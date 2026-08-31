@@ -46,17 +46,23 @@ class Patcher(ABC):
 
     def __init__(
         self,
-        cache_dir: Path,
+        cache_dir: Path | str,
         *,
         api_key: str | None = None,
         provider: str | None = None,
         on_status: StatusFn | None = None,
         on_partial: PartialFn | None = None,
     ) -> None:
-        if provider is not None and self.providers and provider not in self.providers:
+        """Build a patcher.
+
+        `cache_dir` accepts a string as well as a `Path` and is normalised to a
+        `Path`, because callers across the JSON boundary — the NDJSON IPC surface
+        and the CLI — can only hand over strings.
+        """
+        if provider is not None and provider not in self.providers:
+            supported = ", ".join(self.providers) or "none"
             raise CapabilityError(
-                f"{self.game_id} does not support provider {provider!r}. "
-                f"Supported: {', '.join(self.providers)}"
+                f"{self._subject()} does not support provider {provider!r}. Supported: {supported}"
             )
         self.cache_dir = Path(cache_dir)
         self.api_key = api_key
@@ -65,6 +71,15 @@ class Patcher(ABC):
         self.on_partial = on_partial
 
     # -- helpers available to subclasses ------------------------------------
+
+    def _subject(self) -> str:
+        """Name this patcher in an error message.
+
+        `game_id` is empty until `@register` stamps it, so a subclass that is
+        written but not yet decorated would otherwise raise errors with no
+        subject at all. Fall back to the class name.
+        """
+        return self.game_id or type(self).__name__
 
     def status(self, message: str) -> None:
         """Report a human-readable status message, if anyone is listening."""
@@ -91,7 +106,7 @@ class Patcher(ABC):
         touches the network and must not demand credentials.
         """
         if self.requires_api_key and not self.api_key:
-            raise CapabilityError(f"{self.game_id} requires an api_key")
+            raise CapabilityError(f"{self._subject()} requires an api_key")
 
     def check_slot_mapping(self, slot_mapping: list[SlotMapping] | None) -> None:
         """Enforce the declared slot-mapping capability.
@@ -99,20 +114,31 @@ class Patcher(ABC):
         Subclasses call this at the top of `map_rosters`. Without it, a caller
         that passes a mapping to an auto-mapping patcher gets silence; with it,
         they get an error naming the mismatch.
+
+        This checks presence against the declared capability and nothing else.
+        Validating slot indices, rejecting duplicates, and checking the mapping
+        against the ROM remain the subclass's job and raise `MappingError`.
         """
         if self.requires_slot_mapping:
             if not slot_mapping:
-                raise CapabilityError(f"{self.game_id} requires a slot mapping")
+                raise CapabilityError(f"{self._subject()} requires a slot mapping")
         elif slot_mapping:
             raise CapabilityError(
-                f"{self.game_id} does not use slot mappings; it maps teams automatically"
+                f"{self._subject()} does not use slot mappings; it maps teams automatically"
             )
 
     # -- the interface ------------------------------------------------------
 
     @abstractmethod
     def analyze_rom(self, rom_path: Path) -> RomInfo:
-        """Inspect a ROM. Raises `RomError` if it is not readable at all."""
+        """Inspect a ROM.
+
+        Raises `RomError` only when the file is missing or unreadable. A readable
+        file that is not this game is not an error: return
+        `RomInfo(is_valid=False)` instead of raising, because `retro-roster
+        analyze` probes every registered patcher against one ROM to discover
+        which of them recognises it.
+        """
 
     @abstractmethod
     def fetch(
@@ -134,7 +160,12 @@ class Patcher(ABC):
         data: LeagueData,
         slot_mapping: list[SlotMapping] | None = None,
     ) -> MappedRosters:
-        """Reduce league data to this game's own record types."""
+        """Reduce league data to this game's own record types.
+
+        Implementations call `self.check_slot_mapping(slot_mapping)` first. That
+        guard only checks the mapping's presence against the declared capability;
+        validating its contents raises `MappingError`.
+        """
 
     @abstractmethod
     def patch(
