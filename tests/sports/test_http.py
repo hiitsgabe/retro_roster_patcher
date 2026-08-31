@@ -8,8 +8,9 @@ import pytest
 from retro_roster_patcher.core.errors import ApiError
 from retro_roster_patcher.sports import _http
 
-# Longer than the timeout the timeout test passes, short enough that the handler
-# thread is gone well before the suite ends.
+# Comfortably longer than the timeout the timeout test passes, short enough not to
+# drag. The handler swallows the resulting disconnect, so nothing depends on this
+# sleep finishing before the suite does.
 SLOW_RESPONSE_SECONDS = 0.5
 
 
@@ -111,6 +112,27 @@ def test_a_malformed_body_is_quoted_in_the_error():
     assert "captive portal" in message
 
 
+def test_a_huge_body_is_truncated_in_the_error():
+    def transport(url, headers, timeout):
+        return b"x" * 100_000
+
+    with pytest.raises(ApiError) as excinfo:
+        _http.get_json("https://example.test/p", transport=transport)
+    assert len(str(excinfo.value)) < 500
+
+
+def test_an_already_parsed_body_is_truncated_in_the_error():
+    # Where a replay transport returning `json.load(f)` instead of raw bytes lands.
+    def transport(url, headers, timeout):
+        return {"players": [{"name": "x" * 100} for _ in range(500)]}
+
+    with pytest.raises(ApiError) as excinfo:
+        _http.get_json("https://example.test/p", transport=transport)
+    message = str(excinfo.value)
+    assert "a dict:" in message
+    assert len(message) < 500
+
+
 def test_an_empty_body_is_reported_as_empty():
     def transport(url, headers, timeout):
         return b""
@@ -141,11 +163,17 @@ class _Handler(BaseHTTPRequestHandler):
             body = json.dumps(
                 {"path": self.path, "headers": {k.lower(): v for k, v in self.headers.items()}}
             ).encode()
-        self.send_response(status)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
+        try:
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionResetError):
+            # Expected: the timeout test hangs up mid-`/slow`. Left to propagate,
+            # socketserver dumps a traceback to stderr from this daemon thread,
+            # and pytest staples it to whichever test is running at the time.
+            self.close_connection = True
 
     def log_message(self, *args):
         """Silence the default stderr access log."""
@@ -202,6 +230,9 @@ def test_an_http_error_status_becomes_an_api_error_carrying_the_body(server_url)
 
 def test_the_timeout_is_honoured(server_url):
     started = time.monotonic()
-    with pytest.raises(ApiError):
+    # Pinned to the message the read-timeout path produces. A bare `raises` would
+    # also be satisfied by connection-refused if the fixture server were broken,
+    # which is fast enough to pass the elapsed-time bound without a timeout.
+    with pytest.raises(ApiError, match="failed: timed out"):
         _http.get_json(f"{server_url}/slow", timeout=0.05)
     assert time.monotonic() - started < SLOW_RESPONSE_SECONDS
