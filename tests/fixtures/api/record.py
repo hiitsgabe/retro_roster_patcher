@@ -27,6 +27,9 @@ HERE = pathlib.Path(__file__).parent
 # fixture filename -> the URL it was recorded from
 SOURCES = {
     "espn_nhl_teams.json": "https://site.api.espn.com/apis/site/v2/sports/hockey/nhl/teams",
+    # The client asks for /standings/now; this pins a date so re-recording mid-season
+    # cannot swap the fixture's team set out from under the tests. Same payload shape.
+    "nhl_standings.json": "https://api-web.nhle.com/v1/standings/2025-01-01",
 }
 
 
