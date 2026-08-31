@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/banner.png" alt="retro_roster_patcher" width="720">
+</p>
+
 # retro_roster_patcher
 
 Patch real-world sports rosters into retro game ROMs.
