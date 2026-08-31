@@ -99,6 +99,18 @@ def test_setting_the_same_team_twice_replaces_its_colours(tmp_path):
     }
 
 
+def test_setting_the_same_team_twice_rewrites_its_entry_rather_than_appending(tmp_path):
+    # Asserted on the bytes, not on the parsed value: `set_team_color` keys the cache
+    # by `str(team_id)`, and an int key would produce a file with `"33"` written
+    # twice. `json.load` silently keeps the last, so every parsing assertion above
+    # stays green while the file grows on each re-pick and becomes RFC 8259
+    # ambiguous. Re-picking a colour for a team is the ordinary user path.
+    team_colors.set_team_color(str(tmp_path), 33, "DA291C", "FBE122")
+    team_colors.set_team_color(str(tmp_path), 33, "000000", "FFFFFF")
+
+    assert (tmp_path / "team_colors.json").read_text().count('"33"') == 1
+
+
 def test_an_unknown_team_has_no_colour(tmp_path):
     team_colors.set_team_color(str(tmp_path), 33, "DA291C", "FBE122")
 
