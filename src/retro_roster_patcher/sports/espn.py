@@ -2,6 +2,7 @@
 
 import json
 import os
+from collections.abc import Callable
 from typing import Any
 
 from . import _http
@@ -90,7 +91,12 @@ BASKETBALL_CORE_URL = "https://sports.core.api.espn.com/v2/sports/basketball/lea
 class EspnClient:
     """Client for ESPN's public soccer and hockey API — no key, no rate limits."""
 
-    def __init__(self, cache_dir: str, on_status=None, transport=None):
+    def __init__(
+        self,
+        cache_dir: str,
+        on_status: Callable[[str], None] | None = None,
+        transport: _http.Transport | None = None,
+    ) -> None:
         self.cache_dir = cache_dir
         self.on_status = on_status
         self._transport = transport

@@ -1,0 +1,5 @@
+# Recorded API responses: single-line JSON, hundreds of KB each. A re-record shows
+# up as one enormous changed line that no diff viewer and no reviewer can read, so
+# say so and let it render as "Binary files differ" instead. The URL each one came
+# from lives in tests/fixtures/api/record.py, which is where provenance belongs.
+tests/fixtures/api/*.json -diff
