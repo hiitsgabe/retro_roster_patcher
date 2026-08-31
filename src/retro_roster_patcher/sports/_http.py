@@ -38,14 +38,21 @@ Transport = Callable[[str, Mapping[str, str], float], bytes]
 
 
 def _describe(body: object) -> str:
-    """Size and leading bytes of an unusable body, for an error message.
+    """Size and leading content of an unusable body, for an error message.
 
     Tolerates a non-bytes body: `json.loads` raises `TypeError` for one, and an
-    error path must not raise an error of its own.
+    error path must not raise an error of its own. That branch is bounded too —
+    it is where a transport returning already-parsed JSON lands, so its input is
+    typically a whole decoded fixture rather than a short scrap.
     """
     if isinstance(body, bytes | bytearray | str):
-        return f"{len(body)} bytes starting {body[:_BODY_SNIPPET]!r}"
-    return f"a {type(body).__name__}: {body!r}"
+        unit = "characters" if isinstance(body, str) else "bytes"
+        return f"{len(body)} {unit} starting {body[:_BODY_SNIPPET]!r}"
+    return f"a {type(body).__name__}: {_truncate(repr(body))}"
+
+
+def _truncate(text: str) -> str:
+    return text if len(text) <= _BODY_SNIPPET else f"{text[:_BODY_SNIPPET]}..."
 
 
 def _with_default_user_agent(headers: Mapping[str, str]) -> dict[str, str]:
