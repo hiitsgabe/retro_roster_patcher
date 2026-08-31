@@ -1,10 +1,18 @@
 <p align="center">
-  <img src="assets/banner.png" alt="retro_roster_patcher" width="720">
+  <img src="assets/logo.png" alt="" width="132">
 </p>
 
-# retro_roster_patcher
+<h1 align="center">Retro Roster Patcher</h1>
 
-Patch real-world sports rosters into retro game ROMs.
+<p align="center">
+  Patch real-world sports rosters into retro game ROMs.
+</p>
+
+<p align="center">
+  <a href="https://github.com/hiitsgabe/retro_roster_patcher/actions/workflows/ci.yml"><img src="https://github.com/hiitsgabe/retro_roster_patcher/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <img src="https://img.shields.io/badge/python-3.11%20%7C%203.12%20%7C%203.13-blue" alt="Python 3.11 | 3.12 | 3.13">
+  <img src="https://img.shields.io/badge/license-MIT-green" alt="MIT">
+</p>
 
 Zero runtime dependencies. Usable as a library or as a CLI.
 
