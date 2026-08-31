@@ -103,8 +103,10 @@ def forbid_default_transport(monkeypatch):
     answers from constants and never requests anything — which no comparison of
     name sets can make. Exposed as a fixture rather than by exporting
     `TransportLeak`: there is no `tests/__init__.py`, so pytest imports this file
-    as `sports.conftest`, and a test doing `from tests.sports.conftest import
-    TransportLeak` would bind a second, unrelated copy of the class.
+    as `sports.conftest`, and `pythonpath = ["."]` means a test doing
+    `from tests.sports.conftest import TransportLeak` would silently succeed while
+    binding a second, unrelated copy of the class — one that no cross-module
+    `except TransportLeak` or `pytest.raises(TransportLeak)` would match.
     """
 
     def forbidden(url, headers, timeout):

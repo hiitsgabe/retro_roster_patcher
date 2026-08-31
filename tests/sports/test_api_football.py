@@ -245,24 +245,31 @@ def test_a_transport_failure_yields_an_empty_dict(tmp_path):
 # wrong data rather than an obvious crash.
 
 
-def test_get_leagues_parses_a_league_with_its_season_statistics(tmp_path):
-    body = {
-        "response": [
-            {
-                "league": {"id": 39, "name": "Premier League", "logo": "pl.png"},
-                "country": {"name": "England", "code": "GB"},
-                "seasons": [
-                    {"year": 2023, "statistics": {"teams": 18}},
-                    {"year": 2024, "statistics": {"teams": 20}},
-                ],
-            }
-        ]
-    }
-    client = ApiFootballClient(api_key="k", cache_dir=str(tmp_path), transport=_Transport(body))
+# Two seasons, requested-first. The ordering is load-bearing in both directions:
+# the season-filter test below asks for 2024, which is *not* `seasons[-1]`, so a
+# parser that ignored the filter and took the last entry fails; and the no-season
+# test asks for nothing, where the fallback deliberately does take `seasons[-1]`
+# and so must yield 2023. Swapping these two dicts makes both tests pass against
+# parsers they exist to reject.
+LEAGUES_BODY: dict[str, Any] = {
+    "response": [
+        {
+            "league": {"id": 39, "name": "Premier League", "logo": "pl.png"},
+            "country": {"name": "England", "code": "GB"},
+            "seasons": [
+                {"year": 2024, "statistics": {"teams": 20}},
+                {"year": 2023, "statistics": {"teams": 18}},
+            ],
+        }
+    ]
+}
 
-    # Two seasons in the payload and the requested one is not the last, so a
-    # parser that took `seasons[-1]` or ignored the filter would still produce a
-    # plausible League — with the wrong teams_count.
+
+def test_get_leagues_takes_the_statistics_of_the_requested_season(tmp_path):
+    client = ApiFootballClient(
+        api_key="k", cache_dir=str(tmp_path), transport=_Transport(LEAGUES_BODY)
+    )
+
     assert client.get_leagues(season=2024) == [
         League(
             id=39,
@@ -272,6 +279,27 @@ def test_get_leagues_parses_a_league_with_its_season_statistics(tmp_path):
             logo_url="pl.png",
             season=2024,
             teams_count=20,
+        )
+    ]
+
+
+def test_get_leagues_without_a_season_falls_back_to_the_last_one_listed(tmp_path):
+    # The only caller that reaches `if not used_season and seasons`. Without it the
+    # season silently comes back 0, which is not a season any endpoint accepts, and
+    # teams_count stays 0 because no filter matched.
+    client = ApiFootballClient(
+        api_key="k", cache_dir=str(tmp_path), transport=_Transport(LEAGUES_BODY)
+    )
+
+    assert client.get_leagues() == [
+        League(
+            id=39,
+            name="Premier League",
+            country="England",
+            country_code="GB",
+            logo_url="pl.png",
+            season=2023,
+            teams_count=0,
         )
     ]
 
@@ -331,6 +359,18 @@ def test_get_squad_maps_positions_and_keeps_the_name_halves_apart(tmp_path):
                         "number": 10,
                         "photo": "10.png",
                     },
+                    {
+                        # A sparse entry, which is what a fringe player actually
+                        # looks like: no age, no squad number, and a JSON null for
+                        # firstname rather than a missing key.
+                        "id": 3,
+                        "name": "Kobbie Mainoo",
+                        "firstname": None,
+                        "lastname": "Mainoo",
+                        "nationality": "England",
+                        "position": "Midfielder",
+                        "photo": "3.png",
+                    },
                 ]
             }
         ]
@@ -362,6 +402,20 @@ def test_get_squad_maps_positions_and_keeps_the_name_halves_apart(tmp_path):
             number=10,
             photo_url="10.png",
         ),
+        # age falls through to the parser's 25 default, number to None, and
+        # first_name to "" — the `or ""` is what stops a JSON null landing in a
+        # str field, where it would travel unnoticed until the patcher formats it.
+        Player(
+            id=3,
+            name="Kobbie Mainoo",
+            first_name="",
+            last_name="Mainoo",
+            age=25,
+            nationality="England",
+            position="Midfielder",
+            number=None,
+            photo_url="3.png",
+        ),
     ]
 
 
@@ -383,7 +437,10 @@ def test_get_player_stats_parses_the_first_statistics_entry(tmp_path):
                         },
                         "goals": {"total": 18, "assists": 7},
                         "shots": {"total": 60, "on": 30},
-                        "passes": {"total": 900, "accuracy": 84},
+                        # accuracy arrives as a string, like rating: an int here
+                        # would compare equal to the expected float either way and
+                        # the coercion would be invisible.
+                        "passes": {"total": 900, "accuracy": "84"},
                         "tackles": {"total": 20, "interceptions": 8, "blocks": 3},
                         "duels": {"total": 200, "won": 110},
                         "dribbles": {"attempts": 90, "success": 45},
@@ -395,7 +452,16 @@ def test_get_player_stats_parses_the_first_statistics_entry(tmp_path):
                     # taking the primary league only.
                     {"games": {"appearences": 99}, "goals": {"total": 99}},
                 ],
-            }
+            },
+            # A player with no statistics at all — signed but never registered.
+            # The parser skips the whole entry rather than emitting an all-zero
+            # record, so an id=2 row appearing below means the skip is gone.
+            {"player": {"id": 2}, "statistics": []},
+            # A player registered but never played: every stat group missing.
+            # rating is the one field that must come back None rather than 0.0,
+            # because PlayerStats.rating is float | None and 0.0 would read as a
+            # rated performance of zero rather than no performance at all.
+            {"player": {"id": 3}, "statistics": [{"games": {}}]},
         ]
     }
     client = ApiFootballClient(api_key="k", cache_dir=str(tmp_path), transport=_Transport(body))
@@ -425,7 +491,31 @@ def test_get_player_stats_parses_the_first_statistics_entry(tmp_path):
             cards_red=1,
             rating=7.4,
             lineups=34,
-        )
+        ),
+        PlayerStats(
+            player_id=3,
+            appearances=0,
+            minutes=0,
+            goals=0,
+            assists=0,
+            shots_total=0,
+            shots_on=0,
+            passes_total=0,
+            passes_accuracy=0.0,
+            tackles_total=0,
+            interceptions=0,
+            blocks=0,
+            duels_total=0,
+            duels_won=0,
+            dribbles_attempts=0,
+            dribbles_success=0,
+            fouls_committed=0,
+            fouls_drawn=0,
+            cards_yellow=0,
+            cards_red=0,
+            rating=None,
+            lineups=0,
+        ),
     ]
 
 
