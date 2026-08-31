@@ -33,6 +33,18 @@ GENESIS = RomFinderConfig(
     system_type="megadrive",
 )
 
+# A term and a filename that score exactly 50 — five shared tokens of six distinct,
+# `int(5/6 * 60)`. 50 is the value both scans compare against, and no realistic ROM
+# name lands on it, so the boundary needs a synthetic pair to be pinned at all.
+BOUNDARY_TERM = "alpha bravo charlie delta echo"
+BOUNDARY_FILE = "foxtrot alpha bravo charlie echo delta (USA).bin"
+BOUNDARY_CONFIG = RomFinderConfig(
+    search_terms=[BOUNDARY_TERM],
+    system_folders=["megadrive"],
+    file_extensions=[".bin"],
+    system_type="megadrive",
+)
+
 
 def _write(path, text=""):
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -59,6 +71,13 @@ def test_normalize_lowercases_and_collapses_whitespace():
 
 def test_normalize_drops_every_parenthesised_group():
     assert _normalize("NHL 94 (USA) (Rev A).md") == "nhl 94"
+
+
+def test_normalize_drops_each_group_separately_rather_than_everything_between_them():
+    # `\([^)]*\)` is deliberately non-greedy about the closing paren. A `\(.*\)`
+    # would swallow "Hockey" along with both groups and score a multi-disc set
+    # against the wrong title; multi-disc naming makes that reachable.
+    assert _normalize("NHL 94 (Disc 1) Hockey (USA).bin") == "nhl 94 hockey"
 
 
 def test_normalize_turns_hyphens_into_word_breaks():
@@ -107,6 +126,27 @@ def test_a_reordered_title_falls_back_to_token_overlap():
 def test_a_different_year_scores_on_the_one_shared_token():
     # {nhl, 94} vs {nhl, 95}: 1 shared of 3 distinct, int(1/3 * 60) == 20.
     assert _fuzzy_score("NHL 94", "NHL 95 (Europe).bin") == 20
+
+
+def test_the_threshold_value_itself_is_reachable():
+    # The premise the two boundary scan tests rest on. Asserted here so that a change
+    # to the scoring weights fails with "this pair no longer scores 50" rather than
+    # quietly turning both of those tests into ordinary above-threshold cases.
+    assert _fuzzy_score(BOUNDARY_TERM, BOUNDARY_FILE) == 50
+
+
+def test_identical_tokens_in_a_different_order_score_the_branch_maximum():
+    # Ratio 1.0, so `int(ratio * 60)` hits its ceiling of 60 — the most the overlap
+    # branch can ever award, and the only ratio that distinguishes the weight from a
+    # neighbouring one. It also sits above the 50 both scans require, which means a
+    # fully word-reordered title is *accepted*, not merely demoted.
+    assert _fuzzy_score("NHL 94", "94 NHL (USA).bin") == 60
+
+
+def test_the_overlap_score_truncates_rather_than_rounds():
+    # 1 shared of 7 distinct: 60 * 1/7 == 8.57. Every other overlap case in this
+    # file lands on a whole number, where truncation and rounding agree.
+    assert _fuzzy_score("nhl 94", "a b c d e 94 (USA).bin") == 8
 
 
 def test_an_unrelated_filename_scores_zero():
@@ -213,6 +253,55 @@ def test_a_missing_cue_resolves_to_nothing(tmp_path):
     assert _resolve_cue_track1(str(tmp_path / "absent.cue")) is None
 
 
+def test_a_cue_that_opens_with_rem_headers_still_resolves(tmp_path):
+    # Real cue sheets routinely lead with REM GENRE / REM DATE / CATALOG, so the
+    # FILE line is rarely the first line. Every other cue in this file starts with
+    # FILE, which would let an anchored-at-position-0 match look correct while
+    # silently dropping most real .cue sets from the scan.
+    _write(tmp_path / "Game (USA) (Track 1).bin", "data")
+    cue = _write(
+        tmp_path / "Game (USA).cue",
+        "REM GENRE Sports\n"
+        "REM DATE 1993\n"
+        "CATALOG 0000000000000\n"
+        'FILE "Game (USA) (Track 1).bin" BINARY\n'
+        "  TRACK 01 MODE1/2352\n",
+    )
+
+    assert _resolve_cue_track1(str(cue)) == str(tmp_path / "Game (USA) (Track 1).bin")
+
+
+def test_a_file_reference_inside_a_comment_is_not_the_track(tmp_path):
+    # The pattern anchors FILE to the start of a line. Without that anchor the
+    # preservation note below wins, because it comes first in the file.
+    _write(tmp_path / "decoy.bin", "wrong")
+    _write(tmp_path / "Game (USA) (Track 1).bin", "data")
+    cue = _write(
+        tmp_path / "Game (USA).cue",
+        'REM RIPPED FROM FILE "decoy.bin" BINARY\n'
+        'FILE "Game (USA) (Track 1).bin" BINARY\n'
+        "  TRACK 01 MODE1/2352\n",
+    )
+
+    assert _resolve_cue_track1(str(cue)) == str(tmp_path / "Game (USA) (Track 1).bin")
+
+
+def test_a_cue_that_is_not_valid_utf8_is_read_rather_than_raising(tmp_path):
+    # Load-bearing: `UnicodeDecodeError` subclasses `ValueError`, not `OSError`, so
+    # it is not caught by the guard around the read. A Shift-JIS cue sheet — the
+    # title comment below is one — would propagate out and abort the entire scan
+    # rather than skipping one file.
+    _write(tmp_path / "Game (Japan) (Track 1).bin", "data")
+    cue = tmp_path / "Game (Japan).cue"
+    cue.write_bytes(
+        b"REM TITLE \x83j\x83b\x83N\n"
+        b'FILE "Game (Japan) (Track 1).bin" BINARY\n'
+        b"  TRACK 01 MODE1/2352\n"
+    )
+
+    assert _resolve_cue_track1(str(cue)) == str(tmp_path / "Game (Japan) (Track 1).bin")
+
+
 def test_a_cue_whose_first_file_is_an_audio_track_resolves_to_nothing(tmp_path):
     # The pattern requires the BINARY keyword. The .wav exists, so without that
     # anchor this would hand back a CD audio track as if it were the ROM.
@@ -261,10 +350,14 @@ def test_the_local_scan_searches_every_configured_folder(tmp_path):
 
 
 def test_the_local_scan_skips_folders_that_do_not_exist(tmp_path):
-    # Only "genesis" is created; "megadrive" is configured first and must not raise.
     _write(tmp_path / "genesis" / "NHL 94 (USA).bin")
+    # The precondition, stated rather than implied: "megadrive" is configured first
+    # and is absent, so the scan has to survive it before it ever reaches "genesis".
+    assert not (tmp_path / "megadrive").exists()
 
-    assert RomFinder()._scan_local(GENESIS, str(tmp_path)) is not None
+    assert RomFinder()._scan_local(GENESIS, str(tmp_path)) == str(
+        tmp_path / "genesis" / "NHL 94 (USA).bin"
+    )
 
 
 def test_the_local_scan_ignores_unconfigured_extensions(tmp_path):
@@ -328,6 +421,27 @@ def test_the_local_scan_accepts_a_name_scoring_at_or_above_the_threshold(tmp_pat
 
     assert RomFinder()._scan_local(GENESIS, str(tmp_path)) == str(
         tmp_path / "megadrive" / "NHL 94 All-Star Hockey (USA).bin"
+    )
+
+
+def test_the_local_scan_accepts_a_name_scoring_exactly_the_threshold(tmp_path):
+    # The boundary itself. Every other scan test scores 80 or 100 on the accept side
+    # and 20 or 40 on the reject side, leaving `>= 50` free to become `> 50` — or to
+    # slide anywhere in between — unnoticed.
+    _write(tmp_path / "megadrive" / BOUNDARY_FILE)
+
+    assert RomFinder()._scan_local(BOUNDARY_CONFIG, str(tmp_path)) == str(
+        tmp_path / "megadrive" / BOUNDARY_FILE
+    )
+
+
+def test_the_local_scan_accepts_a_fully_reordered_title(tmp_path):
+    # 60, the overlap branch's ceiling, which clears the threshold. The scan-level
+    # consequence of `test_identical_tokens_in_a_different_order_score_the_branch_maximum`.
+    _write(tmp_path / "megadrive" / "94 NHL (USA).bin")
+
+    assert RomFinder()._scan_local(GENESIS, str(tmp_path)) == str(
+        tmp_path / "megadrive" / "94 NHL (USA).bin"
     )
 
 
@@ -447,6 +561,31 @@ def test_the_cache_search_applies_the_same_score_threshold(tmp_path):
     assert RomFinder()._search_cache(GENESIS, [system], str(tmp_path)) == (None, None)
 
 
+def test_the_cache_search_accepts_an_entry_scoring_above_the_threshold(tmp_path):
+    # The accept side of the same threshold, which the local scan has and this one
+    # did not: every other cache hit in this file scores 100, so the comparison was
+    # pinned only from below and could have moved anywhere in 51..100 unnoticed.
+    # This entry scores 80.
+    system = {"roms_folder": "megadrive", "url": LISTING_URL}
+    _listing(tmp_path, LISTING_HASH, [{"filename": "NHL 94 All-Star Hockey (USA).bin"}])
+
+    entry, _ = RomFinder()._search_cache(GENESIS, [system], str(tmp_path))
+
+    assert entry == {"filename": "NHL 94 All-Star Hockey (USA).bin"}
+
+
+def test_the_cache_search_accepts_an_entry_scoring_exactly_the_threshold(tmp_path):
+    # And the boundary, mirroring the local scan's. Both call sites compare against
+    # the same literal 50 but neither shares code with the other, so each needs its
+    # own boundary case.
+    system = {"roms_folder": "megadrive", "url": LISTING_URL}
+    _listing(tmp_path, LISTING_HASH, [{"filename": BOUNDARY_FILE}])
+
+    entry, _ = RomFinder()._search_cache(BOUNDARY_CONFIG, [system], str(tmp_path))
+
+    assert entry == {"filename": BOUNDARY_FILE}
+
+
 def test_a_corrupt_listing_is_skipped_rather_than_raising(tmp_path):
     system = {"roms_folder": "megadrive", "url": LISTING_URL}
     _write(tmp_path / "listings" / f"{LISTING_HASH}.json", "{not json")
@@ -475,20 +614,6 @@ def test_an_empty_cache_dir_reads_no_listing_at_all(tmp_path, monkeypatch):
     _listing(tmp_path, LISTING_HASH, [{"filename": "NHL 94 (USA).bin"}])
 
     assert RomFinder()._search_cache(GENESIS, [system]) == (None, None)
-
-
-def test_find_without_a_cache_dir_reports_not_found_rather_than_reading_the_cwd(
-    tmp_path, monkeypatch
-):
-    # The same guarantee through the public entry point, whose `cache_dir` also
-    # defaults to "".
-    monkeypatch.chdir(tmp_path)
-    roms = tmp_path / "roms"
-    roms.mkdir()
-    system = {"roms_folder": "megadrive", "url": LISTING_URL}
-    _listing(tmp_path, LISTING_HASH, [{"filename": "NHL 94 (USA).bin"}])
-
-    assert RomFinder().find(GENESIS, str(roms), [system]) == RomFinderResult(status="not_found")
 
 
 # ── Empty search terms ───────────────────────────────────────────────────
@@ -560,6 +685,21 @@ def test_find_falls_back_to_the_cached_listings(tmp_path):
         system_data=system,
         match_name="NHL 94 (USA).bin",
     )
+
+
+def test_find_without_a_cache_dir_reports_not_found_rather_than_reading_the_cwd(
+    tmp_path, monkeypatch
+):
+    # The cwd guarantee through the public entry point, whose `cache_dir` also
+    # defaults to "". The planted listing is a perfect match; finding it would mean
+    # `find()` had reintroduced the dependency on where the process was started.
+    monkeypatch.chdir(tmp_path)
+    roms = tmp_path / "roms"
+    roms.mkdir()
+    system = {"roms_folder": "megadrive", "url": LISTING_URL}
+    _listing(tmp_path, LISTING_HASH, [{"filename": "NHL 94 (USA).bin"}])
+
+    assert RomFinder().find(GENESIS, str(roms), [system]) == RomFinderResult(status="not_found")
 
 
 def test_find_reports_not_found_when_neither_source_has_it(tmp_path):
