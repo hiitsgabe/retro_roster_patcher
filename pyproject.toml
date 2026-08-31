@@ -35,6 +35,11 @@ Homepage = "https://github.com/hiitsgabe/retro_roster_patcher"
 where = ["src"]
 
 [tool.setuptools.package-data]
+# PEP 561. Without the marker a type checker ignores this package's annotations
+# entirely for anyone importing it installed, which is every consumer that matters:
+# the CLI, the Flutter/IPC embedding, and the tests. `_http.Transport` and the rest
+# would be enforced only for callers inside `src`.
+"retro_roster_patcher" = ["py.typed"]
 "retro_roster_patcher.games.we2002" = ["assets/**"]
 
 [tool.pytest.ini_options]
