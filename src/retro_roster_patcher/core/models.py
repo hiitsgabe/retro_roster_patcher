@@ -50,6 +50,9 @@ class RomInfo:
     game_id: str
     is_valid: bool = True
     slots: list[RomSlot] = field(default_factory=list)
+    # Values must be JSON-serialisable: this dict crosses the NDJSON boundary
+    # verbatim, and a non-primitive value raises TypeError inside the renderer,
+    # far from the patcher that put it there.
     extra: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -59,7 +62,7 @@ class RomInfo:
             "game_id": self.game_id,
             "is_valid": self.is_valid,
             "slots": [s.to_dict() for s in self.slots],
-            "extra": self.extra,
+            "extra": dict(self.extra),
         }
 
 
