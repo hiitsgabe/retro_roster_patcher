@@ -1,0 +1,59 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "retro-roster-patcher"
+version = "0.1.0.dev0"
+description = "Patch real-world sports rosters into retro game ROMs"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { file = "LICENSE" }
+authors = [{ name = "hiitsgabe" }]
+keywords = ["rom", "patcher", "retro", "sports", "roster"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Games/Entertainment",
+]
+dependencies = []
+
+[project.optional-dependencies]
+images = ["Pillow>=10"]
+dev = ["pytest>=8", "ruff>=0.6", "mypy>=1.11", "build>=1.2"]
+
+[project.scripts]
+retro-roster = "retro_roster_patcher.cli.__main__:main"
+
+[project.urls]
+Homepage = "https://github.com/hiitsgabe/retro_roster_patcher"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+"retro_roster_patcher.games.we2002" = ["assets/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# Puts the repository root on sys.path so tests can do
+# `from tests.fixtures import synthetic_rom`. Without it, pytest only inserts
+# each test file's own directory and the shared fixtures are unreachable.
+pythonpath = ["."]
+markers = [
+    "real_rom: requires a real ROM, gated on RETRO_ROSTER_TEST_ROMS",
+]
+
+[tool.ruff]
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B"]
+
+[tool.mypy]
+python_version = "3.11"
+files = ["src"]
+ignore_missing_imports = true
