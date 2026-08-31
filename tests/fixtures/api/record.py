@@ -30,6 +30,9 @@ SOURCES = {
     # The client asks for /standings/now; this pins a date so re-recording mid-season
     # cannot swap the fixture's team set out from under the tests. Same payload shape.
     "nhl_standings.json": "https://api-web.nhle.com/v1/standings/2025-01-01",
+    # The season the client defaults to, so this is the URL `get_hockey_squad("BOS")`
+    # really builds — the fixture and the pinned URL in test_nhl.py agree.
+    "nhl_roster.json": "https://api-web.nhle.com/v1/roster/BOS/20252026",
 }
 
 

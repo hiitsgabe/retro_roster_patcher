@@ -59,6 +59,8 @@ def assert_no_transport_leak(monkeypatch):
 
     Takes the client class, a `{method: (args, kwargs)}` table of the calls that
     reach the wire, and whatever else the constructor needs before `transport=`.
+    Returns the URLs those calls requested, in order, so a caller can pin every
+    endpoint the client builds in one assertion.
     """
 
     def _assert(client_class, network_calls, *args, **kwargs):
@@ -69,15 +71,25 @@ def assert_no_transport_leak(monkeypatch):
         # patching the attribute reaches every call site.
         monkeypatch.setattr(_http, "default_transport", forbidden)
 
+        requested = []
+
         def stub(url, headers, timeout):
             # Parses to an empty dict, so every method yields an empty result and —
             # since these clients only cache a truthy body — every method really
             # does call out, on every iteration.
+            requested.append(url)
             return b"{}"
 
         client = client_class(*args, transport=stub, **kwargs)
         for name, (call_args, call_kwargs) in network_calls.items():
             getattr(client, name)(*call_args, **call_kwargs)
+        # Returned rather than asserted on: only the caller knows which URLs it
+        # expects. Walking every method with arguments that reach the wire is the
+        # expensive part, so handing the list back turns pinning a client's whole
+        # URL construction — season strings, path segments, game-type suffixes —
+        # into one list-equality. A caller that ignores the return gets exactly the
+        # guard it got before.
+        return requested
 
     return _assert
 
