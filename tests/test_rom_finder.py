@@ -8,6 +8,8 @@ rather than to relative comparisons — the thresholds downstream are absolute
 
 import json
 
+import pytest
+
 from retro_roster_patcher.rom_finder import (
     RomFinder,
     RomFinderConfig,
@@ -143,10 +145,17 @@ def test_a_non_default_preferred_region_is_honoured():
     assert _tiebreak_sort_key("NHL 94 (USA).bin", "Europe")[0] == 1
 
 
-def test_a_multi_region_dump_does_not_count_as_preferred():
-    # Recorded, not endorsed: the check is for the literal "(usa)", so the common
-    # "(Japan, USA)" dump is demoted below a USA-only one. Upstream behaviour.
+def test_a_multi_region_dump_is_demoted_below_regions_nobody_asked_for():
+    # Recorded, not endorsed. The check is for the literal "(usa)", so the common
+    # comma-joined "(Japan, USA)" dump scores no better than a region the caller did
+    # not ask for. The consequence, not just the key component: with USA preferred,
+    # a playable USA-included dump sorts *below* the Europe-only one and `find()`
+    # returns the wrong ROM. Upstream behaviour, pinned so a fix is a visible change.
     assert _tiebreak_sort_key("NHL 94 (Japan, USA).bin", "USA")[0] == 1
+    assert sorted(["NHL 94 (Japan, USA).bin", "NHL 94 (Europe).bin"], key=_tiebreak_sort_key) == [
+        "NHL 94 (Europe).bin",
+        "NHL 94 (Japan, USA).bin",
+    ]
 
 
 def test_every_prerelease_word_is_demoted_and_only_as_a_whole_word():
@@ -451,18 +460,70 @@ def test_the_cache_search_finds_nothing_without_a_cached_listing(tmp_path):
     assert RomFinder()._search_cache(GENESIS, [system], str(tmp_path)) == (None, None)
 
 
-def test_an_empty_cache_dir_resolves_listings_against_the_working_directory(tmp_path, monkeypatch):
-    # Recorded, not endorsed. Upstream fell back to the host application's global
-    # listings cache here; the port has no such global, so `cache_dir=""` — the
-    # parameter default — reads `./listings/<md5>.json` from wherever the process
-    # happens to be. `monkeypatch.chdir` keeps that inside tmp_path.
+def test_an_empty_cache_dir_reads_no_listing_at_all(tmp_path, monkeypatch):
+    # A library must not key behaviour off the process working directory. Upstream
+    # fell back to the host application's own absolute cache here, which a
+    # standalone package has no equivalent of; joining onto "" instead would read
+    # `./listings/<md5>.json` from wherever the caller happened to start — the
+    # pygame launcher and the embedded-CPython host both begin in directories
+    # neither this package nor its caller chose. So: no cache directory, no cache.
+    #
+    # The listing below is planted in the working directory and is a perfect match.
+    # Finding it would mean the search had reintroduced the cwd dependency.
     monkeypatch.chdir(tmp_path)
     system = {"roms_folder": "megadrive", "url": LISTING_URL}
     _listing(tmp_path, LISTING_HASH, [{"filename": "NHL 94 (USA).bin"}])
 
-    entry, _ = RomFinder()._search_cache(GENESIS, [system])
+    assert RomFinder()._search_cache(GENESIS, [system]) == (None, None)
 
-    assert entry == {"filename": "NHL 94 (USA).bin"}
+
+def test_find_without_a_cache_dir_reports_not_found_rather_than_reading_the_cwd(
+    tmp_path, monkeypatch
+):
+    # The same guarantee through the public entry point, whose `cache_dir` also
+    # defaults to "".
+    monkeypatch.chdir(tmp_path)
+    roms = tmp_path / "roms"
+    roms.mkdir()
+    system = {"roms_folder": "megadrive", "url": LISTING_URL}
+    _listing(tmp_path, LISTING_HASH, [{"filename": "NHL 94 (USA).bin"}])
+
+    assert RomFinder().find(GENESIS, str(roms), [system]) == RomFinderResult(status="not_found")
+
+
+# ── Empty search terms ───────────────────────────────────────────────────
+
+
+def test_a_config_with_no_search_terms_raises_in_the_local_scan(tmp_path):
+    # Recorded, not endorsed: both scans call `max()` over a generator across
+    # `search_terms`, which raises on an empty sequence rather than matching nothing.
+    # Upstream behaviour; pinned so that turning it into a quiet "no match" is a
+    # visible change rather than a silent one.
+    no_terms = RomFinderConfig(
+        search_terms=[],
+        system_folders=["megadrive"],
+        file_extensions=[".bin"],
+        system_type="megadrive",
+    )
+    _write(tmp_path / "megadrive" / "NHL 94 (USA).bin")
+
+    with pytest.raises(ValueError):
+        RomFinder()._scan_local(no_terms, str(tmp_path))
+
+
+def test_a_config_with_no_search_terms_raises_in_the_cache_search(tmp_path):
+    # The second `max()` call site, which no local-scan test reaches.
+    no_terms = RomFinderConfig(
+        search_terms=[],
+        system_folders=["megadrive"],
+        file_extensions=[".bin"],
+        system_type="megadrive",
+    )
+    system = {"roms_folder": "megadrive", "url": LISTING_URL}
+    _listing(tmp_path, LISTING_HASH, [{"filename": "NHL 94 (USA).bin"}])
+
+    with pytest.raises(ValueError):
+        RomFinder()._search_cache(no_terms, [system], str(tmp_path))
 
 
 # ── find() ───────────────────────────────────────────────────────────────

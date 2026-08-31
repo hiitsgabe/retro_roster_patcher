@@ -68,6 +68,9 @@ def _fuzzy_score(search_term: str, filename: str) -> int:
 
     search_tokens = set(norm_search.split())
     file_tokens = set(norm_file.split())
+    # Dead: the `not norm_search` guard above already returned, so a non-empty
+    # string always splits into at least one token. Unreachable and therefore
+    # untestable; kept verbatim for port fidelity, not because it is needed.
     if not search_tokens:
         return 0
     overlap = len(search_tokens & file_tokens)
@@ -78,6 +81,9 @@ def _fuzzy_score(search_term: str, filename: str) -> int:
 
 # ── Tiebreaker Sorting ──────────────────────────────────────────────────
 
+# Unreferenced: `_tiebreak_sort_key` does its region check with a lowercased
+# substring test instead. Nothing reads this, so no test can pin it; kept verbatim
+# for port fidelity.
 _USA_RE = re.compile(r"\(USA\)", re.IGNORECASE)
 _BETA_DEMO_RE = re.compile(r"\b(beta|demo|proto|sample)\b", re.IGNORECASE)
 
@@ -179,9 +185,14 @@ class RomFinder:
 
             for url in urls:
                 # Determine cache file path. Upstream fell back to the host
-                # application's global listings cache when `cache_dir` was empty;
-                # this package has no such global, so an empty `cache_dir` resolves
-                # relative to the process working directory instead.
+                # application's own absolute cache directory when `cache_dir` was
+                # empty; a standalone library has no such global, and joining onto
+                # "" would key the read off `os.getcwd()` — non-deterministic across
+                # the pygame launcher and the embedded-CPython host, both of which
+                # start in directories neither this package nor its caller chose.
+                # With no cache directory there is simply no listings cache.
+                if not cache_dir:
+                    continue
                 url_hash = hashlib.md5(url.encode()).hexdigest()
                 cache_path = os.path.join(cache_dir, "listings", f"{url_hash}.json")
 
