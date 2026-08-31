@@ -5,6 +5,11 @@ registry. Import cost is trivial (pure Python, no I/O at import time) and the
 alternative — lazy discovery — makes `list_patchers()` order-dependent.
 """
 
+# These core and sports imports must stay ahead of the game imports added in Tasks 17
+# and 20. A game module is only ever safe to import `retro_roster_patcher.core.*`
+# directly, never the package root: while the game imports below are running, this
+# module is still partially initialised, so `from retro_roster_patcher import Patcher`
+# would resolve only by accident of ordering and break the moment the block is reordered.
 from .core.errors import (
     ApiError,
     CapabilityError,

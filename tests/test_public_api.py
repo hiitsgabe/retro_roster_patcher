@@ -22,9 +22,14 @@ def test_the_documented_names_are_importable_from_the_root():
         "register",
     }
     assert expected <= set(rrp.__all__)
-    for name in expected:
+    # Iterate __all__, not `expected`: ruff's F822 (undefined name in __all__) is
+    # suppressed inside __init__.py, so a stale or typo'd entry would otherwise ship
+    # green and only blow up in consumer code as `from ... import *` -> AttributeError.
+    for name in rrp.__all__:
         assert hasattr(rrp, name), name
 
 
-def test_all_is_sorted_so_diffs_stay_readable():
-    assert rrp.__all__ == sorted(rrp.__all__)
+def test_all_is_sorted_and_free_of_duplicates():
+    # Comparing against the sorted *set* covers both: sorted(["A", "A", "B"]) equals
+    # its input, so a duplicate surviving a merge would pass a plain sorted() check.
+    assert rrp.__all__ == sorted(set(rrp.__all__))
