@@ -16,7 +16,8 @@ class FakePatcher(Patcher):
     sport = "hockey"
     requires_slot_mapping = False
     requires_api_key = False
-    providers = ("espn",)
+    # Widened from the inferred `tuple[str]` so subclasses may declare no providers.
+    providers: tuple[str, ...] = ("espn",)
 
     def analyze_rom(self, rom_path):
         return RomInfo(path=str(rom_path), size=0, game_id=self.game_id)
@@ -42,6 +43,26 @@ class SlotPatcher(FakePatcher):
 class NoProviderPatcher(FakePatcher):
     game_id = "fake-no-providers"
     providers = ()
+
+
+class UndecoratedPatcher(Patcher):
+    """A patcher written but not yet put through `@register`.
+
+    Nothing stamps its capabilities, so `game_id` keeps the ABC's empty
+    placeholder and `providers` stays empty. This is the state of anyone
+    part-way through writing the first real patcher.
+    """
+
+    requires_slot_mapping = True
+    requires_api_key = True
+
+    def analyze_rom(self, rom_path): ...
+
+    def fetch(self, *, season, league_id=None, on_progress=None): ...
+
+    def map_rosters(self, data, slot_mapping=None): ...
+
+    def patch(self, *, rom_path, output_path, rosters, on_progress=None, **options): ...
 
 
 def test_the_abc_cannot_be_instantiated_directly():
@@ -125,6 +146,19 @@ def test_a_patcher_declaring_no_providers_rejects_any_provider():
 
 def test_provider_is_none_when_none_are_declared():
     assert NoProviderPatcher(cache_dir=Path("/tmp")).provider is None
+
+
+def test_guard_errors_name_the_class_when_game_id_is_unset():
+    # Before `@register` stamps a game_id, an error built from it alone would
+    # read " requires an api_key" — a leading space and no subject.
+    patcher = UndecoratedPatcher(cache_dir=Path("/tmp"))
+    assert patcher.game_id == ""
+    with pytest.raises(CapabilityError, match="UndecoratedPatcher requires an api_key"):
+        patcher.check_api_key()
+    with pytest.raises(CapabilityError, match="UndecoratedPatcher requires a slot mapping"):
+        patcher.check_slot_mapping(None)
+    with pytest.raises(CapabilityError, match="UndecoratedPatcher does not support provider"):
+        UndecoratedPatcher(cache_dir=Path("/tmp"), provider="espn")
 
 
 def test_provider_defaults_to_the_first_declared_one():
