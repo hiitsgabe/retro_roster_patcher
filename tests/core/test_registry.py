@@ -1,3 +1,5 @@
+import json
+
 import pytest
 
 from retro_roster_patcher.core import registry
@@ -68,7 +70,17 @@ def test_get_patcher_raises_a_helpful_error_for_unknown_ids():
 
     with pytest.raises(KeyError) as excinfo:
         get_patcher("nope")
-    assert "dummy" in str(excinfo.value)
+    message = str(excinfo.value)
+    assert "nope" in message
+    assert "dummy" in message
+
+
+def test_get_patcher_says_none_when_nothing_is_registered():
+    with pytest.raises(KeyError) as excinfo:
+        get_patcher("nope")
+    message = str(excinfo.value)
+    assert "nope" in message
+    assert "none" in message
 
 
 def test_registering_the_same_id_twice_is_an_error():
@@ -76,11 +88,17 @@ def test_registering_the_same_id_twice_is_an_error():
     class First:
         pass
 
-    with pytest.raises(ValueError, match="dummy"):
+    class Second:
+        pass
 
-        @register("dummy", platform="genesis", sport="hockey")
-        class Second:
-            pass
+    with pytest.raises(ValueError) as excinfo:
+        register("dummy", platform="genesis", sport="hockey")(Second)
+
+    message = str(excinfo.value)
+    assert "dummy" in message
+    assert "First" in message
+    assert get_patcher("dummy") is First
+    assert not hasattr(Second, "game_id")
 
 
 def test_list_patchers_is_sorted_and_describes_each_game():
@@ -103,3 +121,27 @@ def test_list_patchers_is_sorted_and_describes_each_game():
         providers=("espn",),
     )
     assert infos[1].requires_slot_mapping is True
+
+
+def test_patcher_info_serialises_for_the_json_protocol():
+    info = PatcherInfo(
+        game_id="nhl94-genesis",
+        platform="genesis",
+        sport="hockey",
+        requires_slot_mapping=True,
+        requires_api_key=False,
+        providers=("espn", "nhl"),
+    )
+
+    assert info.to_dict() == {
+        "game_id": "nhl94-genesis",
+        "platform": "genesis",
+        "sport": "hockey",
+        "requires_slot_mapping": True,
+        "requires_api_key": False,
+        "providers": ["espn", "nhl"],
+    }
+
+    round_tripped = json.loads(json.dumps(info.to_dict()))
+    assert round_tripped == info.to_dict()
+    assert round_tripped["providers"] == ["espn", "nhl"]
