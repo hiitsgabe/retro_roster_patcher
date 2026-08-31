@@ -1,14 +1,15 @@
-"""API-Football rate-limit, cache-key, and URL behaviour. Never touches the network.
+"""API-Football client behaviour, offline. Never touches the network.
 
 Unlike the ESPN and NHL suites there is no recorded fixture here: API-Football
 authenticates every request with a real key, so nothing can be recorded without
-committing one. The tests drive synthetic bodies instead, and target what makes
-this client different from its siblings — the retry loop, the plan restriction,
-and the four argument-derived cache keys.
+committing one. The tests drive hand-written synthetic bodies instead, the same
+way `test_nhl.py` drives club-stats.
 """
 
 import json
+import time
 from collections.abc import Mapping
+from datetime import datetime
 from typing import Any
 
 import pytest
@@ -19,6 +20,7 @@ from retro_roster_patcher.sports.api_football import (
     RateLimitError,
     SeasonNotAvailableError,
 )
+from retro_roster_patcher.sports.models import League, Player, PlayerStats, Team
 
 BASE = "https://v3.football.api-sports.io"
 LEAGUES_URL = f"{BASE}/leagues"
@@ -34,9 +36,14 @@ EMPTY_RESPONSE: dict[str, Any] = {"response": []}
 class _Transport:
     """Yields each payload in turn, repeating the last, and logs the URLs asked for.
 
-    A class rather than a function with an attribute bolted on: mypy rejects
-    `transport.calls = calls` on a function object, and `calls` is the whole point
-    — pinning the URL list is what catches a wrong path or a collapsed cache key.
+    `calls` is the whole point — pinning the URL list is what catches a wrong path
+    or a collapsed cache key. A class rather than a function carrying the list as
+    a bolted-on attribute, which is what `conftest.replay` does: that pattern is
+    fine while the function stays unannotated, but mypy rejects
+    `transport.calls = calls` once the function has a signature, and this one
+    needs one to accept `*payloads`. CI's mypy would not notice either way —
+    `pyproject.toml` sets `files = ["src"]`, so it never reads the tests — but the
+    `mypy src tests` run locally does.
     """
 
     def __init__(self, *payloads: Any) -> None:
@@ -116,6 +123,14 @@ def test_the_retry_waits_the_whole_window_in_steps_and_reports_it(tmp_path, slep
     assert seen[-1] == "Rate limited — retrying in 5s..."
 
 
+def test_the_sleep_seam_defaults_to_really_sleeping():
+    # Every other rate-limit test replaces _sleep, so all of them stay green if the
+    # production default is neutered. The seam exists to make the wait testable,
+    # not to remove it: without a real sleep the "retry" is three requests fired
+    # back to back at a provider that has just said stop.
+    assert ApiFootballClient._sleep is time.sleep
+
+
 def test_a_persistent_rate_limit_raises_after_the_retries_are_spent(tmp_path, slept):
     transport = _Transport({"errors": {"rateLimit": "too many"}})
     client = ApiFootballClient(api_key="k", cache_dir=str(tmp_path), transport=transport)
@@ -140,6 +155,20 @@ def test_the_daily_limit_raises_immediately(tmp_path, slept):
     assert slept == []
 
 
+def test_a_rate_limit_beats_a_daily_limit_when_a_body_carries_both(tmp_path, slept):
+    # The two checks are separate blocks in _request and the order between them is
+    # a real decision: hoisting the daily-limit block would turn every combined
+    # body into an immediate hard failure instead of a retry. Nothing about
+    # raising DailyLimitError here would look wrong on its own.
+    transport = _Transport({"errors": {"rateLimit": "too many", "requests": "daily limit"}})
+    client = ApiFootballClient(api_key="k", cache_dir=str(tmp_path), transport=transport)
+
+    with pytest.raises(RateLimitError):
+        client._request("/teams", {})
+
+    assert len(transport.calls) == 4
+
+
 def test_a_free_plan_restriction_raises_season_not_available(tmp_path):
     client = ApiFootballClient(api_key="k", cache_dir=str(tmp_path))
     with pytest.raises(SeasonNotAvailableError) as excinfo:
@@ -151,12 +180,279 @@ def test_a_free_plan_restriction_raises_season_not_available(tmp_path):
     assert excinfo.value.season == 1998
 
 
+# A plan restriction is what a free key hitting a historical season actually gets
+# back. The body below is the whole response — API-Football answers 200 with the
+# error in the envelope, so nothing raises on its own.
+PLAN_RESTRICTED: dict[str, Any] = {
+    "errors": {"plan": "Free plans do not have access to this season"}
+}
+
+
+def test_get_leagues_surfaces_a_plan_restriction(tmp_path):
+    # Drives the public path, not _check_plan_error directly: the call site in
+    # get_leagues can be deleted outright without the direct test noticing, and
+    # the caller would then see an empty league list instead of being told the
+    # key cannot reach 1998.
+    client = ApiFootballClient(
+        api_key="k", cache_dir=str(tmp_path), transport=_Transport(PLAN_RESTRICTED)
+    )
+
+    with pytest.raises(SeasonNotAvailableError) as excinfo:
+        client.get_leagues(season=1998)
+
+    assert excinfo.value.season == 1998
+
+
+def test_get_teams_surfaces_a_plan_restriction(tmp_path):
+    client = ApiFootballClient(
+        api_key="k", cache_dir=str(tmp_path), transport=_Transport(PLAN_RESTRICTED)
+    )
+
+    with pytest.raises(SeasonNotAvailableError) as excinfo:
+        client.get_teams(39, 1998)
+
+    assert excinfo.value.season == 1998
+
+
+def test_a_plan_restricted_squad_comes_back_empty_rather_than_raising(tmp_path):
+    # Pinning a known defect in the ported source, not endorsing it: get_squad and
+    # get_player_stats never call _check_plan_error, so the same body that raises
+    # for leagues and teams is indistinguishable here from a team with no players.
+    # Reported upstream; deliberately not fixed as part of a mechanical port.
+    client = ApiFootballClient(
+        api_key="k", cache_dir=str(tmp_path), transport=_Transport(PLAN_RESTRICTED)
+    )
+
+    assert client.get_squad(33) == []
+    assert client.get_player_stats(33, 1998) == []
+
+
 def test_a_transport_failure_yields_an_empty_dict(tmp_path):
     def failing(url, headers, timeout):
         raise OSError("no network")
 
     client = ApiFootballClient(api_key="k", cache_dir=str(tmp_path), transport=failing)
     assert client._request("/teams", {}) == {}
+
+
+# --- parsers ---
+#
+# Driven through the public methods rather than by poking the _parse_* helpers, so
+# each test covers the wiring as well as the transform. Assertions are whole-object
+# equalities: a truthiness check like `all(p.name for p in players)` passes just as
+# happily on a blanked field that fell through to a non-empty default, or on a
+# first/last name swap, which is the failure mode that produces plausible-looking
+# wrong data rather than an obvious crash.
+
+
+def test_get_leagues_parses_a_league_with_its_season_statistics(tmp_path):
+    body = {
+        "response": [
+            {
+                "league": {"id": 39, "name": "Premier League", "logo": "pl.png"},
+                "country": {"name": "England", "code": "GB"},
+                "seasons": [
+                    {"year": 2023, "statistics": {"teams": 18}},
+                    {"year": 2024, "statistics": {"teams": 20}},
+                ],
+            }
+        ]
+    }
+    client = ApiFootballClient(api_key="k", cache_dir=str(tmp_path), transport=_Transport(body))
+
+    # Two seasons in the payload and the requested one is not the last, so a
+    # parser that took `seasons[-1]` or ignored the filter would still produce a
+    # plausible League — with the wrong teams_count.
+    assert client.get_leagues(season=2024) == [
+        League(
+            id=39,
+            name="Premier League",
+            country="England",
+            country_code="GB",
+            logo_url="pl.png",
+            season=2024,
+            teams_count=20,
+        )
+    ]
+
+
+def test_get_teams_truncates_the_short_name_and_code_to_the_rom_field_widths(tmp_path):
+    # The name overruns 12 characters and the code overruns 3 on purpose. Both cuts
+    # are ROM field widths, and a widened cut is invisible until the patcher writes
+    # past the field — the same hazard test_nhl.py pins with "Golden Knigh".
+    body = {
+        "response": [
+            {
+                "team": {"id": 33, "name": "Manchester United", "code": "MANU", "logo": "mu.png"},
+                "venue": {"city": "Manchester"},
+            }
+        ]
+    }
+    client = ApiFootballClient(api_key="k", cache_dir=str(tmp_path), transport=_Transport(body))
+
+    assert client.get_teams(39, 2024) == [
+        Team(
+            id=33,
+            name="Manchester United",
+            short_name="Manchester U",
+            code="MAN",
+            logo_url="mu.png",
+            country="Manchester",
+        )
+    ]
+
+
+def test_get_squad_maps_positions_and_keeps_the_name_halves_apart(tmp_path):
+    body = {
+        "response": [
+            {
+                "players": [
+                    {
+                        "id": 1,
+                        "name": "David de Gea",
+                        "firstname": "David",
+                        "lastname": "de Gea",
+                        "age": 33,
+                        "nationality": "Spain",
+                        "position": "Goalkeeper",
+                        "number": 1,
+                        "photo": "1.png",
+                    },
+                    {
+                        # "Winger" is not one of the three names the parser matches,
+                        # so it exercises the Attacker fallback rather than a branch.
+                        "id": 2,
+                        "name": "Marcus Rashford",
+                        "firstname": "Marcus",
+                        "lastname": "Rashford",
+                        "age": 26,
+                        "nationality": "England",
+                        "position": "Winger",
+                        "number": 10,
+                        "photo": "10.png",
+                    },
+                ]
+            }
+        ]
+    }
+    client = ApiFootballClient(api_key="k", cache_dir=str(tmp_path), transport=_Transport(body))
+
+    # Both players carry distinct first and last names, so a swap fails rather than
+    # producing something that still reads like a name.
+    assert client.get_squad(33) == [
+        Player(
+            id=1,
+            name="David de Gea",
+            first_name="David",
+            last_name="de Gea",
+            age=33,
+            nationality="Spain",
+            position="Goalkeeper",
+            number=1,
+            photo_url="1.png",
+        ),
+        Player(
+            id=2,
+            name="Marcus Rashford",
+            first_name="Marcus",
+            last_name="Rashford",
+            age=26,
+            nationality="England",
+            position="Attacker",
+            number=10,
+            photo_url="10.png",
+        ),
+    ]
+
+
+def test_get_player_stats_parses_the_first_statistics_entry(tmp_path):
+    body = {
+        "response": [
+            {
+                "player": {"id": 1},
+                "statistics": [
+                    {
+                        # "appearences" is API-Football's own misspelling and it is
+                        # load-bearing: correcting it to "appearances" here or in
+                        # the parser silently zeroes every appearance count.
+                        "games": {
+                            "appearences": 35,
+                            "minutes": 3050,
+                            "rating": "7.4",
+                            "lineups": 34,
+                        },
+                        "goals": {"total": 18, "assists": 7},
+                        "shots": {"total": 60, "on": 30},
+                        "passes": {"total": 900, "accuracy": 84},
+                        "tackles": {"total": 20, "interceptions": 8, "blocks": 3},
+                        "duels": {"total": 200, "won": 110},
+                        "dribbles": {"attempts": 90, "success": 45},
+                        "fouls": {"committed": 15, "drawn": 25},
+                        "cards": {"yellow": 4, "red": 1},
+                    },
+                    # A second entry, which the parser must ignore: players loaned
+                    # mid-season carry one per competition and the client documents
+                    # taking the primary league only.
+                    {"games": {"appearences": 99}, "goals": {"total": 99}},
+                ],
+            }
+        ]
+    }
+    client = ApiFootballClient(api_key="k", cache_dir=str(tmp_path), transport=_Transport(body))
+
+    # goals and assists differ, so the swap that would read fine either way fails.
+    assert client.get_player_stats(33, 2024) == [
+        PlayerStats(
+            player_id=1,
+            appearances=35,
+            minutes=3050,
+            goals=18,
+            assists=7,
+            shots_total=60,
+            shots_on=30,
+            passes_total=900,
+            passes_accuracy=84.0,
+            tackles_total=20,
+            interceptions=8,
+            blocks=3,
+            duels_total=200,
+            duels_won=110,
+            dribbles_attempts=90,
+            dribbles_success=45,
+            fouls_committed=15,
+            fouls_drawn=25,
+            cards_yellow=4,
+            cards_red=1,
+            rating=7.4,
+            lineups=34,
+        )
+    ]
+
+
+# --- members that answer offline ---
+
+
+def test_the_offline_members_answer_without_touching_the_transport(
+    tmp_path, forbid_default_transport
+):
+    # Constructed with no transport at all, under a default transport that raises:
+    # OFFLINE_MEMBERS is otherwise only ever compared as a set of names, so a
+    # member listed there could start issuing requests with the suite still green.
+    client = ApiFootballClient(api_key="k", cache_dir=str(tmp_path))
+
+    assert client.get_team_logo_url(33) == "https://media.api-sports.io/football/teams/33.png"
+
+    # Recomputed rather than hardcoded: the source reads datetime.now().year, so a
+    # literal here would rot at the new year. The cross-year rule is the point —
+    # the Champions League season is labelled by the year it started, and getting
+    # it wrong asks the API for a season that has not finished.
+    year = datetime.now().year
+    assert client.get_featured_leagues() == [
+        League(id=2, name="UEFA Champions League", country="World", season=year - 1),
+        League(id=13, name="Copa Libertadores", country="South America", season=year),
+        League(id=71, name="Brasileirao Serie A", country="Brazil", season=year),
+        League(id=253, name="MLS", country="USA", season=year),
+    ]
 
 
 # --- cache keys ---

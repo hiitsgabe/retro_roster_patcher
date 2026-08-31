@@ -95,6 +95,25 @@ def assert_no_transport_leak(monkeypatch):
 
 
 @pytest.fixture
+def forbid_default_transport(monkeypatch):
+    """Make any fall-through to the real network transport raise, loudly.
+
+    `assert_no_transport_leak` covers the members that are supposed to reach the
+    wire. This covers the opposite claim — that a member classified as offline
+    answers from constants and never requests anything — which no comparison of
+    name sets can make. Exposed as a fixture rather than by exporting
+    `TransportLeak`: there is no `tests/__init__.py`, so pytest imports this file
+    as `sports.conftest`, and a test doing `from tests.sports.conftest import
+    TransportLeak` would bind a second, unrelated copy of the class.
+    """
+
+    def forbidden(url, headers, timeout):
+        raise TransportLeak(f"a member classified as offline requested: {url}")
+
+    monkeypatch.setattr(_http, "default_transport", forbidden)
+
+
+@pytest.fixture
 def assert_public_members_are_classified():
     """Fail when a public member exists that neither table accounts for.
 
@@ -104,6 +123,9 @@ def assert_public_members_are_classified():
     """
 
     def _assert(client_class, network_calls, offline_members):
+        # A name in both tables satisfies the union below while meaning two
+        # contradictory things, and its offline claim would go unchecked.
+        assert not set(network_calls) & set(offline_members)
         public = {name for name in dir(client_class) if not name.startswith("_")}
         assert public == set(network_calls) | set(offline_members)
 
