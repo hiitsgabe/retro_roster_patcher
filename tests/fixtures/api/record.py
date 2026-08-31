@@ -16,6 +16,7 @@ the library will really send. Not named `test_*.py`, so pytest does not collect 
 
 from __future__ import annotations
 
+import json
 import pathlib
 import sys
 
@@ -30,8 +31,19 @@ SOURCES = {
 
 
 def record(name: str) -> int:
-    """Fetch one fixture, overwrite it on disk, and return the byte count."""
+    """Fetch one fixture, overwrite it on disk, and return the byte count.
+
+    Raises rather than writing if the response is not JSON. A 200 is no guarantee
+    of one — an HTML interstitial, a captive portal, and a truncated body all
+    arrive that way — and this script's whole job is replacing the file the suite
+    depends on. Clobbering a known-good fixture with junk surfaces much later and
+    somewhere else, as a bewildering assertion failure in a client test.
+    """
     body = _http.default_transport(SOURCES[name], {}, _http.DEFAULT_TIMEOUT)
+    try:
+        json.loads(body)
+    except ValueError as exc:
+        raise ValueError(f"not JSON ({exc}); body starts {body[:120]!r}") from exc
     (HERE / name).write_bytes(body)
     return len(body)
 
@@ -43,9 +55,17 @@ def main(argv: list[str]) -> int:
         print(f"unknown fixture(s): {', '.join(unknown)}", file=sys.stderr)
         print(f"known: {', '.join(sorted(SOURCES))}", file=sys.stderr)
         return 2
+    failed = False
     for name in names:
-        print(f"{name}: {record(name)} bytes from {SOURCES[name]}")
-    return 0
+        try:
+            size = record(name)
+        except Exception as exc:
+            # Keep going: one dead endpoint should not block re-recording the rest.
+            print(f"{name}: left unchanged, {exc}", file=sys.stderr)
+            failed = True
+            continue
+        print(f"{name}: {size} bytes from {SOURCES[name]}")
+    return 1 if failed else 0
 
 
 if __name__ == "__main__":
