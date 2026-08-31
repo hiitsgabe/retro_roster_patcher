@@ -65,9 +65,17 @@ def test_get_hockey_squad_parses_the_recorded_roster(tmp_path, replay):
     # alongside the mapped ones.
     assert {p.position for p in players} == {"C", "LW", "RW", "D", "G"}
 
+    # One player spelled out. `name` is `f"{first} {last}".strip()`, so blanking
+    # either half leaves it truthy and the check above passes on half a name.
+    # Selected by sweater number, which is independent of both.
+    pastrnak = next(p for p in players if p.number == 88)
+    assert (pastrnak.first_name, pastrnak.last_name) == ("David", "Pastrnak")
+    assert pastrnak.name == "David Pastrnak"
+    assert pastrnak.position == "RW"  # the R -> RW mapping, on a named player
 
-def test_each_team_and_season_caches_separately(tmp_path, replay):
-    # The standings cache key is a bare constant, but these two are built from the
+
+def test_each_squad_team_and_season_caches_separately(tmp_path, replay):
+    # The standings cache key is a bare constant, but this one is built from the
     # arguments. A key that drops one serves Boston's roster for Toronto, or last
     # season's for this one — wrong data, no error. Asserting the URL list rather
     # than a call count pins the season string the key and the path share.
@@ -82,6 +90,30 @@ def test_each_team_and_season_caches_separately(tmp_path, replay):
         ROSTER_URL,
         "https://api-web.nhle.com/v1/roster/TOR/20252026",
         "https://api-web.nhle.com/v1/roster/BOS/20242025",
+    ]
+
+
+def test_each_leaders_team_and_season_caches_separately(tmp_path):
+    # Same hazard, same shape, on the third endpoint. Driven by a synthetic body
+    # rather than a recorded one on purpose: what is under test is the cache key
+    # and the URL, not the stat extraction, so this needs no club-stats fixture —
+    # only a payload truthy enough that the client caches it.
+    calls = []
+
+    def transport(url, headers, timeout):
+        calls.append(url)
+        return b'{"skaters": [{"playerId": 1, "goals": 3}], "goalies": []}'
+
+    client = NhlApiClient(str(tmp_path), transport=transport)
+    client.get_hockey_team_leaders("BOS")
+    client.get_hockey_team_leaders("TOR")
+    client.get_hockey_team_leaders("BOS", season=2024)
+    client.get_hockey_team_leaders("BOS")
+
+    assert calls == [
+        CLUB_STATS_URL,
+        "https://api-web.nhle.com/v1/club-stats/TOR/20252026/2",
+        "https://api-web.nhle.com/v1/club-stats/BOS/20242025/2",
     ]
 
 
