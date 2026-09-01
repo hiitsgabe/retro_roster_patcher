@@ -123,7 +123,7 @@ def test_the_patcher_is_registered_with_its_capabilities():
     assert cls.providers == ("espn", "nhl")
 
 
-def test_importing_the_package_root_is_what_registers_the_game():
+def test_importing_the_package_root_is_what_registers_the_game(tmp_path):
     # The registration is a side-effect import at the bottom of the package
     # __init__. Dropping it leaves `get_patcher` green for anyone who imported
     # the game module first — which every other test in this file does — and
@@ -146,6 +146,10 @@ def test_importing_the_package_root_is_what_registers_the_game():
     )
     proc = subprocess.run(
         [sys.executable, "-c", source],
+        # `-c` puts the child's cwd on its `sys.path`, so an inherited cwd that
+        # happens to hold a `retro_roster_patcher/` directory would shadow the
+        # installed package. `tmp_path` holds nothing.
+        cwd=tmp_path,
         capture_output=True,
         text=True,
         check=False,
@@ -161,21 +165,22 @@ def test_an_unknown_provider_is_rejected(tmp_path):
         NHL94GenesisPatcher(cache_dir=tmp_path, provider="statsapi")
 
 
-def test_the_default_provider_is_espn_and_nhl_can_be_chosen(tmp_path, forbid_default_transport):
+def test_the_default_provider_is_espn_and_nhl_can_be_chosen(tmp_path):
     assert NHL94GenesisPatcher(cache_dir=tmp_path / "a").provider == "espn"
     assert NHL94GenesisPatcher(cache_dir=tmp_path / "b", provider="nhl").provider == "nhl"
 
 
-def test_each_provider_builds_its_own_client(tmp_path, forbid_default_transport):
+def test_each_provider_builds_its_own_client(tmp_path):
     # Every other test in this file swaps `patcher.api` for a fake, so without
     # this one the branch that chooses between the two real clients is never
     # executed and inverting it changes nothing.
     #
-    # These are live clients built with `transport=None`, so they are the three
-    # tests in this file that could reach the wire. `forbid_default_transport`
-    # (tests/conftest.py) makes the fall-through raise instead: today both
-    # constructors only assign attributes and makedirs, and this is what keeps
-    # that true.
+    # These are live clients built with `transport=None`, and so are the ones the
+    # `patcher` fixture builds before it overwrites `p.api` — 42 of the 47 tests
+    # in this file construct one. The autouse guard in `tests/conftest.py` makes
+    # the fall-through to the real transport raise `TransportLeak` for all of
+    # them: today both constructors only assign attributes and makedirs, and that
+    # is what keeps it true.
     espn = NHL94GenesisPatcher(cache_dir=tmp_path / "a")
     nhl = NHL94GenesisPatcher(cache_dir=tmp_path / "b", provider="nhl")
     assert type(espn.api) is EspnClient
@@ -201,9 +206,7 @@ def test_the_client_is_given_the_cache_directory_and_the_transport(tmp_path, pro
     assert p.api.on_status == seen.append
 
 
-def test_the_cache_directory_exists_once_the_patcher_is_constructed(
-    tmp_path, forbid_default_transport
-):
+def test_the_cache_directory_exists_once_the_patcher_is_constructed(tmp_path):
     # Constructing a patcher has to be enough to make the cache usable. The
     # patcher itself no longer calls mkdir: both clients do it in their own
     # constructors, and a second call here was invisible to every assertion.
@@ -682,10 +685,14 @@ def test_a_roster_region_running_past_the_end_of_the_image_becomes_a_rom_error(t
 
 def test_an_out_of_range_slot_key_is_ignored_rather_than_written(tmp_path, patcher):
     # DEFECT (pinned in test_rom_writer.py): the writer's only bounds check is
-    # `team_index >= TEAM_COUNT`, so a negative index wraps round the pointer
-    # table and patches whatever it finds near offset 0. `MappedRosters.teams` is
-    # a plain dict that may have been rebuilt from JSON, so `patch` drives its
-    # loop off `range(TEAM_COUNT)` instead of off the dict's keys.
+    # `team_index >= TEAM_COUNT`, so a negative index is not rejected at all. It
+    # is not a wrap either: `_read_team_pointer(-1)` computes `0x030E - 4` and
+    # reads the four bytes *preceding* the pointer table, then treats that word
+    # as a team pointer. Where the stray write lands is whatever that word says —
+    # on this fixture it reads zero, on an image carrying anything else there it
+    # is an arbitrary offset. `MappedRosters.teams` is a plain dict that may have
+    # been rebuilt from JSON, so `patch` filters the keys `filled_slots()` hands
+    # it through `0 <= slot < TEAM_COUNT` instead of trusting them.
     #
     # The landing site is baited first, exactly as the writer tests bait theirs.
     # On the plain fixture slot -1 resolves to a region at offset 0 that is

@@ -12,10 +12,13 @@ contracts is worked around here rather than fixed there:
     file that is not this game must not raise.
   * `NHL94GenesisRomWriter.write_team_roster` documents a `-1` error return but
     raises `IndexError` on a malformed image by the two routes pinned in
-    `test_rom_writer.py` (`:918`, the zero fill past the end of a region the
-    reader over-measured, and `:953`, the name write that follows a stats write
-    the writer's own bounds guard refused). `patch` catches those and raises
-    `RomError`, which is what its contract promises.
+    `test_rom_writer.py`: the zero fill past the end of a region the reader
+    over-measured (`test_a_roster_region_that_runs_past_the_end_of_the_file_raises`)
+    and the name write that follows a stats write the writer's own bounds guard
+    refused (`test_a_team_block_at_the_end_of_the_file_lets_stats_scribble_past_it`).
+    Cited by name rather than by line number, which nothing keeps current.
+    `patch` catches those and raises `RomError`, which is what its contract
+    promises.
 
 The original orchestrator returned `dict[str, list[Player]]` from its fetch step
 and left team leader stats on `self.team_stats` as a side effect. Here `fetch`
@@ -103,9 +106,11 @@ class NHL94GenesisPatcher(Patcher):
         # eagerly is what keeps `analyze_rom` free of a lazily-built API object.
         #
         # `Any` rather than a union or a Protocol, and it is the one loose
-        # annotation in this tree: the two clients disagree on the signature of
-        # every method `fetch` calls — `get_hockey_squad(team_id)` against
-        # `get_hockey_squad(code, season)` — so no single type describes both.
+        # annotation in this tree: of the three methods `fetch` calls on the
+        # client, only `get_nhl_teams` has the same signature on both. The other
+        # two disagree — `get_hockey_squad(team_id)` against
+        # `get_hockey_squad(team_abbrev, season)`, and `get_hockey_team_leaders`
+        # split the same way — so no single type describes both.
         # The cost is real: calling the wrong client's method is a runtime bug
         # here rather than a mypy error, which is why `fetch` branches on
         # `self.provider` and both branches are pinned by tests.
@@ -242,9 +247,12 @@ class NHL94GenesisPatcher(Patcher):
 
         self.status("Initializing ROM writer...")
         # The image is read from disk twice — once above, once by the writer's
-        # own internal reader — which is ~2 MB of redundant I/O per patch. Kept
-        # deliberately: it is what lets "not this game" fail before any writer
-        # state exists, and the writer owns its reader for its whole lifetime.
+        # own internal reader — so exactly one whole copy of the file is
+        # redundant I/O per patch: 1 MB at `ROM_SIZE_STANDARD`, and more for the
+        # expanded images `validate` accepts, since it bounds the size only from
+        # below. Kept deliberately: it is what lets "not this game" fail before
+        # any writer state exists, and the writer owns its reader for its whole
+        # lifetime.
         writer = NHL94GenesisRomWriter(str(rom_path), str(output_path))
         if not writer.load():
             raise RomError(f"Failed to load ROM for writing: {rom_path}")
