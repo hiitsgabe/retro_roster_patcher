@@ -258,6 +258,24 @@ def test_english_is_served_from_the_package_without_writing_anything(tmp_path, m
     assert path.endswith("we2002_english.ppf") is True
 
 
+def test_english_returns_one_shared_path_rather_than_a_copy_per_call(tmp_path, monkeypatch):
+    # `ensure_ppf`'s docstring described the opposite of this: a fresh temporary
+    # file per call, and two calls returning two different paths. `package_path`
+    # memoises on `(package, name)`, so every caller is handed the same file and
+    # a caller that wrote to it would change what the next one reads.
+    monkeypatch.setattr(assets, "_materialised", {})
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+    cache_dir = tmp_path / "cache"
+
+    first = ensure_ppf(str(cache_dir), "en")
+    second = ensure_ppf(str(cache_dir), "en")
+
+    assert second == first
+    # One file materialised, not two, and `cache_dir` is still untouched.
+    assert [p.name for p in tmp_path.iterdir()] == [pathlib.Path(first).name]
+    assert cache_dir.exists() is False
+
+
 def test_english_falls_back_to_generation_when_community_assets_are_supplied(tmp_path):
     """The `has_community` half of the dispatcher's English short-circuit."""
     cache_dir = tmp_path / "cache"
