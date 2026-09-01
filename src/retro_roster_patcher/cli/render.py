@@ -88,7 +88,7 @@ class HumanRenderer:
             self.err.flush()
             self._progress_open = False
 
-    def _line(self, text: str = "") -> None:
+    def _line(self, text: str) -> None:
         self.out.write(text + "\n")
 
     # -- Renderer -----------------------------------------------------------
@@ -118,6 +118,12 @@ class HumanRenderer:
 
     def result(self, payload: dict[str, Any]) -> None:
         self._close_progress()
+        # `.get`, not `[]`: a payload with no `kind` violates this module's
+        # docstring, but raising here would replace a producer bug with no output
+        # at all, and this is the last stop before the user. `_fallback` still
+        # prints every key, so the degraded rendering is the useful failure. That
+        # is contract, not accident: the suite pins the absent-`kind` case as
+        # well as the unrecognised-`kind` one.
         formatter = {
             "patchers": self._patchers,
             "rom_info": self._rom_info,
@@ -144,8 +150,12 @@ class HumanRenderer:
         header = ["GAME", "PLATFORM", "SPORT", "SLOT-MAP", "API-KEY", "PROVIDERS"]
         widths = [max(len(r[i]) for r in [header, *rows]) for i in range(len(header))]
         for row in [header, *rows]:
-            # `strict`: widths is sized from the header, so a short row is a bug
-            # in a formatter above, not something to truncate silently.
+            # `strict` catches a row longer than the header; a short one never
+            # reaches here, because sizing `widths` indexes every row by every
+            # header position and raises IndexError first. Neither is reachable
+            # from a payload — the comprehension above always yields six cells —
+            # so this is belt-and-braces against a later edit to this function,
+            # and B905 requires an explicit `strict=` either way.
             cells = (cell.ljust(w) for cell, w in zip(row, widths, strict=True))
             self._line("  ".join(cells).rstrip())
 
@@ -155,11 +165,15 @@ class HumanRenderer:
             self._line("no registered patcher recognised this ROM")
             return
         for info in matches:
-            slots = len(info.get("slots") or [])
+            # Indexed, not `.get`: every match is a `RomInfo.to_dict()`, which
+            # emits `slots` and `is_valid` unconditionally. A `.get` would turn a
+            # producer that dropped one into "valid: no" / "0 slots" — a
+            # plausible falsehood about the user's ROM rather than a traceback.
+            slots = len(info["slots"])
             self._line(f"{info['game_id']}")
             self._line(f"  path:   {info['path']}")
             self._line(f"  size:   {info['size']:,} bytes")
-            self._line(f"  valid:  {'yes' if info.get('is_valid') else 'no'}")
+            self._line(f"  valid:  {'yes' if info['is_valid'] else 'no'}")
             self._line(f"  slots:  {slots} slot{'' if slots == 1 else 's'}")
 
     def _rosters(self, payload: dict[str, Any]) -> None:
