@@ -9,6 +9,7 @@ def test_the_documented_names_are_importable_from_the_root():
         "LeagueData",
         "MappedRosters",
         "MappingError",
+        "MissingAssetError",
         "Patcher",
         "PatcherInfo",
         "PatchResult",
@@ -18,6 +19,8 @@ def test_the_documented_names_are_importable_from_the_root():
         "RomSlot",
         "SlotMapping",
         "get_patcher",
+        "league_data_from_dict",
+        "league_data_to_dict",
         "list_patchers",
         "register",
     }

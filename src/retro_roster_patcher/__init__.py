@@ -10,6 +10,7 @@ alternative — lazy discovery — makes `list_patchers()` order-dependent.
 # directly, never the package root: while the game imports below are running, this
 # module is still partially initialised, so `from retro_roster_patcher import Patcher`
 # would resolve only by accident of ordering and break the moment the block is reordered.
+from .core.assets import MissingAssetError
 from .core.errors import (
     ApiError,
     CapabilityError,
@@ -21,6 +22,7 @@ from .core.models import MappedRosters, PatchResult, RomInfo, RomSlot, SlotMappi
 from .core.patcher import Patcher
 from .core.registry import PatcherInfo, get_patcher, list_patchers, register
 from .sports.models import League, LeagueData, Player, PlayerStats, Team, TeamRoster
+from .sports.serde import league_data_from_dict, league_data_to_dict
 
 # isort: split
 #
@@ -41,6 +43,7 @@ __all__ = [
     "LeagueData",
     "MappedRosters",
     "MappingError",
+    "MissingAssetError",
     "PatchResult",
     "Patcher",
     "PatcherInfo",
@@ -55,6 +58,8 @@ __all__ = [
     "TeamRoster",
     "__version__",
     "get_patcher",
+    "league_data_from_dict",
+    "league_data_to_dict",
     "list_patchers",
     "register",
 ]
