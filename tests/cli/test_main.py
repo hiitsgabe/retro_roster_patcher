@@ -308,9 +308,16 @@ def test_build_patcher_wires_the_renderer_status_callback(tmp_path):
 
 
 def test_build_patcher_wires_the_renderer_partial_callback(tmp_path):
-    renderer = JsonRenderer(out=io.StringIO())
+    # Not `patcher.on_partial == renderer.partial`, which is what this asserted
+    # until `_partial_adapter` came between them. Driving a payload through and
+    # reading the stream pins what the wiring is actually for, and a dict is the
+    # case that must arrive untouched: `cmd_fetch` calls `renderer.partial` with
+    # an already-serialised payload, so the adapter may not reshape one.
+    out = io.StringIO()
+    renderer = JsonRenderer(out=out)
     patcher = build_patcher("we2002", _args(tmp_path), renderer)
-    assert patcher.on_partial == renderer.partial
+    patcher.partial({"teams": []})
+    assert out.getvalue() == '{"event":"partial","data":{"teams":[]}}\n'
 
 
 def test_an_empty_api_key_reaches_the_patcher_as_none(tmp_path):
