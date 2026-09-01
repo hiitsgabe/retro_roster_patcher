@@ -7,7 +7,10 @@ maps each fixture back to the URL it came from and can re-record it.
 The transport-seam helpers below are client-agnostic on purpose: each client's own
 test file supplies only its method tables. The subtleties that make the leak guard
 work — the sentinel deriving from `BaseException`, the unfiltered member scan —
-live here once instead of being re-derived, and trimmed, per client.
+live in one place instead of being re-derived, and trimmed, per client. The
+sentinel itself and the `forbid_default_transport` fixture moved up to
+`tests/conftest.py`, which is the only scope from which `tests/games/` — where
+the NHL94 patcher constructs live sports clients — can see them.
 """
 
 import pathlib
@@ -15,6 +18,7 @@ import pathlib
 import pytest
 
 from retro_roster_patcher.sports import _http
+from tests.conftest import TransportLeak
 
 FIXTURES = pathlib.Path(__file__).parent.parent / "fixtures" / "api"
 
@@ -41,16 +45,6 @@ def replay():
         return transport
 
     return _replay
-
-
-class TransportLeak(BaseException):
-    """Raised when a client call site falls back to the real network transport.
-
-    Deliberately not an `Exception`. Every call site in these clients wraps its
-    request in `except Exception: return {}`, which would swallow an
-    `AssertionError` and leave the guard below green while the leak it exists to
-    catch went past.
-    """
 
 
 @pytest.fixture
@@ -92,29 +86,6 @@ def assert_no_transport_leak(monkeypatch):
         return requested
 
     return _assert
-
-
-@pytest.fixture
-def forbid_default_transport(monkeypatch):
-    """Make any fall-through to the real network transport raise, loudly.
-
-    `assert_no_transport_leak` covers the members that are supposed to reach the
-    wire. This covers the opposite claim — that a member classified as offline
-    answers from constants and never requests anything — which no comparison of
-    name sets can make. Exposed as a fixture rather than by exporting
-    `TransportLeak`: fixture injection is the access path a conftest is built for,
-    and it was once the only safe one. With no `tests/__init__.py` pytest bound
-    this file as `sports.conftest` while `pythonpath = ["."]` let a test import it
-    again as `tests.sports.conftest`, yielding a second, unrelated copy of the
-    class that no cross-module `except TransportLeak` or
-    `pytest.raises(TransportLeak)` would match. `tests/__init__.py` closed that
-    off; `tests/games/nhl94_genesis/test_rom_reader.py` keeps it closed.
-    """
-
-    def forbidden(url, headers, timeout):
-        raise TransportLeak(f"a member classified as offline requested: {url}")
-
-    monkeypatch.setattr(_http, "default_transport", forbidden)
 
 
 @pytest.fixture
