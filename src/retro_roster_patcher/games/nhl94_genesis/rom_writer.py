@@ -123,9 +123,14 @@ class NHL94GenesisRomWriter:
             if max_name_len < 1:
                 break  # No room for more players
 
-            # Truncate name to fit
+            # Truncate name to fit. An empty name would encode a length word of
+            # 2, which both `read_team_roster` and `get_team_player_region` treat
+            # as the end-of-roster sentinel, so it would hide every record after
+            # it while this method still counted them. One placeholder byte keeps
+            # the length word at 3 — the low edge of the reader's test — and the
+            # record chain intact.
             name = player.name[:max_name_len]
-            name_bytes = name.encode("ascii", errors="replace")
+            name_bytes = name.encode("ascii", errors="replace") or b"?"
             name_len = len(name_bytes)
 
             # Write 2-byte BE length (includes the 2 length bytes)
