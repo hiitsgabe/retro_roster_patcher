@@ -1,5 +1,6 @@
 import io
 import json
+import sys
 
 import pytest
 
@@ -8,6 +9,30 @@ from retro_roster_patcher.core.errors import RomError
 
 
 class FakeTty(io.StringIO):
+    def isatty(self) -> bool:
+        return True
+
+
+class Recorder(io.StringIO):
+    """An `io.StringIO` that counts `flush()` calls.
+
+    `io.StringIO.flush()` is a no-op, so a dropped `flush()` leaves `getvalue()`
+    identical and every other test in this file green. On the stream the renderer
+    actually gets it is not a no-op: Python block-buffers stdout when it is not a
+    tty, so an unflushed line sits in the buffer until it fills or the process
+    exits, and the `retro_toolbox` consumer's `readline()` blocks that whole time.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.flushes = 0
+
+    def flush(self) -> None:
+        self.flushes += 1
+        super().flush()
+
+
+class RecorderTty(Recorder):
     def isatty(self) -> bool:
         return True
 
@@ -85,10 +110,74 @@ def test_json_never_writes_to_stderr():
     r.partial({"a": 1})
     r.result({"kind": "patch", "output_path": "/x", "teams_patched": 0, "players_patched": 0})
     r.error(RomError("boom"))
+    # An empty stderr is also what a renderer that emitted nothing at all would
+    # produce, so the line count is what makes the claim above load-bearing.
+    assert len(events(out)) == 5
     assert err.getvalue() == ""
 
 
+def test_json_events_are_written_in_compact_form():
+    # The NDJSON framing — one object per line — is pinned by every `events()`
+    # call in this file. The separators are not: dropping them keeps the frame
+    # and only widens the bytes, which is a cost paid on every event over IPC.
+    out = io.StringIO()
+    JsonRenderer(out=out).status("Validating ROM...")
+    assert out.getvalue() == '{"event":"status","msg":"Validating ROM..."}\n'
+
+
+def test_json_flushes_the_stream_after_every_event():
+    out = Recorder()
+    r = JsonRenderer(out=out)
+    r.status("Validating ROM...")
+    assert out.flushes == 1
+    r.progress(0.42, "Fetching squads")
+    assert out.flushes == 2
+
+
+def test_a_json_renderer_with_no_streams_binds_the_process_streams():
+    # Tasks 23-25 construct renderers bare. A default that bound `out` to stderr
+    # would break the wire protocol outright while every test here stayed green,
+    # because all of them pass both streams explicitly.
+    r = JsonRenderer()
+    assert r.out is sys.stdout
+    assert r.err is sys.stderr
+
+
+def test_json_passes_a_payload_with_no_kind_straight_through():
+    out = io.StringIO()
+    JsonRenderer(out=out).result({"output_path": "/x"})
+    assert events(out) == [{"output_path": "/x", "event": "result", "ok": True}]
+
+
 # -- HumanRenderer ----------------------------------------------------------
+
+
+def test_a_human_renderer_with_no_streams_binds_the_process_streams():
+    r = HumanRenderer()
+    assert r.out is sys.stdout
+    assert r.err is sys.stderr
+
+
+def test_human_flushes_both_streams_as_it_writes():
+    # Every write this renderer makes has to be visible immediately: progress is
+    # `\r`-rewritten and useless once buffered, and a status printed after the
+    # run it was narrating is worse than none. Counts are exact so that a stray
+    # extra flush is a failure too.
+    out, err = Recorder(), RecorderTty()
+    r = HumanRenderer(out=out, err=err)
+    r.status("Validating ROM...")
+    assert err.flushes == 1
+    r.progress(0.42, "Fetching squads")
+    assert err.flushes == 2
+    # Closing the open progress line flushes on its own account, then `status`
+    # flushes again: two, not one, which is what pins `_close_progress`.
+    r.status("Writing ROM...")
+    assert err.flushes == 4
+    r.error(RomError("boom"))
+    assert err.flushes == 5
+    assert out.flushes == 0
+    r.result({"kind": "patch", "output_path": "/x", "teams_patched": 0, "players_patched": 0})
+    assert out.flushes == 1
 
 
 def test_human_status_goes_to_stderr_not_stdout():
@@ -241,6 +330,27 @@ def test_human_pluralises_a_slot_count_that_is_not_one():
     )
 
 
+def test_a_rom_info_match_missing_slots_raises_rather_than_reporting_zero():
+    # Every match is a `RomInfo.to_dict()`, which emits `slots` unconditionally,
+    # so absence is a producer bug. It has to surface as one: rendering "0 slots"
+    # would tell the user something false about their ROM.
+    out, err = io.StringIO(), io.StringIO()
+    r = HumanRenderer(out=out, err=err)
+    match = {"path": "/roms/x.bin", "size": 512, "game_id": "we2002", "is_valid": True}
+    with pytest.raises(KeyError, match="slots"):
+        r.result({"kind": "rom_info", "matches": [match]})
+
+
+def test_a_rom_info_match_missing_is_valid_raises_rather_than_reporting_invalid():
+    # Same guarantee, same reason: "valid: no" on a ROM nobody checked is a
+    # plausible falsehood, and the user has no way to tell it from a real answer.
+    out, err = io.StringIO(), io.StringIO()
+    r = HumanRenderer(out=out, err=err)
+    match = {"path": "/roms/x.bin", "size": 512, "game_id": "we2002", "slots": []}
+    with pytest.raises(KeyError, match="is_valid"):
+        r.result({"kind": "rom_info", "matches": [match]})
+
+
 def test_human_reports_when_no_patcher_recognised_the_rom():
     out, err = io.StringIO(), io.StringIO()
     HumanRenderer(out=out, err=err).result({"kind": "rom_info", "matches": []})
@@ -279,6 +389,23 @@ def test_a_fetch_summary_with_no_output_path_omits_the_written_line():
     assert out.getvalue() == "Premier League 2024\n  20 teams, 540 players\n"
 
 
+def test_a_fetch_summary_with_the_output_path_key_absent_omits_the_written_line():
+    # Unlike `rom_info`, `rosters` has no backing model whose `to_dict` promises
+    # the key, so both spellings of "nothing was written" have to render the same
+    # summary. The sibling test above covers `""`; this one covers absence.
+    out, err = io.StringIO(), io.StringIO()
+    HumanRenderer(out=out, err=err).result(
+        {
+            "kind": "rosters",
+            "league": "Premier League",
+            "season": 2024,
+            "teams": 20,
+            "players": 540,
+        }
+    )
+    assert out.getvalue() == "Premier League 2024\n  20 teams, 540 players\n"
+
+
 def test_human_renders_a_patch_summary():
     out, err = io.StringIO(), io.StringIO()
     HumanRenderer(out=out, err=err).result(
@@ -291,6 +418,31 @@ def test_an_unknown_kind_is_dumped_as_key_value_lines_rather_than_crashing():
     out, err = io.StringIO(), io.StringIO()
     HumanRenderer(out=out, err=err).result({"kind": "something-new", "answer": 42})
     assert out.getvalue() == "answer: 42\n"
+
+
+def test_a_payload_with_no_kind_is_dumped_rather_than_crashing():
+    # The module docstring says every payload carries `kind`. When one does not,
+    # this renderer is the last thing between the producer's bug and the user, so
+    # it degrades to `_fallback` instead of raising. `JsonRenderer` passes the
+    # same payload through, adding only its two protocol keys. Both behaviours
+    # are contract, not accident.
+    out, err = io.StringIO(), io.StringIO()
+    HumanRenderer(out=out, err=err).result({"output_path": "/x"})
+    assert out.getvalue() == "output_path: /x\n"
+
+
+def test_the_renderer_protocol_pins_the_members_handlers_may_call():
+    # A rename is caught by the two renderers failing `isinstance` below. A
+    # member quietly dropped from the Protocol is not: both renderers would keep
+    # satisfying a smaller surface, and the contract Tasks 23-25 code against
+    # would narrow with nothing to show for it.
+    assert sorted(Renderer.__protocol_attrs__) == [
+        "error",
+        "partial",
+        "progress",
+        "result",
+        "status",
+    ]
 
 
 @pytest.mark.parametrize("renderer_cls", [HumanRenderer, JsonRenderer])
