@@ -1,13 +1,18 @@
 """The WE2002 patcher against the unified interface.
 
-WE2002 is a 700 MB PlayStation image. There is no synthetic equivalent worth
-fabricating at that size, so `patch` is covered from two directions instead of
-one: an opt-in real-ROM test at the bottom of this file, and — for everything
-`patch` itself decides — a recording stand-in for `RomWriter`. What that
-stand-in pins is the sequence, which is where the ported writer's sharp edges
-are: `write_team` writes no players unless it is handed a `players=` list, it
-returns silently for a slot outside 0..31, and it only queues its 3D-jersey TEX
-patch — `flush_tex_patches` is the one call that applies them.
+WE2002 is a 700 MB PlayStation image and no copy of one may enter this
+repository, so `patch` is covered from two directions instead of one: an opt-in
+real-ROM test at the bottom of this file, and — for everything `patch` itself
+decides — a recording stand-in for `RomWriter`. What that stand-in pins is the
+sequence, which is where the ported writer's sharp edges are: `write_team`
+writes no players unless it is handed a `players=` list, it returns silently for
+a slot outside 0..31, it writes only as many players as the slot has room for,
+and it only queues its 3D-jersey TEX patch — `flush_tex_patches` is the one call
+that applies them.
+
+The input file every `patch` test hands over is `_valid_rom`: a sparse 100 MB of
+zeroes, built in-test, holding nothing from the game. It has to be that large
+because `patch` now applies `validate_rom`, whose only test is the size.
 
 Both stand-ins copy their signatures from the real collaborator rather than
 inventing convenient ones, and the two conformance tests below keep them copied.
@@ -210,6 +215,20 @@ def _silence_translation(monkeypatch, log=None):
         return "fake description"
 
     monkeypatch.setattr(patcher_module, "apply_ppf", _apply)
+
+
+def _valid_rom(tmp_path, name="we2002.bin"):
+    """An input file `patch` will accept: 100 MB of addressable zeroes.
+
+    `validate_rom`'s only test is `size >= 100 MB`, and `patch` applies it, so
+    the 4 KB stand-in these tests used before is now refused. `truncate` makes
+    the file sparse — the bytes are addressable and no blocks are allocated —
+    so this costs neither disk nor time. Nothing in it came from the game.
+    """
+    path = tmp_path / name
+    with path.open("wb") as handle:
+        handle.truncate(100 * 1024 * 1024)
+    return path
 
 
 # ── Registration ─────────────────────────────────────────────────────────
@@ -683,8 +702,7 @@ def test_a_file_large_enough_to_be_the_game_reports_its_thirty_two_slots(patcher
 def test_an_unknown_language_is_rejected(patcher, tmp_path):
     data = patcher.fetch(season=2024, league_id=39)
     mapped = patcher.map_rosters(data, slot_mapping=[SlotMapping(slot_index=0, team_id=100)])
-    rom = tmp_path / "we2002.bin"
-    rom.write_bytes(b"\x00" * 4096)
+    rom = _valid_rom(tmp_path)
 
     with pytest.raises(CapabilityError, match="klingon"):
         patcher.patch(
@@ -705,6 +723,25 @@ def test_patching_a_missing_rom_raises_rom_error(patcher, tmp_path):
         )
 
 
+def test_patching_a_file_too_small_to_be_the_game_raises_rom_error(patcher, tmp_path):
+    # `analyze_rom` has always applied `validate_rom` and `patch` did not, so a
+    # 4 KB file was copied to `output_path`, written at offsets megabytes past
+    # its end, and returned as a `PatchResult` claiming a patched ISO. The
+    # writer's own seeks are what inflate it, so the corruption is silent: the
+    # output is the right shape and every byte of the game is missing.
+    data = patcher.fetch(season=2024, league_id=39)
+    mapped = patcher.map_rosters(data, slot_mapping=[SlotMapping(slot_index=0, team_id=100)])
+    rom = tmp_path / "we2002.bin"
+    rom.write_bytes(b"\x00" * 4096)
+    out = tmp_path / "out.bin"
+
+    with pytest.raises(RomError, match="not a WE2002 ROM"):
+        patcher.patch(rom_path=rom, output_path=out, rosters=mapped)
+
+    # Refused before the writer was constructed, so nothing was copied.
+    assert out.exists() is False
+
+
 def test_patch_writes_every_slot_with_its_players_then_flushes_then_finalises(
     patcher, tmp_path, monkeypatch
 ):
@@ -719,8 +756,7 @@ def test_patch_writes_every_slot_with_its_players_then_flushes_then_finalises(
             SlotMapping(slot_index=0, team_id=100),
         ],
     )
-    rom = tmp_path / "we2002.bin"
-    rom.write_bytes(b"\x00" * 4096)
+    rom = _valid_rom(tmp_path)
     out = tmp_path / "out.bin"
 
     result = patcher.patch(rom_path=rom, output_path=out, rosters=mapped)
@@ -751,8 +787,7 @@ def test_patch_reports_progress_and_ends_at_one(patcher, tmp_path, monkeypatch):
             SlotMapping(slot_index=1, team_id=101),
         ],
     )
-    rom = tmp_path / "we2002.bin"
-    rom.write_bytes(b"\x00" * 4096)
+    rom = _valid_rom(tmp_path)
     seen = []
 
     patcher.patch(
@@ -778,8 +813,7 @@ def test_patching_with_nothing_mapped_still_writes_an_output(patcher, tmp_path, 
     log = []
     monkeypatch.setattr(patcher_module, "RomWriter", _fake_writer_class(log))
     _silence_translation(monkeypatch, log)
-    rom = tmp_path / "we2002.bin"
-    rom.write_bytes(b"\x00" * 4096)
+    rom = _valid_rom(tmp_path)
 
     result = patcher.patch(
         rom_path=rom,
@@ -803,8 +837,7 @@ def test_a_slot_the_writer_would_silently_drop_is_not_counted(patcher, tmp_path,
     mapped = patcher.map_rosters(data, slot_mapping=[SlotMapping(slot_index=0, team_id=100)])
     mapped.teams[40] = mapped.teams[0]
     mapped.teams[-1] = mapped.teams[0]
-    rom = tmp_path / "we2002.bin"
-    rom.write_bytes(b"\x00" * 4096)
+    rom = _valid_rom(tmp_path)
 
     result = patcher.patch(rom_path=rom, output_path=tmp_path / "out.bin", rosters=mapped)
 
@@ -838,8 +871,7 @@ def test_players_past_the_slot_capacity_are_counted_as_written_not_as_supplied(
             SlotMapping(slot_index=31, team_id=101),
         ],
     )
-    rom = tmp_path / "we2002.bin"
-    rom.write_bytes(b"\x00" * 4096)
+    rom = _valid_rom(tmp_path)
 
     result = p.patch(rom_path=rom, output_path=tmp_path / "out.bin", rosters=mapped)
 
@@ -865,8 +897,7 @@ def test_patch_raises_when_finalisation_leaves_no_output(patcher, tmp_path, monk
     _silence_translation(monkeypatch)
     data = patcher.fetch(season=2024, league_id=39)
     mapped = patcher.map_rosters(data, slot_mapping=[SlotMapping(slot_index=0, team_id=100)])
-    rom = tmp_path / "we2002.bin"
-    rom.write_bytes(b"\x00" * 4096)
+    rom = _valid_rom(tmp_path)
 
     with pytest.raises(RomError, match="Failed to write patched ROM"):
         patcher.patch(rom_path=rom, output_path=tmp_path / "out.bin", rosters=mapped)
@@ -882,8 +913,7 @@ def test_each_supported_language_names_itself_in_the_status(tmp_path, monkeypatc
     monkeypatch.setattr(patcher_module, "RomWriter", _fake_writer_class([]))
     _silence_translation(monkeypatch)
     monkeypatch.setattr(patcher_module, "ensure_ppf", lambda *a, **kw: "unused.ppf")
-    rom = tmp_path / "we2002.bin"
-    rom.write_bytes(b"\x00" * 4096)
+    rom = _valid_rom(tmp_path)
     seen = []
 
     p.patch(
@@ -917,8 +947,7 @@ def test_a_missing_translation_asset_is_reported_and_the_patch_continues(tmp_pat
     monkeypatch.setattr(patcher_module, "ensure_ppf", _missing)
     data = p.fetch(season=2024, league_id=39)
     mapped = p.map_rosters(data, slot_mapping=[SlotMapping(slot_index=0, team_id=100)])
-    rom = tmp_path / "we2002.bin"
-    rom.write_bytes(b"\x00" * 4096)
+    rom = _valid_rom(tmp_path)
     seen = []
 
     result = p.patch(
@@ -953,8 +982,7 @@ def test_a_broken_patch_file_is_reported_and_the_patch_continues(tmp_path, monke
         raise PPFError("Unsupported PPF format")
 
     monkeypatch.setattr(patcher_module, "apply_ppf", _broken)
-    rom = tmp_path / "we2002.bin"
-    rom.write_bytes(b"\x00" * 4096)
+    rom = _valid_rom(tmp_path)
 
     result = p.patch(
         rom_path=rom,
@@ -977,8 +1005,7 @@ def test_an_unreadable_translation_file_is_reported_and_the_patch_continues(tmp_
     p = _make_patcher(tmp_path, on_status=status.append)
     monkeypatch.setattr(patcher_module, "RomWriter", _fake_writer_class([]))
     monkeypatch.setattr(patcher_module, "ensure_ppf", lambda *a, **kw: str(tmp_path / "gone.ppf"))
-    rom = tmp_path / "we2002.bin"
-    rom.write_bytes(b"\x00" * 4096)
+    rom = _valid_rom(tmp_path)
 
     result = p.patch(
         rom_path=rom,
@@ -1026,8 +1053,7 @@ def test_a_community_file_that_is_not_ppf2_is_reported_and_the_patch_continues(
     _silence_translation(monkeypatch)
     data = p.fetch(season=2024, league_id=39)
     mapped = p.map_rosters(data, slot_mapping=[SlotMapping(slot_index=0, team_id=100)])
-    rom = tmp_path / "we2002.bin"
-    rom.write_bytes(b"\x00" * 4096)
+    rom = _valid_rom(tmp_path)
 
     result = p.patch(rom_path=rom, output_path=tmp_path / "out.bin", rosters=mapped)
 
@@ -1054,8 +1080,7 @@ def test_the_assets_directory_is_forwarded_to_the_translation(tmp_path, monkeypa
         return "unused.ppf"
 
     monkeypatch.setattr(patcher_module, "ensure_ppf", _record)
-    rom = tmp_path / "we2002.bin"
-    rom.write_bytes(b"\x00" * 4096)
+    rom = _valid_rom(tmp_path)
 
     p.patch(
         rom_path=rom,
@@ -1078,8 +1103,7 @@ def test_without_an_assets_directory_the_translation_is_asked_for_none(tmp_path,
         return "unused.ppf"
 
     monkeypatch.setattr(patcher_module, "ensure_ppf", _record)
-    rom = tmp_path / "we2002.bin"
-    rom.write_bytes(b"\x00" * 4096)
+    rom = _valid_rom(tmp_path)
 
     p.patch(
         rom_path=rom,
