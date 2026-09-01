@@ -54,6 +54,7 @@ Add `--json` to any command to get newline-delimited JSON on stdout instead of h
 ```json
 {"event":"status","msg":"Validating ROM..."}
 {"event":"progress","pct":0.42,"msg":"Fetching Boston Bruins..."}
+{"event":"partial","data":{}}
 {"kind":"patch","output_path":"nhl94-2025.bin","teams_patched":26,"players_patched":598,"event":"result","ok":true}
 {"event":"error","type":"RomError","msg":"Not a valid NHL94 Genesis ROM: nhl94.bin"}
 ```

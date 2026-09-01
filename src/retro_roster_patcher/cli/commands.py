@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from ..core.errors import RomError
-from ..core.models import SlotMapping
+from ..core.models import PartialFn, SlotMapping
 from ..core.patcher import Patcher
 from ..core.registry import get_patcher, list_patchers
 from ..sports.models import LeagueData
@@ -45,6 +45,28 @@ def resolve_patcher_class(game_id: str) -> type[Patcher]:
         raise UsageError(exc.args[0]) from None
 
 
+def _partial_adapter(renderer: Renderer) -> PartialFn:
+    """Serialise what the library hands `on_partial` before it reaches the wire.
+
+    `PartialFn` is `Callable[[Any], None]` on purpose, so a library consumer can
+    be handed a typed dataclass: `we2002`'s `fetch` publishes its team list as a
+    `LeagueData` skeleton. `JsonRenderer.partial` then calls `json.dumps` on it,
+    which raises `TypeError: Object of type LeagueData is not JSON serializable`
+    — untyped, so none of `main`'s `except` clauses catch it and `--json` dies
+    with no `error` event. Translating here keeps the fix at the boundary this
+    module's docstring already owns: the library keeps its dataclass contract and
+    `render.py` stays ignorant of the sports models.
+
+    Anything else passes through untouched, `dict` above all — `cmd_fetch` calls
+    `renderer.partial` with an already-serialised payload of its own.
+    """
+
+    def emit(data: Any) -> None:
+        renderer.partial(league_data_to_dict(data) if isinstance(data, LeagueData) else data)
+
+    return emit
+
+
 def build_patcher(game_id: str, args: argparse.Namespace, renderer: Renderer) -> Patcher:
     """Instantiate a registered patcher wired to the renderer's callbacks."""
     cls = resolve_patcher_class(game_id)
@@ -52,7 +74,7 @@ def build_patcher(game_id: str, args: argparse.Namespace, renderer: Renderer) ->
         "api_key": getattr(args, "api_key", None) or None,
         "provider": getattr(args, "provider", None) or None,
         "on_status": renderer.status,
-        "on_partial": renderer.partial,
+        "on_partial": _partial_adapter(renderer),
     }
     # Only WE2002 accepts this today. Passing it to a patcher that does not
     # would be a TypeError from deep inside the library; say so plainly instead.

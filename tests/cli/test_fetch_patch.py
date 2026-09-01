@@ -53,6 +53,27 @@ class StubPatcher(Patcher):
         return PatchResult(output_path=str(output_path), teams_patched=1, players_patched=1)
 
 
+class PartialStubPatcher(StubPatcher):
+    """A stub whose `fetch` publishes a `LeagueData` partial, as WE2002's does.
+
+    `StubPatcher` never calls `on_partial` at all, and that gap is what let
+    `fetch --game we2002 --json` ship broken: every CLI test drove a patcher that
+    stayed silent, so nothing observed a renderer being handed a dataclass.
+    """
+
+    def fetch(self, *, season, league_id=None, on_progress=None):
+        data = super().fetch(season=season, league_id=league_id, on_progress=on_progress)
+        # WE2002 publishes a skeleton of `loading` teams before the squads land;
+        # `loading=True` with no players is that shape.
+        self.partial(
+            LeagueData(
+                league=data.league,
+                teams=[TeamRoster(team=t.team, loading=True) for t in data.teams],
+            )
+        )
+        return data
+
+
 @pytest.fixture
 def stub():
     """Register the stub for the duration of one test, then take it back out.
@@ -74,6 +95,25 @@ def stub():
         yield StubPatcher
     finally:
         registry._REGISTRY.pop("stub-game", None)
+
+
+@pytest.fixture
+def partial_stub():
+    """The same bargain as `stub`, under its own id, for the partial-firing stub.
+
+    Both class attributes are reset here as well as in `stub`: they live on
+    `StubPatcher`, which this subclass inherits them from, so a `fail_with` left
+    by an earlier test would make this stub's `fetch` raise too.
+    """
+    StubPatcher.calls = []
+    StubPatcher.fail_with = None
+    try:
+        registry.register("partial-stub-game", platform="test", sport="test", providers=("stub",))(
+            PartialStubPatcher
+        )
+        yield PartialStubPatcher
+    finally:
+        registry._REGISTRY.pop("partial-stub-game", None)
 
 
 @pytest.fixture
@@ -121,6 +161,42 @@ def test_fetch_result_summarises_the_league(tmp_path, stub, base, capsys):
     # `output_path` is the file this run wrote. With no `--out` it is `""`
     # instead, which `test_fetch_without_out_...` below pins.
     assert result["output_path"] == str(out)
+
+
+def test_a_league_data_partial_is_serialised_before_it_reaches_the_json_stream(
+    tmp_path, partial_stub, capsys
+):
+    # `retro-roster fetch --game we2002 --json` verbatim, minus the network: the
+    # library hands `on_partial` a `LeagueData`, because `PartialFn` is
+    # `Callable[[Any], None]` so that a programmatic consumer gets the dataclass.
+    # Unadapted, `json.dumps` raised `TypeError: Object of type LeagueData is not
+    # JSON serializable` — untyped, so it escaped all three `except` clauses in
+    # `main` and the run died with no `error` event and no return at all.
+    # `--out` is passed so the only `partial` on the stream is the patcher's;
+    # `cmd_fetch` emits one of its own when `--out` is absent.
+    code = main(
+        [
+            "fetch",
+            "--season",
+            "2024",
+            "--out",
+            str(tmp_path / "r.json"),
+            "--game",
+            "partial-stub-game",
+            "--cache-dir",
+            str(tmp_path / "cache"),
+            "--json",
+        ]
+    )
+    assert code == 0
+    lines = capsys.readouterr().out.splitlines()
+    assert lines[1] == (
+        '{"event":"partial","data":{"league":{"id":1,"name":"Test League","country":"",'
+        '"country_code":"","logo_url":"","season":2024,"teams_count":0},"teams":[{"team":'
+        '{"id":33,"name":"Team A","short_name":"","code":"","logo_url":"","country":"",'
+        '"color":"","alternate_color":""},"players":[],"player_stats":{},"loading":true,'
+        '"error":"","extra":{}}]}}'
+    )
 
 
 def test_fetch_creates_the_parent_directories_of_out(tmp_path, stub, base, capsys):
@@ -249,7 +325,11 @@ def test_patch_from_a_season_fetches_then_writes(tmp_path, stub, base, capsys):
     # `type=int` and not the one the `fetch` tests above cover.
     assert ("fetch", 2024, None) in StubPatcher.calls
     # The two paths and the mapped rosters, in one tuple: each is a separate
-    # keyword on the `patcher.patch` call and nothing else observes them.
+    # keyword on the `patcher.patch` call. Two of the three have no other
+    # witness — measured, with this line deleted, mutating `rom_path` alone or
+    # the mapped rosters alone in `cmd_patch` leaves the whole suite green.
+    # `output_path` is not exclusive: mutating it the same way fails three
+    # tests, `out.read_bytes()` two lines above among them.
     assert ("patch", str(rom), str(out), 1) in StubPatcher.calls
 
 
