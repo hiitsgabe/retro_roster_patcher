@@ -163,7 +163,7 @@ class NHL94GenesisRomWriter:
     def _write_player_stats(self, player: NHL94GenPlayerRecord, offset: int) -> int:
         """Write 8 stat bytes for a player. Returns new offset.
 
-        Byte layout (14 nibbles packed into 8 bytes):
+        Byte layout (a BCD jersey byte, then 14 nibbles packed into 7 bytes):
           Byte 0: Jersey number (BCD)
           Byte 1: Weight (0-14) | Agility (0-6)
           Byte 2: Speed (0-6) | Off. Awareness (0-6)
