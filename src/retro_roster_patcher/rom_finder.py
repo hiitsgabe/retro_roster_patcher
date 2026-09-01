@@ -184,13 +184,16 @@ class RomFinder:
                 urls = [urls]
 
             for url in urls:
-                # Determine cache file path. Upstream fell back to the host
-                # application's own absolute cache directory when `cache_dir` was
-                # empty; a standalone library has no such global, and joining onto
-                # "" would key the read off `os.getcwd()` — non-deterministic across
-                # the pygame launcher and the embedded-CPython host, both of which
-                # start in directories neither this package nor its caller chose.
-                # With no cache directory there is simply no listings cache.
+                # No cache directory means no listings cache. Upstream resolved this
+                # path through `services.file_listing._get_listing_cache_path`, which
+                # joins `constants.SYSTEMS_CACHE_DIR` — a host-application global
+                # anchored on that application's own `__file__`, so absolute and
+                # install-relative. A standalone library has no equivalent to fall
+                # back to, and importing the host's module is exactly the coupling
+                # this package exists to remove, so the fallback is dropped rather
+                # than reproduced. Joining onto "" instead would yield the *relative*
+                # "listings/<md5>.json" and key the read off `os.getcwd()` — a bug
+                # this port declines to introduce, not one it inherited.
                 if not cache_dir:
                     continue
                 url_hash = hashlib.md5(url.encode()).hexdigest()
