@@ -330,7 +330,14 @@ def _make_ppf1(description: str, records: list) -> bytes:
     desc_bytes = description.encode("ascii", errors="replace")[:50]
     buf.extend(desc_bytes.ljust(50, b"\x00"))
 
-    # Records — split any > 255 bytes into multiple records
+    # A PPF1 record carries its length in a single byte, so 255 is the format's
+    # hard limit and anything longer has to become several records at
+    # consecutive offsets. No caller in this package reaches that: the kanji
+    # records are `_LUN_NOMIK[i] * 2` bytes and the widest entry is 14, so 28
+    # bytes is the largest, and the community records come from a PPF2 parser
+    # that reads its own count from one byte. The split therefore does not fire
+    # today; it is kept because `bytearray.append` raises `ValueError` above 255
+    # and this is a general PPF1 writer, not a kanji-only one.
     for offset, data in records:
         remaining = data
         cur_offset = offset

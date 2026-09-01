@@ -13,10 +13,12 @@ from retro_roster_patcher.games.we2002.translations.we2002 import (
     ensure_ppf,
 )
 from retro_roster_patcher.games.we2002.translations.we2002.english_ppf import (
-    ensure_ppf as ensure_english_ppf,
+    _build_kanji_records,
+    _make_ppf1,
+    generate_english_ppf,
 )
 from retro_roster_patcher.games.we2002.translations.we2002.english_ppf import (
-    generate_english_ppf,
+    ensure_ppf as ensure_english_ppf,
 )
 from retro_roster_patcher.games.we2002.translations.we2002.french_ppf import (
     ensure_ppf as ensure_french_ppf,
@@ -424,3 +426,100 @@ def test_an_absent_assets_dir_is_not_an_error(tmp_path):
 
     assert path == str(cache_dir / "we2002_portuguese.ppf")
     assert (cache_dir / "we2002_portuguese.ppf").exists() is True
+
+
+# ── record merge order and the PPF1 record limit ──────────────────────────
+
+
+def _community_ppf_with(offset: int, payload: bytes) -> bytes:
+    """A synthetic PPF2 carrying one record at a caller-chosen offset."""
+    header = b"PPF20" + b"\x00" + b"X" * 50 + struct.pack("<I", 0) + b"\x00" * 1024
+    return header + struct.pack("<I", offset) + bytes([len(payload)]) + payload
+
+
+def test_a_community_record_inside_the_kanji_span_is_written_before_the_kanji_name(tmp_path):
+    # `generate_english_ppf` merges as `menu + records`. Both existing merge
+    # assertions are order-insensitive, and the synthetic community record they
+    # use sits at 0x1000, outside the kanji span entirely, so nothing before this
+    # could tell `menu + records` from `records + menu`.
+    #
+    # PPF records are applied in file order, so the later one wins. Putting the
+    # community record at the first kanji offset makes the order decide which
+    # bytes reach the ROM.
+    kanji_offset, kanji_data = _build_kanji_records()[0]
+    assert kanji_offset == 2002316
+    payload = b"\xee" * len(kanji_data)
+    assert (payload == kanji_data) is False
+
+    assets_dir = tmp_path / "assets"
+    assets_dir.mkdir()
+    (assets_dir / "w202-english.ppf").write_bytes(_community_ppf_with(kanji_offset, payload))
+
+    merged = generate_english_ppf(str(assets_dir))
+
+    # First record after the 56-byte header is the community one, in full.
+    records = merged[56:]
+    assert records[:4] == struct.pack("<I", kanji_offset)
+    assert records[4] == len(payload)
+    assert records[5 : 5 + len(payload)] == payload
+    # Second record is the kanji name for the same offset, so it lands last.
+    second = records[5 + len(payload) :]
+    assert second[:4] == struct.pack("<I", kanji_offset)
+    assert second[5 : 5 + len(kanji_data)] == kanji_data
+
+
+def test_the_kanji_name_is_what_survives_at_a_contested_offset(tmp_path):
+    # The consequence of that order, measured on a target rather than read off
+    # the patch: the reversed merge would leave `\xee` here instead.
+    from retro_roster_patcher.games.we2002.ppf import apply_ppf
+
+    kanji_offset, kanji_data = _build_kanji_records()[0]
+    payload = b"\xee" * len(kanji_data)
+    assets_dir = tmp_path / "assets"
+    assets_dir.mkdir()
+    (assets_dir / "w202-english.ppf").write_bytes(_community_ppf_with(kanji_offset, payload))
+    patch = tmp_path / "merged.ppf"
+    patch.write_bytes(generate_english_ppf(str(assets_dir)))
+    target = tmp_path / "rom.bin"
+    target.write_bytes(bytes(kanji_offset + 4096))
+
+    apply_ppf(str(target), str(patch))
+
+    written = target.read_bytes()[kanji_offset : kanji_offset + len(kanji_data)]
+    assert written == kanji_data
+    assert (written == payload) is False
+
+
+def test_no_record_this_package_generates_reaches_the_ppf1_length_limit():
+    # A PPF1 record carries its length in one byte, so 255 is the format limit
+    # and `_make_ppf1` splits anything longer. Nothing here gets near it: the
+    # kanji records are `_LUN_NOMIK[i] * 2` bytes and the widest entry is 14.
+    lengths = [len(data) for _, data in _build_kanji_records()]
+
+    assert len(lengths) == 96
+    assert max(lengths) == 28
+    assert min(lengths) == 4
+
+
+def test_a_record_longer_than_the_limit_becomes_several_at_consecutive_offsets():
+    # The split branch has no live caller, which is why it survived every mutant
+    # aimed at it. It is kept rather than deleted because `bytearray.append`
+    # raises `ValueError` above 255, so a caller handing `_make_ppf1` a long
+    # record would otherwise get a crash instead of a patch. 600 bytes is
+    # 255 + 255 + 90, which is three records and not two.
+    long_data = bytes(range(256)) * 2 + bytes(88)
+    assert len(long_data) == 600
+
+    patch = _make_ppf1("split", [(1000, long_data)])
+
+    records = patch[56:]
+    assert records[:4] == struct.pack("<I", 1000)
+    assert records[4] == 255
+    assert records[5:260] == long_data[:255]
+    assert records[260:264] == struct.pack("<I", 1255)
+    assert records[264] == 255
+    assert records[265:520] == long_data[255:510]
+    assert records[520:524] == struct.pack("<I", 1510)
+    assert records[524] == 90
+    assert records[525:615] == long_data[510:]
+    assert len(records) == 615
