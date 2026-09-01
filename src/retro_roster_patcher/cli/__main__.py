@@ -7,6 +7,7 @@ that only reads the exit code still learns whether to look at stdout.
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 
 from ..core.errors import RetroRosterError
@@ -67,6 +68,48 @@ def build_parser() -> argparse.ArgumentParser:
         help="where caches and generated assets live",
     )
     p_analyze.set_defaults(handler=commands.cmd_analyze)
+
+    def add_provider_flags(sub: argparse.ArgumentParser) -> None:
+        """Flags every network-touching verb needs."""
+        sub.add_argument("--game", required=True, help="patcher id, as shown by `list`")
+        sub.add_argument(
+            "--provider", default="", help="data provider, when the game offers more than one"
+        )
+        sub.add_argument(
+            "--api-key",
+            default=os.environ.get("RETRO_ROSTER_API_KEY", ""),
+            help="provider API key; defaults to $RETRO_ROSTER_API_KEY",
+        )
+        sub.add_argument("--league-id", type=int, default=None, help="provider league id")
+        sub.add_argument(
+            "--cache-dir",
+            default=str(commands.default_cache_dir()),
+            help="where caches and generated assets live",
+        )
+        sub.add_argument(
+            "--assets-dir",
+            default="",
+            help="optional directory of user-supplied assets (WE2002 translation PPF)",
+        )
+
+    p_fetch = subparsers.add_parser(
+        "fetch", parents=[common], help="download rosters for one season"
+    )
+    add_provider_flags(p_fetch)
+    p_fetch.add_argument("--season", type=int, required=True, help="season year, e.g. 2024")
+    p_fetch.add_argument(
+        "--out", default="", help="write rosters here; omit to emit them on the protocol stream"
+    )
+    p_fetch.set_defaults(handler=commands.cmd_fetch)
+
+    p_patch = subparsers.add_parser("patch", parents=[common], help="write a patched ROM")
+    add_provider_flags(p_patch)
+    p_patch.add_argument("--rom", required=True, help="path to the input ROM or ISO")
+    p_patch.add_argument("--out", required=True, help="path to write the patched ROM to")
+    p_patch.add_argument("--season", type=int, default=None, help="fetch this season inline")
+    p_patch.add_argument("--rosters", default="", help="use a rosters file from `fetch`")
+    p_patch.add_argument("--slot-map", default="", help="JSON list of slot mappings")
+    p_patch.set_defaults(handler=commands.cmd_patch)
 
     return parser
 

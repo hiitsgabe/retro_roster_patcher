@@ -9,12 +9,16 @@ from __future__ import annotations
 
 import argparse
 import inspect
+import json
 from pathlib import Path
 from typing import Any
 
 from ..core.errors import RomError
+from ..core.models import SlotMapping
 from ..core.patcher import Patcher
 from ..core.registry import get_patcher, list_patchers
+from ..sports.models import LeagueData
+from ..sports.serde import league_data_from_dict, league_data_to_dict
 from .render import Renderer
 
 
@@ -99,3 +103,85 @@ def cmd_analyze(args: argparse.Namespace, renderer: Renderer) -> None:
             matches.append(info.to_dict())
 
     renderer.result({"kind": "rom_info", "matches": matches})
+
+
+def _load_slot_map(path: str | None) -> list[SlotMapping] | None:
+    """Read a slot-map file. `None` means the caller did not supply one."""
+    if not path:
+        return None
+    try:
+        raw = json.loads(Path(path).read_text(encoding="utf-8"))
+        return [SlotMapping.from_dict(entry) for entry in raw]
+    except (OSError, ValueError, TypeError, KeyError) as exc:
+        raise UsageError(f"Cannot read slot map {path}: {exc}") from None
+
+
+def _summarise(data: LeagueData, output_path: str) -> dict[str, Any]:
+    return {
+        "kind": "rosters",
+        "league": data.league.name,
+        "season": data.league.season,
+        "teams": len(data.teams),
+        "players": sum(len(t.players) for t in data.teams),
+        "output_path": output_path,
+    }
+
+
+def cmd_fetch(args: argparse.Namespace, renderer: Renderer) -> None:
+    patcher = build_patcher(args.game, args, renderer)
+    data = patcher.fetch(
+        season=args.season, league_id=args.league_id, on_progress=renderer.progress
+    )
+    payload = league_data_to_dict(data)
+
+    if args.out:
+        Path(args.out).parent.mkdir(parents=True, exist_ok=True)
+        Path(args.out).write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    else:
+        # No file to point at, so hand the data over on the protocol stream.
+        # `partial` and not `result`: the summary is still the result.
+        renderer.partial(payload)
+
+    renderer.result(_summarise(data, args.out or ""))
+
+
+def _rosters_for_patch(
+    args: argparse.Namespace, patcher: Patcher, renderer: Renderer
+) -> LeagueData:
+    # Equal booleans mean neither flag was given or both were, which is exactly
+    # the pair of usage errors. Checked before anything expensive: the fetch
+    # below is a provider request, and API-Football rate-limits those.
+    if bool(args.season) == bool(args.rosters):
+        raise UsageError("patch needs exactly one of --season or --rosters")
+    if args.rosters:
+        try:
+            raw = json.loads(Path(args.rosters).read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            raise UsageError(f"Cannot read rosters {args.rosters}: {exc}") from None
+        return league_data_from_dict(raw)
+    return patcher.fetch(
+        season=args.season, league_id=args.league_id, on_progress=renderer.progress
+    )
+
+
+def cmd_patch(args: argparse.Namespace, renderer: Renderer) -> None:
+    rom = Path(args.rom)
+    if not rom.is_file():
+        raise RomError(f"No such ROM: {rom}")
+
+    patcher = build_patcher(args.game, args, renderer)
+    # Slot map first: a malformed one is then rejected without paying for the
+    # fetch whose data it would have been mapped against.
+    slot_mapping = _load_slot_map(args.slot_map)
+    data = _rosters_for_patch(args, patcher, renderer)
+
+    renderer.status("Mapping rosters...")
+    mapped = patcher.map_rosters(data, slot_mapping=slot_mapping)
+
+    out = Path(args.out)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    renderer.status(f"Writing {out}...")
+    result = patcher.patch(
+        rom_path=rom, output_path=out, rosters=mapped, on_progress=renderer.progress
+    )
+    renderer.result({"kind": "patch", **result.to_dict()})
