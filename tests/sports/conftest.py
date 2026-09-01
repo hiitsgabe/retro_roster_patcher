@@ -102,11 +102,13 @@ def forbid_default_transport(monkeypatch):
     wire. This covers the opposite claim — that a member classified as offline
     answers from constants and never requests anything — which no comparison of
     name sets can make. Exposed as a fixture rather than by exporting
-    `TransportLeak`: there is no `tests/__init__.py`, so pytest imports this file
-    as `sports.conftest`, and `pythonpath = ["."]` means a test doing
-    `from tests.sports.conftest import TransportLeak` would silently succeed while
-    binding a second, unrelated copy of the class — one that no cross-module
-    `except TransportLeak` or `pytest.raises(TransportLeak)` would match.
+    `TransportLeak`: fixture injection is the access path a conftest is built for,
+    and it was once the only safe one. With no `tests/__init__.py` pytest bound
+    this file as `sports.conftest` while `pythonpath = ["."]` let a test import it
+    again as `tests.sports.conftest`, yielding a second, unrelated copy of the
+    class that no cross-module `except TransportLeak` or
+    `pytest.raises(TransportLeak)` would match. `tests/__init__.py` closed that
+    off; `tests/games/nhl94_genesis/test_rom_reader.py` keeps it closed.
     """
 
     def forbidden(url, headers, timeout):
