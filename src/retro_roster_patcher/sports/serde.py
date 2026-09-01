@@ -39,10 +39,11 @@ def _only_declared(cls: Any, raw: dict[str, Any]) -> dict[str, Any]:
     """The subset of `raw` that `cls` actually declares as fields.
 
     `cls` is `Any` rather than `type[T]` because `dataclasses.fields` is typed
-    against `DataclassInstance`, which a bare type variable does not satisfy --
-    the generic form needs a `# type: ignore`, and this package does not carry
-    those. Returning the keyword arguments instead of the built instance also
-    keeps each construction site's own type precise.
+    against `DataclassInstance | type[DataclassInstance]`, which a bare type
+    variable does not satisfy -- under the generic form the `fields(cls)` line
+    below is an `[arg-type]` error and would need a suppression sitting on it.
+    Returning the keyword arguments instead of the built instance also keeps
+    each construction site's own type precise.
     """
     declared = {f.name for f in fields(cls)}
     return {k: v for k, v in raw.items() if k in declared}
