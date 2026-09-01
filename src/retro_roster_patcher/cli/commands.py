@@ -57,8 +57,15 @@ def _partial_adapter(renderer: Renderer) -> PartialFn:
     module's docstring already owns: the library keeps its dataclass contract and
     `render.py` stays ignorant of the sports models.
 
-    Anything else passes through untouched, `dict` above all — `cmd_fetch` calls
-    `renderer.partial` with an already-serialised payload of its own.
+    Anything else passes through untouched, though nothing in `src/` reaches that
+    branch today: `we2002`'s `fetch` is the only `on_partial` producer and it
+    publishes a `LeagueData`. `cmd_fetch`'s own already-serialised payload is not
+    a second producer — it calls `renderer.partial` directly and never traverses
+    this adapter. The pass-through is defence against a later patcher publishing
+    a payload that is already serialisable, and its only witness is the synthetic
+    dict in `test_build_patcher_wires_the_renderer_partial_callback`: measured,
+    dropping the branch for an unconditional `league_data_to_dict(data)` fails
+    that one test and nothing else in the suite.
     """
 
     def emit(data: Any) -> None:
