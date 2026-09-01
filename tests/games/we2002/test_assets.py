@@ -13,16 +13,59 @@ from retro_roster_patcher.games.we2002.translations.we2002 import (
     ensure_ppf,
 )
 from retro_roster_patcher.games.we2002.translations.we2002.english_ppf import (
+    ensure_ppf as ensure_english_ppf,
+)
+from retro_roster_patcher.games.we2002.translations.we2002.english_ppf import (
     generate_english_ppf,
+)
+from retro_roster_patcher.games.we2002.translations.we2002.french_ppf import (
+    ensure_ppf as ensure_french_ppf,
+)
+from retro_roster_patcher.games.we2002.translations.we2002.french_ppf import (
+    generate_french_ppf,
+)
+from retro_roster_patcher.games.we2002.translations.we2002.portuguese_ppf import (
+    ensure_ppf as ensure_portuguese_ppf,
+)
+from retro_roster_patcher.games.we2002.translations.we2002.portuguese_ppf import (
+    generate_portuguese_ppf,
+)
+from retro_roster_patcher.games.we2002.translations.we2002.spanish_ppf import (
+    ensure_ppf as ensure_spanish_ppf,
+)
+from retro_roster_patcher.games.we2002.translations.we2002.spanish_ppf import (
+    generate_spanish_ppf,
 )
 
 WE2002_ASSETS = "retro_roster_patcher.games.we2002.assets"
 
-# What `_translate_record` turns the synthetic community record into, per
-# language. Each is padded back to the original five bytes, so the merged PPF is
-# the same size whichever language ran — which is why the size assertions below
-# are not left to carry the claim alone.
-TRANSLATED = {"es": b"TIRO ", "fr": b"TIR  ", "pt": b"CHUTE"}
+ALL_LANGS = ["en", "es", "fr", "pt"]
+
+# The per-language module behind each code: the generator that produces the
+# unmerged patch, and the module-level `ensure_ppf` the dispatcher delegates to.
+GENERATORS = {
+    "en": generate_english_ppf,
+    "es": generate_spanish_ppf,
+    "fr": generate_french_ppf,
+    "pt": generate_portuguese_ppf,
+}
+MODULE_ENSURE = {
+    "en": ensure_english_ppf,
+    "es": ensure_spanish_ppf,
+    "fr": ensure_french_ppf,
+    "pt": ensure_portuguese_ppf,
+}
+
+# What the synthetic community record looks like once merged, per language. Each
+# is padded back to the original five bytes, so the merged PPF is the same size
+# whichever language ran — which is why the size assertions below are not left to
+# carry the claim alone. English has no translation table, so its record merges
+# through unchanged.
+TRANSLATED = {"en": b"SHOOT", "es": b"TIRO ", "fr": b"TIR  ", "pt": b"CHUTE"}
+
+
+def _cache_file(cache_dir: pathlib.Path, lang: str) -> pathlib.Path:
+    return cache_dir / f"we2002_{LANGUAGES[lang].lower()}.ppf"
 
 
 @pytest.fixture(autouse=True)
@@ -76,13 +119,19 @@ def test_package_path_memoises_one_temporary_copy_per_asset(tmp_path, monkeypatc
     first = package_path(WE2002_ASSETS, "we2002_english.ppf")
     second = package_path(WE2002_ASSETS, "we2002_english.ppf")
     third = package_path(WE2002_ASSETS, "we2002_english.ppf")
+    # A second name in the same package: the memo is keyed on both halves, so
+    # this must not come back as the PPF's path.
+    other = package_path(WE2002_ASSETS, "__init__.py")
 
     assert second == first
     assert third == first
-    expected = package_bytes(WE2002_ASSETS, "we2002_english.ppf")
-    assert pathlib.Path(first).read_bytes() == expected
-    assert [args for _, args in registered] == [(first,)]
-    assert [p.name for p in tmp_path.iterdir()] == [pathlib.Path(first).name]
+    assert (other == first) is False
+    assert pathlib.Path(first).read_bytes() == package_bytes(WE2002_ASSETS, "we2002_english.ppf")
+    assert pathlib.Path(other).read_bytes() == package_bytes(WE2002_ASSETS, "__init__.py")
+    assert [args for _, args in registered] == [(first,), (other,)]
+    assert sorted(p.name for p in tmp_path.iterdir()) == sorted(
+        [pathlib.Path(first).name, pathlib.Path(other).name]
+    )
 
 
 def test_a_temporary_copy_deleted_from_underneath_is_materialised_again(tmp_path, monkeypatch):
@@ -210,7 +259,11 @@ def test_english_falls_back_to_generation_when_community_assets_are_supplied(tmp
     path = ensure_ppf(str(cache_dir), "en", assets_dir=str(assets_dir))
 
     assert path == str(cache_dir / "we2002_english.ppf")
-    assert (cache_dir / "we2002_english.ppf").exists() is True
+    merged = pathlib.Path(path).read_bytes()
+    # Routed *and* merged: 1912 is the team-names-only patch. English has no
+    # translation table, so the record merges through untranslated.
+    assert len(merged) == 1922
+    assert TRANSLATED["en"] in merged
 
 
 def test_an_empty_assets_dir_never_falls_through_to_the_working_directory(tmp_path, monkeypatch):
@@ -267,33 +320,75 @@ def test_a_community_assets_dir_is_read_but_never_written(tmp_path, lang):
     assert TRANSLATED[lang] in merged
 
 
-def test_a_cache_predating_the_community_assets_is_rebuilt_with_them(tmp_path):
+@pytest.mark.parametrize("lang", ALL_LANGS)
+def test_a_cache_predating_the_community_assets_is_rebuilt_with_them(tmp_path, lang):
     cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
     assets_dir = tmp_path / "assets"
     assets_dir.mkdir()
-    plain = ensure_ppf(str(cache_dir), "fr")
-    assert len(pathlib.Path(plain).read_bytes()) == 1912
+    # Seeded from the generator rather than through `ensure_ppf`, because for
+    # "en" the dispatcher serves the packaged asset and writes no cache at all.
+    plain = _cache_file(cache_dir, lang)
+    plain.write_bytes(GENERATORS[lang]())
+    assert len(plain.read_bytes()) == 1912
 
     (assets_dir / "w202-english.ppf").write_bytes(_synthetic_community_ppf())
-    rebuilt = ensure_ppf(str(cache_dir), "fr", assets_dir=str(assets_dir))
+    rebuilt = ensure_ppf(str(cache_dir), lang, assets_dir=str(assets_dir))
 
-    assert rebuilt == plain
-    assert TRANSLATED["fr"] in pathlib.Path(rebuilt).read_bytes()
+    assert rebuilt == str(plain)
+    assert len(plain.read_bytes()) == 1922
+    assert TRANSLATED[lang] in plain.read_bytes()
 
 
-def test_a_cache_already_merged_with_the_community_assets_is_left_alone(tmp_path):
+@pytest.mark.parametrize("lang", ALL_LANGS)
+def test_a_cache_already_merged_with_the_community_assets_is_left_alone(tmp_path, lang):
     """The old size heuristic rebuilt this every call, because 1922 is under 10 KB."""
     cache_dir = tmp_path / "cache"
     assets_dir = tmp_path / "assets"
     assets_dir.mkdir()
     (assets_dir / "w202-english.ppf").write_bytes(_synthetic_community_ppf())
-    merged = ensure_ppf(str(cache_dir), "fr", assets_dir=str(assets_dir))
+    merged = ensure_ppf(str(cache_dir), lang, assets_dir=str(assets_dir))
     pathlib.Path(merged).write_bytes(b"SENTINEL")
 
-    again = ensure_ppf(str(cache_dir), "fr", assets_dir=str(assets_dir))
+    again = ensure_ppf(str(cache_dir), lang, assets_dir=str(assets_dir))
 
     assert again == merged
     assert pathlib.Path(again).read_bytes() == b"SENTINEL"
+
+
+@pytest.mark.parametrize("lang", ALL_LANGS)
+def test_a_warm_cache_is_not_rewritten_when_no_community_assets_are_present(
+    tmp_path, lang, monkeypatch
+):
+    """Both halves of `has_community` in the language module's staleness guard.
+
+    Drop either one and the guard opens: the cache matches the generator output,
+    so it is unlinked and rewritten on every call. The bytes come out identical,
+    which is why this checks the mtime instead — a warm cache in a read-only
+    directory raises `PermissionError` under either mutation, and that is the
+    exact failure the cache/assets split exists to prevent.
+
+    Called through the language module rather than the dispatcher because for
+    "en" the dispatcher serves the packaged asset and never reaches this code
+    without community assets.
+    """
+    # `os.path.join("", "w202-english.ppf")` is a bare relative path, so without
+    # the `bool(assets_dir)` guard this stray file makes the module believe the
+    # caller supplied community assets. The cwd is the thing under test, which is
+    # why this test moves it.
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "w202-english.ppf").write_bytes(_synthetic_community_ppf())
+    cache_dir = tmp_path / "cache"
+    first = MODULE_ENSURE[lang](str(cache_dir))
+    assert pathlib.Path(first).read_bytes() == GENERATORS[lang]()
+    # A rewrite cannot preserve this; unlike an inode it cannot be reused, and
+    # unlike a wall-clock comparison it is immune to mtime granularity.
+    os.utime(first, (0, 0))
+
+    second = MODULE_ENSURE[lang](str(cache_dir))
+
+    assert second == first
+    assert os.stat(second).st_mtime_ns == 0
 
 
 def test_an_absent_assets_dir_is_not_an_error(tmp_path):
