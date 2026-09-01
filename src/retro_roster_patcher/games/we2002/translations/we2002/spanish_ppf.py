@@ -349,17 +349,18 @@ def ensure_ppf(cache_dir: str, assets_dir: str = "") -> str:
     """Generate the Spanish PPF into `cache_dir` and return its path.
 
     `cache_dir` is written to; `assets_dir` is only read, and only for the
-    optional community translation. When that file is present the generated PPF
-    carries its translated menu records and grows past 10 KB, so a smaller
-    cached file from an earlier run is regenerated.
+    optional community translation. A cache written before that translation was
+    available holds exactly the unmerged output, so it is discarded and rebuilt
+    with the translated menu records merged in.
     """
     ppf_path = os.path.join(cache_dir, "we2002_spanish.ppf")
     has_community = bool(assets_dir) and os.path.exists(
         os.path.join(assets_dir, "w202-english.ppf")
     )
-    if os.path.exists(ppf_path):
-        if has_community and os.path.getsize(ppf_path) < 10000:
-            os.remove(ppf_path)
+    if has_community and os.path.exists(ppf_path):
+        with open(ppf_path, "rb") as f:
+            if f.read() == generate_spanish_ppf():
+                os.remove(ppf_path)
     if not os.path.exists(ppf_path):
         os.makedirs(cache_dir, exist_ok=True)
         ppf_data = generate_spanish_ppf(assets_dir)
