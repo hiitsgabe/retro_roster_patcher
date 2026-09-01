@@ -11,8 +11,11 @@ contracts is worked around here rather than fixed there:
     `retro-roster analyze` probes every registered patcher against one ROM and a
     file that is not this game must not raise.
   * `NHL94GenesisRomWriter.write_team_roster` documents a `-1` error return but
-    raises `IndexError` on a malformed image by two distinct routes. `patch`
-    catches those and raises `RomError`, which is what its contract promises.
+    raises `IndexError` on a malformed image by the two routes pinned in
+    `test_rom_writer.py` (`:918`, the zero fill past the end of a region the
+    reader over-measured, and `:953`, the name write that follows a stats write
+    the writer's own bounds guard refused). `patch` catches those and raises
+    `RomError`, which is what its contract promises.
 
 The original orchestrator returned `dict[str, list[Player]]` from its fetch step
 and left team leader stats on `self.team_stats` as a side effect. Here `fetch`
@@ -98,6 +101,14 @@ class NHL94GenesisPatcher(Patcher):
         # Both clients `os.makedirs(cache_dir, exist_ok=True)` in their own
         # constructors, so there is nothing to do here. Constructing the client
         # eagerly is what keeps `analyze_rom` free of a lazily-built API object.
+        #
+        # `Any` rather than a union or a Protocol, and it is the one loose
+        # annotation in this tree: the two clients disagree on the signature of
+        # every method `fetch` calls — `get_hockey_squad(team_id)` against
+        # `get_hockey_squad(code, season)` — so no single type describes both.
+        # The cost is real: calling the wrong client's method is a runtime bug
+        # here rather than a mypy error, which is why `fetch` branches on
+        # `self.provider` and both branches are pinned by tests.
         if self.provider == "nhl":
             self.api: Any = NhlApiClient(str(self.cache_dir), on_status, transport=transport)
         else:
@@ -113,9 +124,12 @@ class NHL94GenesisPatcher(Patcher):
         try:
             info = reader.get_info()
         except IndexError:
-            # `validate` passed on pointer 0 but one of the other 25 points too
-            # close to the end of the file. That is a file which is not this
-            # game, not an unreadable one, so it is reported rather than raised.
+            # `validate` bounds-checks pointer 0 and nothing else, so *any* of
+            # the 26 pointers — pointer 0 included — landing in the last five
+            # bytes of the file reaches here: `_read_team_slots` dereferences
+            # every one of them through `_read_team_city`, which reads a 16-bit
+            # word at `team_base + 4`. That is a file which is not this game, not
+            # an unreadable one, so it is reported rather than raised.
             return RomInfo(
                 path=str(rom_path),
                 size=size,
@@ -195,7 +209,7 @@ class NHL94GenesisPatcher(Patcher):
         slot_mapping: list[SlotMapping] | None = None,
     ) -> MappedRosters:
         self.check_slot_mapping(slot_mapping)
-        teams: dict[int, Any] = {}
+        teams: dict[int, list[NHL94GenPlayerRecord]] = {}
         for roster in data.teams:
             slot = self.mapper.get_team_slot(roster.team.code)
             if slot is None or not 0 <= slot < TEAM_COUNT:
@@ -227,6 +241,10 @@ class NHL94GenesisPatcher(Patcher):
             raise RomError(f"Not a valid NHL94 Genesis ROM: {rom_path}")
 
         self.status("Initializing ROM writer...")
+        # The image is read from disk twice — once above, once by the writer's
+        # own internal reader — which is ~2 MB of redundant I/O per patch. Kept
+        # deliberately: it is what lets "not this game" fail before any writer
+        # state exists, and the writer owns its reader for its whole lifetime.
         writer = NHL94GenesisRomWriter(str(rom_path), str(output_path))
         if not writer.load():
             raise RomError(f"Failed to load ROM for writing: {rom_path}")
@@ -234,12 +252,18 @@ class NHL94GenesisPatcher(Patcher):
         # Without this the game refuses to boot an edited cartridge.
         writer.disable_checksum()
 
-        # Driven off `range(TEAM_COUNT)` rather than off `rosters.teams`, which
-        # is a plain dict that may have crossed a JSON boundary since
-        # `map_rosters` built it. A negative key would clear the writer's
-        # `team_index >= TEAM_COUNT` guard, wrap round the pointer table and
-        # scribble somewhere near offset 0.
-        targets = [slot for slot in range(TEAM_COUNT) if rosters.teams.get(slot)]
+        # `filled_slots()` is the model's own definition of "slots that received
+        # players", and the truthiness matters on its own: an empty list reaching
+        # `write_team_roster` zero-fills the whole region it was going to patch,
+        # erasing a team's roster while this method still reports success.
+        #
+        # The range is then re-checked, because those keys come from a plain dict
+        # that may have crossed a JSON boundary since `map_rosters` built it. The
+        # reader bounds-checks only `team_index >= TEAM_COUNT`, so a negative key
+        # reads the four bytes *preceding* the pointer table and treats whatever
+        # is there as a team pointer: the stray write lands wherever that word
+        # points, which is anywhere in the image, not near offset 0.
+        targets = [slot for slot in rosters.filled_slots() if 0 <= slot < TEAM_COUNT]
 
         teams_patched = 0
         players_patched = 0
