@@ -275,6 +275,14 @@ class WE2002Patcher(Patcher):
             )
         if not Path(rom_path).exists():
             raise RomError(f"ROM not found: {rom_path}")
+        # `analyze_rom` has always published this predicate; `patch` did not
+        # apply it. Every write below is an absolute seek into a 700 MB image,
+        # and seeking past the end of a short file extends it, so a 4 KB input
+        # came back as a 12 MB "patched ISO" holding nothing but the patch. This
+        # is stricter than upstream, which validated nothing here — it is not a
+        # restored guard, it is a new one.
+        if not RomReader(str(rom_path)).validate_rom():
+            raise RomError(f"Too small to be a WE2002 ROM, or not a WE2002 ROM: {rom_path}")
 
         self.status("Preparing ROM...")
         # The constructor copies the ROM to `output_path`, so the file the
