@@ -201,8 +201,22 @@ class NHL94GenesisPatcher(Patcher):
 
         if on_progress is not None:
             on_progress(1.0, "Complete")
+        # Every field but `season` is synthesised: this game has no league
+        # endpoint. `country` and `country_code` are distinct fields — "USA" and
+        # "US" — and `teams_count` counts the rosters actually built, which is the
+        # slot-mapped subset of what the provider returned, not `len(teams)`.
+        # `League` defaults all five, so leaving any of them out is a silent ""
+        # or 0 in the emitted fetch JSON rather than a construction error.
         return LeagueData(
-            league=League(id=0, name="NHL", country="US", season=season),
+            league=League(
+                id=0,
+                name="NHL",
+                country="USA",
+                country_code="US",
+                logo_url="",
+                season=season,
+                teams_count=len(rosters),
+            ),
             teams=rosters,
         )
 
