@@ -54,7 +54,7 @@ from ...core.models import (
 from ...core.patcher import Patcher
 from ...core.registry import register
 from ...sports import _http
-from ...sports.api_football import ApiFootballClient
+from ...sports.api_football import ApiFootballClient, DailyLimitError, RateLimitError
 from ...sports.models import LeagueData, Team, TeamRoster
 from .models import WETeamRecord
 from .ppf import PPFError, apply_ppf
@@ -203,18 +203,52 @@ class WE2002Patcher(Patcher):
         for i, team in enumerate(teams):
             if on_progress is not None:
                 on_progress(0.1 + 0.8 * (i / len(teams)), f"Fetching {team.name}...")
-            # `get_squad` takes a team id and nothing else; the squad endpoint
-            # serves the current squad and its cache key carries no season.
-            # `get_player_stats` returns a list, which is re-keyed by player id
-            # because that is the shape `map_team_with_league_context` reads.
-            stats = self.api.get_player_stats(team.id, season)
-            rosters.append(
-                TeamRoster(
-                    team=team,
-                    players=self.api.get_squad(team.id),
-                    player_stats={ps.player_id: ps for ps in stats},
-                )
-            )
+            # A league fetch is dozens of requests and one of them failing must
+            # not cost the other dozens: the team keeps its place in the list,
+            # carries the reason on `TeamRoster.error`, and the fetch goes on.
+            # Everything below `map_rosters` tolerates a team with no players.
+            #
+            # The roster is built empty and filled in, rather than mutating the
+            # skeleton published above: that skeleton is a snapshot a caller may
+            # still be rendering, and writing through it would change what it
+            # already handed over.
+            roster = TeamRoster(team=team)
+            try:
+                # The squad first, because that is the order upstream used and
+                # the order that matters under a rate limiter — whichever call
+                # goes second is the one that gets throttled, and losing the
+                # squad costs the whole team where losing the stats does not.
+                # `get_squad` takes a team id and nothing else; the squad
+                # endpoint serves the current squad and its cache key carries no
+                # season.
+                roster.players = self.api.get_squad(team.id)
+                try:
+                    # `get_player_stats` returns a list, re-keyed by player id
+                    # because that is the shape `map_team_with_league_context`
+                    # reads. Stats are optional: `map_player` falls back to
+                    # position defaults for a player who has none, so this
+                    # failure costs ratings and not the team.
+                    stats = self.api.get_player_stats(team.id, season)
+                    roster.player_stats = {ps.player_id: ps for ps in stats}
+                except Exception:
+                    self.status(
+                        f"{team.name}: stats unavailable, ratings will use position defaults"
+                    )
+            except DailyLimitError:
+                roster.error = "Daily API limit reached — upgrade your plan"
+                self.status(f"{team.name}: {roster.error}")
+            except RateLimitError:
+                roster.error = "Rate limit reached — squad unavailable"
+                self.status(f"{team.name}: {roster.error}")
+            except Exception as exc:
+                # As broad as upstream's, and deliberately so — a provider can
+                # fail in ways this module has no list of. `TransportLeak` is a
+                # `BaseException` precisely so the network guard still escapes
+                # this, and `check_api_key` has already run, so a missing key
+                # raises before the loop rather than becoming 20 team errors.
+                roster.error = f"Failed to load squad: {exc}"
+                self.status(f"{team.name}: {roster.error}")
+            rosters.append(roster)
 
         if on_progress is not None:
             on_progress(1.0, "Complete")

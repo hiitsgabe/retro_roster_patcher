@@ -41,7 +41,11 @@ from retro_roster_patcher.games.we2002 import patcher as patcher_module
 from retro_roster_patcher.games.we2002.patcher import MAX_ML_SLOTS, WE2002Patcher
 from retro_roster_patcher.games.we2002.ppf import PPFError
 from retro_roster_patcher.games.we2002.rom_writer import RomWriter, _slot_player_range
-from retro_roster_patcher.sports.api_football import ApiFootballClient
+from retro_roster_patcher.sports.api_football import (
+    ApiFootballClient,
+    DailyLimitError,
+    RateLimitError,
+)
 from retro_roster_patcher.sports.models import (
     League,
     LeagueData,
@@ -95,6 +99,35 @@ class FakeApi:
 
     def get_player_stats(self, team_id, season):
         self.calls.append(("get_player_stats", team_id, season))
+        return list(self._stats.get(team_id, []))
+
+
+class FailingApi(FakeApi):
+    """A `FakeApi` that raises for named teams instead of answering.
+
+    Two independent maps rather than one flag, because the two calls fail
+    differently: a squad failure costs the team, a stats failure costs only its
+    ratings, and a fake that could not tell them apart would prove neither.
+    """
+
+    def __init__(self, *, squad_errors=None, stats_errors=None, **kwargs):
+        super().__init__(**kwargs)
+        self._squad_errors = {} if squad_errors is None else squad_errors
+        self._stats_errors = {} if stats_errors is None else stats_errors
+
+    def get_squad(self, team_id):
+        self.calls.append(("get_squad", team_id))
+        if team_id in self._squad_errors:
+            raise self._squad_errors[team_id]
+        return [
+            Player(id=team_id * 100 + i, name=f"P{i}", position="Midfielder")
+            for i in range(self._squad_size)
+        ]
+
+    def get_player_stats(self, team_id, season):
+        self.calls.append(("get_player_stats", team_id, season))
+        if team_id in self._stats_errors:
+            raise self._stats_errors[team_id]
         return list(self._stats.get(team_id, []))
 
 
@@ -359,6 +392,11 @@ def test_fetch_asks_the_provider_for_exactly_what_it_needs(tmp_path):
     # invisible to any fake that records only that it was called. `get_squad`
     # takes a team id and nothing else — its cache key is `squad_{team_id}`, with
     # no season in it.
+    #
+    # The squad comes before the stats for each team, which is upstream's order
+    # and matters under a rate limiter: whichever call goes second is the one
+    # that gets throttled, and a lost squad costs the whole team where lost
+    # stats cost only its ratings.
     p = _make_patcher(tmp_path)
     p.api = FakeApi(team_count=2)
 
@@ -367,11 +405,76 @@ def test_fetch_asks_the_provider_for_exactly_what_it_needs(tmp_path):
     assert p.api.calls == [
         ("get_leagues", None, 2024, 39),
         ("get_teams", 39, 2024),
-        ("get_player_stats", 100, 2024),
         ("get_squad", 100),
-        ("get_player_stats", 101, 2024),
+        ("get_player_stats", 100, 2024),
         ("get_squad", 101),
+        ("get_player_stats", 101, 2024),
     ]
+
+
+def test_one_team_whose_squad_fails_costs_that_team_and_not_the_league(tmp_path):
+    # Four teams, one broken: a league fetch is dozens of HTTP calls and losing
+    # all of them to the third one is the difference between a usable roster
+    # patch and none at all. The broken team keeps its place in the list — the
+    # slot mapping the caller goes on to build is positional — and carries the
+    # reason on `TeamRoster.error`, which is the field the model has for exactly
+    # this and which nothing populated before.
+    p = _make_patcher(tmp_path)
+    p.api = FailingApi(team_count=4, squad_errors={102: RuntimeError("connection reset")})
+    status = []
+    p.on_status = status.append
+
+    data = p.fetch(season=2024, league_id=39)
+
+    assert [tr.team.id for tr in data.teams] == [100, 101, 102, 103]
+    assert [len(tr.players) for tr in data.teams] == [11, 11, 0, 11]
+    assert data.teams[2].error == "Failed to load squad: connection reset"
+    assert [tr.error for tr in data.teams] == ["", "", "Failed to load squad: connection reset", ""]
+    # Reported rather than hidden, and every team is done loading either way.
+    assert status == ["Team 2: Failed to load squad: connection reset"]
+    assert [tr.loading for tr in data.teams] == [False, False, False, False]
+
+
+def test_a_rate_limit_partway_through_a_league_keeps_the_teams_already_fetched(tmp_path):
+    # `RateLimitError` and `DailyLimitError` mean different things to a user —
+    # one is "wait", the other is "upgrade" — so they get different messages.
+    # Before this, either one raised out of `fetch` and lost the whole league.
+    p = _make_patcher(tmp_path)
+    p.api = FailingApi(
+        team_count=3,
+        squad_errors={
+            101: RateLimitError("too fast"),
+            102: DailyLimitError("out of requests"),
+        },
+    )
+
+    data = p.fetch(season=2024, league_id=39)
+
+    assert [len(tr.players) for tr in data.teams] == [11, 0, 0]
+    assert data.teams[1].error == "Rate limit reached — squad unavailable"
+    assert data.teams[2].error == "Daily API limit reached — upgrade your plan"
+
+
+def test_a_stats_failure_costs_the_ratings_and_not_the_squad(tmp_path):
+    # Stats are optional: a player without them maps to his position defaults,
+    # which is a worse record than a rated one and a far better one than a team
+    # with no players. So this failure must not set `error` or drop the squad.
+    p = _make_patcher(tmp_path)
+    p.api = FailingApi(
+        team_count=2,
+        stats={100: [_stats(10000, goals=3)]},
+        stats_errors={101: RuntimeError("stats endpoint down")},
+    )
+    status = []
+    p.on_status = status.append
+
+    data = p.fetch(season=2024, league_id=39)
+
+    assert [len(tr.players) for tr in data.teams] == [11, 11]
+    assert sorted(data.teams[0].player_stats) == [10000]
+    assert data.teams[1].player_stats == {}
+    assert [tr.error for tr in data.teams] == ["", ""]
+    assert status == ["Team 1: stats unavailable, ratings will use position defaults"]
 
 
 def test_fetch_keys_player_stats_by_player_id(tmp_path):
@@ -407,12 +510,17 @@ def test_fetch_publishes_the_team_list_before_the_squads(tmp_path):
         ("get_leagues", None, 2024, 39),
         ("get_teams", 39, 2024),
         ("partial", 2),
-        ("get_player_stats", 100, 2024),
         ("get_squad", 100),
-        ("get_player_stats", 101, 2024),
+        ("get_player_stats", 100, 2024),
         ("get_squad", 101),
+        ("get_player_stats", 101, 2024),
     ]
     assert len(published) == 1
+    # Still `loading=True` and still empty after `fetch` has returned: the
+    # skeleton is a snapshot, and the loop fills fresh `TeamRoster`s rather than
+    # writing through the object it already handed the caller. Upstream mutated
+    # the published list in place, which is the one thing here that deliberately
+    # does not match it.
     assert [tr.loading for tr in published[0].teams] == [True, True]
     assert [len(tr.players) for tr in published[0].teams] == [0, 0]
 
