@@ -141,6 +141,12 @@ def test_an_empty_body_is_reported_as_empty():
         _http.get_json("https://example.test/p", transport=transport)
 
 
+# `tests/conftest.py` arms an autouse guard over the whole suite that swaps
+# `_http.default_transport` for one that raises `TransportLeak`. This file is the
+# one that tests the transport itself, so it opts back out by marker: this test
+# reads the attribute, and the loopback group below drives the real urllib code
+# path. Neither reaches the network — the server is bound to 127.0.0.1.
+@pytest.mark.allow_default_transport
 def test_the_default_transport_is_urllib_based():
     assert _http.default_transport.__name__ == "_urllib_transport"
 
@@ -195,31 +201,37 @@ def server_url():
         thread.join(timeout=5)
 
 
+@pytest.mark.allow_default_transport
 def test_the_real_transport_fetches_and_parses(server_url):
     assert _http.get_json(f"{server_url}/echo")["path"] == "/echo"
 
 
+@pytest.mark.allow_default_transport
 def test_the_real_transport_sends_caller_headers(server_url):
     payload = _http.get_json(f"{server_url}/echo", headers={"x-apisports-key": "abc"})
     assert payload["headers"]["x-apisports-key"] == "abc"
 
 
+@pytest.mark.allow_default_transport
 def test_the_real_transport_sends_the_default_user_agent(server_url):
     payload = _http.get_json(f"{server_url}/echo")
     assert payload["headers"]["user-agent"] == _http.DEFAULT_USER_AGENT
     assert "Python-urllib" not in payload["headers"]["user-agent"]
 
 
+@pytest.mark.allow_default_transport
 def test_a_caller_can_override_the_default_user_agent(server_url):
     payload = _http.get_json(f"{server_url}/echo", headers={"User-Agent": "custom/1"})
     assert payload["headers"]["user-agent"] == "custom/1"
 
 
+@pytest.mark.allow_default_transport
 def test_a_caller_can_override_the_default_user_agent_case_insensitively(server_url):
     payload = _http.get_json(f"{server_url}/echo", headers={"user-agent": "custom/2"})
     assert payload["headers"]["user-agent"] == "custom/2"
 
 
+@pytest.mark.allow_default_transport
 def test_an_http_error_status_becomes_an_api_error_carrying_the_body(server_url):
     with pytest.raises(ApiError) as excinfo:
         _http.get_json(f"{server_url}/boom")
@@ -228,6 +240,7 @@ def test_an_http_error_status_becomes_an_api_error_carrying_the_body(server_url)
     assert "upstream blew up" in message
 
 
+@pytest.mark.allow_default_transport
 def test_the_timeout_is_honoured(server_url):
     started = time.monotonic()
     # Pinned to the message the read-timeout path produces. A bare `raises` would
