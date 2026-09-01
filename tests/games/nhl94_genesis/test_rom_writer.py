@@ -929,8 +929,12 @@ def test_a_roster_region_that_runs_past_the_end_of_the_file_raises(tmp_path):
     # `max_name_len >= 1`, that is while `offset <= end - 13`, and the name is
     # truncated to `end - offset - 12`, so its stats begin at or before `end - 10`
     # and finish at or before `end - 2`. With `end` just two bytes past the image
-    # that is always in range. Reaching the guard needs an `end` much further out,
-    # which a corrupt record chain cannot produce but a corrupt pointer table can —
+    # that is always in range. What reaches the guard is not a larger overshoot but
+    # a later `start`: a corrupt record chain leaves `start` deep inside the file,
+    # so the name write hits EOF first no matter how far `end` runs (a chain of
+    # maximal 16-bit hops reaches `end - len(data) == 65541` and still never fires
+    # it). Only a corrupt pointer table can put `start` within one record of the
+    # end, which fires the guard at an overshoot of just 98 bytes —
     # `test_a_team_block_at_the_end_of_the_file_lets_stats_scribble_past_it`.
     rom = synthetic_rom.build_nhl94_genesis_rom()
     start = synthetic_rom.team_base(0) + synthetic_rom.SEC_PLAYERS
@@ -955,13 +959,15 @@ def test_a_team_block_at_the_end_of_the_file_lets_stats_scribble_past_it(tmp_pat
     # 108-byte region finishing 98 bytes past the image.
     #
     # The first record's stats then begin at `len(data) - 2`, the guard fires, and
-    # nothing is written; drop the guard and the jersey BCD and the weight nibble
-    # land on the last two bytes of the ROM instead. Either way the *second*
-    # record's name write runs off the end at rom_writer.py:138. That is a second
-    # route to IndexError distinct from the zero fill at :153 in the test above,
-    # and like that one it never returns the documented -1. The partial write is
-    # already in `self.data`, so a caller that catches the exception and finalizes
-    # anyway ships the damaged image — which is what the tail assertion reads back.
+    # nothing is written; the loop advances and the *second* record's name write
+    # runs off the end at rom_writer.py:138. Drop the guard and there is no second
+    # record: the jersey BCD and the weight nibble land on the last two bytes of
+    # the ROM and the raise moves up into `_write_player_stats` at :186. Either
+    # way this is a route to IndexError distinct from the zero fill at :153 in the
+    # test above, and like that one it never returns the documented -1. The partial
+    # write is already in `self.data`, so a caller that catches the exception and
+    # finalizes anyway ships the damaged image — which the tail assertion reads back,
+    # and those last two bytes are exactly what the guard is worth.
     rom = synthetic_rom.build_nhl94_genesis_rom()
     end_of_file = len(rom)
     base = end_of_file - 20
