@@ -600,15 +600,18 @@ def test_the_cache_search_finds_nothing_without_a_cached_listing(tmp_path):
 
 
 def test_an_empty_cache_dir_reads_no_listing_at_all(tmp_path, monkeypatch):
-    # A library must not key behaviour off the process working directory. Upstream
-    # fell back to the host application's own absolute cache here, which a
-    # standalone package has no equivalent of; joining onto "" instead would read
-    # `./listings/<md5>.json` from wherever the caller happened to start — the
-    # pygame launcher and the embedded-CPython host both begin in directories
-    # neither this package nor its caller chose. So: no cache directory, no cache.
+    # No cache directory, no listings cache. Upstream fell back to a host-application
+    # global (`constants.SYSTEMS_CACHE_DIR`, anchored on that application's own
+    # `__file__`) which a standalone package has no equivalent of, so this port drops
+    # the fallback rather than importing the host. Upstream's own path was absolute
+    # and had no cwd dependency; the cwd is the hazard of the *naive* replacement,
+    # not something inherited.
     #
-    # The listing below is planted in the working directory and is a perfect match.
-    # Finding it would mean the search had reintroduced the cwd dependency.
+    # Which is why the chdir is load-bearing rather than scene-setting. Delete the
+    # `if not cache_dir` guard and what is left is `os.path.join("", "listings", ...)`,
+    # a relative path: with the listing planted in the working directory the search
+    # finds it and this assertion fails. Measured — run from anywhere else, that same
+    # mutant passes here vacuously.
     monkeypatch.chdir(tmp_path)
     system = {"roms_folder": "megadrive", "url": LISTING_URL}
     _listing(tmp_path, LISTING_HASH, [{"filename": "NHL 94 (USA).bin"}])
@@ -687,12 +690,10 @@ def test_find_falls_back_to_the_cached_listings(tmp_path):
     )
 
 
-def test_find_without_a_cache_dir_reports_not_found_rather_than_reading_the_cwd(
-    tmp_path, monkeypatch
-):
-    # The cwd guarantee through the public entry point, whose `cache_dir` also
-    # defaults to "". The planted listing is a perfect match; finding it would mean
-    # `find()` had reintroduced the dependency on where the process was started.
+def test_find_without_a_cache_dir_reports_not_found(tmp_path, monkeypatch):
+    # The same guarantee through the public entry point, whose `cache_dir` also
+    # defaults to "". Same chdir mutation trap as the `_search_cache` test above: the
+    # planted listing is a perfect match and is reachable only by a relative join.
     monkeypatch.chdir(tmp_path)
     roms = tmp_path / "roms"
     roms.mkdir()
