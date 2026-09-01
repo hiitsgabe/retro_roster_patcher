@@ -45,6 +45,19 @@ BOUNDARY_CONFIG = RomFinderConfig(
     system_type="megadrive",
 )
 
+# And the largest score the scans must still refuse: nine shared tokens of eleven
+# distinct, `int(9/11 * 60)` == 49. Synthetic for the same reason as the pair above —
+# every reject-side case built from real ROM names scores 40 or less, which leaves the
+# whole 41..49 band unexamined.
+NEAR_MISS_TERM = "alpha bravo charlie delta echo foxtrot golf hotel india juliet"
+NEAR_MISS_FILE = "kilo alpha bravo charlie delta echo foxtrot golf hotel india (USA).bin"
+NEAR_MISS_CONFIG = RomFinderConfig(
+    search_terms=[NEAR_MISS_TERM],
+    system_folders=["megadrive"],
+    file_extensions=[".bin"],
+    system_type="megadrive",
+)
+
 
 def _write(path, text=""):
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -133,6 +146,13 @@ def test_the_threshold_value_itself_is_reachable():
     # to the scoring weights fails with "this pair no longer scores 50" rather than
     # quietly turning both of those tests into ordinary above-threshold cases.
     assert _fuzzy_score(BOUNDARY_TERM, BOUNDARY_FILE) == 50
+
+
+def test_the_value_one_below_the_threshold_is_reachable():
+    # Likewise for the two near-miss scan tests. 49 is not a round number of the
+    # weights, so a rescale is far more likely to move this pair off 49 than to keep
+    # it there, and the two scan tests would silently become ordinary reject cases.
+    assert _fuzzy_score(NEAR_MISS_TERM, NEAR_MISS_FILE) == 49
 
 
 def test_identical_tokens_in_a_different_order_score_the_branch_maximum():
@@ -425,14 +445,24 @@ def test_the_local_scan_accepts_a_name_scoring_at_or_above_the_threshold(tmp_pat
 
 
 def test_the_local_scan_accepts_a_name_scoring_exactly_the_threshold(tmp_path):
-    # The boundary itself. Every other scan test scores 80 or 100 on the accept side
-    # and 20 or 40 on the reject side, leaving `>= 50` free to become `> 50` — or to
-    # slide anywhere in between — unnoticed.
+    # The accept side of the boundary. Every other scan test scores 80 or 100 here and
+    # 20 or 40 on the reject side, so this one closes the top of the range: `> 50` and
+    # `>= 51` now fail. It does not close the bottom — measured, the entire suite stayed
+    # green with both call sites at `>= 41` — which is what the near-miss case below is
+    # for. Only the pair fixes the constant at 50.
     _write(tmp_path / "megadrive" / BOUNDARY_FILE)
 
     assert RomFinder()._scan_local(BOUNDARY_CONFIG, str(tmp_path)) == str(
         tmp_path / "megadrive" / BOUNDARY_FILE
     )
+
+
+def test_the_local_scan_rejects_a_name_scoring_one_below_the_threshold(tmp_path):
+    # The reject side of the boundary, one point under. A threshold that slid anywhere
+    # into 41..49 would return this file instead of nothing.
+    _write(tmp_path / "megadrive" / NEAR_MISS_FILE)
+
+    assert RomFinder()._scan_local(NEAR_MISS_CONFIG, str(tmp_path)) is None
 
 
 def test_the_local_scan_accepts_a_fully_reordered_title(tmp_path):
@@ -584,6 +614,15 @@ def test_the_cache_search_accepts_an_entry_scoring_exactly_the_threshold(tmp_pat
     entry, _ = RomFinder()._search_cache(BOUNDARY_CONFIG, [system], str(tmp_path))
 
     assert entry == {"filename": BOUNDARY_FILE}
+
+
+def test_the_cache_search_rejects_an_entry_scoring_one_below_the_threshold(tmp_path):
+    # And the near miss, for the same reason: the two literals are independent, so a
+    # slide at one call site is invisible to the other's tests.
+    system = {"roms_folder": "megadrive", "url": LISTING_URL}
+    _listing(tmp_path, LISTING_HASH, [{"filename": NEAR_MISS_FILE}])
+
+    assert RomFinder()._search_cache(NEAR_MISS_CONFIG, [system], str(tmp_path)) == (None, None)
 
 
 def test_a_corrupt_listing_is_skipped_rather_than_raising(tmp_path):
