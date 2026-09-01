@@ -841,8 +841,20 @@ def test_the_goalie_byte_flags_a_third_goalie_and_preserves_the_byte_before_it(t
 # ── Checksums and finalize ───────────────────────────────────────────────
 
 
-def test_disable_checksum_writes_an_rts_at_the_bypass_offset(rom_paths):
-    writer, output = _loaded_writer(rom_paths)
+def test_disable_checksum_writes_an_rts_at_the_bypass_offset(tmp_path):
+    # The bytes either side of the patch are poisoned rather than left at the
+    # fixture's zeros, per the policy in this module's docstring: the image is
+    # already zero there, so "the neighbours are still zero" would hold just as
+    # well for a writer that had scribbled zeros over them, and the assertion
+    # would pass whether or not `disable_checksum` stayed inside its two bytes.
+    source = _write_rom(
+        tmp_path,
+        "bypass.bin",
+        _poisoned_rom((CHECKSUM_BYPASS_OFFSET - 4, 4), (CHECKSUM_BYPASS_OFFSET + 2, 4)),
+    )
+    output = tmp_path / "out.bin"
+    writer = NHL94GenesisRomWriter(str(source), str(output))
+    assert writer.load() is True
     writer.disable_checksum()
     assert writer.finalize() is True
 
@@ -850,8 +862,8 @@ def test_disable_checksum_writes_an_rts_at_the_bypass_offset(rom_paths):
     assert data[CHECKSUM_BYPASS_OFFSET : CHECKSUM_BYPASS_OFFSET + 2] == b"\x4e\x75"
     # A word-aligned two-byte patch and nothing more.
     assert CHECKSUM_BYPASS_OFFSET % 2 == 0
-    assert data[CHECKSUM_BYPASS_OFFSET - 2 : CHECKSUM_BYPASS_OFFSET] == b"\x00\x00"
-    assert data[CHECKSUM_BYPASS_OFFSET + 2 : CHECKSUM_BYPASS_OFFSET + 4] == b"\x00\x00"
+    assert data[CHECKSUM_BYPASS_OFFSET - 4 : CHECKSUM_BYPASS_OFFSET] == bytes([POISON]) * 4
+    assert data[CHECKSUM_BYPASS_OFFSET + 2 : CHECKSUM_BYPASS_OFFSET + 6] == bytes([POISON]) * 4
 
 
 def test_disable_checksum_before_loading_does_nothing(tmp_path):
