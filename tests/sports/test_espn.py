@@ -59,14 +59,34 @@ def _roster_transport(bodies):
 
 
 def test_get_nhl_teams_parses_the_recorded_response(tmp_path, replay):
+    # The fixture is a recorded response with fixed content, so every claim here is
+    # exact rather than approximate. The `len(teams) >= 30` bound and the
+    # `all(t.id ...)` / `all(t.name ...)` checks this replaces passed on any
+    # non-empty value: they would have stayed green had every team parsed to the
+    # wrong id and the wrong name, which is the failure that matters. Indexing
+    # positionally pins the parsed order too.
     client = EspnClient(str(tmp_path), transport=replay("espn_nhl_teams.json"))
     teams = client.get_nhl_teams()
 
-    assert len(teams) >= 30
-    codes = {t.code for t in teams}
-    assert "BOS" in codes
-    assert all(t.id for t in teams)
-    assert all(t.name for t in teams)
+    assert len(teams) == 32
+
+    bruins = teams[1]
+    assert bruins.id == 1
+    assert bruins.name == "Boston Bruins"
+    assert bruins.code == "BOS"
+
+
+def test_get_nhl_teams_truncates_the_two_fields_it_slices(tmp_path, replay):
+    # `code` and `short_name` are the only fields `_parse_teams` transforms rather
+    # than copies, and the fixture carries exactly one team past each limit: "UTAH"
+    # is its only abbreviation longer than 3 characters, and "Golden Knights" its
+    # only shortDisplayName longer than 12. Pinning any other team would assert the
+    # slices without exercising them.
+    client = EspnClient(str(tmp_path), transport=replay("espn_nhl_teams.json"))
+    teams = client.get_nhl_teams()
+
+    assert teams[27].code == "UTA"
+    assert teams[29].short_name == "Golden Knigh"
 
 
 def test_results_are_cached_so_the_second_call_skips_the_transport(tmp_path, replay):
