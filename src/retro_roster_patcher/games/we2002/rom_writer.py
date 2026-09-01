@@ -1730,78 +1730,11 @@ _NAT_COLOR_OFFSETS = _compute_nat_color_offsets()
 # The C++ OnWriteCD() writes ML flag colors in this exact non-sequential order,
 # with relative seeks interspersed.  We replicate the absolute offsets by
 # tracking file position as the C++ code does.
+#
+# The ML color region starts after the national one, so the position it begins
+# at has to be derived by replaying the national writes first;
+# `_compute_ml_color_offsets` does both in a single pass.
 # ---------------------------------------------------------------------------
-
-
-def _build_ml_color_write_plan() -> list[tuple[int, int]]:
-    """Build (ml_squad_index, relative_position) pairs for color writes.
-
-    Returns a list of (squad_ml_index, absolute_offset_from_COLORE) entries.
-    We simulate the C++ file pointer to compute absolute positions.
-    """
-    # The C++ first writes 56 national team colors, then does relative seeks
-    # for ML teams.  We need to figure out the file position after all the
-    # national writes, then trace the ML writes.
-    #
-    # Rather than simulate the full national write (which has its own skips),
-    # we compute the ML color offsets by tracking the file pointer from known
-    # absolute positions.  The ML color section starts after national teams.
-    #
-    # From the C++ (OnWriteCD lines 5987-6055):
-    #   After writing 56 national colors with skips, the file pointer is at
-    #   some position.  Then:
-    #     Seek(64, current)      → skip 2 empty slots
-    #     Write ml[0..4]         → 5 × 32 bytes
-    #     Write ml[10]           → 32 bytes
-    #     Write ml[7..9]         → 3 × 32 bytes
-    #     Write ml[11..12]       → 2 × 32 bytes
-    #     Write ml[15]           → 32 bytes
-    #     Write ml[18..21]       → 4 × 32 bytes
-    #     Seek(32, current)      → skip 1 slot
-    #     Write ml[14]           → 32 bytes
-    #     Write ml[24]           → 32 bytes
-    #     Write ml[25]           → 32 bytes
-    #     Write ml[26] partial   → 26 bytes (straddles to COLORE2)
-    #     --- Seek to COLORE2 ---
-    #     Write ml[26] tail      → 6 bytes
-    #     Write ml[27]           → 32 bytes
-    #     Write ml[16..17]       → 2 × 32 bytes
-    #     Seek(64, current)      → skip 2 slots
-    #     Write ml[13]           → 32 bytes
-    #     Seek(288, current)     → skip 9 slots
-    #     Write nazall[39]       → 32 bytes (national team, skip)
-    #     Seek(64, current)      → skip 2 slots
-    #     Write nazall[47]       → 32 bytes (national team, skip)
-    #     Write ml[6]            → 32 bytes
-    #     Write ml[23]           → 32 bytes
-    #     Write ml[28..31]       → 4 × 32 bytes
-    #
-    # We don't need absolute offsets for every position — instead we compute
-    # them relative to OFS_BANDIERE_COLORE2 for the second segment,
-    # and use a tracking approach for the first segment.
-    #
-    # Actually, the simplest correct approach: we know the file position after
-    # writing nationals.  Let's compute it.
-    #
-    # National color write (lines 5989-6015):
-    #   56 teams with special cases:
-    #   - i=13: write 26, seek to COLORE1, write 6 (straddle)
-    #   - i=36,39,47: skip (no write)
-    #   - i=1,40,52: seek +32 before write (skip old team slot)
-    #   - default: write 32
-    #
-    # After COLORE1 seek at i=13, file position is OFS_BANDIERE_COLORE1 + 6.
-    # Then normal 32-byte writes continue for i=14..55 (minus skips).
-    # Actually this is getting complex — let me just hardcode the ML offsets
-    # by doing the math once.
-
-    # I'll trace the file pointer through the entire national+ML write sequence.
-    # Start at OFS_BANDIERE_COLORE.
-    return []  # placeholder — actual computation below
-
-
-# Instead of the complex tracing, compute the ML color offsets directly.
-# The ML color region starts at a known position that we can derive.
 
 
 def _compute_ml_color_offsets() -> dict:
