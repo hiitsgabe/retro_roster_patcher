@@ -3,3 +3,7 @@
 Soccer ROMs have fixed team slots with no code to match against, so this patcher
 requires an explicit slot mapping and an API-Football key.
 """
+
+from .patcher import WE2002Patcher
+
+__all__ = ["WE2002Patcher"]

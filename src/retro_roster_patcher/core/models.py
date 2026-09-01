@@ -105,7 +105,15 @@ class MappedRosters:
     teams: dict[int, Any] = field(default_factory=dict)
 
     def filled_slots(self) -> list[int]:
-        """Slot indices that actually received players, in ascending order."""
+        """Slot indices whose mapped value is truthy, in ascending order.
+
+        For a game that stores a list of player records per slot — NHL94 — that
+        is exactly the slots which received players, and its patcher depends on
+        the distinction: an empty list reaching the writer erases the slot it was
+        going to patch. For a game that stores one record object per slot —
+        WE2002's `WETeamRecord` — every value is truthy however empty, so this
+        returns every key and that patcher iterates `teams` directly instead.
+        """
         return sorted(i for i, players in self.teams.items() if players)
 
 
