@@ -22,9 +22,15 @@ from .models import League, LeagueData, Player, PlayerStats, Team, TeamRoster
 def league_data_to_dict(data: LeagueData) -> dict[str, Any]:
     """Convert to plain dicts.
 
-    Every *value* is JSON-serialisable, but `player_stats` keeps its `int` keys.
-    `json.dumps` stringifies those on the way out, which is the whole reason the
-    read side has to convert them back.
+    Every value the models *declare* is JSON-serialisable, but `player_stats`
+    keeps its `int` keys. `json.dumps` stringifies those on the way out, which is
+    the whole reason the read side has to convert them back.
+
+    `extra` is the deliberate exception. It is `dict[str, Any]`, an escape hatch
+    holding whatever the provider put there, so this function hands back a `set`
+    or a `datetime` as readily as a `str` and `json.dumps` then raises. Keeping
+    what goes into `extra` dumpable is the caller's responsibility, not this
+    module's.
     """
     return asdict(data)
 
