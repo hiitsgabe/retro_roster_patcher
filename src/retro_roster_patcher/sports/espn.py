@@ -497,9 +497,12 @@ class EspnClient:
             base = BASKETBALL_BASE_URL
         else:
             base = SOCCER_BASE_URL
+        # Outside the `try`: only the request is meant to be guarded. A raising
+        # status callback is a caller bug, not a failed fetch, and swallowing it
+        # here turned it into an empty payload.
+        if self.on_status:
+            self.on_status(f"Fetching{path}...")
         try:
-            if self.on_status:
-                self.on_status(f"Fetching{path}...")
             data = _http.get_json(base + path, transport=self._transport)
         except Exception:
             return {}
