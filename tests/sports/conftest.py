@@ -10,7 +10,10 @@ work — the sentinel deriving from `BaseException`, the unfiltered member scan 
 live in one place instead of being re-derived, and trimmed, per client. The
 sentinel itself and the `forbid_default_transport` fixture moved up to
 `tests/conftest.py`, which is the only scope from which `tests/games/` — where
-the NHL94 patcher constructs live sports clients — can see them.
+the NHL94 patcher constructs live sports clients — can see them, and where the
+guard is autouse over the whole suite. `assert_no_transport_leak` still patches
+`default_transport` itself on top of that: it is the same prohibition with a
+message that names the client class under test.
 """
 
 import pathlib

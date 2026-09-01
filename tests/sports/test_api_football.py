@@ -522,10 +522,9 @@ def test_get_player_stats_parses_the_first_statistics_entry(tmp_path):
 # --- members that answer offline ---
 
 
-def test_the_offline_members_answer_without_touching_the_transport(
-    tmp_path, forbid_default_transport
-):
-    # Constructed with no transport at all, under a default transport that raises:
+def test_the_offline_members_answer_without_touching_the_transport(tmp_path):
+    # Constructed with no transport at all, under the suite-wide autouse guard in
+    # `tests/conftest.py`, which makes the default transport raise:
     # OFFLINE_MEMBERS is otherwise only ever compared as a set of names, so a
     # member listed there could start issuing requests with the suite still green.
     client = ApiFootballClient(api_key="k", cache_dir=str(tmp_path))
