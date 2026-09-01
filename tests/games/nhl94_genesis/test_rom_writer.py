@@ -1,7 +1,7 @@
 """Writer coverage against the synthetic ROM in `tests/fixtures/synthetic_rom.py`.
 
 The writer had no test at all in the codebase it was ported from, so this file is
-the first thing that has ever executed its 357 lines. As with the reader tests,
+the first thing that has ever executed a line of it. As with the reader tests,
 nothing here touches a real image.
 
 Every read-back goes through a *fresh* `NHL94GenesisRomReader` opened on the
@@ -533,6 +533,54 @@ def test_a_non_ascii_name_becomes_one_question_mark_per_character(rom_paths):
     data = output.read_bytes()
     assert struct.unpack_from(">H", data, start)[0] == 9
     assert struct.unpack_from(">H", data, start + 9 + 8)[0] == 8
+
+
+def test_an_empty_name_is_written_as_a_placeholder_and_not_as_a_sentinel(rom_paths):
+    # `read_team_roster` and `get_team_player_region` both stop at a length word
+    # below 3, and an empty name encodes a length word of exactly 2. Written
+    # mid-roster it would bury the end-of-roster sentinel inside the roster: the
+    # writer still reports 20 written, but only the three records ahead of it
+    # would ever read back and the region would re-measure at 56 bytes instead of
+    # 355, so a later patch of the same team truncates against the short region.
+    # Both providers can hand over "" — `sports/nhl.py` joins two absent name keys
+    # and strips, `sports/espn.py` falls back to "" when neither display name is
+    # present — and `stat_mapper.map_player` passes it straight through.
+    writer, output = _loaded_writer(rom_paths)
+    roster = [NHL94GenPlayerRecord(name=f"NAME{i:04d}", jersey_number=i + 1) for i in range(20)]
+    roster[3] = NHL94GenPlayerRecord(name="", jersey_number=4)
+    assert writer.write_team_roster(0, roster) == 20
+    assert writer.finalize() is True
+
+    reader = _read_back(output)
+    names, stats = reader.read_team_roster(0)
+    # Twenty, not three: every record the writer counted is still reachable.
+    assert len(names) == 20
+    assert names[3] == "?"
+    assert names[4] == "NAME0004"
+    # The record after the placeholder still starts where the reader expects it.
+    assert stats[4][0] == 0x05
+    # Nineteen 18-byte records, one 11-byte record, and the 2-byte sentinel.
+    assert reader.get_team_player_region(0)[1] == 355
+
+
+def test_a_one_character_name_survives_the_round_trip(rom_paths):
+    # Length word 3 is the low edge of the reader's `length < 3` sentinel test, so
+    # a one-character name is the shortest record that must not be read as the end
+    # of the roster. Nothing else in the suite round-trips one.
+    writer, output = _loaded_writer(rom_paths)
+    roster = [
+        NHL94GenPlayerRecord(name=name, jersey_number=i + 1)
+        for i, name in enumerate(("AAAA", "X", "BBBB", "CCCC"))
+    ]
+    assert writer.write_team_roster(0, roster) == 4
+    assert writer.finalize() is True
+
+    reader = _read_back(output)
+    names, stats = reader.read_team_roster(0)
+    assert names == ["AAAA", "X", "BBBB", "CCCC"]
+    assert stats[2][0] == 0x03
+    # Three 14-byte records, one 11-byte record, and the 2-byte sentinel.
+    assert reader.get_team_player_region(0)[1] == 55
 
 
 def test_a_name_is_truncated_when_only_part_of_it_fits(rom_paths):
