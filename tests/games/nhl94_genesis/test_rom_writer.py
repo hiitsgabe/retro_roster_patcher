@@ -924,10 +924,14 @@ def test_a_roster_region_that_runs_past_the_end_of_the_file_raises(tmp_path):
     # path in the writer that does not degrade gracefully, and the orchestrator
     # will have to catch it — `analyze`/`patch` probe every patcher against one ROM.
     #
-    # It is also why `_write_player_stats`'s own `offset + STATS_SIZE >
-    # len(self.data)` guard is unreachable: a region past EOF is the only way to
-    # get an out-of-range offset, and the zero fill gets there first. Removing that
-    # guard changes nothing any test can observe.
+    # `_write_player_stats`'s own `offset + STATS_SIZE > len(self.data)` guard
+    # cannot fire on an image shaped like this one. A record is written only while
+    # `max_name_len >= 1`, that is while `offset <= end - 13`, and the name is
+    # truncated to `end - offset - 12`, so its stats begin at or before `end - 10`
+    # and finish at or before `end - 2`. With `end` just two bytes past the image
+    # that is always in range. Reaching the guard needs an `end` much further out,
+    # which a corrupt record chain cannot produce but a corrupt pointer table can —
+    # `test_a_team_block_at_the_end_of_the_file_lets_stats_scribble_past_it`.
     rom = synthetic_rom.build_nhl94_genesis_rom()
     start = synthetic_rom.team_base(0) + synthetic_rom.SEC_PLAYERS
     record = synthetic_rom.player_record(0, 0)
@@ -940,6 +944,51 @@ def test_a_roster_region_that_runs_past_the_end_of_the_file_raises(tmp_path):
     assert start + 982530 == synthetic_rom.ROM_SIZE + 2
     with pytest.raises(IndexError):
         writer.write_team_roster(0, _squad())
+
+
+def test_a_team_block_at_the_end_of_the_file_lets_stats_scribble_past_it(tmp_path):
+    # DEFECT: `write_team_roster`'s second IndexError route, and the one that shows
+    # `_write_player_stats`'s bounds guard is load-bearing rather than dead. Team 0's
+    # block is moved to 20 bytes from EOF with its players pointer at +10, so the
+    # region *starts* in range, and the length word planted there says 100, so the
+    # reader's scan clears the end of the file in a single step and reports a
+    # 108-byte region finishing 98 bytes past the image.
+    #
+    # The first record's stats then begin at `len(data) - 2`, the guard fires, and
+    # nothing is written; drop the guard and the jersey BCD and the weight nibble
+    # land on the last two bytes of the ROM instead. Either way the *second*
+    # record's name write runs off the end at rom_writer.py:138. That is a second
+    # route to IndexError distinct from the zero fill at :153 in the test above,
+    # and like that one it never returns the documented -1. The partial write is
+    # already in `self.data`, so a caller that catches the exception and finalizes
+    # anyway ships the damaged image — which is what the tail assertion reads back.
+    rom = synthetic_rom.build_nhl94_genesis_rom()
+    end_of_file = len(rom)
+    base = end_of_file - 20
+    struct.pack_into(">I", rom, synthetic_rom.POINTER_TABLE_OFFSET, base)
+    struct.pack_into(">H", rom, base, 10)
+    struct.pack_into(">H", rom, end_of_file - 10, 100)
+    source = _write_rom(tmp_path, "edge.bin", rom)
+    output = tmp_path / "out.bin"
+    writer = NHL94GenesisRomWriter(str(source), str(output))
+    assert writer.load() is True
+    assert writer.reader.get_team_player_region(0) == (end_of_file - 10, 108)
+
+    players = [
+        NHL94GenPlayerRecord(name=name, jersey_number=7)
+        for name in ("ABCDEF", "GHIJKL", "MNOPQR", "STUVWX")
+    ]
+    with pytest.raises(IndexError):
+        writer.write_team_roster(0, players)
+    assert writer.finalize() is True
+
+    # Two zeros from before the region, the first record's length word, its six
+    # name bytes, then the second record's length word in the last two bytes. The
+    # eight stat bytes the first record should have had are simply absent: the
+    # guard returned the offset unchanged, so the name that follows overwrote
+    # nothing and the file ends on a length word rather than on a jersey and a
+    # weight nibble. That last pair is the whole difference the guard makes.
+    assert output.read_bytes()[-12:] == b"\x00\x00\x00\x08ABCDEF\x00\x08"
 
 
 def test_a_negative_team_index_overwrites_the_start_of_the_rom_with_line_data(rom_paths):
