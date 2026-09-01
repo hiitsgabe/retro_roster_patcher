@@ -177,11 +177,11 @@ def test_each_provider_builds_its_own_client(tmp_path):
     #
     # These are live clients built with `transport=None`, and so are the ones the
     # `patcher` fixture builds before it overwrites `p.api`: 41 of the 47 tests
-    # in this file construct one that way, one more injects its own transport,
-    # and 5 construct none. The autouse guard in `tests/conftest.py` makes the
-    # fall-through to the real transport raise `TransportLeak` for all 41 — today
-    # both constructors only assign attributes and makedirs, and that is what
-    # keeps it true.
+    # in this file construct an `EspnClient` that way, one more injects its own
+    # transport, and the last 5 construct no `EspnClient` at all. The autouse
+    # guard in `tests/conftest.py` makes the fall-through to the real transport
+    # raise `TransportLeak` for all 41 — today both constructors only assign
+    # attributes and makedirs, and that is what keeps it true.
     espn = NHL94GenesisPatcher(cache_dir=tmp_path / "a")
     nhl = NHL94GenesisPatcher(cache_dir=tmp_path / "b", provider="nhl")
     assert type(espn.api) is EspnClient
