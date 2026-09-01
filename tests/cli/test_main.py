@@ -57,8 +57,11 @@ def test_list_without_json_prints_a_table(capsys):
     assert code == 0
     # Both assertions pin the column widths, which `_patchers` computes from the
     # data: GAME is padded to 13 because `nhl94-genesis` is 13 characters wide.
-    # Pinning one header line and one row rather than the whole blob keeps this
-    # from breaking when a later version registers a third game.
+    # That couples both strings to the widest values in the whole registry, since
+    # `widths` maxes over every row: a third game whose id exceeds 13, platform
+    # exceeds 8 or sport exceeds 6 characters re-pads the header *and* this row,
+    # and both lines below have to be updated with it. Pinning two lines rather
+    # than the whole blob narrows that coupling; it does not remove it.
     assert lines[0] == "GAME           PLATFORM  SPORT   SLOT-MAP  API-KEY  PROVIDERS"
     assert "nhl94-genesis  genesis   hockey  no        no       espn,nhl" in lines
 
@@ -100,9 +103,12 @@ def test_analyze_with_an_explicit_game_reports_that_game(tmp_path, cache, capsys
 
 def test_analyze_sweeps_without_an_api_key_even_though_we2002_requires_one(tmp_path, cache, capsys):
     # This is why the api-key guard lives in `fetch` and not `__init__` (Task 7).
-    # Asserting the whole event sequence is the point: a `CapabilityError` from
-    # WE2002's constructor would show up as an extra `error` event, which an
-    # assertion about `evts[-1]` alone would not see.
+    # The whole sequence, not just the last event: `build_patcher` hands
+    # `renderer.status` and `renderer.partial` to every patcher it builds, and
+    # `JsonRenderer` writes those to stdout alongside the result, so a sweep that
+    # narrated itself would emit `status`/`partial` lines that `evts[-1]` alone
+    # would still call a pass. An `error` needs no such guarding — `main` returns
+    # immediately after `renderer.error`, so it is always the only event.
     rom = tmp_path / "garbage.bin"
     rom.write_bytes(b"\x00" * 4096)
     code, evts = run(["analyze", "--rom", str(rom), "--json", *cache], capsys)
