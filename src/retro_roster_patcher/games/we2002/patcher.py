@@ -390,19 +390,25 @@ class WE2002Patcher(Patcher):
 
         `kit_home` and `kit_away` are what reach the image: they fill the maglia
         palette that drives the 2D menu preview and the 3D shorts, the flag
-        palette, and — `kit_home` alone — the 3D jersey TEX patch. `kit_third`
-        mirrors `kit_home` as upstream set it; no writer path reads it today.
+        palette, and — `kit_home` alone — the 3D jersey TEX patch. No writer path
+        reads `kit_third` today.
 
         A colour the provider did not supply leaves the record's own default in
-        place rather than overwriting it with black.
+        place rather than overwriting it with black. `kit_third` is the one
+        exception, because it is not a provider value at all: upstream assigned
+        it from `kit_home` unconditionally and so does this, so the accent
+        matches the shirt whether or not a provider colour arrived. Mirroring it
+        only inside the `home is not None` branch left the two disagreeing —
+        white shirt, black accent — in exactly the case where nothing had chosen
+        either.
         """
         home = _parse_hex_colour(team.color)
         if home is not None:
             record.kit_home = home
-            record.kit_third = home
         away = _parse_hex_colour(team.alternate_color)
         if away is not None:
             record.kit_away = away
+        record.kit_third = record.kit_home
 
     def _apply_translation(
         self,

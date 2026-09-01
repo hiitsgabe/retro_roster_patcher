@@ -678,11 +678,30 @@ def test_a_team_with_no_colours_keeps_the_record_defaults(patcher):
     # `_parse_hex_colour` rejects on length. These are `WETeamRecord`'s own
     # defaults, unwritten — the tests below supply a distinct away colour, so
     # `kit_away` matching the default here is not the only reading it gets.
+    # `kit_third` is not one of them: it is never a provider value, so it takes
+    # `kit_home` here rather than its own black default.
     record = _map_one(patcher, _roster(100))
 
     assert record.kit_home == (255, 255, 255)
     assert record.kit_away == (0, 0, 0)
-    assert record.kit_third == (0, 0, 0)
+    assert record.kit_third == (255, 255, 255)
+
+
+def test_the_third_kit_mirrors_the_home_kit_whether_or_not_a_colour_arrived(patcher):
+    # `_apply_kit_colours` documents `kit_third` as mirroring `kit_home`, and
+    # upstream assigned it unconditionally. Mirroring it only when the provider
+    # supplied a usable colour made the two disagree in exactly the case where
+    # nothing chose either of them: the record's own defaults are white for the
+    # home kit and black for the third, so they did not match.
+    supplied = _map_one(patcher, _roster(100, color="C60000"))
+    absent = _map_one(patcher, _roster(100))
+
+    assert supplied.kit_third == supplied.kit_home
+    assert absent.kit_third == absent.kit_home
+    # Not a vacuous pair: the two records carry different colours, so a mirror
+    # that had frozen on one value would fail one of the two above.
+    assert supplied.kit_home == (198, 0, 0)
+    assert absent.kit_home == (255, 255, 255)
 
 
 def test_a_colour_too_short_to_be_a_triple_is_ignored_rather_than_half_parsed(patcher):
@@ -693,7 +712,7 @@ def test_a_colour_too_short_to_be_a_triple_is_ignored_rather_than_half_parsed(pa
     record = _map_one(patcher, _roster(100, color="C60", alternate_color="#00FF80"))
 
     assert record.kit_home == (255, 255, 255)
-    assert record.kit_third == (0, 0, 0)
+    assert record.kit_third == (255, 255, 255)
     assert record.kit_away == (0, 255, 128)
 
 
@@ -704,7 +723,7 @@ def test_a_colour_longer_than_six_characters_is_ignored(patcher):
     record = _map_one(patcher, _roster(100, color="C60000FF", alternate_color="#00FF80"))
 
     assert record.kit_home == (255, 255, 255)
-    assert record.kit_third == (0, 0, 0)
+    assert record.kit_third == (255, 255, 255)
     assert record.kit_away == (0, 255, 128)
 
 
@@ -716,7 +735,7 @@ def test_a_six_character_colour_that_is_not_hex_is_ignored(patcher):
 
     assert record.kit_home == (255, 255, 255)
     assert record.kit_away == (0, 0, 0)
-    assert record.kit_third == (0, 0, 0)
+    assert record.kit_third == (255, 255, 255)
 
 
 def test_a_bad_home_colour_does_not_suppress_a_good_away_colour(patcher):
