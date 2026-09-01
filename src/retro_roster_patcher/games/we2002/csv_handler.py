@@ -34,6 +34,28 @@ _POS_NAMES = {0: "GK", 1: "DF", 2: "MF", 3: "FW"}
 _POS_CODES = {"GK": 0, "DF": 1, "MF": 2, "FW": 3}
 
 
+def _int_or(row: dict, key: str, default: int) -> int:
+    """Read an integer column, falling back to `default` when it is absent.
+
+    A CSV a person edited can be missing a value in three different ways and
+    `dict.get`'s default only covered the first:
+
+      * the header never named the column, so `csv.DictReader` produces no key;
+      * the header named it but the row stopped short, so `DictReader` fills the
+        key with `restval`, which is `None`, and `int(None)` raised `TypeError`;
+      * the cell is there and empty, which is what a spreadsheet writes for a
+        blank, and `int("")` raised `ValueError`.
+
+    A value that is present and unreadable — `high` in a numeric column — is
+    still an error. Defaulting that to 5 would hide a typo behind a plausible
+    rating.
+    """
+    value = row.get(key)
+    if value is None or value == "":
+        return default
+    return int(value)
+
+
 class CsvHandler:
     """Export/import roster data as CSV for manual editing."""
 
@@ -102,28 +124,28 @@ class CsvHandler:
                     last_name = name_parts[0]
 
                 attrs = WEPlayerAttributes(
-                    offensive=int(row.get("off", 5)),
-                    defensive=int(row.get("def", 5)),
-                    body_balance=int(row.get("bod", 5)),
-                    stamina=int(row.get("sta", 5)),
-                    speed=int(row.get("spe", 5)),
-                    acceleration=int(row.get("acl", 5)),
-                    pass_accuracy=int(row.get("pas", 5)),
-                    shoot_power=int(row.get("spw", 5)),
-                    shoot_accuracy=int(row.get("sac", 5)),
-                    jump_power=int(row.get("jmp", 5)),
-                    heading=int(row.get("hea", 5)),
-                    technique=int(row.get("tec", 5)),
-                    dribble=int(row.get("dri", 5)),
-                    curve=int(row.get("cur", 5)),
-                    aggression=int(row.get("agg", 5)),
+                    offensive=_int_or(row, "off", 5),
+                    defensive=_int_or(row, "def", 5),
+                    body_balance=_int_or(row, "bod", 5),
+                    stamina=_int_or(row, "sta", 5),
+                    speed=_int_or(row, "spe", 5),
+                    acceleration=_int_or(row, "acl", 5),
+                    pass_accuracy=_int_or(row, "pas", 5),
+                    shoot_power=_int_or(row, "spw", 5),
+                    shoot_accuracy=_int_or(row, "sac", 5),
+                    jump_power=_int_or(row, "jmp", 5),
+                    heading=_int_or(row, "hea", 5),
+                    technique=_int_or(row, "tec", 5),
+                    dribble=_int_or(row, "dri", 5),
+                    curve=_int_or(row, "cur", 5),
+                    aggression=_int_or(row, "agg", 5),
                 )
 
                 player = WEPlayerRecord(
                     last_name=last_name,
                     first_name=first_name,
                     position=_POS_CODES.get(row.get("position", "MF"), 2),
-                    shirt_number=int(row.get("number", 0)),
+                    shirt_number=_int_or(row, "number", 0),
                     attributes=attrs,
                 )
 
