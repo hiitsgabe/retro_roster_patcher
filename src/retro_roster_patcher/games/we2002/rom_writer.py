@@ -1805,7 +1805,11 @@ def _build_ml_color_write_plan() -> list[tuple[int, int]]:
 
 
 def _compute_ml_color_offsets() -> dict:
-    """Compute {ml_index: (offset, size)} for each ML team's color data.
+    """Compute {ml_index: (offset, size)} for 30 of the 32 ML teams' color data.
+
+    ml[5] and ml[22] have no known offset and are absent from the result — the
+    upstream C++ write sequence traced below never writes them. See the comment
+    at the end of this function and `_write_flag_impl` for what that costs.
 
     For teams that straddle a sector boundary (ml[26]), returns two entries
     that must be written separately.
@@ -1925,9 +1929,21 @@ def _compute_ml_color_offsets() -> dict:
         result[idx] = [(pos, 32)]
         pos += 32
 
-    # ml[22] is missing from the C++ write sequence — it may share a slot
-    # with one of the national teams or be at a position we haven't found.
-    # Leave it unpatched to avoid corruption.
+    # TWO slots are missing from the C++ write sequence, not one: ml[5] and
+    # ml[22]. Neither is reached by any of the writes traced above, so `result`
+    # holds 30 of the 32. They may share a slot with one of the national teams
+    # or sit at a position that has not been found.
+    #
+    # Leave both unpatched. Guessing an offset here writes 32 colour bytes into
+    # an unidentified ISO structure, which is a worse outcome than an unpatched
+    # flag palette. `_write_flag_impl` still writes the FORMA style byte for
+    # them, so those two clubs get a new geometric pattern drawn over the
+    # original Japanese palette, and `patcher.py` counts them in
+    # `teams_patched`. That is the accepted cost.
+    #
+    # This is inherited from the upstream write sequence, not a porting error:
+    # `_compute_ml_color_offsets` is byte-identical to the version it was
+    # ported from, and so was the one-slot claim this comment replaces.
 
     return result
 
@@ -2457,7 +2473,15 @@ class RomWriter:
         return written
 
     def _write_flag_impl(self, f, slot_index, team):
-        """Write team flag data (uses existing file handle)."""
+        """Write team flag data (uses existing file handle).
+
+        The style byte goes to all 32 ML slots; the 32-byte palette goes to 30
+        of them. `_ML_COLOR_OFFSETS` has no entry for ml[5] or ml[22] — the
+        upstream write sequence never wrote those two and no offset for them is
+        known — so those slots take a new geometric pattern over the original
+        Japanese palette. Inherited from upstream, and left that way on purpose:
+        a guessed offset writes colour bytes into an unidentified structure.
+        """
         if slot_index < 0 or slot_index >= _SQUADRE_ML:
             return
         style, color_data = _build_flag_data(team)
@@ -2476,7 +2500,11 @@ class RomWriter:
             _write_chunks(f, color_data, chunks)
 
     def write_flag(self, slot_index: int, team: WETeamRecord):
-        """Write team flag (style byte + 16 colors) for an ML team slot."""
+        """Write team flag (style byte, and 16 colors for 30 of the 32 slots).
+
+        ml[5] and ml[22] get the style byte and no palette; see
+        `_write_flag_impl`.
+        """
         if not os.path.exists(self.output_path):
             return
         with open(self.output_path, "r+b") as f:
