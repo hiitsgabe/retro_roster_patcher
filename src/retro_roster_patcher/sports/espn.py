@@ -139,9 +139,13 @@ class EspnClient:
         if cached:
             return self._parse_teams(cached)
         data = self._request(f"/{code}/teams", sport="soccer")
-        if data:
+        # Cache what parsed, not what arrived. A body carrying zero teams is still a
+        # truthy dict, so caching on the body persisted the empty result across runs
+        # and no later call could recover. The same guard is on every teams method.
+        teams = self._parse_teams(data)
+        if teams:
             self._save_cache(cache_key, data)
-        return self._parse_teams(data)
+        return teams
 
     def get_squad(self, team_id: int, league_code: str | None = None) -> list[Player]:
         """Fetch current squad for a team."""
@@ -176,9 +180,10 @@ class EspnClient:
         if cached:
             return self._parse_teams(cached)
         data = self._request("/nhl/teams", sport="hockey")
-        if data:
+        teams = self._parse_teams(data)
+        if teams:
             self._save_cache(cache_key, data)
-        return self._parse_teams(data)
+        return teams
 
     def get_hockey_squad(self, team_id: int) -> list[Player]:
         """Fetch current roster for an NHL team."""
@@ -238,9 +243,10 @@ class EspnClient:
         if cached:
             return self._parse_teams(cached)
         data = self._request("/mlb/teams", sport="baseball")
-        if data:
+        teams = self._parse_teams(data)
+        if teams:
             self._save_cache(cache_key, data)
-        return self._parse_teams(data)
+        return teams
 
     def get_baseball_squad(self, team_id: int) -> list[Player]:
         """Fetch current roster for an MLB team."""
@@ -362,9 +368,10 @@ class EspnClient:
         if cached:
             return self._parse_teams(cached)
         data = self._request("/nba/teams", sport="basketball")
-        if data:
+        teams = self._parse_teams(data)
+        if teams:
             self._save_cache(cache_key, data)
-        return self._parse_teams(data)
+        return teams
 
     def get_basketball_squad(self, team_id: int) -> list[Player]:
         """Fetch current roster for an NBA team."""
@@ -539,7 +546,12 @@ class EspnClient:
     def _parse_teams(self, data: dict) -> list[Team]:
         if not isinstance(data, dict):
             return []
-        teams_raw = data.get("sports", [{}])[0].get("leagues", [{}])[0].get("teams", [])
+        # `or [{}]` rather than a `.get` default: ESPN sends an empty list — not a
+        # missing key — when it has nothing to report, and the default only covers
+        # the missing-key case, so indexing [0] raised IndexError.
+        sports = data.get("sports") or [{}]
+        leagues = sports[0].get("leagues") or [{}]
+        teams_raw = leagues[0].get("teams") or []
         teams = []
         for entry in teams_raw:
             t = entry.get("team", {})

@@ -27,6 +27,26 @@ def _soccer_roster(*names):
     ).encode()
 
 
+def _nhl_teams_body(*teams):
+    """Build a teams body in ESPN's sports/leagues/teams envelope."""
+    return json.dumps(
+        {
+            "sports": [
+                {
+                    "leagues": [
+                        {
+                            "teams": [
+                                {"team": {"id": i + 1, "displayName": name, "abbreviation": code}}
+                                for i, (code, name) in enumerate(teams)
+                            ]
+                        }
+                    ]
+                }
+            ]
+        }
+    ).encode()
+
+
 def _roster_transport(bodies):
     """Serve a soccer roster chosen by the league code in the requested URL."""
 
@@ -100,6 +120,45 @@ def test_a_transport_failure_yields_no_teams_rather_than_crashing(tmp_path):
 
     client = EspnClient(str(tmp_path), transport=failing)
     assert client.get_nhl_teams() == []
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        b'{"sports": []}',
+        b'{"sports": [{"leagues": []}]}',
+    ],
+)
+def test_a_truncated_teams_payload_yields_no_teams_rather_than_an_index_error(tmp_path, payload):
+    # `sports[0]` and `leagues[0]` were indexed unguarded, so an empty list at
+    # either level raised IndexError out of a method whose contract is to return
+    # a list.
+    def transport(url, headers, timeout):
+        return payload
+
+    client = EspnClient(str(tmp_path), transport=transport)
+    assert client.get_nhl_teams() == []
+
+
+def test_a_payload_that_parses_to_no_teams_is_not_cached(tmp_path):
+    # A body carrying zero teams is still a truthy dict, so caching on the body
+    # rather than on the parse saved it and served [] for every later call — the
+    # failure outlived the run that caused it. Cache what parsed, not what arrived.
+    bodies = [
+        b'{"sports": [{"leagues": [{"teams": []}]}]}',
+        _nhl_teams_body(("BOS", "Boston Bruins"), ("TOR", "Toronto Maple Leafs")),
+    ]
+
+    def transport(url, headers, timeout):
+        transport.calls.append(url)
+        return bodies[min(len(transport.calls) - 1, len(bodies) - 1)]
+
+    transport.calls = []
+    client = EspnClient(str(tmp_path), transport=transport)
+
+    assert client.get_nhl_teams() == []
+    assert [t.code for t in client.get_nhl_teams()] == ["BOS", "TOR"]
+    assert transport.calls == [NHL_TEAMS_URL, NHL_TEAMS_URL]
 
 
 def test_the_status_callback_reports_the_fetch(tmp_path, replay):
