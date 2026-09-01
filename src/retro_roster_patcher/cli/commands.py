@@ -70,7 +70,14 @@ def cmd_analyze(args: argparse.Namespace, renderer: Renderer) -> None:
         raise RomError(f"No such ROM: {rom}")
 
     if args.game:
-        resolve_patcher_class(args.game)  # fail fast on a typo'd id
+        # Redundant with `build_patcher`, whose first statement resolves the same
+        # id: `candidates` gets exactly one element here, so the loop below always
+        # reaches that call, and nothing in between has a side effect. Measured —
+        # deleting this line leaves exit code, stdout and stderr byte-identical
+        # across 19 argvs including `--help`, a typo'd `--game`, a missing ROM and
+        # a directory ROM. It stays as defence against a later edit that reorders
+        # `cmd_analyze`, not as a fail-fast with an observable effect.
+        resolve_patcher_class(args.game)
         candidates = [args.game]
     else:
         candidates = [info.game_id for info in list_patchers()]
