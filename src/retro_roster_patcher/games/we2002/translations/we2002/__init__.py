@@ -9,6 +9,12 @@ into the ROM's Kanji name section.  Supported languages:
   pt - Portuguese
 """
 
+import os
+
+from .....core.assets import package_path
+
+_ASSETS_PACKAGE = "retro_roster_patcher.games.we2002.assets"
+
 LANGUAGES = {
     "en": "English",
     "es": "Spanish",
@@ -20,11 +26,22 @@ LANGUAGES = {
 LANGUAGE_CODES = list(LANGUAGES.keys())
 
 
-def ensure_ppf(assets_dir: str, lang: str = "en") -> str:
-    """Generate and cache the translation PPF for the given language.
+def ensure_ppf(cache_dir: str, lang: str = "en", assets_dir: str = "") -> str:
+    """Return a path to the translation PPF for `lang`.
 
-    Returns the path to the .ppf file.
+    English is shipped as package data, so it needs no generation: it is copied
+    to a fresh temporary file on every call, `cache_dir` is never touched, and
+    two calls return two different paths. Supplying a community PPF through
+    `assets_dir` overrides that — English is then generated with translated menu
+    records like any other language. Every other language is generated into
+    `cache_dir` on first use and the same path is returned thereafter.
     """
+    has_community = bool(assets_dir) and os.path.exists(
+        os.path.join(assets_dir, "w202-english.ppf")
+    )
+    if lang == "en" and not has_community:
+        return package_path(_ASSETS_PACKAGE, "we2002_english.ppf")
+
     if lang == "es":
         from .spanish_ppf import ensure_ppf as _ensure
     elif lang == "fr":
@@ -33,4 +50,4 @@ def ensure_ppf(assets_dir: str, lang: str = "en") -> str:
         from .portuguese_ppf import ensure_ppf as _ensure
     else:
         from .english_ppf import ensure_ppf as _ensure
-    return _ensure(assets_dir)
+    return _ensure(cache_dir, assets_dir)

@@ -345,15 +345,23 @@ def generate_french_ppf(assets_dir: str = "") -> bytes:
     return _make_ppf1("WE2002 French - Console Utilities", records)
 
 
-def ensure_ppf(assets_dir: str) -> str:
-    """Ensure the French PPF exists in the assets directory."""
-    ppf_path = os.path.join(assets_dir, "we2002_french.ppf")
-    has_community = os.path.exists(os.path.join(assets_dir, "w202-english.ppf"))
+def ensure_ppf(cache_dir: str, assets_dir: str = "") -> str:
+    """Generate the French PPF into `cache_dir` and return its path.
+
+    `cache_dir` is written to; `assets_dir` is only read, and only for the
+    optional community translation. When that file is present the generated PPF
+    carries its translated menu records and grows past 10 KB, so a smaller
+    cached file from an earlier run is regenerated.
+    """
+    ppf_path = os.path.join(cache_dir, "we2002_french.ppf")
+    has_community = bool(assets_dir) and os.path.exists(
+        os.path.join(assets_dir, "w202-english.ppf")
+    )
     if os.path.exists(ppf_path):
         if has_community and os.path.getsize(ppf_path) < 10000:
             os.remove(ppf_path)
     if not os.path.exists(ppf_path):
-        os.makedirs(assets_dir, exist_ok=True)
+        os.makedirs(cache_dir, exist_ok=True)
         ppf_data = generate_french_ppf(assets_dir)
         with open(ppf_path, "wb") as f:
             f.write(ppf_data)

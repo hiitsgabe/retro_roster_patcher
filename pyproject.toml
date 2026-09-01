@@ -40,7 +40,7 @@ where = ["src"]
 # the CLI, the Flutter/IPC embedding, and the tests. `_http.Transport` and the rest
 # would be enforced only for callers inside `src`.
 "retro_roster_patcher" = ["py.typed"]
-"retro_roster_patcher.games.we2002" = ["assets/**"]
+"retro_roster_patcher.games.we2002.assets" = ["*.ppf"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
