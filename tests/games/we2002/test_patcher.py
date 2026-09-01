@@ -9,10 +9,12 @@ are: `write_team` writes no players unless it is handed a `players=` list, it
 returns silently for a slot outside 0..31, and it only queues its 3D-jersey TEX
 patch — `flush_tex_patches` is the one call that applies them.
 
-`FakeApi` copies its signatures from `ApiFootballClient` rather than inventing
-convenient ones, and `test_the_fake_api_matches_the_real_client_signatures`
-keeps them copied. A fake that accepted a `season` on `get_squad` would leave
-this suite green while production raised `TypeError`.
+Both stand-ins copy their signatures from the real collaborator rather than
+inventing convenient ones, and the two conformance tests below keep them copied.
+A fake that accepted a `season` on `get_squad` would leave this suite green
+while production raised `TypeError`. The writer needs that guard more than the
+API client does, not less: no test anywhere constructs a real `RomWriter`, so
+renaming a parameter on the real one is otherwise invisible to CI.
 """
 
 import inspect
@@ -28,10 +30,11 @@ from retro_roster_patcher.core.errors import (
     MappingError,
     RomError,
 )
-from retro_roster_patcher.core.models import MappedRosters, SlotMapping
+from retro_roster_patcher.core.models import MappedRosters, RomSlot, SlotMapping
 from retro_roster_patcher.games.we2002 import patcher as patcher_module
 from retro_roster_patcher.games.we2002.patcher import MAX_ML_SLOTS, WE2002Patcher
 from retro_roster_patcher.games.we2002.ppf import PPFError
+from retro_roster_patcher.games.we2002.rom_writer import RomWriter
 from retro_roster_patcher.sports.api_football import ApiFootballClient
 from retro_roster_patcher.sports.models import (
     League,
@@ -43,35 +46,49 @@ from retro_roster_patcher.sports.models import (
 )
 
 
+def _signature_facts(fn):
+    """Every parameter's name, kind and default, in declaration order.
+
+    Names alone would let a keyword argument the caller passes turn
+    positional-only, or a default appear or vanish, without any test noticing.
+    """
+    return [(p.name, p.kind, p.default) for p in inspect.signature(fn).parameters.values()]
+
+
 class FakeApi:
     """Stands in for ApiFootballClient.
 
-    Records what it was asked for. `get_squad` takes no season and
-    `get_player_stats` returns a list, both matching the real client exactly.
+    Records every call it receives, in order, on `calls`, so a test can pin the
+    arguments and not just the answers: `get_teams(league_id, season)` takes two
+    integers that a swap would leave undetectable otherwise. `get_squad` takes no
+    season and `get_player_stats` returns a list, both matching the real client.
     """
 
-    def __init__(self, team_count=4, squad_size=11, stats=None):
+    def __init__(self, team_count=4, squad_size=11, stats=None, calls=None):
         self._team_count = team_count
         self._squad_size = squad_size
         self._stats = {} if stats is None else stats
-        self.squad_calls = []
-        self.stats_calls = []
+        # An externally supplied list lets a test interleave these calls with
+        # another callback's events on one timeline.
+        self.calls = [] if calls is None else calls
 
     def get_leagues(self, country=None, season=None, id=None):
+        self.calls.append(("get_leagues", country, season, id))
         return [League(id=id or 39, name="Premier League", country="England", season=season or 0)]
 
     def get_teams(self, league_id, season):
+        self.calls.append(("get_teams", league_id, season))
         return [Team(id=100 + i, name=f"Team {i}", code=f"T{i}") for i in range(self._team_count)]
 
     def get_squad(self, team_id):
-        self.squad_calls.append(team_id)
+        self.calls.append(("get_squad", team_id))
         return [
             Player(id=team_id * 100 + i, name=f"P{i}", position="Midfielder")
             for i in range(self._squad_size)
         ]
 
     def get_player_stats(self, team_id, season):
-        self.stats_calls.append((team_id, season))
+        self.calls.append(("get_player_stats", team_id, season))
         return list(self._stats.get(team_id, []))
 
 
@@ -209,9 +226,21 @@ def test_the_fake_api_matches_the_real_client_signatures():
     # client. If it accepts arguments the real one does not, `fetch` can call the
     # real client wrongly and every test here still passes.
     for name in ("get_leagues", "get_teams", "get_squad", "get_player_stats"):
-        fake = list(inspect.signature(getattr(FakeApi, name)).parameters)
-        real = list(inspect.signature(getattr(ApiFootballClient, name)).parameters)
+        fake = _signature_facts(getattr(FakeApi, name))
+        real = _signature_facts(getattr(ApiFootballClient, name))
         assert fake == real
+
+
+def test_the_fake_writer_matches_the_real_writer_signatures():
+    # No test in this repository constructs a real `RomWriter` — there is no ROM
+    # to give it — so the stand-in is the only `RomWriter` CI ever sees. Renaming
+    # `players` or `flush_tex_patches` on the real one would leave every test
+    # here green and break `patch` on the first real image. Kinds and defaults as
+    # well as names, because `patch` passes `players` and `include_flag` by
+    # keyword and a positional-only real parameter would reject that.
+    fake = _fake_writer_class([])
+    for name in ("write_team", "flush_tex_patches", "finalize"):
+        assert _signature_facts(getattr(fake, name)) == _signature_facts(getattr(RomWriter, name))
 
 
 # ── fetch ────────────────────────────────────────────────────────────────
@@ -228,6 +257,39 @@ def test_construction_creates_the_cache_directory(tmp_path):
     p = WE2002Patcher(cache_dir=cache)
 
     assert p.cache_dir.is_dir() is True
+
+
+def test_the_client_is_given_the_cache_directory_the_key_and_the_transport(tmp_path):
+    # Every test that reaches `fetch` replaces `p.api` with a fake, so this is
+    # the only place the real client's wiring is checked at all. A transport
+    # that never reaches the client leaves it free to open a real socket, and a
+    # cache directory that never reaches it puts the JSON cache somewhere else.
+    def transport(url, headers, timeout):
+        raise AssertionError("no test may reach the network")
+
+    seen = []
+    p = WE2002Patcher(
+        cache_dir=tmp_path / "cache",
+        api_key="test-key",
+        on_status=seen.append,
+        transport=transport,
+    )
+
+    assert type(p.api) is ApiFootballClient
+    assert p.api.cache_dir == str(tmp_path / "cache")
+    assert p.api._transport is transport
+    assert p.api.on_status == seen.append
+    assert p.api.api_key == "test-key"
+
+
+def test_a_patcher_built_without_a_key_gives_the_client_an_empty_one(tmp_path):
+    # `ApiFootballClient` types `api_key` as `str`, so `None` cannot be passed
+    # through. `check_api_key` is what refuses the missing key, at the top of
+    # `fetch`; the client never sees a request before that.
+    p = WE2002Patcher(cache_dir=tmp_path / "cache")
+
+    assert p.api_key is None
+    assert p.api.api_key == ""
 
 
 def test_an_api_key_is_mandatory_at_fetch_time(tmp_path):
@@ -247,18 +309,32 @@ def test_fetch_returns_league_data(patcher):
 
     assert isinstance(data, LeagueData) is True
     assert data.league.name == "Premier League"
+    # The season the caller asked for has to reach the provider and come back on
+    # the league: dropping it from the leagues call leaves this at 0.
+    assert data.league.season == 2024
     assert len(data.teams) == 4
     assert len(data.teams[0].players) == 11
     assert [tr.team.id for tr in data.teams] == [100, 101, 102, 103]
 
 
-def test_fetch_asks_for_each_squad_without_a_season(patcher):
-    # `ApiFootballClient.get_squad` takes a team id and nothing else; its cache
-    # key is `squad_{team_id}`, with no season in it.
-    patcher.fetch(season=2024, league_id=39)
+def test_fetch_asks_the_provider_for_exactly_what_it_needs(tmp_path):
+    # `get_teams(league_id, season)` takes two bare integers, so swapping them is
+    # invisible to any fake that records only that it was called. `get_squad`
+    # takes a team id and nothing else — its cache key is `squad_{team_id}`, with
+    # no season in it.
+    p = _make_patcher(tmp_path)
+    p.api = FakeApi(team_count=2)
 
-    assert patcher.api.squad_calls == [100, 101, 102, 103]
-    assert patcher.api.stats_calls == [(100, 2024), (101, 2024), (102, 2024), (103, 2024)]
+    p.fetch(season=2024, league_id=39)
+
+    assert p.api.calls == [
+        ("get_leagues", None, 2024, 39),
+        ("get_teams", 39, 2024),
+        ("get_player_stats", 100, 2024),
+        ("get_squad", 100),
+        ("get_player_stats", 101, 2024),
+        ("get_squad", 101),
+    ]
 
 
 def test_fetch_keys_player_stats_by_player_id(tmp_path):
@@ -274,16 +350,34 @@ def test_fetch_keys_player_stats_by_player_id(tmp_path):
 
 
 def test_fetch_publishes_the_team_list_before_the_squads(tmp_path):
-    seen = []
-    p = WE2002Patcher(cache_dir=tmp_path / "cache", api_key="k", on_partial=seen.append)
-    p.api = FakeApi()
+    # Contents alone would not make this test's name true: moving the partial
+    # publish down to just above the `return` leaves the skeleton byte-identical
+    # and changes only when it arrives. Both callbacks append to one list, so
+    # what is asserted is the order between them.
+    events = []
+    published = []
+
+    def _on_partial(data):
+        events.append(("partial", len(data.teams)))
+        published.append(data)
+
+    p = WE2002Patcher(cache_dir=tmp_path / "cache", api_key="k", on_partial=_on_partial)
+    p.api = FakeApi(team_count=2, calls=events)
 
     p.fetch(season=2024, league_id=39)
 
-    assert len(seen) == 1
-    assert len(seen[0].teams) == 4
-    assert [tr.loading for tr in seen[0].teams] == [True, True, True, True]
-    assert [len(tr.players) for tr in seen[0].teams] == [0, 0, 0, 0]
+    assert events == [
+        ("get_leagues", None, 2024, 39),
+        ("get_teams", 39, 2024),
+        ("partial", 2),
+        ("get_player_stats", 100, 2024),
+        ("get_squad", 100),
+        ("get_player_stats", 101, 2024),
+        ("get_squad", 101),
+    ]
+    assert len(published) == 1
+    assert [tr.loading for tr in published[0].teams] == [True, True]
+    assert [len(tr.players) for tr in published[0].teams] == [0, 0]
 
 
 def test_fetch_reports_progress(tmp_path):
@@ -415,34 +509,85 @@ def test_map_rosters_carries_the_kit_colours_from_the_team(patcher):
     record = mapped.teams[0]
 
     assert record.kit_home == (198, 0, 0)
+    # The away value carries a leading `#`, which the provider sometimes sends
+    # and sometimes does not; dropping the `lstrip` leaves seven characters and
+    # no colour at all.
     assert record.kit_away == (0, 255, 128)
     # Upstream mirrored the home kit into the third slot. Nothing in the ported
-    # writer reads `kit_third` — the maglia palette, the flag palette and the 3D
-    # TEX patch all read `kit_home` and `kit_away` — so this pins parity, not an
-    # effect on the ROM.
+    # writer reads `kit_third` — the maglia palette and the flag palette read
+    # `kit_home` and `kit_away`, and the 3D jersey TEX patch reads `kit_home`
+    # alone — so this pins parity, not an effect on the ROM.
     assert record.kit_third == (198, 0, 0)
 
 
-def test_a_team_with_no_colours_keeps_the_record_defaults(patcher):
-    data = _league_data([_roster(100)])
+def _map_one(patcher, team_roster):
+    """Map a single team into slot 0 and return the record it produced."""
+    mapped = patcher.map_rosters(
+        _league_data([team_roster]), slot_mapping=[SlotMapping(slot_index=0, team_id=100)]
+    )
+    return mapped.teams[0]
 
-    record = patcher.map_rosters(data, slot_mapping=[SlotMapping(slot_index=0, team_id=100)]).teams[
-        0
-    ]
+
+def test_a_team_with_no_colours_keeps_the_record_defaults(patcher):
+    # `Team.color` and `Team.alternate_color` default to the empty string, which
+    # `_parse_hex_colour` rejects on length. These are `WETeamRecord`'s own
+    # defaults, unwritten — the tests below supply a distinct away colour, so
+    # `kit_away` matching the default here is not the only reading it gets.
+    record = _map_one(patcher, _roster(100))
 
     assert record.kit_home == (255, 255, 255)
     assert record.kit_away == (0, 0, 0)
     assert record.kit_third == (0, 0, 0)
 
 
-def test_a_malformed_colour_is_ignored_rather_than_half_parsed(patcher):
-    data = _league_data([_roster(100, color="C60", alternate_color="not a colour")])
-
-    record = patcher.map_rosters(data, slot_mapping=[SlotMapping(slot_index=0, team_id=100)]).teams[
-        0
-    ]
+def test_a_colour_too_short_to_be_a_triple_is_ignored_rather_than_half_parsed(patcher):
+    # Three characters is a valid CSS shorthand and a valid hex integer, so a
+    # length check that let it through would parse `C6` and `0` and only then
+    # fail, on an empty third slice. The away colour is valid and distinct,
+    # which is what proves the home rejection did not skip the whole method.
+    record = _map_one(patcher, _roster(100, color="C60", alternate_color="#00FF80"))
 
     assert record.kit_home == (255, 255, 255)
+    assert record.kit_third == (0, 0, 0)
+    assert record.kit_away == (0, 255, 128)
+
+
+def test_a_colour_longer_than_six_characters_is_ignored(patcher):
+    # Eight characters is `RRGGBBAA`, which some providers send. Slicing the
+    # first six off it would be a guess at where the alpha sits, so it is
+    # refused: a length test of `< 6` rather than `!= 6` would accept it.
+    record = _map_one(patcher, _roster(100, color="C60000FF", alternate_color="#00FF80"))
+
+    assert record.kit_home == (255, 255, 255)
+    assert record.kit_third == (0, 0, 0)
+    assert record.kit_away == (0, 255, 128)
+
+
+def test_a_six_character_colour_that_is_not_hex_is_ignored(patcher):
+    # `orange` and `purple` are exactly six characters, so they pass the length
+    # check and reach `int(..., 16)`. Without the `except ValueError` the
+    # `ValueError` would leave `map_rosters` instead of returning a record.
+    record = _map_one(patcher, _roster(100, color="orange", alternate_color="purple"))
+
+    assert record.kit_home == (255, 255, 255)
+    assert record.kit_away == (0, 0, 0)
+    assert record.kit_third == (0, 0, 0)
+
+
+def test_a_bad_home_colour_does_not_suppress_a_good_away_colour(patcher):
+    # The two colours are parsed independently: a team may supply one and not
+    # the other, and the failure of one must not cost the other.
+    record = _map_one(patcher, _roster(100, color="orange", alternate_color="00FF80"))
+
+    assert record.kit_home == (255, 255, 255)
+    assert record.kit_away == (0, 255, 128)
+
+
+def test_a_bad_away_colour_does_not_suppress_a_good_home_colour(patcher):
+    record = _map_one(patcher, _roster(100, color="C60000", alternate_color="orange"))
+
+    assert record.kit_home == (198, 0, 0)
+    assert record.kit_third == (198, 0, 0)
     assert record.kit_away == (0, 0, 0)
 
 
@@ -487,6 +632,31 @@ def test_a_file_too_small_to_be_the_game_is_reported_rather_than_raised(patcher,
     assert info.game_id == "we2002"
     assert info.extra == {"version": "Unknown"}
     assert info.to_dict()["extra"] == {"version": "Unknown"}
+
+
+def test_a_file_large_enough_to_be_the_game_reports_its_thirty_two_slots(patcher, tmp_path):
+    # `validate_rom`'s only test is `size >= 100 MB`, so a file of exactly that
+    # size takes the valid branch and the reader's generic slot labels come back
+    # through the translation in `analyze_rom`. `truncate` makes the file sparse:
+    # 100 MB of addressable zeroes with no blocks allocated and nothing written,
+    # so this costs neither disk nor time.
+    rom = tmp_path / "we2002.bin"
+    with rom.open("wb") as handle:
+        handle.truncate(100 * 1024 * 1024)
+
+    info = patcher.analyze_rom(rom)
+
+    assert info.is_valid is True
+    assert info.size == 104857600
+    assert info.game_id == "we2002"
+    assert info.path == str(rom)
+    assert info.extra == {"version": "WE2002"}
+    assert len(info.slots) == 32
+    # `display_name` carries the reader's `league_group`, not a second copy of
+    # the name, and `current_name` is 1-based where `index` is 0-based.
+    assert info.slots[5] == RomSlot(index=5, current_name="ML Slot 6", display_name="Master League")
+    assert info.slots[0].index == 0
+    assert info.slots[31].current_name == "ML Slot 32"
 
 
 # ── patch ────────────────────────────────────────────────────────────────
@@ -753,7 +923,14 @@ def test_an_unreadable_translation_file_is_reported_and_the_patch_continues(tmp_
     )
 
     assert result.teams_patched == 0
-    assert status[1].startswith("English translation skipped: ")
+    # The whole message, not a prefix: the reason is the only part of this that
+    # tells a user what to do, and a prefix match passes whatever follows it.
+    missing = tmp_path / "gone.ppf"
+    assert status == [
+        "Preparing ROM...",
+        f"English translation skipped: [Errno 2] No such file or directory: '{missing}'",
+        "Saving patched ROM...",
+    ]
 
 
 def test_the_assets_directory_is_forwarded_to_the_translation(tmp_path, monkeypatch):
