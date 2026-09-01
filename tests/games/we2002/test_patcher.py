@@ -997,6 +997,51 @@ def test_an_unreadable_translation_file_is_reported_and_the_patch_continues(tmp_
     ]
 
 
+def test_a_community_file_that_is_not_ppf2_is_reported_and_the_patch_continues(
+    tmp_path, monkeypatch
+):
+    # The one translation failure that is not `MissingAssetError`, `PPFError` or
+    # `OSError`: `assets_dir` holds a file called `w202-english.ppf` that is not
+    # PPF2 — a PPF1 or PPF3 community patch, or a truncated download.
+    # `menu_records._parse_ppf2` raises a bare `ValueError` for it, and nothing
+    # between there and here converts it. `ensure_ppf` is deliberately not
+    # stubbed, so this drives the real chain that reaches that raise:
+    # `translations.we2002.ensure_ppf` sees a community file and hands off to
+    # `english_ppf.ensure_ppf`, which asks `get_menu_records` to parse it.
+    #
+    # The bytes below are this project's own; no community patch is in the tree.
+    status = []
+    p = WE2002Patcher(
+        cache_dir=tmp_path / "cache",
+        api_key="k",
+        on_status=status.append,
+        assets_dir=tmp_path / "assets",
+    )
+    p.api = FakeApi()
+    (tmp_path / "assets").mkdir()
+    community = tmp_path / "assets" / "w202-english.ppf"
+    community.write_bytes(b"PPF30" + bytes(64))
+    log = []
+    monkeypatch.setattr(patcher_module, "RomWriter", _fake_writer_class(log))
+    _silence_translation(monkeypatch)
+    data = p.fetch(season=2024, league_id=39)
+    mapped = p.map_rosters(data, slot_mapping=[SlotMapping(slot_index=0, team_id=100)])
+    rom = tmp_path / "we2002.bin"
+    rom.write_bytes(b"\x00" * 4096)
+
+    result = p.patch(rom_path=rom, output_path=tmp_path / "out.bin", rosters=mapped)
+
+    # The roster patch under the translation is the point, so it still happens.
+    assert result.teams_patched == 1
+    assert result.players_patched == 11
+    assert status == [
+        "Preparing ROM...",
+        f"English translation skipped: Not a PPF2 file: {community}",
+        "Saving patched ROM...",
+    ]
+    assert log[-2:] == [("flush_tex_patches",), ("finalize",)]
+
+
 def test_the_assets_directory_is_forwarded_to_the_translation(tmp_path, monkeypatch):
     seen = []
     p = WE2002Patcher(cache_dir=tmp_path / "cache", api_key="k", assets_dir=tmp_path / "assets")
