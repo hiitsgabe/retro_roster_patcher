@@ -13,8 +13,8 @@ in `tests/games/nhl94_genesis/test_patcher.py` construct a live `EspnClient` wit
 `transport=None`, and exactly 3 of them requested this fixture. 34 of the rest
 come in through that file's `patcher` fixture, which builds a real client before
 overwriting `p.api` with a fake, and 4 build a patcher of their own — the same
-constructor-time exposure as the 3 that were guarded. Autouse now covers 319 of
-the suite's 327 tests; the remaining 8 opt out explicitly.
+constructor-time exposure as the 3 that were guarded. Autouse now covers 323 of
+the suite's 331 tests; the remaining 8 opt out explicitly.
 
 Disarming a negative safety net is silent — every other test stays green while
 the claim it enforces quietly stops holding. `tests/test_network_guard.py` is
