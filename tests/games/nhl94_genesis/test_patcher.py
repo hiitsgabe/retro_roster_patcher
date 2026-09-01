@@ -293,11 +293,44 @@ def test_fetch_returns_league_data_for_the_teams_that_have_slots(patcher):
 
     assert isinstance(data, LeagueData)
     # The whole `League`, not just name and season: `LeagueData` is what crosses
-    # the fetch → JSON → map boundary, and `id` and `country` are synthesised
+    # the fetch → JSON → map boundary, and every field but `season` is synthesised
     # here — this game has no league endpoint to read them from — so nothing else
-    # in the codebase would notice them changing.
-    assert data.league == League(id=0, name="NHL", country="US", season=2025)
+    # in the codebase would notice them changing. `League` gives all five of those
+    # a default, so an omitted field is a quiet "" or 0 rather than a TypeError.
+    assert data.league == League(
+        id=0,
+        name="NHL",
+        country="USA",
+        country_code="US",
+        logo_url="",
+        season=2025,
+        teams_count=2,
+    )
     assert [tr.team.code for tr in data.teams] == ["BOS", "CHI"]
+
+
+def test_fetch_counts_only_the_teams_that_have_a_rom_slot_in_the_league_header(tmp_path):
+    # Six provider teams, four of which map to a ROM slot. Four is neither 0 nor 1
+    # and is not the length of any other list in play, so `len(rosters)` is told
+    # apart from the default 0, from the six teams the provider returned, from the
+    # 26 ROM slots and from the 15 players in each squad.
+    p = NHL94GenesisPatcher(cache_dir=tmp_path / "cache")
+    p.api = FakeApi(
+        [
+            Team(id=1, name="Boston Bruins", code="BOS"),
+            Team(id=2, name="Seattle Kraken", code="SEA"),
+            Team(id=3, name="Chicago Blackhawks", code="CHI"),
+            Team(id=4, name="Detroit Red Wings", code="DET"),
+            Team(id=5, name="Utah Mammoth", code="UTA"),
+            Team(id=6, name="Toronto Maple Leafs", code="TOR"),
+        ]
+    )
+    data = p.fetch(season=2025)
+
+    assert len(data.teams) == 4
+    assert data.league.teams_count == 4
+    assert data.league.country == "USA"
+    assert data.league.country_code == "US"
 
 
 def test_fetch_carries_leader_stats_in_extra(patcher):
