@@ -140,14 +140,39 @@ def test_optional_keys_may_be_absent_entirely():
 
 def test_absent_containers_are_read_as_empty_rather_than_as_none():
     # The other three guards: `league`, `teams`, and a roster's own `team`. Absent
-    # is not the same as empty here -- `raw.get` yields `None`, and unguarded that
-    # reaches `_only_declared` as an `AttributeError` about `NoneType` instead of a
-    # `TypeError` naming the fields the file actually lacks.
+    # is not the same as empty in any of the three, but the failure mode is not the
+    # same either, so the assertions below are not either.
+    #
+    # `league` and `team` are handed to `_only_declared`. Unguarded, `raw.get`
+    # yields `None` and `_only_declared` calls `None.items()`, which is
+    # `AttributeError: 'NoneType' object has no attribute 'items'` -- not the
+    # `TypeError` naming the `id` and `name` the file actually lacks. Those two get
+    # a `pytest.raises` for that `TypeError`.
+    #
+    # `teams` never reaches `_only_declared`: it is the iterable of a list
+    # comprehension. Unguarded it is `TypeError: 'NoneType' object is not iterable`
+    # raised at the comprehension itself, so there is no wrong-exception contrast to
+    # draw and the guarded result -- an empty list -- is the whole claim.
     assert league_data_from_dict({"league": {"id": 1, "name": "N"}}).teams == []
     with pytest.raises(TypeError, match="name"):
         league_data_from_dict({"teams": []})
     with pytest.raises(TypeError, match="name"):
         league_data_from_dict({"league": {"id": 1, "name": "N"}, "teams": [{}]})
+
+
+def test_json_legal_values_of_the_wrong_type_are_coerced_to_the_declared_one():
+    # Leniency about optional fields extends to their type. A hand-edited or
+    # older-schema file can legally carry `1` for `loading` and a bare number for
+    # `error` -- both are valid JSON, neither is the declared `bool` / `str`. The
+    # `bool()` and `str()` calls on the read side are the only thing standing
+    # between those and a typed field holding something it does not declare.
+    raw = {
+        "league": {"id": 1, "name": "N"},
+        "teams": [{"team": {"id": 1, "name": "X"}, "loading": 1, "error": 404}],
+    }
+    restored = league_data_from_dict(raw)
+    assert restored.teams[0].loading is True
+    assert restored.teams[0].error == "404"
 
 
 def test_a_payload_missing_a_required_field_raises():
