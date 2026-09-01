@@ -233,13 +233,20 @@ def test_the_fake_api_matches_the_real_client_signatures():
 
 def test_the_fake_writer_matches_the_real_writer_signatures():
     # No test in this repository constructs a real `RomWriter` — there is no ROM
-    # to give it — so the stand-in is the only `RomWriter` CI ever sees. Renaming
-    # `players` or `flush_tex_patches` on the real one would leave every test
-    # here green and break `patch` on the first real image. Kinds and defaults as
-    # well as names, because `patch` passes `players` and `include_flag` by
-    # keyword and a positional-only real parameter would reject that.
+    # to give it — so the stand-in is the only `RomWriter` CI ever sees. Before
+    # this test, renaming `players` or `flush_tex_patches` on the real one left
+    # the whole suite green while `patch` broke on the first real image. Kinds
+    # and defaults as well as names, because `patch` passes `players` and
+    # `include_flag` by keyword and a positional-only real parameter would
+    # reject that.
+    #
+    # `__init__` is in the loop for the same reason and needs it most: `patch`
+    # constructs the writer before it calls anything on it, so a parameter added
+    # there fails ahead of every other call. The client's constructor needs no
+    # equivalent guard — the wiring test below builds a real `ApiFootballClient`
+    # and would raise.
     fake = _fake_writer_class([])
-    for name in ("write_team", "flush_tex_patches", "finalize"):
+    for name in ("__init__", "write_team", "flush_tex_patches", "finalize"):
         assert _signature_facts(getattr(fake, name)) == _signature_facts(getattr(RomWriter, name))
 
 
@@ -260,8 +267,12 @@ def test_construction_creates_the_cache_directory(tmp_path):
 
 
 def test_the_client_is_given_the_cache_directory_the_key_and_the_transport(tmp_path):
-    # Every test that reaches `fetch` replaces `p.api` with a fake, so this is
-    # the only place the real client's wiring is checked at all. A transport
+    # No test in this file runs a method on a real client. Every test that calls
+    # `fetch` swaps in `FakeApi` first, bar
+    # `test_an_api_key_is_mandatory_at_fetch_time`, which stops at
+    # `check_api_key` ahead of the first client call. Construction is therefore
+    # the only place the real wiring shows, and it takes two tests to see all of
+    # it: this one, and the keyless case below for the key itself. A transport
     # that never reaches the client leaves it free to open a real socket, and a
     # cache directory that never reaches it puts the JSON cache somewhere else.
     def transport(url, headers, timeout):
