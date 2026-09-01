@@ -73,3 +73,8 @@ API keys come from `--api-key` or `$RETRO_ROSTER_API_KEY`.
 pip install -e ".[dev]"
 pytest
 ```
+
+That run reports `5 deselected`: `tests/test_packaging.py` asserts the import came from an
+installed distribution, so it fails against the source tree by design. Running that file on
+its own selects nothing and exits `5`. CI's `wheel` job selects it with `-m packaging` after
+installing a built wheel.
