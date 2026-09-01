@@ -15,6 +15,11 @@ from importlib import resources
 
 from .errors import RetroRosterError
 
+# One temporary copy per asset, keyed by `(package, name)`. Without it every
+# `package_path` call left another temp file and another `atexit` callback
+# behind, and the orchestrator calls it once per patch run.
+_materialised: dict[tuple[str, str], str] = {}
+
 
 class MissingAssetError(RetroRosterError):
     """A file expected to be package data was not found in the installation."""
@@ -30,32 +35,56 @@ def package_bytes(package: str, name: str) -> bytes:
 
     `package` is a dotted module path, e.g.
     `retro_roster_patcher.games.we2002.assets`.
+
+    `name` must be a single filename. `importlib.resources` happily resolves a
+    separator, so `"../assets/x.ppf"` would read outside the package; this
+    library does not offer that, and rejecting it here covers `package_path`
+    too.
+
+    Only absence becomes `MissingAssetError`. A genuine I/O fault — a
+    permission-denied read on an installed asset, say — propagates as itself,
+    because calling it "missing" sends the reader hunting for a packaging bug
+    that is not there.
     """
+    if name in ("", ".", "..") or "/" in name or "\\" in name:
+        raise MissingAssetError(f"Not a single filename: {package}:{name}")
     try:
         return (resources.files(package) / name).read_bytes()
-    except (FileNotFoundError, ModuleNotFoundError, OSError) as exc:
+    except (FileNotFoundError, ModuleNotFoundError) as exc:
         raise MissingAssetError(f"Missing packaged asset {package}:{name}") from exc
 
 
 def package_path(package: str, name: str) -> str:
-    """Copy a packaged file to a temporary path and return that path.
+    """Return a filesystem path to a packaged file, materialising it if needed.
 
-    For consumers that must hand a real filesystem path to something else — the
-    PPF applier takes a path, not bytes.
+    For consumers that must hand a real path to something else — the PPF applier
+    takes a path, not bytes.
 
-    The returned path is always a fresh copy, never the packaged file in place,
-    whether the package lives in a plain directory or inside a zip. The copy is
-    a `NamedTemporaryFile` created with `delete=False` and unlinked at
-    interpreter exit by an `atexit` hook. Two calls therefore return two
-    different paths.
+    The path is always a temporary copy, never the packaged file in place, since
+    the package may live inside a zip. It is memoised per `(package, name)`: the
+    same path comes back for the lifetime of the process, exactly one temporary
+    file exists per asset, and it is unlinked at interpreter exit. If that file
+    is deleted from underneath, the next call materialises it again rather than
+    handing back a path to nothing.
+
+    Callers must treat the returned path as read-only. Every caller is handed
+    the same file, so writing to it changes what the next one reads.
     """
+    key = (package, name)
+    cached = _materialised.get(key)
+    if cached is not None and pathlib.Path(cached).exists():
+        return cached
+
     data = package_bytes(package, name)
 
     handle = tempfile.NamedTemporaryFile(suffix=f"-{name}", delete=False)
+    # Registered before the write so a write that raises still leaves a cleanup
+    # hook behind for the empty file it has already created.
+    atexit.register(_unlink, handle.name)
     try:
         handle.write(data)
     finally:
         handle.close()
 
-    atexit.register(_unlink, handle.name)
+    _materialised[key] = handle.name
     return handle.name
