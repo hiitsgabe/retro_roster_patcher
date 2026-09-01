@@ -145,14 +145,17 @@ class EspnClient:
 
     def get_squad(self, team_id: int, league_code: str | None = None) -> list[Player]:
         """Fetch current squad for a team."""
-        cache_key = f"espn_squad_{team_id}"
-        cached = self._load_cache(cache_key)
-        if cached:
-            return self._parse_squad(cached)
-        # ESPN roster endpoint requires the league code; find it via team detail if unknown
+        # ESPN roster endpoint requires the league code; find it via team detail if
+        # unknown. Resolved before the cache lookup because the code varies the
+        # response — team ids are league-scoped, so a key of the id alone would
+        # serve one competition's roster for another's request.
         code = league_code or self._find_league_code_for_team(team_id)
         if not code:
             return []
+        cache_key = f"espn_squad_{code}_{team_id}"
+        cached = self._load_cache(cache_key)
+        if cached:
+            return self._parse_squad(cached)
         data = self._request(f"/{code}/teams/{team_id}/roster", sport="soccer")
         if data:
             self._save_cache(cache_key, data)
