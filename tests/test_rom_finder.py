@@ -361,6 +361,31 @@ def test_the_local_scan_honours_a_non_default_preferred_region(tmp_path):
     )
 
 
+def test_the_local_scan_ranks_on_the_basename_not_the_whole_path(tmp_path):
+    # The sort key's third component is a length, so feeding it the full path lets the
+    # *folder* name decide. Measured: dropping the `os.path.basename` call from the
+    # local-scan sort left the whole suite green, because every other scan test in this
+    # file puts its candidates in one folder, where the prefix is common and cancels.
+    #
+    # Both files score 100 and both are USA, so only length separates them. The
+    # No-Intro folder name is 25 characters longer than "md", which more than covers
+    # the 8 characters the Rev A basename is longer — so the two orderings disagree,
+    # and the plain dump is the one the scan is supposed to prefer.
+    long_folder = "Sega - Mega Drive - Genesis"
+    cross = RomFinderConfig(
+        search_terms=["NHL 94"],
+        system_folders=[long_folder, "md"],
+        file_extensions=[".bin"],
+        system_type="megadrive",
+    )
+    _write(tmp_path / long_folder / "NHL 94 (USA).bin")
+    _write(tmp_path / "md" / "NHL 94 (USA) (Rev A).bin")
+
+    assert RomFinder()._scan_local(cross, str(tmp_path)) == str(
+        tmp_path / long_folder / "NHL 94 (USA).bin"
+    )
+
+
 def test_the_local_scan_searches_every_configured_folder(tmp_path):
     _write(tmp_path / "genesis" / "NHL 94 (USA).bin")
 
