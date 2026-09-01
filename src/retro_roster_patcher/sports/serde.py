@@ -61,7 +61,14 @@ def _team_roster_from_dict(raw: dict[str, Any]) -> TeamRoster:
             for pid, s in (raw.get("player_stats") or {}).items()
         },
         loading=bool(raw.get("loading", False)),
-        error=str(raw.get("error", "")),
+        # `or ""` rather than a `get` default, because an empty `error` is how a
+        # healthy roster says "no error" and every falsy JSON value means the
+        # same thing. `str()` alone would render `null` as `"None"`, `false` as
+        # `"False"` and `0` as `"0"` -- all non-empty, so all truthy to a
+        # consumer's `if roster.error:`, reporting a failure on a roster that
+        # had none. `loading` above needs no such guard: `bool(None)` is already
+        # `False`, so its `get` default and an `or` are indistinguishable.
+        error=str(raw.get("error") or ""),
         extra=dict(raw.get("extra") or {}),
     )
 
