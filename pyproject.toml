@@ -50,7 +50,15 @@ testpaths = ["tests"]
 pythonpath = ["."]
 markers = [
     "real_rom: requires a real ROM, gated on RETRO_ROSTER_TEST_ROMS",
+    "packaging: asserts the running import came from an installed distribution",
 ]
+# `tests/test_packaging.py` fails on purpose against the source tree — that is
+# the one assertion in it worth having. Deselected here so the default run stays
+# green; the `wheel` CI job selects it back with `-m packaging` after installing
+# the built wheel. Deselecting rather than skipping keeps the failure real: if
+# that job ever loses its `-m packaging`, this line deselects every test it
+# collected and pytest exits 5, which is red, not a silent pass.
+addopts = ["-m", "not packaging"]
 
 [tool.ruff]
 line-length = 100
