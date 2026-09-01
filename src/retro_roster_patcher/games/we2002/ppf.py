@@ -1,7 +1,16 @@
 """PPF (PlayStation Patch Format) applier for PS1 BIN images.
 
-Supports PPF2 and PPF3 formats.  Used to apply community-made English
-translation patches to WE2002 (SLPM-87056).
+Applies PPF1, PPF2 and PPF3. `apply_ppf` dispatches on the magic: PPF2 and PPF3
+match on their first four bytes, PPF1 on all five of `PPF10`, and anything else
+raises `PPFError`. That asymmetry is deliberate — see the tests — because the
+one production call passes `skip_validation=True`, which leaves the magic as the
+only thing between a wrong file and an in-place write into the output ISO.
+
+In-product only PPF1 is ever applied: the sole call site is
+`patcher._apply_translation`, and every patch this project generates carries the
+`PPF10` magic. PPF2 and PPF3 exist here for externally supplied patches — a
+community translation a user drops into `assets_dir`, which this project does
+not redistribute — and for `get_ppf_info` to report on.
 
 Reference implementation: github.com/sahlberg/pop-fe/blob/master/ppf.py
 PPF3 spec: github.com/meunierd/ppf/blob/master/ppfdev/PPF3.txt
