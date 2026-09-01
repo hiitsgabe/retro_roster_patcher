@@ -6,15 +6,15 @@ there is no injection seam and a file has to exist. That costs about 1.3 ms per
 test (build, write, load), which is why each test gets its own image instead of
 sharing a session-scoped one.
 
-This file's arrival made `tests/` a real package. Two things forced it. Without
-an `__init__.py` beside this file pytest binds the module as top-level
-`test_rom_reader`, and the WE2002 suite's own `test_rom_reader.py` then collides
-on basename and aborts collection outright. And without `tests/__init__.py` above
-it, pytest prepends `tests/` to `sys.path`, so `tests.fixtures.synthetic_rom` and
-`fixtures.synthetic_rom` both resolve — to two distinct module objects wrapping
-one file — and `mypy src tests` refuses to run at all, reporting the same file
-under two module names. Rooting the whole tree at `tests` gives every module
-exactly one name and takes `tests/` off `sys.path`.
+This file's arrival made `tests/` a real package. `tests/__init__.py` is the
+load-bearing one: without it pytest prepends `tests/` to `sys.path`, so
+`tests.fixtures.synthetic_rom` and `fixtures.synthetic_rom` both resolve — to two
+distinct module objects wrapping one file — and `mypy src tests` refuses to run at
+all, reporting the same file under two module names. The three leaf `__init__.py`
+files below it are convention (matching `tests/core/` and `tests/sports/`) and
+defensive: with `tests/__init__.py` in place, pytest 9.1.1 collects a second
+`tests/games/we2002/test_rom_reader.py` with or without them, but the
+package-qualified module name is what makes that true.
 
 The second half of this file pins defects rather than intended behaviour. The
 reader is a faithful port and fidelity is the standing policy, so these tests
@@ -67,7 +67,7 @@ def _unterminated_rom():
     """
     rom = synthetic_rom.build_nhl94_genesis_rom()
     start = synthetic_rom.team_base(0) + synthetic_rom.SEC_PLAYERS
-    record = synthetic_rom.filler_record()
+    record = synthetic_rom.player_record(0, 0)
     repeats = (len(rom) - start) // len(record) + 1
     rom[start:] = (record * repeats)[: len(rom) - start]
     return rom
@@ -79,8 +79,10 @@ def _unterminated_rom():
 def test_the_fixture_is_bound_under_exactly_one_module_name():
     # The mechanism, not a restatement of the import: `tests/` staying off
     # sys.path is what makes `fixtures.synthetic_rom` unreachable, and so makes
-    # the second binding impossible rather than merely unwritten. Deleting any
-    # `__init__.py` between here and the repo root turns one of these red.
+    # the second binding impossible rather than merely unwritten. Deleting
+    # `tests/__init__.py` turns the second assertion red (and breaks
+    # `mypy src tests`); the three leaf `__init__.py` files are not covered here
+    # because removing any one of them changes neither pytest nor mypy today.
     assert synthetic_rom.__name__ == "tests.fixtures.synthetic_rom"
     assert [p for p in sys.path if p.endswith("/tests")] == []
     assert "fixtures.synthetic_rom" not in sys.modules
@@ -95,6 +97,16 @@ def test_the_synthetic_rom_validates(tmp_path):
 
 def test_a_missing_file_fails_to_load(tmp_path):
     assert NHL94GenesisRomReader(str(tmp_path / "nope.bin")).load() is False
+
+
+def test_a_path_that_is_a_directory_fails_to_load(tmp_path):
+    # The `os.path.exists` guard passes for a directory, so this is the only way
+    # into `load`'s `except Exception` arm — `open(dir, "rb")` raises
+    # IsADirectoryError. Without it the branch is never executed and a `return
+    # True` there would go unnoticed.
+    reader = NHL94GenesisRomReader(str(tmp_path))
+    assert reader.load() is False
+    assert reader.data is None
 
 
 def test_a_too_small_file_does_not_validate(tmp_path):
@@ -140,7 +152,15 @@ def test_every_team_index_resolves_to_its_own_block(tmp_path):
 
 
 def test_a_team_index_at_the_count_resolves_to_nothing(tmp_path):
-    assert _loaded_reader(tmp_path).get_team_section_offsets(synthetic_rom.TEAM_COUNT) is None
+    # `_read_team_pointer` is asserted on directly because it is the only guard
+    # that is not masked by another: every public entry point checks
+    # `team_index >= TEAM_COUNT` itself first, so removing the check here changes
+    # nothing any of them return.
+    reader = _loaded_reader(tmp_path)
+    assert reader._read_team_pointer(synthetic_rom.TEAM_COUNT) is None
+    assert reader.get_team_section_offsets(synthetic_rom.TEAM_COUNT) is None
+    assert reader.read_team_roster(synthetic_rom.TEAM_COUNT) == ([], [])
+    assert reader.get_team_player_region(synthetic_rom.TEAM_COUNT) == (0, 0)
 
 
 # ── Team slots ───────────────────────────────────────────────────────────
@@ -170,17 +190,88 @@ def test_team_slots_read_the_city_strings(tmp_path):
     )
 
 
+def test_a_loaded_rom_that_fails_validation_reports_itself_invalid_with_no_slots(tmp_path):
+    # The contract `core.patcher.analyze_rom` depends on, and the only path that
+    # runs `get_info`'s main branch with `is_valid` false: a full-size file whose
+    # first pointer is out of range. `test_an_empty_file_loads_as_an_empty_bytearray`
+    # reaches the `not self.data` early return instead, so without this the
+    # `team_slots=[]` arm and the reported `path` never execute with data present.
+    rom = synthetic_rom.build_nhl94_genesis_rom()
+    rom[synthetic_rom.POINTER_TABLE_OFFSET : synthetic_rom.POINTER_TABLE_OFFSET + 4] = (
+        b"\xff\xff\xff\xff"
+    )
+    path = _write(tmp_path, "not_nhl94.bin", rom)
+    info = _reader(path).get_info()
+    assert info.path == str(path)
+    assert info.size == synthetic_rom.ROM_SIZE
+    assert info.is_valid is False
+    assert info.team_slots == []
+
+
+def test_a_team_whose_city_string_is_unreadable_falls_back_to_the_display_name(tmp_path):
+    # A length word of zero makes `_read_length_prefixed_string` return "", which
+    # is what the `current_name = name or display` fallback exists for. Slot 20 is
+    # the vehicle because it is the one slot where the image and the constant table
+    # disagree, so the fallback produces a value no other slot could.
+    rom = synthetic_rom.build_nhl94_genesis_rom()
+    strings = synthetic_rom.team_base(20) + synthetic_rom.SEC_STRINGS
+    rom[strings : strings + 2] = b"\x00\x00"
+    slots = _reader(_write(tmp_path, "no_city.bin", rom)).get_info().team_slots
+    assert (slots[20].current_name, slots[20].display_name) == ("St. Louis", "St. Louis")
+    # Neighbours still come from the image, so this is the fallback and not a
+    # wholesale switch to the constant table.
+    assert (slots[19].current_name, slots[21].current_name) == ("San Jose", "Tampa Bay")
+
+
+def test_a_city_length_word_is_honoured_up_to_forty_and_rejected_above_it(tmp_path):
+    # `length > 40` is what stops a garbage length word from yielding a 65533-byte
+    # "name". Both sides of the ceiling are needed: a length of 0xFFFF would be
+    # rejected by a `> 400` guard too. At exactly 40 the reader consumes 38 bytes
+    # and runs straight through the city into the abbreviation that follows it,
+    # which is what the returned string shows.
+    rom = synthetic_rom.build_nhl94_genesis_rom()
+    for team_index, length in ((19, 40), (20, 41)):
+        strings = synthetic_rom.team_base(team_index) + synthetic_rom.SEC_STRINGS
+        rom[strings : strings + 2] = length.to_bytes(2, "big")
+    slots = _reader(_write(tmp_path, "long_city.bin", rom)).get_info().team_slots
+    assert slots[19].current_name == "San Jose\x00\x05SJS"
+    assert slots[20].current_name == "St. Louis"
+
+
 # ── Roster reading ───────────────────────────────────────────────────────
 
 
 def test_the_roster_region_spans_every_record_and_the_sentinel(tmp_path):
-    assert _loaded_reader(tmp_path).get_team_player_region(0) == (0x010200, 452)
+    reader = _loaded_reader(tmp_path)
+    assert reader.get_team_player_region(0) == (0x010200, 452)
+    # A team other than 0, so a region scan that ignored `team_index` and always
+    # started from the first block is caught. `rom_writer.write_team_roster` sizes
+    # its in-place patch from exactly this call.
+    assert reader.get_team_player_region(25) == (0x029200, 452)
 
 
-def test_reading_a_roster_returns_names_and_eight_stat_bytes_each(tmp_path):
-    names, stats = _loaded_reader(tmp_path).read_team_roster(0)
-    assert names == ["PLAYER00"] * synthetic_rom.ROSTER_PLAYERS
-    assert stats == [b"\x11\x22\x33\x44\x55\x66\x77\x88"] * synthetic_rom.ROSTER_PLAYERS
+def test_a_player_record_identifies_its_team_and_its_slot(tmp_path):
+    # Literal bytes rather than a call back into the fixture: byte 0 is the BCD
+    # jersey (slot + 1), byte 1 the team and byte 2 the slot, each packed base 7 so
+    # both nibbles stay inside the 0-6 the writer can emit. Team 13 rather than 0
+    # so the team byte is non-zero.
+    names, stats = _loaded_reader(tmp_path).read_team_roster(13)
+    assert (names[0], stats[0]) == ("T13_PL00", b"\x01\x16\x00\x33\x44\x55\x66\x12")
+    assert (names[24], stats[24]) == ("T13_PL24", b"\x25\x16\x33\x33\x44\x55\x66\x12")
+
+
+@pytest.mark.parametrize("team_index", [0, 1, 9, 13, 20, 25])
+def test_each_team_reads_its_own_roster_in_slot_order(tmp_path, team_index):
+    # Zipped rather than compared as two lists: this is the assertion that pins
+    # name-to-stats pairing, so a reader that returned the right names and the
+    # right stat blocks rotated by one against each other fails here. Comparing
+    # the lists separately would not.
+    names, stats = _loaded_reader(tmp_path).read_team_roster(team_index)
+    assert (len(names), len(stats)) == (synthetic_rom.ROSTER_PLAYERS,) * 2
+    assert list(zip(names, stats, strict=True)) == [
+        (synthetic_rom.player_name(team_index, slot), synthetic_rom.player_stats(team_index, slot))
+        for slot in range(synthetic_rom.ROSTER_PLAYERS)
+    ]
 
 
 def test_a_length_word_of_two_ends_the_roster(tmp_path):
@@ -192,7 +283,7 @@ def test_a_length_word_of_two_ends_the_roster(tmp_path):
     sentinel = (
         synthetic_rom.team_base(0)
         + synthetic_rom.SEC_PLAYERS
-        + synthetic_rom.ROSTER_PLAYERS * synthetic_rom.FILLER_RECORD_SIZE
+        + synthetic_rom.ROSTER_PLAYERS * synthetic_rom.PLAYER_RECORD_SIZE
     )
     rom[sentinel : sentinel + 2] = b"\x00\x02"
     reader = _reader(_write(tmp_path, "empty_name_terminator.bin", rom))
@@ -255,10 +346,10 @@ def test_a_record_whose_stat_bytes_run_past_the_end_yields_a_name_with_no_stats(
     # anyway rather than being rejected up front.
     rom = synthetic_rom.build_nhl94_genesis_rom()
     start = synthetic_rom.team_base(0) + synthetic_rom.SEC_PLAYERS
-    cut = start + 2 + len(synthetic_rom.FILLER_NAME) + 4  # name complete, stats not
+    cut = start + 2 + synthetic_rom.PLAYER_NAME_SIZE + 4  # name complete, stats not
     reader = _reader(_write(tmp_path, "cut.bin", rom[:cut]))
     assert reader.validate() is False
-    assert reader.read_team_roster(0) == (["PLAYER00"], [])
+    assert reader.read_team_roster(0) == (["T00_PL00"], [])
 
 
 def test_a_negative_team_index_reads_the_word_before_the_pointer_table(tmp_path):
@@ -285,4 +376,7 @@ def test_an_empty_file_loads_as_an_empty_bytearray(tmp_path):
     assert reader.data == bytearray()
     assert reader.validate() is False
     info = reader.get_info()
+    # `path` is asserted in both `get_info` branches — this is the no-data one —
+    # because it is what `analyze_rom` hands back to the caller that asked.
+    assert info.path == str(empty)
     assert (info.size, info.is_valid, info.team_slots) == (0, False, [])

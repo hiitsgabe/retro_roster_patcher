@@ -7,7 +7,14 @@ the team block. This module satisfies all of it, with sections spaced so none
 overlaps another and a roster region wide enough for a full 25-player squad.
 
 Nothing here is derived from a real ROM. The team blocks are placed at a round
-address well clear of the header, and every stat byte starts at zero.
+address well clear of the header.
+
+Every player record is self-identifying: its name and its stat bytes both encode
+the team index and the roster slot it was written to. Uniform filler would make
+the 26 team blocks byte-identical, and then no assertion could tell which team a
+read came from — a reader that ignored `team_index` entirely, or that returned a
+roster reversed or with its stat blocks rotated by one, would satisfy every
+equality a test could write.
 
 Every multi-byte field is big-endian, matching `_read_u16_be`/`_read_u32_be` in
 the reader and `_write_u16_be` in the writer. The `NHL94GenPlayerRecord`
@@ -35,17 +42,21 @@ SEC_STRINGS = 0x00C0
 SEC_LINES = 0x0100  # 8 lines x 8 bytes
 SEC_PLAYERS = 0x0200
 
-# Filler player records. Each is 2 length bytes + name + 8 stat bytes, and the
-# length field counts itself — the same encoding `read_team_roster` decodes.
-FILLER_NAME = b"PLAYER00"
-# Deliberately not zero. The reader decodes a name then `.strip("\x00")`s it, so
-# against zeroed stat bytes a decoder that read `length` bytes instead of
-# `length - 2` would produce the identical string and the over-read would be
-# invisible. Byte 0 is the jersey BCD field, hence a legal 11.
-FILLER_STATS = b"\x11\x22\x33\x44\x55\x66\x77\x88"
-FILLER_RECORD_SIZE = 2 + len(FILLER_NAME) + len(FILLER_STATS)  # 18
+# Player records. Each is 2 length bytes + name + 8 stat bytes, and the length
+# field counts itself — the same encoding `read_team_roster` decodes. The roster
+# region is therefore 25 * 18 + 2 = 452 bytes; the reader tests pin that as a
+# literal rather than importing it back from here.
+PLAYER_NAME_SIZE = 8
+PLAYER_STATS_SIZE = 8
+PLAYER_RECORD_SIZE = 2 + PLAYER_NAME_SIZE + PLAYER_STATS_SIZE  # 18
 ROSTER_PLAYERS = 25
-ROSTER_REGION_SIZE = ROSTER_PLAYERS * FILLER_RECORD_SIZE + 2  # + end sentinel
+
+# Stat bytes 3-7, identical in every record. Every stat byte in this module stays
+# inside the range `rom_writer._write_player_stats` can actually emit: byte 0 is a
+# BCD jersey, and `encode_nibble` clamps both nibbles of the rest to 0-6, so a
+# byte like 0x77 is one the writer could never produce and a round-trip against it
+# would be unsatisfiable.
+STAT_PADDING = b"\x33\x44\x55\x66\x12"
 
 # The city written into each team's strings section. Deliberately not a copy of
 # `NHL94_GEN_TEAM_ORDER`: slot 20 is "St Louis" here against "St. Louis" there,
@@ -124,9 +135,45 @@ def team_base(team_index: int) -> int:
     return TEAM_BLOCK_BASE + team_index * TEAM_BLOCK_STRIDE
 
 
-def filler_record() -> bytes:
-    """One complete player record: BE length, then the name, then the stat bytes."""
-    return struct.pack(">H", len(FILLER_NAME) + 2) + FILLER_NAME + FILLER_STATS
+def _nibble_pair(value: int) -> int:
+    """Pack 0-48 into one byte whose two nibbles are both inside the writer's 0-6.
+
+    Base 7, because a nibble the writer can emit holds seven values. Both 26 teams
+    and 25 slots fit, so a single byte can carry either one without going outside
+    what `encode_nibble` will produce.
+    """
+    return (value // 7) << 4 | (value % 7)
+
+
+def player_name(team_index: int, slot: int) -> str:
+    """The name in one roster slot. Always 8 bytes, so records stay 18 bytes."""
+    return f"T{team_index:02d}_PL{slot:02d}"
+
+
+def player_stats(team_index: int, slot: int) -> bytes:
+    """The eight stat bytes for one roster slot, identifying both coordinates.
+
+    Byte 0 is the jersey number in BCD and so is never zero, which matters: the
+    reader decodes a name and then `.strip("\\x00")`s it, so a decoder that read
+    `length` bytes instead of `length - 2` would spill into bytes 0 and 1 here. A
+    zero byte 0 would be stripped straight back off and the over-read would leave
+    the name looking correct.
+    """
+    jersey = slot + 1
+    identity = bytes(
+        [
+            (jersey // 10) << 4 | jersey % 10,
+            _nibble_pair(team_index),
+            _nibble_pair(slot),
+        ]
+    )
+    return identity + STAT_PADDING
+
+
+def player_record(team_index: int, slot: int) -> bytes:
+    """One complete record: BE length, then the name, then the stat bytes."""
+    name = player_name(team_index, slot).encode("ascii")
+    return struct.pack(">H", len(name) + 2) + name + player_stats(team_index, slot)
 
 
 def build_nhl94_genesis_rom() -> bytearray:
@@ -154,11 +201,10 @@ def build_nhl94_genesis_rom() -> bytearray:
             rom[strings + 2 : strings + 2 + len(encoded)] = encoded
             strings += 2 + len(encoded)
 
-        record = filler_record()
         offset = base + SEC_PLAYERS
-        for _ in range(ROSTER_PLAYERS):
-            rom[offset : offset + FILLER_RECORD_SIZE] = record
-            offset += FILLER_RECORD_SIZE
+        for slot in range(ROSTER_PLAYERS):
+            rom[offset : offset + PLAYER_RECORD_SIZE] = player_record(i, slot)
+            offset += PLAYER_RECORD_SIZE
         _u16(rom, offset, 0x0000)  # end-of-roster sentinel
 
     return rom
