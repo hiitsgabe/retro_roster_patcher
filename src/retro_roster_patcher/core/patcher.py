@@ -101,9 +101,11 @@ class Patcher(ABC):
         """Enforce the declared api-key capability.
 
         Subclasses call this at the top of `fetch`, not in `__init__`. Construction
-        stays cheap and side-effect-free so `retro-roster analyze` can instantiate
-        every registered patcher purely to inspect a ROM — an operation that never
-        touches the network and must not demand credentials.
+        stays free of network I/O and of credentials so `retro-roster analyze`
+        can instantiate every registered patcher purely to inspect a ROM — an
+        operation that never reaches a provider. It is not free of side effects:
+        every sports client `os.makedirs` its cache directory from its own
+        constructor, and the patchers build their client eagerly.
         """
         if self.requires_api_key and not self.api_key:
             raise CapabilityError(f"{self._subject()} requires an api_key")

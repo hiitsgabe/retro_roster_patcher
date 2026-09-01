@@ -4,8 +4,9 @@ The network-leak sentinel and the fixture that arms it live at the root of the
 suite rather than under `tests/sports/`, because the claim they enforce — that
 no test in this repository opens a socket — is not specific to the sports client
 tests. `tests/games/` constructs live `EspnClient` and `NhlApiClient` objects
-through `NHL94GenesisPatcher.__init__`, and conftest scoping means a fixture one
-directory down is invisible to it.
+through `NHL94GenesisPatcher.__init__` and a live `ApiFootballClient` through
+`WE2002Patcher.__init__`, and conftest scoping means a fixture one directory
+down is invisible to it.
 
 The guard is autouse, so the claim covers every test in the suite instead of the
 ones whose authors thought to ask for it. Arming it by request did not: 41 tests
@@ -13,8 +14,8 @@ in `tests/games/nhl94_genesis/test_patcher.py` construct a live `EspnClient` wit
 `transport=None`, and exactly 3 of them requested this fixture. 34 of the rest
 come in through that file's `patcher` fixture, which builds a real client before
 overwriting `p.api` with a fake, and 4 build a patcher of their own — the same
-constructor-time exposure as the 3 that were guarded. Autouse now covers 362 of
-the suite's 370 tests; the remaining 8 opt out explicitly.
+constructor-time exposure as the 3 that were guarded. Autouse now covers 406 of
+the suite's 414 tests; the remaining 8 opt out explicitly.
 
 Disarming a negative safety net is silent — every other test stays green while
 the claim it enforces quietly stops holding. `tests/test_network_guard.py` is

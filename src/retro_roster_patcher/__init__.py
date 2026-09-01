@@ -30,6 +30,7 @@ from .sports.models import League, LeagueData, Player, PlayerStats, Team, TeamRo
 # alphabetically between `.core` and `.sports` and the ordering this comment
 # describes is silently undone.
 from .games import nhl94_genesis as _nhl94_genesis  # noqa: E402,F401
+from .games import we2002 as _we2002  # noqa: E402,F401
 
 __version__ = "0.1.0.dev0"
 
