@@ -371,14 +371,22 @@ class WE2002Patcher(Patcher):
         """Apply the translation PPF, degrading to Japanese menus on failure.
 
         A failed translation is cosmetic; the roster patch under it is the point.
-        The original code swallowed the exception here and this preserves that,
-        but reports it rather than hiding it.
+        The original code swallowed every exception here; this narrows that to
+        the four this call can actually raise, and reports rather than hides
+        them.
 
-        Three failures are tolerated. `MissingAssetError` is what `ensure_ppf`
-        raises when the packaged English PPF is not in the installation — it is a
-        `RetroRosterError`, not an `OSError`, so it needs naming separately.
-        `PPFError` covers a patch file this applier cannot read, and `OSError`
-        covers one it cannot open.
+        `MissingAssetError` is what `ensure_ppf` raises when the packaged
+        English PPF is not in the installation — it is a `RetroRosterError`, not
+        an `OSError`, so it needs naming separately. `PPFError` covers a patch
+        file this applier cannot read, and `OSError` covers one it cannot open.
+
+        `ValueError` comes from further in. If `assets_dir` holds a file named
+        `w202-english.ppf` that is not PPF2 — a PPF1 or PPF3 community patch, or
+        a truncated download — then `translations.we2002.menu_records`'s
+        `_parse_ppf2` raises a bare `ValueError("Not a PPF2 file: ...")` while
+        `ensure_ppf` is still building the merged patch. Unnamed here, a wrong
+        file in a directory this code only reads aborted `patch` before a single
+        roster byte was written.
         """
         name = LANGUAGES[language]
         if on_progress is not None:
@@ -390,7 +398,7 @@ class WE2002Patcher(Patcher):
                 assets_dir=str(self.assets_dir) if self.assets_dir is not None else "",
             )
             apply_ppf(str(output_path), ppf_path, skip_validation=True)
-        except (MissingAssetError, PPFError, OSError) as exc:
+        except (MissingAssetError, PPFError, OSError, ValueError) as exc:
             self.status(f"{name} translation skipped: {exc}")
             if on_progress is not None:
                 on_progress(0.05, f"{name} translation skipped")
