@@ -237,10 +237,28 @@ class NHL94GenesisPatcher(Patcher):
             selected = self.mapper.select_roster(
                 roster.players, leaders, max_players=MAX_PLAYERS_PER_SLOT
             )
-            teams[slot] = [
+            records = [
                 self.mapper.map_player(player, roster.team.code, leaders.get(str(player.id), {}))
                 for player in selected
             ]
+            # `MODERN_NHL_TO_NHL94_GEN` maps 30 codes onto 26 slots: LAK/LA,
+            # NJD/NJ, SJS/SJ and TBL/TB each reach one slot, so two entries in
+            # `data.teams` can target the same one. The original kept its rosters
+            # in a dict keyed by team code and only stored a team whose squad was
+            # non-empty, so an empty roster could never displace anything; here
+            # the slot is assigned directly, and without this an empty alias
+            # arriving second would wipe the populated one. `filled_slots()` would
+            # then drop the slot, so `patch` would leave the 1994 roster, count
+            # byte, goalie byte and line table in place and still report success
+            # with `teams_patched` short by one.
+            #
+            # An empty roster that collides with nothing still takes the slot: the
+            # serialised `MappedRosters` keeps showing which slots a provider team
+            # matched, and `filled_slots()` is what keeps the empty list away from
+            # `write_team_roster`, which would zero-fill the region.
+            if not records and teams.get(slot):
+                continue
+            teams[slot] = records
         return MappedRosters(game_id=self.game_id, teams=teams)
 
     # -- patch --------------------------------------------------------------
