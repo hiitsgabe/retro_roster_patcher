@@ -111,10 +111,14 @@ def test_extra_keys_are_passed_through_rather_than_re_keyed():
     # that coerced every key with `str()` would satisfy it unchanged.
     #
     # So skip the `json.dumps` hop and feed `league_data_to_dict` output straight
-    # back in. That is the only path on which a non-`str` key exists to be
-    # observed at all; through real JSON every key is a `str` before the reader
-    # ever sees it, which is exactly why `player_stats` needs its conversion and
-    # this one must not have one.
+    # back in. Any dict assembled in Python can hold a non-`str` key, and the
+    # hand-written `raw` dicts below reach the reader the same direct way, so what
+    # this one adds is that the key survives a reader-side pass unchanged. The path is
+    # deliberately not the production one: this module is the contract for a file,
+    # so in production `league_data_from_dict` is only ever reached through
+    # `to_dict` -> `dumps` -> `loads`, and after real JSON every key is a `str`
+    # before the reader sees it -- which is exactly why `player_stats` needs its
+    # conversion and this one must not have one.
     data = LeagueData(
         league=League(id=1, name="N"),
         teams=[TeamRoster(team=Team(id=1, name="X"), extra={7: "seven"})],
@@ -124,12 +128,22 @@ def test_extra_keys_are_passed_through_rather_than_re_keyed():
     assert type(list(restored.teams[0].extra)[0]) is int
 
 
-def test_the_extra_blob_is_copied_rather_than_aliased():
+def test_the_extra_blob_is_shallow_copied_rather_than_aliased():
     # `extra` is the only field handed over whole instead of rebuilt from its
     # parts, so it is the only one that can end up sharing an object with the
     # payload it was read from. Without the `dict(...)` around it, a write through
     # the roster reaches back into the caller's parsed JSON, which is a mutation
     # of an argument this function was only asked to read.
+    #
+    # `dict(...)` copies one level and that is the whole of the guarantee, so the
+    # second half of this test pins the sharp edge rather than implying it away:
+    # the nested dicts are the *same objects* on both sides, and the real `extra`
+    # shape -- `{"leaders": {...}}`, as in `sample()` -- puts every value a
+    # consumer would write one level down. Deepening the copy is not obviously
+    # right either: `extra` is a provider-defined escape hatch of arbitrary shape
+    # and unbounded size, and nothing under `src/` mutates a roster's `extra` in
+    # place -- `nhl94_genesis/patcher.py` builds one at :198 and only reads it at
+    # :222 -- so a deep copy would be paying on every read for no caller's benefit.
     source = {"leaders": {"8471675": {"G": 42}}}
     raw = {
         "league": {"id": 1, "name": "N"},
@@ -138,6 +152,10 @@ def test_the_extra_blob_is_copied_rather_than_aliased():
     restored = league_data_from_dict(raw)
     restored.teams[0].extra["POISON"] = 1
     assert source == {"leaders": {"8471675": {"G": 42}}}
+    # And the level below, which the copy does not reach.
+    assert restored.teams[0].extra["leaders"] is source["leaders"]
+    restored.teams[0].extra["leaders"]["POISON"] = 1
+    assert source == {"leaders": {"8471675": {"G": 42}, "POISON": 1}}
 
 
 def test_a_loading_roster_keeps_its_state_and_its_place_in_the_list():
@@ -214,22 +232,34 @@ def test_a_present_json_null_is_absorbed_like_an_absent_key():
     # The distinction the two tests above do not draw. `null` is legal JSON and a
     # writer that emits every key -- an older schema, a hand edit, a Dart
     # `jsonEncode` of a nullable field -- sends it where this one omits the key.
-    # Every guard on the read side is `raw.get(k) or DEFAULT` rather than
-    # `raw.get(k, DEFAULT)` for exactly that reason: the two forms are identical
-    # on an absent key and differ only on a present `null`. Nothing above can
-    # therefore tell the six `or`s from a `get` default; this payload can.
+    # That producer is why the six container guards -- `league`, `teams`, a
+    # roster's own `team`, `players`, `player_stats` and `extra` -- are all
+    # `raw.get(k) or DEFAULT` rather than `raw.get(k, DEFAULT)`: the two forms
+    # agree on an absent key and differ only on a present `null`, so nothing
+    # above can tell those six `or`s from a `get` default. This payload can.
+    #
+    # `error` is the seventh `or` and is here for the same reason, but it is a
+    # scalar, so what a `get` default lets through is worse: the `str()` around it
+    # would render a `null` as the *string* `"None"` -- non-empty, and so an
+    # error to any consumer that tests the field for one.
+    # `loading` is the one read that is written `raw.get("loading", False)`, and
+    # correctly: `bool(None)` is already `False`, so the guard would change
+    # nothing. It is asserted below to show that, not to separate two forms.
     #
     # Built by parsing JSON text rather than as Python dicts, so what is claimed
     # legal here is demonstrably what a file can carry.
     roster = json.loads(
         '{"league": {"id": 1, "name": "N"},'
         ' "teams": [{"team": {"id": 1, "name": "X"},'
-        ' "players": null, "player_stats": null, "extra": null}]}'
+        ' "players": null, "player_stats": null, "extra": null,'
+        ' "loading": null, "error": null}]}'
     )
     restored = league_data_from_dict(roster)
     assert restored.teams[0].players == []
     assert restored.teams[0].player_stats == {}
     assert restored.teams[0].extra == {}
+    assert restored.teams[0].loading is False
+    assert restored.teams[0].error == ""
     # `teams` is the iterable of a comprehension: a `null` reaching it is a
     # `TypeError` at the comprehension, not a field holding `None`, so the empty
     # list is again the whole claim.
@@ -254,22 +284,35 @@ def test_json_legal_values_of_the_wrong_type_are_coerced_to_the_declared_one():
     # `bool()` and `str()` calls on the read side are the only thing standing
     # between those and a typed field holding something it does not declare.
     #
-    # Coercion is also the *whole* of what the read side does to the value. The
-    # second roster's `error` is already a `str`, and a number cannot carry the
-    # thing that shows it is passed through verbatim, so it carries the
-    # surrounding whitespace a provider message plausibly arrives with: it comes
-    # back as written rather than tidied.
+    # For a value that survives `error`'s `or ""` -- anything truthy -- coercion
+    # is also the *whole* of what the read side does. The second roster's `error`
+    # is already a `str`, and a number cannot carry the thing that shows it is
+    # passed through verbatim, so it carries the surrounding whitespace a provider
+    # message plausibly arrives with: it comes back as written rather than tidied.
+    #
+    # The third and fourth rosters are the other side of that `or`, and the price
+    # of it: a falsy `error` is read as "no error" rather than coerced, so `0`
+    # does not become `"0"` nor `false` `"False"`. Both of those strings are
+    # non-empty, which is what a consumer reads as a failure, so on this field
+    # dropping the value is the coercion that preserves the meaning. `loading`
+    # has no such rule -- it is `bool()` of whatever is there, and `0` is `False`
+    # because `bool(0)` is, not because anything absorbed it.
     raw = {
         "league": {"id": 1, "name": "N"},
         "teams": [
             {"team": {"id": 1, "name": "X"}, "loading": 1, "error": 404},
             {"team": {"id": 2, "name": "Y"}, "error": "  rate limited\n"},
+            {"team": {"id": 3, "name": "Z"}, "loading": 0, "error": 0},
+            {"team": {"id": 4, "name": "W"}, "error": False},
         ],
     }
     restored = league_data_from_dict(raw)
     assert restored.teams[0].loading is True
     assert restored.teams[0].error == "404"
     assert restored.teams[1].error == "  rate limited\n"
+    assert restored.teams[2].error == ""
+    assert restored.teams[2].loading is False
+    assert restored.teams[3].error == ""
 
 
 def test_a_payload_missing_a_required_field_raises():
