@@ -71,9 +71,11 @@ def assert_no_transport_leak(monkeypatch):
         requested = []
 
         def stub(url, headers, timeout):
-            # Parses to an empty dict, so every method yields an empty result and —
-            # since these clients only cache a truthy body — every method really
-            # does call out, on every iteration.
+            # Parses to an empty dict, so every method yields an empty result and
+            # nothing is written to the cache: the squad and leaders methods store
+            # only a truthy body, and the teams methods only a body that parsed to
+            # at least one team. So every method really does call out, on every
+            # iteration.
             requested.append(url)
             return b"{}"
 
