@@ -53,7 +53,7 @@ from .stat_mapper import NHL94GenStatMapper
 # how many of them survive is decided by the ROM. `write_team_roster` patches
 # in place inside whatever the existing record chain occupies and spends
 # `2 + len(name) + 8` bytes per player, so a 452-byte region holds 23 players
-# only if their names average six characters. Real names arrive as
+# only if their names average nine characters. Real names arrive as
 # "First Last" and `map_player` keeps 14 of them, which fits 19. The overflow is
 # dropped silently by the writer and the last surviving name is truncated;
 # `write_team_header` is then told the real count so the lines table only ever

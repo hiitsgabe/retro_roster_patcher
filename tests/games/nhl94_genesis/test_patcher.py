@@ -166,7 +166,7 @@ def test_the_client_is_given_the_cache_directory_and_the_transport(tmp_path, pro
     )
     assert p.api.cache_dir == str(tmp_path / provider)
     assert p.api._transport is transport
-    assert p.api.on_status is not None
+    assert p.api.on_status == seen.append
 
 
 def test_the_cache_directory_exists_once_the_patcher_is_constructed(tmp_path):
@@ -640,7 +640,7 @@ def test_a_slot_the_writer_reports_an_error_for_is_not_counted(tmp_path, patcher
 def test_a_realistic_roster_overruns_the_rom_and_is_truncated(tmp_path, patcher):
     # MAX_PLAYERS_PER_SLOT is a selection cap, not a capacity. The fixture's
     # player region is 452 bytes and a record costs 2 + len(name) + 8, so 23
-    # players fit only at an average name length of six. `map_player` keeps 14
+    # players fit only at an average name length of nine. `map_player` keeps 14
     # characters of "First Last", which fits 19 — and the writer drops the rest
     # in silence, defence first, because the ROM order is goalies, forwards,
     # defence.
