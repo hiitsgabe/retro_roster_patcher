@@ -200,11 +200,28 @@ def test_an_existing_secondary_is_never_overwritten(tmp_path):
     assert data.teams[0].team.alternate_color == "FFFFFF"
 
 
-def test_apply_cached_colors_ignores_data_it_cannot_walk(tmp_path):
+def test_apply_cached_colors_ignores_none(tmp_path):
+    # Asserted on the return rather than left bare: this test is what stops the guard
+    # being deleted (without it `None.teams` raises `AttributeError` mid-fetch), and a
+    # test with no assertion at all reads as a smoke test nobody has to keep passing.
     team_colors.set_team_color(str(tmp_path), 33, "DA291C", "FBE122")
 
-    team_colors.apply_cached_colors(str(tmp_path), None)
-    team_colors.apply_cached_colors(str(tmp_path), object())
+    assert team_colors.apply_cached_colors(str(tmp_path), None) is None
+
+
+def test_apply_cached_colors_ignores_an_object_with_no_teams(tmp_path):
+    # The `hasattr` arm on its own. Split from the `None` case because the guard has
+    # two arms and one test cannot say which it exercised.
+    #
+    # The other arm is not separately pinned, and that is deliberate rather than an
+    # oversight: `hasattr(None, "teams")` is already `False`, so dropping
+    # `not league_data` leaves both cases here behaving identically — measured, the
+    # file stays green. Telling the arms apart needs something both falsy and carrying
+    # a non-empty `teams`, and `LeagueData` declares neither `__bool__` nor `__len__`,
+    # so a real one is never falsy.
+    team_colors.set_team_color(str(tmp_path), 33, "DA291C", "FBE122")
+
+    assert team_colors.apply_cached_colors(str(tmp_path), object()) is None
 
 
 # ── The "every team is covered" check ────────────────────────────────────
