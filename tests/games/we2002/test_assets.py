@@ -119,18 +119,27 @@ def test_package_path_memoises_one_temporary_copy_per_asset(tmp_path, monkeypatc
     first = package_path(WE2002_ASSETS, "we2002_english.ppf")
     second = package_path(WE2002_ASSETS, "we2002_english.ppf")
     third = package_path(WE2002_ASSETS, "we2002_english.ppf")
-    # A second name in the same package: the memo is keyed on both halves, so
-    # this must not come back as the PPF's path.
+    # The memo is keyed on both halves, so neither a second name in the same
+    # package nor the same name in a second package may collide with it.
     other = package_path(WE2002_ASSETS, "__init__.py")
+    same_name_other_package = package_path("retro_roster_patcher.core", "__init__.py")
 
     assert second == first
     assert third == first
     assert (other == first) is False
+    assert (same_name_other_package == other) is False
     assert pathlib.Path(first).read_bytes() == package_bytes(WE2002_ASSETS, "we2002_english.ppf")
     assert pathlib.Path(other).read_bytes() == package_bytes(WE2002_ASSETS, "__init__.py")
-    assert [args for _, args in registered] == [(first,), (other,)]
+    assert pathlib.Path(same_name_other_package).read_bytes() == package_bytes(
+        "retro_roster_patcher.core", "__init__.py"
+    )
+    assert [args for _, args in registered] == [(first,), (other,), (same_name_other_package,)]
     assert sorted(p.name for p in tmp_path.iterdir()) == sorted(
-        [pathlib.Path(first).name, pathlib.Path(other).name]
+        [
+            pathlib.Path(first).name,
+            pathlib.Path(other).name,
+            pathlib.Path(same_name_other_package).name,
+        ]
     )
 
 
