@@ -17,8 +17,10 @@ jobs:
       - run: ruff check .
       - run: ruff format --check .
       # `src tests`, not bare `mypy`: `[tool.mypy]`'s `files = ["src"]` is the
-      # convenience default for an interactive run, and taking it here left
-      # `tests/` unchecked in CI while every gate in this project checks both.
+      # convenience default for an interactive run, and taking it here would
+      # leave `tests/` unchecked (measured: 45 source files bare, 84 with the
+      # paths). This is the only mypy invocation in the repository, so these
+      # explicit paths are what type-check `tests/` at all.
       - run: mypy src tests
 
   test:
@@ -46,10 +48,14 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      # Deliberately not `pip install -e ".[dev]"` like the jobs above: measured,
-      # an editable install alongside the wheel makes the import resolve to
-      # `src/`, and `test_the_import_resolved_to_an_installed_package` fails.
-      # Only the builder, the wheel and a test runner belong in this environment.
+      # Deliberately not `pip install -e ".[dev]"` like the jobs above. Measured
+      # both orderings: editable first is survivable — installing the wheel
+      # uninstalls the editable distribution, the import resolves to
+      # site-packages and this job passes — but an editable install landing
+      # *after* the wheel puts `src/` back in front and
+      # `test_the_import_resolved_to_an_installed_package` fails. The working
+      # order is luck, not design, so keep this environment to the builder, the
+      # wheel and a test runner.
       - run: pip install build pytest
       - run: python -m build --wheel
       - run: pip install dist/*.whl

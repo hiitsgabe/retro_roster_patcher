@@ -40,8 +40,13 @@ def _game_ids(stdout: str) -> set[str]:
 
 def test_the_import_resolved_to_an_installed_package():
     # Everything else in this file passes against `src/` too. Without this the
-    # wheel job goes vacuous the moment its `cd /tmp` or `pythonpath` changes,
-    # and stays green forever while proving nothing.
+    # wheel job goes vacuous the moment anything puts `src/` back on the path
+    # ahead of site-packages — a `pythonpath` reaching into it, or an editable
+    # install landing after the wheel — and stays green forever while proving
+    # nothing. The job's `cd /tmp` is not that mechanism: measured, running this
+    # from inside the checkout still resolves to site-packages, because
+    # `pythonpath = ["."]` inserts the repository root and the package lives one
+    # level down under `src/`.
     installed = "site-packages" in Path(retro_roster_patcher.__file__).parts
     assert installed is True
 

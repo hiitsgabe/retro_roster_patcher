@@ -41,9 +41,9 @@ class _Transport:
     a bolted-on attribute, which is what `conftest.replay` does: that pattern is
     fine while the function stays unannotated, but mypy rejects
     `transport.calls = calls` once the function has a signature, and this one
-    needs one to accept `*payloads`. CI's mypy would not notice either way —
-    `pyproject.toml` sets `files = ["src"]`, so it never reads the tests — but the
-    `mypy src tests` run locally does.
+    needs one to accept `*payloads`. `pyproject.toml` sets `files = ["src"]`, so a
+    bare `mypy` never reads the tests; CI passes the paths explicitly as
+    `mypy src tests`, so it does.
     """
 
     def __init__(self, *payloads: Any) -> None:

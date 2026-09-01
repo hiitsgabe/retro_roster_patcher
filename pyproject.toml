@@ -57,7 +57,11 @@ markers = [
 # green; the `wheel` CI job selects it back with `-m packaging` after installing
 # the built wheel. Deselecting rather than skipping keeps the failure real: if
 # that job ever loses its `-m packaging`, this line deselects every test it
-# collected and pytest exits 5, which is red, not a silent pass.
+# collected and pytest exits 5, which is red, not a silent pass. `-m` is not
+# additive, though: any command-line `-m` replaces this one, so an unrelated
+# `pytest -m "not real_rom"` re-selects the packaging tests and fails in the
+# source tree. That is loud rather than silent, and it is the same door the
+# wheel job walks through on purpose with `-m packaging` against a built wheel.
 addopts = ["-m", "not packaging"]
 
 [tool.ruff]
