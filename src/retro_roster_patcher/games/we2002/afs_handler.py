@@ -45,7 +45,15 @@ class AfsHandler:
         return self._raw[entry.offset : entry.offset + entry.size]
 
     def replace_entry(self, index: int, data: bytes):
-        """Replace an entry's data in-place (data must be <= original size)."""
+        """Replace an entry's data in this handler's in-memory copy.
+
+        "In place" means within the entry's own extent — the replacement must
+        fit in the original size and the remainder is zero-padded, so no offset
+        in the TOC moves. It does NOT mean the file on disk: `self.afs_path` is
+        read once in the constructor and never written. `rebuild` is the only
+        method here that writes anything, and it writes to a path the caller
+        names. A caller that wants this change persisted has to call `rebuild`.
+        """
         if index < 0 or index >= len(self._entries):
             raise IndexError(f"AFS entry index {index} out of range")
         entry = self._entries[index]
@@ -54,7 +62,7 @@ class AfsHandler:
                 f"New data ({len(data)} bytes) exceeds original entry size "
                 f"({entry.size} bytes). Use rebuild() for larger replacements."
             )
-        # Patch in-place: overwrite, then pad with zeros
+        # Overwrite within the entry's extent, then pad with zeros
         raw_list = bytearray(self._raw)
         raw_list[entry.offset : entry.offset + entry.size] = data + b"\x00" * (
             entry.size - len(data)
