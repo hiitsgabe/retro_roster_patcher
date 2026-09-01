@@ -874,6 +874,46 @@ def test_disable_checksum_writes_an_rts_at_the_bypass_offset(tmp_path):
     assert data[CHECKSUM_BYPASS_OFFSET + 2 : CHECKSUM_BYPASS_OFFSET + 6] == bytes([POISON]) * 4
 
 
+def test_the_bypass_is_written_only_when_both_its_bytes_fit(tmp_path):
+    # Both sides of `CHECKSUM_BYPASS_OFFSET + 2 <= len(data)`. The offset sits
+    # 1334 bytes from the end of a 1 MB image, so against the plain fixture the
+    # guard never decides anything. At exactly `offset + 2` bytes the patch is the
+    # last word in the file; one byte shorter and nothing may be written at all.
+    rom = synthetic_rom.build_nhl94_genesis_rom()
+    fits = _write_rom(tmp_path, "fits.bin", rom[: CHECKSUM_BYPASS_OFFSET + 2])
+    short = _write_rom(tmp_path, "short.bin", rom[: CHECKSUM_BYPASS_OFFSET + 1])
+
+    for source, name in ((fits, "fits_out.bin"), (short, "short_out.bin")):
+        writer = NHL94GenesisRomWriter(str(source), str(tmp_path / name))
+        assert writer.load() is True
+        writer.disable_checksum()
+        assert writer.finalize() is True
+
+    assert (tmp_path / "fits_out.bin").read_bytes()[-2:] == b"\x4e\x75"
+    # Compared against the input rather than against zeros: the image is unchanged
+    # byte for byte, not merely still zero where the patch would have gone.
+    assert (tmp_path / "short_out.bin").read_bytes() == short.read_bytes()
+
+
+def test_an_odd_length_rom_folds_its_last_byte_in_as_a_high_byte(tmp_path):
+    # The `else` arm of the checksum loop, which no whole-word image can reach:
+    # every ROM in this file is an even number of bytes, so the final iteration
+    # always has a second byte to read. 0x0203 bytes gives one whole word at
+    # 0x200 and a lone byte at 0x202, which the sum takes as the high half of a
+    # word: 0x1234 + 0xAB00 = 0xBD34. Dropping the arm leaves 0x1234 and reading
+    # the byte unshifted leaves 0x12DF, so all three are distinguishable.
+    rom = bytearray(0x203)
+    rom[0x200], rom[0x201], rom[0x202] = 0x12, 0x34, 0xAB
+    source = _write_rom(tmp_path, "odd.bin", rom)
+    output = tmp_path / "odd_out.bin"
+    writer = NHL94GenesisRomWriter(str(source), str(output))
+    assert writer.load() is True
+    writer.update_header_checksum()
+    assert writer.finalize() is True
+
+    assert output.read_bytes()[0x18E:0x190] == b"\xbd\x34"
+
+
 def test_disable_checksum_before_loading_does_nothing(tmp_path):
     writer = NHL94GenesisRomWriter(str(tmp_path / "nope.bin"), str(tmp_path / "out.bin"))
     writer.disable_checksum()
