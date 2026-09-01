@@ -17,17 +17,21 @@ satisfies `all(0.0 <= pct <= 1.0)`.
 """
 
 import struct
+import subprocess
+import sys
+import textwrap
 
 import pytest
 
 from retro_roster_patcher.core.errors import ApiError, CapabilityError, RomError
 from retro_roster_patcher.core.models import SlotMapping
-from retro_roster_patcher.games.nhl94_genesis.models import NHL94GenPlayerRecord
+from retro_roster_patcher.games.nhl94_genesis.models import TEAM_COUNT, NHL94GenPlayerRecord
 from retro_roster_patcher.games.nhl94_genesis.patcher import (
     MAX_PLAYERS_PER_SLOT,
     NHL94GenesisPatcher,
 )
 from retro_roster_patcher.games.nhl94_genesis.rom_reader import NHL94GenesisRomReader
+from retro_roster_patcher.games.nhl94_genesis.rom_writer import NHL94GenesisRomWriter
 from retro_roster_patcher.sports.espn import EspnClient
 from retro_roster_patcher.sports.models import League, LeagueData, Player, Team, TeamRoster
 from retro_roster_patcher.sports.nhl import NhlApiClient
@@ -124,10 +128,32 @@ def test_importing_the_package_root_is_what_registers_the_game():
     # __init__. Dropping it leaves `get_patcher` green for anyone who imported
     # the game module first — which every other test in this file does — and
     # broken for the CLI, which only imports the root.
-    import importlib
+    #
+    # Hence the subprocess: registration is a global side effect, so in this
+    # process the game module is long since imported and any same-process
+    # version of this test passes with the import deleted. The child imports the
+    # root and nothing else. It also asserts on `get_patcher`, the behaviour,
+    # rather than on the `_nhl94_genesis` alias — renaming the alias, or dropping
+    # it for a plain `from .games import nhl94_genesis`, is a refactor with the
+    # same registration side effect and must not fail this.
+    source = textwrap.dedent(
+        """
+        import retro_roster_patcher
 
-    root = importlib.import_module("retro_roster_patcher")
-    assert root._nhl94_genesis.NHL94GenesisPatcher is NHL94GenesisPatcher
+        cls = retro_roster_patcher.get_patcher("nhl94-genesis")
+        print(cls.__module__ + ":" + cls.__name__)
+        """
+    )
+    proc = subprocess.run(
+        [sys.executable, "-c", source],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout.strip() == (
+        "retro_roster_patcher.games.nhl94_genesis.patcher:NHL94GenesisPatcher"
+    )
 
 
 def test_an_unknown_provider_is_rejected(tmp_path):
@@ -135,15 +161,21 @@ def test_an_unknown_provider_is_rejected(tmp_path):
         NHL94GenesisPatcher(cache_dir=tmp_path, provider="statsapi")
 
 
-def test_the_default_provider_is_espn_and_nhl_can_be_chosen(tmp_path):
+def test_the_default_provider_is_espn_and_nhl_can_be_chosen(tmp_path, forbid_default_transport):
     assert NHL94GenesisPatcher(cache_dir=tmp_path / "a").provider == "espn"
     assert NHL94GenesisPatcher(cache_dir=tmp_path / "b", provider="nhl").provider == "nhl"
 
 
-def test_each_provider_builds_its_own_client(tmp_path):
+def test_each_provider_builds_its_own_client(tmp_path, forbid_default_transport):
     # Every other test in this file swaps `patcher.api` for a fake, so without
     # this one the branch that chooses between the two real clients is never
     # executed and inverting it changes nothing.
+    #
+    # These are live clients built with `transport=None`, so they are the three
+    # tests in this file that could reach the wire. `forbid_default_transport`
+    # (tests/conftest.py) makes the fall-through raise instead: today both
+    # constructors only assign attributes and makedirs, and this is what keeps
+    # that true.
     espn = NHL94GenesisPatcher(cache_dir=tmp_path / "a")
     nhl = NHL94GenesisPatcher(cache_dir=tmp_path / "b", provider="nhl")
     assert type(espn.api) is EspnClient
@@ -169,7 +201,9 @@ def test_the_client_is_given_the_cache_directory_and_the_transport(tmp_path, pro
     assert p.api.on_status == seen.append
 
 
-def test_the_cache_directory_exists_once_the_patcher_is_constructed(tmp_path):
+def test_the_cache_directory_exists_once_the_patcher_is_constructed(
+    tmp_path, forbid_default_transport
+):
     # Constructing a patcher has to be enough to make the cache usable. The
     # patcher itself no longer calls mkdir: both clients do it in their own
     # constructors, and a second call here was invisible to every assertion.
@@ -188,6 +222,11 @@ def test_analyze_reports_twenty_six_slots(tmp_path, patcher):
     assert info.game_id == "nhl94-genesis"
     assert info.is_valid is True
     assert info.size == synthetic_rom.ROM_SIZE
+    # `path` crosses the NDJSON boundary verbatim and the two branches of
+    # `analyze_rom` source it differently — the reader's own `rom_path` here,
+    # `str(rom_path)` on the IndexError branch below. Asserted on both so they
+    # cannot drift apart.
+    assert info.path == str(rom)
     assert len(info.slots) == 26
     assert info.slots[BOS_SLOT].current_name == "Boston"
 
@@ -219,11 +258,12 @@ def test_a_readable_file_that_is_not_nhl94_is_reported_not_raised(tmp_path, patc
 def test_a_pointer_that_only_get_info_dereferences_does_not_escape_as_index_error(
     tmp_path, patcher
 ):
-    # DEFECT (pinned in test_rom_reader.py): `validate` checks pointer 0 only,
-    # while `get_info` walks all 26. A pointer inside the file but within two
-    # bytes of its end validates and then overruns `_read_u16_be`. The reader is
-    # a faithful port and stays that way, so this layer catches the IndexError
-    # and answers the contract: a RomInfo, never an exception.
+    # DEFECT (pinned in test_rom_reader.py): `validate` bounds-checks pointer 0
+    # only, while `get_info` dereferences all 26 through `_read_team_city`. A
+    # pointer inside the file but in its last five bytes validates and then
+    # overruns the `_read_u16_be(team_base + 4)` that finds the strings section.
+    # The reader is a faithful port and stays that way, so this layer catches the
+    # IndexError and answers the contract: a RomInfo, never an exception.
     rom = synthetic_rom.build_nhl94_genesis_rom()
     struct.pack_into(">I", rom, synthetic_rom.POINTER_TABLE_OFFSET + 4, 0x0FFFFF)
     path = tmp_path / "late_pointer.bin"
@@ -238,6 +278,7 @@ def test_a_pointer_that_only_get_info_dereferences_does_not_escape_as_index_erro
     info = patcher.analyze_rom(path)
     assert (info.is_valid, info.size, info.slots) == (False, synthetic_rom.ROM_SIZE, [])
     assert info.game_id == "nhl94-genesis"
+    assert info.path == str(path)
 
 
 # ── fetch ────────────────────────────────────────────────────────────────
@@ -247,8 +288,11 @@ def test_fetch_returns_league_data_for_the_teams_that_have_slots(patcher):
     data = patcher.fetch(season=2025)
 
     assert isinstance(data, LeagueData)
-    assert data.league.season == 2025
-    assert data.league.name == "NHL"
+    # The whole `League`, not just name and season: `LeagueData` is what crosses
+    # the fetch → JSON → map boundary, and `id` and `country` are synthesised
+    # here — this game has no league endpoint to read them from — so nothing else
+    # in the codebase would notice them changing.
+    assert data.league == League(id=0, name="NHL", country="US", season=2025)
     assert [tr.team.code for tr in data.teams] == ["BOS", "CHI"]
 
 
@@ -357,6 +401,28 @@ def test_map_rosters_drops_a_team_with_no_rom_slot(patcher):
     assert mapped.teams == {}
 
 
+def test_map_rosters_survives_a_team_roster_with_no_leaders_key(patcher):
+    # `fetch` always writes `extra={"leaders": ...}`, but `map_rosters` is a
+    # public entry point and the module docstring advertises the split-process
+    # path — fetch to JSON in one process, map from JSON in another. A hand-built
+    # or trimmed `LeagueData` arrives with `extra={}`, and without the `or {}` on
+    # the lookup the very next line raises AttributeError on None.
+    data = LeagueData(
+        league=League(id=0, name="NHL", country="US", season=2025),
+        teams=[
+            TeamRoster(
+                team=Team(id=1, name="Boston Bruins", code="BOS"),
+                players=[Player(id=i, name=f"P{i}", position="C", number=i + 1) for i in range(3)],
+                extra={},
+            )
+        ],
+    )
+
+    records = patcher.map_rosters(data).teams[BOS_SLOT]
+
+    assert [r.name for r in records] == ["P0", "P1", "P2"]
+
+
 def test_the_leader_stats_order_the_roster_and_shape_the_attributes(patcher):
     # Three separate paths for the same dict, all of them invisible to a test
     # that supplies no stats: `select_roster` sorts on PTS, `map_player` scales
@@ -384,10 +450,13 @@ def test_map_rosters_refuses_a_slot_the_rom_does_not_have(patcher, monkeypatch):
     # unreachable through the real table. It is still worth keeping: `patch` is
     # the only other thing standing between an out-of-range key and the writer's
     # missing lower bound on `team_index`, and MappedRosters is a public type.
-    monkeypatch.setattr(patcher.mapper, "get_team_slot", lambda code: 99)
-    assert patcher.map_rosters(_league_data([Player(id=1, name="X", position="C")])).teams == {}
-    monkeypatch.setattr(patcher.mapper, "get_team_slot", lambda code: -1)
-    assert patcher.map_rosters(_league_data([Player(id=1, name="X", position="C")])).teams == {}
+    #
+    # 26 is the value the guard exists for — one past the last real slot, and the
+    # only one that tells `< TEAM_COUNT` apart from `<= TEAM_COUNT`. 99 and -1 are
+    # far enough outside that either spelling rejects them.
+    for slot in (99, 26, -1):
+        monkeypatch.setattr(patcher.mapper, "get_team_slot", lambda code, s=slot: s)
+        assert patcher.map_rosters(_league_data([Player(id=1, name="X", position="C")])).teams == {}
 
 
 def test_map_rosters_rejects_a_slot_mapping(patcher):
@@ -507,6 +576,64 @@ def test_patching_with_nothing_mapped_still_writes_an_output(tmp_path, patcher):
     assert out.read_bytes()[0x0FFACA:0x0FFACC] == b"\x4e\x75"
 
 
+def test_patch_forwards_status_messages(tmp_path):
+    # `on_status` is a declared public constructor channel and `fetch`'s single
+    # message is pinned whole; these three were not pinned at all. Asserted as a
+    # whole sequence rather than by membership: a patch that emitted them in the
+    # wrong order, or announced the save before writing a byte, satisfies any
+    # `in` check.
+    seen = []
+    p = NHL94GenesisPatcher(cache_dir=tmp_path / "cache", on_status=seen.append)
+    p.api = FakeApi(_teams())
+    rom = synthetic_rom.write_nhl94_genesis_rom(tmp_path / "nhl94.bin")
+    mapped = p.map_rosters(p.fetch(season=2025))
+    seen.clear()  # drops fetch's own message, which its test already pins
+
+    p.patch(rom_path=rom, output_path=tmp_path / "out.bin", rosters=mapped)
+
+    assert seen == ["Validating ROM...", "Initializing ROM writer...", "Saving patched ROM..."]
+
+
+def test_a_slot_mapped_to_an_empty_squad_leaves_its_region_untouched(tmp_path, patcher):
+    # `map_rosters` really does build `{slot: []}` for a team whose provider
+    # squad came back empty — an off-season or stale-cache response — and the
+    # truthiness filter in `patch` is the only thing between that list and
+    # `write_team_roster`, which zero-fills the entire region it was going to
+    # patch. That is 452 bytes of Boston's roster erased while `PatchResult`
+    # still reports success.
+    mapped = patcher.map_rosters(_league_data([]))
+    assert mapped.teams == {BOS_SLOT: []}
+
+    rom = synthetic_rom.write_nhl94_genesis_rom(tmp_path / "nhl94.bin")
+    out = tmp_path / "out.bin"
+    result = patcher.patch(rom_path=rom, output_path=out, rosters=mapped)
+
+    assert (result.teams_patched, result.players_patched) == (0, 0)
+    # 25 records of 18 bytes plus the two-byte sentinel, the same literal the
+    # reader tests use. Compared against the source rather than against zeros,
+    # and the read-back anchors it: the region is full of the fixture's own
+    # self-identifying records, so this cannot pass over a wiped image.
+    start = synthetic_rom.team_base(BOS_SLOT) + synthetic_rom.SEC_PLAYERS
+    region = 452
+    assert out.read_bytes()[start : start + region] == rom.read_bytes()[start : start + region]
+    assert _read_back(out, BOS_SLOT)[0][:2] == ["T01_PL00", "T01_PL01"]
+
+
+def test_an_output_path_that_cannot_be_written_becomes_a_rom_error(tmp_path, patcher):
+    # `finalize` is the only disk write in the module and it reports failure by
+    # returning False, so the translation to `RomError` is the user-facing half.
+    # Reachable with no monkeypatching: a directory already sitting at the output
+    # path makes `open(..., "wb")` raise inside `finalize`, which swallows every
+    # exception and answers False.
+    rom = synthetic_rom.write_nhl94_genesis_rom(tmp_path / "nhl94.bin")
+    out = tmp_path / "out.bin"
+    out.mkdir()
+    mapped = patcher.map_rosters(patcher.fetch(season=2025))
+
+    with pytest.raises(RomError, match="Failed to write patched ROM"):
+        patcher.patch(rom_path=rom, output_path=out, rosters=mapped)
+
+
 def test_patching_an_invalid_rom_raises_rom_error(tmp_path, patcher):
     bad = tmp_path / "bad.bin"
     bad.write_bytes(b"\x00" * 1024)
@@ -573,22 +700,60 @@ def test_an_out_of_range_slot_key_is_ignored_rather_than_written(tmp_path, patch
     path.write_bytes(bytes(rom))
     out = tmp_path / "out.bin"
 
+    # TEAM_COUNT itself is in the list because it is the only key that tells
+    # `< TEAM_COUNT` apart from `<= TEAM_COUNT`; 99 and -1 are far enough outside
+    # that either spelling rejects them. It is the progress sequence that catches
+    # it — the writer would refuse slot 26 with its documented -1, but
+    # `NHL94_GEN_TEAM_ORDER[26]` raises IndexError one line earlier, outside the
+    # try block, and that escapes `patch` untranslated.
     mapped = patcher.map_rosters(patcher.fetch(season=2025))
     mapped.teams[-1] = mapped.teams[BOS_SLOT]
+    mapped.teams[TEAM_COUNT] = mapped.teams[BOS_SLOT]
     mapped.teams[99] = mapped.teams[BOS_SLOT]
+    seen = []
 
-    result = patcher.patch(rom_path=path, output_path=out, rosters=mapped)
+    result = patcher.patch(
+        rom_path=path,
+        output_path=out,
+        rosters=mapped,
+        on_progress=lambda pct, msg: seen.append((pct, msg)),
+    )
 
     assert (result.teams_patched, result.players_patched) == (2, 30)
+    assert seen == [
+        (0.0, "Writing Boston..."),
+        (0.5, "Writing Chicago..."),
+        (1.0, "Saving patched ROM..."),
+    ]
     assert out.read_bytes()[0:10] == b"\x00\x08\x00\x00\x00\x00\x00\x00\x00\x02"
     assert _read_back(out, BOS_SLOT)[0] == [f"P{i}" for i in range(15)]
 
 
-def test_a_slot_whose_region_is_too_small_for_one_record_is_not_counted(tmp_path, patcher):
+def test_a_slot_whose_region_is_too_small_for_one_record_is_not_counted(
+    tmp_path, patcher, monkeypatch
+):
     # `write_team_roster` returns 0, not -1, when the region it found has no room
     # for a single record. Nothing reached the image, so the slot must not appear
-    # in `teams_patched` and its header must stay as it was — a lines table built
-    # over players that were never written indexes whatever the region holds now.
+    # in `teams_patched` and `write_team_header` must not be called for it — a
+    # lines table built over players that were never written would index whatever
+    # the region holds now.
+    #
+    # The header claim is pinned by spying on the call, not by reading a byte
+    # back, because no such byte exists. Delete `patch`'s `continue` and
+    # `write_team_header(slot, players, actual_count=0)` runs, slices `players`
+    # empty and returns False before touching `self.data` — that guard lives in
+    # `rom_writer.py`, not here, and the output is identical either way. The spy
+    # is an implementation pin, and deliberately so: it is the only observable
+    # difference `patch`'s own half of the contract has.
+    header_calls = []
+    unspied = NHL94GenesisRomWriter.write_team_header
+
+    def spy(self, team_index, players, actual_count=-1):
+        header_calls.append(team_index)
+        return unspied(self, team_index, players, actual_count=actual_count)
+
+    monkeypatch.setattr(NHL94GenesisRomWriter, "write_team_header", spy)
+
     rom = synthetic_rom.build_nhl94_genesis_rom()
     base = synthetic_rom.team_base(CHI_SLOT)
     # Point Chicago's player records at unused, already-zero space inside its own
@@ -603,8 +768,7 @@ def test_a_slot_whose_region_is_too_small_for_one_record_is_not_counted(tmp_path
     result = patcher.patch(rom_path=path, output_path=out, rosters=mapped)
 
     assert (result.teams_patched, result.players_patched) == (1, 15)
-    count_off = base + synthetic_rom.SEC_RATINGS + 3
-    assert out.read_bytes()[count_off] == rom[count_off]
+    assert header_calls == [BOS_SLOT]
     assert _read_back(out, BOS_SLOT)[0] == [f"P{i}" for i in range(15)]
 
 
