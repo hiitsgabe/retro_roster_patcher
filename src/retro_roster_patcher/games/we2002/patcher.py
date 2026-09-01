@@ -201,11 +201,11 @@ class WE2002Patcher(Patcher):
             # serves the current squad and its cache key carries no season.
             # `get_player_stats` returns a list, which is re-keyed by player id
             # because that is the shape `map_team_with_league_context` reads.
-            stats = self.api.get_player_stats(team.id, season) or []
+            stats = self.api.get_player_stats(team.id, season)
             rosters.append(
                 TeamRoster(
                     team=team,
-                    players=self.api.get_squad(team.id) or [],
+                    players=self.api.get_squad(team.id),
                     player_stats={ps.player_id: ps for ps in stats},
                 )
             )
@@ -276,11 +276,12 @@ class WE2002Patcher(Patcher):
         writer = RomWriter(str(rom_path), str(output_path))
         self._apply_translation(output_path, language, on_progress)
 
-        # `rosters.teams` rather than `rosters.filled_slots()`: the values here
-        # are `WETeamRecord` instances, which are truthy however empty, so
-        # `filled_slots()` cannot tell the two apart for this game. The range is
-        # re-checked because `teams` is a plain dict that a caller may have built
-        # by hand rather than through `map_rosters`.
+        # The range is re-checked here even though `map_rosters` refuses an
+        # out-of-range slot: `teams` is a plain dict, and a caller may hand
+        # `patch` a `MappedRosters` it built itself. `RomWriter.write_team`
+        # returns silently for a slot outside 0..31, so an unchecked one would
+        # be counted as patched without reaching the ROM. Sorted so the writes
+        # go out in slot order regardless of the mapping's insertion order.
         slots = sorted(slot for slot in rosters.teams if 0 <= slot < MAX_ML_SLOTS)
 
         teams_patched = 0
