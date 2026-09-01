@@ -29,10 +29,12 @@ LANGUAGE_CODES = list(LANGUAGES.keys())
 def ensure_ppf(cache_dir: str, lang: str = "en", assets_dir: str = "") -> str:
     """Return a path to the translation PPF for `lang`.
 
-    English is shipped as package data, so it needs no generation: it is copied
-    to a fresh temporary file on every call, `cache_dir` is never touched, and
-    two calls return two different paths. Supplying a community PPF through
-    `assets_dir` overrides that — English is then generated with translated menu
+    English is shipped as package data, so it needs no generation: it is
+    materialised once into a process-wide memoised temporary file, `cache_dir`
+    is never touched, and every call returns that same path. Treat it as
+    read-only — every caller holds the same file, so writing to it changes what
+    the next one reads. Supplying a community PPF through `assets_dir` overrides
+    the short-circuit entirely: English is then generated with translated menu
     records like any other language. Every other language is generated into
     `cache_dir` on first use and the same path is returned thereafter.
     """
