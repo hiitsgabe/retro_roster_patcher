@@ -13,8 +13,9 @@ Both stand-ins copy their signatures from the real collaborator rather than
 inventing convenient ones, and the two conformance tests below keep them copied.
 A fake that accepted a `season` on `get_squad` would leave this suite green
 while production raised `TypeError`. The writer needs that guard more than the
-API client does, not less: no test anywhere constructs a real `RomWriter`, so
-renaming a parameter on the real one is otherwise invisible to CI.
+API client does, not less: `test_rom_writer.py` drives a real `RomWriter` over a
+synthetic image, but nothing outside it does, so renaming a parameter on the
+real one is otherwise invisible to the tests in this file.
 """
 
 import inspect
@@ -34,7 +35,7 @@ from retro_roster_patcher.core.models import MappedRosters, RomSlot, SlotMapping
 from retro_roster_patcher.games.we2002 import patcher as patcher_module
 from retro_roster_patcher.games.we2002.patcher import MAX_ML_SLOTS, WE2002Patcher
 from retro_roster_patcher.games.we2002.ppf import PPFError
-from retro_roster_patcher.games.we2002.rom_writer import RomWriter
+from retro_roster_patcher.games.we2002.rom_writer import RomWriter, _slot_player_range
 from retro_roster_patcher.sports.api_football import ApiFootballClient
 from retro_roster_patcher.sports.models import (
     League,
@@ -179,6 +180,11 @@ def _fake_writer_class(log, *, create_output=True):
 
         def write_team(self, slot_index, team, players=None, include_flag=True):
             log.append(("write_team", slot_index, team.name, len(players or []), include_flag))
+            # The real writer loops over the slot's fixed ROM capacity and drops
+            # everything past it, so what it returns is not what it was handed.
+            # The capacity rule is delegated to the real `_slot_player_range`
+            # rather than restated here, so the two cannot drift apart.
+            return min(len(players or []), _slot_player_range(slot_index)[1])
 
         def flush_tex_patches(self):
             log.append(("flush_tex_patches",))
@@ -232,10 +238,11 @@ def test_the_fake_api_matches_the_real_client_signatures():
 
 
 def test_the_fake_writer_matches_the_real_writer_signatures():
-    # No test in this repository constructs a real `RomWriter` — there is no ROM
-    # to give it — so the stand-in is the only `RomWriter` CI ever sees. Before
-    # this test, renaming `players` or `flush_tex_patches` on the real one left
-    # the whole suite green while `patch` broke on the first real image. Kinds
+    # The stand-in is the only `RomWriter` the tests in this file ever see —
+    # `test_rom_writer.py` builds a real one over a synthetic image, but it
+    # exercises `write_team` alone and never runs `patch`. Before this test,
+    # renaming `players` or `flush_tex_patches` on the real one left the whole
+    # suite green while `patch` broke on the first real image. Kinds
     # and defaults as well as names, because `patch` passes `players` and
     # `include_flag` by keyword and a positional-only real parameter would
     # reject that.
@@ -803,6 +810,52 @@ def test_a_slot_the_writer_would_silently_drop_is_not_counted(patcher, tmp_path,
 
     assert [entry[1] for entry in log if entry[0] == "write_team"] == [0]
     assert (result.teams_patched, result.players_patched) == (1, 11)
+
+
+def test_players_past_the_slot_capacity_are_counted_as_written_not_as_supplied(
+    tmp_path, monkeypatch
+):
+    # `PatchResult.players_patched` is a claim about the ROM, and the writer's
+    # per-slot capacity is fixed: `_slot_player_range` gives slot 0 fourteen
+    # places and slot 31 fifteen, and `_write_players_impl` loops over that count
+    # and never looks at `players[count:]`. A 22-man squad in each of those two
+    # slots therefore puts 14 + 15 = 29 players into the image, while the
+    # supplied-list reading, `len(record.players)`, says 22 + 22 = 44.
+    #
+    # Every count in this test is distinct from every plausible wrong one: 29 is
+    # not 44 (supplied), not 2 (teams), not 15 or 22 (either maximum), and not 28
+    # or 30 (a uniform capacity for both slots).
+    log = []
+    monkeypatch.setattr(patcher_module, "RomWriter", _fake_writer_class(log))
+    _silence_translation(monkeypatch)
+    p = _make_patcher(tmp_path)
+    p.api = FakeApi(team_count=2, squad_size=22)
+    data = p.fetch(season=2024, league_id=39)
+    mapped = p.map_rosters(
+        data,
+        slot_mapping=[
+            SlotMapping(slot_index=0, team_id=100),
+            SlotMapping(slot_index=31, team_id=101),
+        ],
+    )
+    rom = tmp_path / "we2002.bin"
+    rom.write_bytes(b"\x00" * 4096)
+
+    result = p.patch(rom_path=rom, output_path=tmp_path / "out.bin", rosters=mapped)
+
+    # All 22 are still handed over — the truncation is the writer's, not the
+    # patcher's, and `patch` must not start second-guessing which ones fit.
+    assert [entry[3] for entry in log if entry[0] == "write_team"] == [22, 22]
+    assert result.players_patched == 29
+    assert result.teams_patched == 2
+
+
+def test_the_two_slot_capacities_differ_so_the_count_cannot_be_a_uniform_multiple(tmp_path):
+    # Guards the test above from becoming vacuous: if both slots ever held the
+    # same number of players, `29` would stop distinguishing "summed the writer's
+    # answers" from "multiplied one capacity by two".
+    assert _slot_player_range(0)[1] == 14
+    assert _slot_player_range(31)[1] == 15
 
 
 def test_patch_raises_when_finalisation_leaves_no_output(patcher, tmp_path, monkeypatch):

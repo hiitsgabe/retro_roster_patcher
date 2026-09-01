@@ -8,6 +8,12 @@ contracts are worked around here rather than fixed there:
   * `RomWriter.write_team` writes no players at all unless it is handed a
     `players=` list, so `patch` always passes one. Counting players without
     passing them would report a patch that never happened.
+  * `RomWriter.write_team` writes only as many players as the slot has room for
+    — 14 places for slots 0-17, 15 for slots 18-31 — and drops the rest. That
+    one is fixed in the writer rather than worked around here: it now returns
+    the number it actually wrote, and `patch` accumulates that. The alternative
+    was to re-derive the capacity rule here from a private helper, which would
+    have put two copies of it in the tree.
   * `RomWriter.write_team` returns silently for any slot outside 0..31, so both
     `map_rosters` and `patch` bound their slots by `MAX_ML_SLOTS`.
   * `RomWriter.finalize` has `pass` for a body and returns `None`, so there is
@@ -292,9 +298,14 @@ class WE2002Patcher(Patcher):
                 on_progress(0.05 + 0.9 * (i / len(slots)), f"Writing slot {slot}...")
             # `players=` is not optional in practice: without it `write_team`
             # writes names, kits and the flag, and no players at all.
-            writer.write_team(slot, record, players=record.players, include_flag=True)
+            #
+            # The whole list goes over, and the count comes back: the writer's
+            # loop is bounded by the slot's ROM capacity (14 or 15 places), so a
+            # 22-man squad in slot 0 leaves eight records on the floor.
+            # `len(record.players)` would report all 22 as patched.
+            written = writer.write_team(slot, record, players=record.players, include_flag=True)
             teams_patched += 1
-            players_patched += len(record.players)
+            players_patched += written
 
         # Every `write_team` above queued a 3D-jersey TEX patch. Without this
         # they are all discarded when the writer goes out of scope.

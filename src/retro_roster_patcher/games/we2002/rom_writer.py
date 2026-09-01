@@ -2200,17 +2200,24 @@ class RomWriter:
         team: WETeamRecord,
         players: list[WEPlayerRecord] | None = None,
         include_flag: bool = True,
-    ):
+    ) -> int:
         """Write team names, abbreviations, force bars, players, and flag.
 
         Consolidates all writes into a single file open to minimize I/O
         on slow storage (SD cards on handhelds).
+
+        Returns the number of supplied player records that reached the ROM: 0
+        when there is no output file, when the slot is outside 0..31, or when no
+        `players=` list was handed over, and otherwise the slot's capacity
+        bounded by the list length. See `_write_players_impl` for why this
+        return value diverges deliberately from upstream.
         """
         if not os.path.exists(self.output_path):
-            return
+            return 0
         if slot_index < 0 or slot_index >= _SQUADRE_ML:
-            return
+            return 0
 
+        written = 0
         with open(self.output_path, "r+b") as f:
             self._write_team_names(f, slot_index, team)
             self._write_kanji_name(f, slot_index, team)
@@ -2220,7 +2227,7 @@ class RomWriter:
 
             # Write players in same file handle
             if players is not None:
-                self._write_players_impl(f, slot_index, players)
+                written = self._write_players_impl(f, slot_index, players)
 
             # Write flag in same file handle
             if include_flag:
@@ -2230,6 +2237,7 @@ class RomWriter:
         # Queue 3D jersey TEX patch (ML teams are TEX indices 63-94)
         tex_index = 63 + slot_index
         self._pending_tex_patches.append((tex_index, team.kit_home))
+        return written
 
     def _write_team_names(self, f, slot_index: int, team: WETeamRecord):
         """Write all 6 name variants + lowercase for an ML team slot.
@@ -2408,8 +2416,19 @@ class RomWriter:
         f.write(maglia1)
         f.write(maglia2)
 
-    def _write_players_impl(self, f, slot_index, players):
-        """Write player names + characteristics (uses existing file handle)."""
+    def _write_players_impl(self, f, slot_index, players) -> int:
+        """Write player names + characteristics (uses existing file handle).
+
+        Returns the number of supplied records that reached the ROM. The loop is
+        bounded by the slot's fixed capacity (14 or 15, see `_slot_player_range`)
+        and `players[count:]` is dropped, so a caller that reports
+        `len(players)` reports players it never wrote.
+
+        The return value is a DELIBERATE DIVERGENCE from the upstream C++/Python
+        writer, which returned nothing: `PatchResult.players_patched` is this
+        project's own contract and needs a truthful number. Not a port bug — it
+        writes exactly the same bytes upstream did. Do not "restore" it.
+        """
         first_idx, count = _slot_player_range(slot_index)
         for i in range(count):
             global_idx = first_idx + i
@@ -2422,14 +2441,20 @@ class RomWriter:
                 carat_bytes = _DUMMY_CARAT
             _write_chunks(f, name_bytes, _nome_chunks(global_idx))
             _write_chunks(f, carat_bytes, _carat_chunks(global_idx))
+        return min(len(players), count)
 
-    def write_players(self, slot_index: int, players: list[WEPlayerRecord]):
-        """Write player names + characteristics for a team slot."""
+    def write_players(self, slot_index: int, players: list[WEPlayerRecord]) -> int:
+        """Write player names + characteristics for a team slot.
+
+        Returns the number of supplied records written, or 0 if there is no
+        output file to write them to.
+        """
         if not os.path.exists(self.output_path):
-            return
+            return 0
         with open(self.output_path, "r+b") as f:
-            self._write_players_impl(f, slot_index, players)
+            written = self._write_players_impl(f, slot_index, players)
             _sync(f)
+        return written
 
     def _write_flag_impl(self, f, slot_index, team):
         """Write team flag data (uses existing file handle)."""
