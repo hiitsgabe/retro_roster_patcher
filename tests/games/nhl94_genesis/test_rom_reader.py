@@ -218,8 +218,11 @@ def test_a_team_whose_city_string_is_unreadable_falls_back_to_the_display_name(t
     rom[strings : strings + 2] = b"\x00\x00"
     slots = _reader(_write(tmp_path, "no_city.bin", rom)).get_info().team_slots
     assert (slots[20].current_name, slots[20].display_name) == ("St. Louis", "St. Louis")
-    # Neighbours still come from the image, so this is the fallback and not a
-    # wholesale switch to the constant table.
+    # Slots 19 and 21 are byte-identical in `CITIES` and `NHL94_GEN_TEAM_ORDER`, so
+    # they cannot tell the image apart from the constant table; that discrimination
+    # is `test_team_slots_read_the_city_strings`'s job, again via slot 20. What the
+    # neighbours buy is that corrupting team 20's length word leaves teams 19 and 21
+    # undisturbed — no bleed across team blocks.
     assert (slots[19].current_name, slots[21].current_name) == ("San Jose", "Tampa Bay")
 
 
@@ -262,10 +265,13 @@ def test_a_player_record_identifies_its_team_and_its_slot(tmp_path):
 
 @pytest.mark.parametrize("team_index", [0, 1, 9, 13, 20, 25])
 def test_each_team_reads_its_own_roster_in_slot_order(tmp_path, team_index):
-    # Zipped rather than compared as two lists: this is the assertion that pins
-    # name-to-stats pairing, so a reader that returned the right names and the
-    # right stat blocks rotated by one against each other fails here. Comparing
-    # the lists separately would not.
+    # This pins name-to-stats pairing: a reader that returned the right names and
+    # the right stat blocks rotated by one against each other fails here. Two
+    # separate list comparisons would catch that too — at equal length
+    # `list(zip(a, b)) == list(zip(x, y))` is exactly `a == x and b == y`. What the
+    # zipped form needs is the length assertion on the line before it, which runs
+    # first and so keeps `strict=True` from turning a length mismatch into a
+    # ValueError instead of a readable diff.
     names, stats = _loaded_reader(tmp_path).read_team_roster(team_index)
     assert (len(names), len(stats)) == (synthetic_rom.ROSTER_PLAYERS,) * 2
     assert list(zip(names, stats, strict=True)) == [
