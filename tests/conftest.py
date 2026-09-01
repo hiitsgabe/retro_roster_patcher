@@ -8,11 +8,12 @@ through `NHL94GenesisPatcher.__init__`, and conftest scoping means a fixture one
 directory down is invisible to it.
 
 The guard is autouse, so the claim covers every test in the suite instead of the
-ones whose authors thought to ask for it. Arming it by request did not: of the 42
-tests in `tests/games/nhl94_genesis/test_patcher.py` that construct a live
-`EspnClient`, exactly 3 requested this fixture. The rest came in through the
-`patcher` fixture, which builds a real client before overwriting `p.api` with a
-fake — the same constructor-time exposure as the sites that were guarded.
+ones whose authors thought to ask for it. Arming it by request did not: of the 41
+tests in `tests/games/nhl94_genesis/test_patcher.py` that construct a live client
+with `transport=None`, exactly 3 requested this fixture. The rest came in through
+the `patcher` fixture, which builds a real `EspnClient` before overwriting
+`p.api` with a fake — the same constructor-time exposure as the sites that were
+guarded. Autouse covers 311 of the suite's 319 tests; the other 8 opt out below.
 
 A test that genuinely needs the real transport opts out with
 `@pytest.mark.allow_default_transport`. The only ones that do are in
