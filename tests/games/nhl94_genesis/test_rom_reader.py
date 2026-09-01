@@ -151,6 +151,51 @@ def test_every_team_index_resolves_to_its_own_block(tmp_path):
     assert resolved == [_expected_offsets(i) for i in range(synthetic_rom.TEAM_COUNT)]
 
 
+def test_a_team_pointer_is_read_as_four_big_endian_bytes(tmp_path):
+    # Every fixture pointer is 0x010000 + a multiple of 0x1000, so its top and
+    # bottom bytes are both zero and no other test exercises either the `<< 24`
+    # term or the low byte of `_read_u32_be`. Team 3 gets 0x000A0B0C, which is
+    # inside a 1 MB image and whose three low bytes are distinct and non-zero;
+    # team 4 gets 0x01000000, which only the `<< 24` term puts outside the file.
+    rom = synthetic_rom.build_nhl94_genesis_rom()
+    table = synthetic_rom.POINTER_TABLE_OFFSET
+    rom[table + 3 * 4 : table + 4 * 4] = b"\x00\x0a\x0b\x0c"
+    rom[table + 4 * 4 : table + 5 * 4] = b"\x01\x00\x00\x00"
+    reader = _reader(_write(tmp_path, "wide_pointers.bin", rom))
+    assert reader._read_team_pointer(3) == 0x000A0B0C
+    assert reader._read_team_pointer(4) is None
+    assert reader.get_team_section_offsets(4) is None
+
+
+def test_a_pointer_at_exactly_the_file_length_is_out_of_range(tmp_path):
+    # Both sides of `addr >= len(data)`. One byte lower is the last address the
+    # reader will hand back; the length itself is the first it will not. Against
+    # the plain fixture, where every pointer is far inside the file, `>=` and `>`
+    # are indistinguishable.
+    rom = synthetic_rom.build_nhl94_genesis_rom()
+    table = synthetic_rom.POINTER_TABLE_OFFSET
+    rom[table + 6 * 4 : table + 7 * 4] = synthetic_rom.ROM_SIZE.to_bytes(4, "big")
+    rom[table + 7 * 4 : table + 8 * 4] = (synthetic_rom.ROM_SIZE - 1).to_bytes(4, "big")
+    reader = _reader(_write(tmp_path, "edge_pointers.bin", rom))
+    assert reader._read_team_pointer(6) is None
+    assert reader._read_team_pointer(7) == synthetic_rom.ROM_SIZE - 1
+    # The public route, which is what makes the guard worth having: without it the
+    # section read would index one past the last byte.
+    assert reader.get_team_player_region(6) == (0, 0)
+
+
+def test_a_pointer_table_entry_that_does_not_fit_in_the_file_is_refused(tmp_path):
+    # `ptr_off + 4 > len(data)`, both sides. A file of exactly 0x312 bytes holds
+    # the whole of entry 0 — 0x030E through 0x0311 — and one byte less does not.
+    # The reader never calls `validate` first, so a file this far under 1 MB
+    # reaches the guard at all.
+    entry = synthetic_rom.POINTER_TABLE_OFFSET
+    whole = bytearray(entry + 4)
+    whole[entry : entry + 4] = (0x300).to_bytes(4, "big")
+    assert _reader(_write(tmp_path, "whole.bin", whole))._read_team_pointer(0) == 0x300
+    assert _reader(_write(tmp_path, "cut.bin", whole[:-1]))._read_team_pointer(0) is None
+
+
 def test_a_team_index_at_the_count_resolves_to_nothing(tmp_path):
     # `_read_team_pointer` is asserted on directly because it is the only guard
     # that is not masked by another: every public entry point checks
@@ -278,6 +323,25 @@ def test_each_team_reads_its_own_roster_in_slot_order(tmp_path, team_index):
         (synthetic_rom.player_name(team_index, slot), synthetic_rom.player_stats(team_index, slot))
         for slot in range(synthetic_rom.ROSTER_PLAYERS)
     ]
+
+
+@pytest.mark.parametrize("tail", [18, 19])
+def test_a_record_that_ends_on_the_last_byte_is_still_read_whole(tmp_path, tail):
+    # The two bounds checks in `read_team_roster`'s loop, each at the one offset
+    # where its comparison decides anything. The fixture's first record is 18
+    # bytes, so a file cut to `start + 18` ends exactly where its stat bytes do:
+    # `offset + STATS_SIZE > len(data)` is false by zero, and a `>=` there would
+    # drop the stats and return a name with none. Cut to `start + 19`, the loop
+    # comes back round with `offset == len(data) - 1`, which `offset <
+    # len(data) - 1` refuses; reading one byte further would take `_read_u16_be`
+    # past the end. Both cuts must yield the same whole record.
+    rom = synthetic_rom.build_nhl94_genesis_rom()
+    start = synthetic_rom.team_base(0) + synthetic_rom.SEC_PLAYERS
+    reader = _reader(_write(tmp_path, f"tail{tail}.bin", rom[: start + tail]))
+    assert reader.read_team_roster(0) == (
+        [synthetic_rom.player_name(0, 0)],
+        [synthetic_rom.player_stats(0, 0)],
+    )
 
 
 def test_a_length_word_of_two_ends_the_roster(tmp_path):
