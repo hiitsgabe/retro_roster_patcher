@@ -170,6 +170,36 @@ def player_stats(team_index: int, slot: int) -> bytes:
     return identity + STAT_PADDING
 
 
+def decode_player_stats(stats: bytes) -> dict[str, int]:
+    """Split the eight stat bytes back into the fourteen values they carry.
+
+    Transcribed from the byte layout in `rom_writer._write_player_stats`'s
+    docstring, deliberately not from its code: `src/` ships no inverse of
+    `encode_nibble`/`encode_weight_nibble`, so a decoder derived from the writer's
+    own statements would agree with any rearrangement of them. Byte 0 is BCD, the
+    rest are two nibbles each, high first.
+    """
+    high = [b >> 4 for b in stats]
+    low = [b & 0x0F for b in stats]
+    return {
+        "jersey_number": high[0] * 10 + low[0],
+        "weight_class": high[1],
+        "agility": low[1],
+        "speed": high[2],
+        "off_awareness": low[2],
+        "def_awareness": high[3],
+        "shot_power": low[3],
+        "checking": high[4],
+        "handedness": low[4],
+        "stick_handling": high[5],
+        "shot_accuracy": low[5],
+        "endurance": high[6],
+        "roughness": low[6],
+        "pass_accuracy": high[7],
+        "aggression": low[7],
+    }
+
+
 def player_record(team_index: int, slot: int) -> bytes:
     """One complete record: BE length, then the name, then the stat bytes."""
     name = player_name(team_index, slot).encode("ascii")
