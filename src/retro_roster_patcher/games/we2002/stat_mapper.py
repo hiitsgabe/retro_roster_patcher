@@ -394,19 +394,57 @@ class StatMapper:
     def _format_player_name(self, player: Player) -> tuple:
         """Build ROM-friendly (last_name, first_name) from a Player.
 
-        Always uses displayName (the player's preferred/known name).
-        The game displays at most 8 characters for player names.
+        Prefers the display name (the player's preferred/known name) and falls
+        back to `last_name` when there is none. The game displays at most 8
+        characters for player names.
         Rules:
         - Single word (mononym): use as-is → "HULK", "NEYMAR"
         - Two+ words: "F. Surname" → "V. Hugo", "G. Pique", "R. Veiga"
+
+        Each of the three provider strings is stripped after conversion and
+        before it is tested, so that a field holding nothing but whitespace
+        counts as absent and the fallback behind it is reached. This is a
+        DELIBERATE DIVERGENCE from the upstream this was ported from, whose body
+        is otherwise byte-identical and which tested the unstripped strings for
+        truthiness. That cost it three things:
+
+          * a whitespace-only `display` skipped the `last_name` fallback, then
+            `" ".split()` returned `[]` and `words[-1]` raised `IndexError` out
+            of `map_rosters`, so one player aborted the whole patch;
+          * where `last_name` held a usable surname it was unreachable, so the
+            correct answer was discarded along with the run;
+          * `"  Neymar  "` kept its padding through `display[:8]`, giving
+            `"  Neyma"` — two of the eight ROM characters spent on spaces — and
+            a whitespace `first_name` beat the `words[0]` fallback the same way.
+
+        The reachable case is not a malformed payload. `_to_ascii` drops every
+        character it cannot render and keeps the spaces between them, so any
+        display name of two or more words in a non-Latin script — Cyrillic,
+        Arabic, Hangul — arrives here as `" "`. A single-word one arrives as
+        `""` and always took the fallback correctly, which is why this went
+        unnoticed. `api_football` passes `name` through as `p.get("name", "")`
+        with no cleaning of its own.
+
+        The order matters and is not interchangeable: stripping the provider
+        string before conversion would not help, because `"Ivanov Petrov"` in
+        Cyrillic is not whitespace until `_to_ascii` has run.
+
+        Do NOT "restore" the unstripped version in a port audit.
+
+        The three `.strip()` calls are the whole divergence; every other line is
+        upstream's. Nothing further is needed below them, because a stripped
+        single-word `display` is its own `words[0]`, and a stripped non-empty
+        `display` holds at least one non-whitespace character — and
+        `str.split()` with no argument never yields an empty string — so `words`
+        and `words[0]` are both non-empty by the time they are indexed.
         """
         from .rom_writer import _to_ascii
 
-        display = _to_ascii(player.name) if player.name else ""
-        first = _to_ascii(player.first_name) if player.first_name else ""
+        display = _to_ascii(player.name).strip() if player.name else ""
+        first = _to_ascii(player.first_name).strip() if player.first_name else ""
 
         if not display:
-            last = _to_ascii(player.last_name) if player.last_name else ""
+            last = _to_ascii(player.last_name).strip() if player.last_name else ""
             return (last or "")[:8], first[:8]
 
         words = display.split()
