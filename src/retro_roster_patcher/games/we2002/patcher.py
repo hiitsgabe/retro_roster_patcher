@@ -1,9 +1,16 @@
 """Winning Eleven 2002 (PlayStation) on the unified Patcher interface.
 
-This module is the translation layer between the ported reader/writer/mapper —
-a faithful copy of an untested upstream, and it stays that way — and the
-contracts in `core.patcher`. The places the ported code breaks one of those
-contracts are worked around here rather than fixed there:
+This module is the translation layer between the ported reader/writer/mapper and
+the contracts in `core.patcher`. The port is a faithful copy of an upstream that
+had no tests, and every offset, encoder, truncation rule and padding byte in it
+stays that way — a differential audit found the two trees produce byte-identical
+images. What has been allowed to diverge is narrow and is called out at each
+site: a return value the upstream did not have, a correction to a comment the
+upstream got wrong, and two defects the upstream also had. None of them moves a
+byte.
+
+The places the ported code breaks one of `core.patcher`'s contracts are worked
+around here rather than fixed there, with one exception, noted below:
 
   * `RomWriter.write_team` writes no players at all unless it is handed a
     `players=` list, so `patch` always passes one. Counting players without
