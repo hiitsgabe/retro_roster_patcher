@@ -66,13 +66,48 @@ def test_a_ppf1_patch_overwrites_only_the_bytes_its_records_name(tmp_path):
     original = bytes(range(256)) * 16
     target.write_bytes(original)
 
-    patch = tmp_path / "good.ppf"
-    patch.write_bytes(_ppf1_patch("synthetic", struct.pack("<I", 4) + b"\x03\xaa\xbb\xcc"))
+    # Two records, so the stride the applier uses to step from one to the next is
+    # actually exercised: with a single record the tail is empty whatever the
+    # stride is. The bundled translation patches carry 96 records each.
+    two_records = (
+        struct.pack("<I", 4) + b"\x03\xaa\xbb\xcc" + struct.pack("<I", 100) + b"\x02\xde\xad"
+    )
+    # Exactly 50 characters, which fills the description field to its width and
+    # so pins the slice the applier reads it back with. No bundled patch is this
+    # long, so `test_a_short_description_comes_back_without_its_null_padding`
+    # covers the padded shape they all actually have.
+    full_desc = "s" * 49 + "c"
 
-    assert get_ppf_info(str(patch))["version"] == 1
-    assert apply_ppf(str(target), str(patch)) == "synthetic"
+    patch = tmp_path / "good.ppf"
+    patch.write_bytes(_ppf1_patch(full_desc, two_records))
+
+    assert get_ppf_info(str(patch)) == {
+        "version": 1,
+        "description": full_desc,
+        "expected_size": 0,
+    }
+    assert apply_ppf(str(target), str(patch)) == full_desc
 
     patched = target.read_bytes()
     assert patched[:4] == original[:4]
     assert patched[4:7] == b"\xaa\xbb\xcc"
-    assert patched[7:] == original[7:]
+    assert patched[7:100] == original[7:100]
+    assert patched[100:102] == b"\xde\xad"
+    assert patched[102:] == original[102:]
+
+
+def test_a_short_description_comes_back_without_its_null_padding(tmp_path):
+    # The full-width description above pins the field's slice, but it leaves no
+    # padding to strip, so on its own it stops covering `.rstrip("\x00")`. This
+    # is the shape that actually ships: generating all four bundled translation
+    # patches gives descriptions of the form "WE2002 English - Console Utilities"
+    # with 16, 16, 17 and 13 trailing NULs (en, es, fr, pt). None is 50 wide.
+    target = tmp_path / "rom.bin"
+    original = bytes(range(256))
+    target.write_bytes(original)
+
+    patch = tmp_path / "short.ppf"
+    patch.write_bytes(_ppf1_patch("synthetic", struct.pack("<I", 0) + b"\x01\xaa"))
+
+    assert get_ppf_info(str(patch))["description"] == "synthetic"
+    assert apply_ppf(str(target), str(patch)) == "synthetic"

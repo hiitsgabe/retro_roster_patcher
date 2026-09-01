@@ -4,6 +4,7 @@ import os
 import struct
 import tempfile
 
+from ...core.errors import ApiError
 from ...sports import _http
 
 try:
@@ -88,6 +89,7 @@ class TimGenerator:
         logo_url: str,
         output_size: tuple,
         bpp: int = 4,
+        *,
         transport: _http.Transport | None = None,
     ) -> bytes:
         """Download a team logo image from URL and convert to TIM format.
@@ -96,11 +98,22 @@ class TimGenerator:
         binary image bytes and `get_json` would try to parse them as JSON and
         raise. The transport is the same seam the sports clients take, so the
         suite-wide `forbid_default_transport` guard covers this call site too.
-        A failing HTTP status arrives as an `ApiError` from the transport itself,
-        which is why nothing here re-checks the status.
+
+        It is the only call site outside `_http` itself that invokes a transport
+        directly, so it repeats the normalisation `get_json` does: every
+        network failure leaves here as an `ApiError`. A failing HTTP status
+        already arrives as one from `_urllib_transport`, which is why nothing
+        re-checks the status, but a connection that never completes does not —
+        a refused port raises a bare `urllib.error.URLError` — and callers should
+        not have to catch two unrelated exception types for the same event.
         """
         tx = transport or _http.default_transport
-        content = tx(logo_url, {}, 15.0)
+        try:
+            content = tx(logo_url, {}, 15.0)
+        except ApiError:
+            raise
+        except Exception as exc:
+            raise ApiError(f"GET {logo_url} failed: {exc}") from exc
 
         with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
             tmp.write(content)
