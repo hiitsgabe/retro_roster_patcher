@@ -15,7 +15,9 @@ in `tests/games/nhl94_genesis/test_patcher.py` construct a live `EspnClient` wit
 come in through that file's `patcher` fixture, which builds a real client before
 overwriting `p.api` with a fake, and 4 build a patcher of their own — the same
 constructor-time exposure as the 3 that were guarded. Autouse now covers 537 of
-the suite's 545 tests; the remaining 8 opt out explicitly.
+the 545 tests a default run executes; the remaining 8 opt out explicitly. The
+suite collects 550 — `addopts` deselects `tests/test_packaging.py`'s 5, which
+are covered too on the run that selects them — so 542 of 550 counted that way.
 
 Disarming a negative safety net is silent — every other test stays green while
 the claim it enforces quietly stops holding. `tests/test_network_guard.py` is
