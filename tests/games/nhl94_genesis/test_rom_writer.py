@@ -359,9 +359,17 @@ def test_the_jersey_number_is_clamped_to_one_through_ninety_nine(rom_paths):
 
 
 def test_attributes_land_in_the_seven_stat_bytes(rom_paths):
-    # Fourteen distinct values across the fourteen nibbles, so a transposed pair or
-    # a nibble read from the wrong half of a byte cannot survive. The literal bytes
-    # pin the layout; the decoded dict names which value went where.
+    # `encode_nibble` clamps every attribute to 0-6, so twelve attributes cannot
+    # all take distinct values — five have to repeat. The repeats are placed to
+    # straddle the packing rather than falling wherever: the six attributes stored
+    # in a high nibble all differ from one another, the six stored in a low nibble
+    # all differ from one another, and no byte holds two equal nibbles. So every
+    # swap of two attributes written into the same half of a byte, and every
+    # nibble read from the wrong half of one, changes a byte here. A swap of two
+    # equal-valued attributes that also crosses halves — def_awareness against
+    # agility — stays invisible, and no assignment of 0-6 to twelve fields can
+    # make it visible. The literal pins the layout; the decoded dict names which
+    # value went where.
     writer, output = _loaded_writer(rom_paths)
     player = NHL94GenPlayerRecord(
         name="AA",
@@ -370,15 +378,15 @@ def test_attributes_land_in_the_seven_stat_bytes(rom_paths):
         weight_class=11,
         handedness=1,
         attributes=NHL94GenPlayerAttributes(
-            speed=6,
-            agility=5,
-            shot_power=4,
-            shot_accuracy=3,
-            stick_handling=2,
-            pass_accuracy=1,
-            off_awareness=0,
-            def_awareness=6,
-            checking=5,
+            speed=0,
+            agility=1,
+            shot_power=5,
+            shot_accuracy=4,
+            stick_handling=3,
+            pass_accuracy=5,
+            off_awareness=6,
+            def_awareness=1,
+            checking=2,
             endurance=4,
             roughness=3,
             aggression=2,
@@ -388,22 +396,22 @@ def test_attributes_land_in_the_seven_stat_bytes(rom_paths):
     assert writer.finalize() is True
 
     _, stats = _read_back(output).read_team_roster(0)
-    assert stats[0] == b"\x87\xb5\x60\x64\x51\x23\x43\x12"
+    assert stats[0] == b"\x87\xb1\x06\x15\x21\x34\x43\x52"
     assert synthetic_rom.decode_player_stats(stats[0]) == {
         "jersey_number": 87,
         "weight_class": 11,
-        "agility": 5,
-        "speed": 6,
-        "off_awareness": 0,
-        "def_awareness": 6,
-        "shot_power": 4,
-        "checking": 5,
+        "agility": 1,
+        "speed": 0,
+        "off_awareness": 6,
+        "def_awareness": 1,
+        "shot_power": 5,
+        "checking": 2,
         "handedness": 1,
-        "stick_handling": 2,
-        "shot_accuracy": 3,
+        "stick_handling": 3,
+        "shot_accuracy": 4,
         "endurance": 4,
         "roughness": 3,
-        "pass_accuracy": 1,
+        "pass_accuracy": 5,
         "aggression": 2,
     }
 
