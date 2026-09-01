@@ -2,6 +2,8 @@
 
 import json
 
+import pytest
+
 from retro_roster_patcher.sports.espn import EspnClient
 
 NHL_TEAMS_URL = "https://site.api.espn.com/apis/site/v2/sports/hockey/nhl/teams"
@@ -109,6 +111,21 @@ def test_the_status_callback_reports_the_fetch(tmp_path, replay):
 
     # No space after "Fetching": the path supplies the separator.
     assert seen == ["Fetching/nhl/teams..."]
+
+
+def test_a_raising_status_callback_is_not_mistaken_for_a_failed_fetch(tmp_path, replay):
+    # Only the request belongs inside the `try`. With the callback in there too, a
+    # raising `on_status` was caught as if the fetch had failed and the caller got
+    # an empty result — a caller bug silently downgraded to "no data". The
+    # transport-failure test above pins the other half: a failing request is still
+    # swallowed.
+    def raising(message):
+        raise RuntimeError("the progress UI went away")
+
+    client = EspnClient(str(tmp_path), on_status=raising, transport=replay("espn_nhl_teams.json"))
+
+    with pytest.raises(RuntimeError):
+        client.get_nhl_teams()
 
 
 # --- the transport seam (helpers live in conftest.py) ---
