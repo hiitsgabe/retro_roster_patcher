@@ -16,6 +16,7 @@ reported `(0.0, ...)` forever, or that emitted its 26 slots in the wrong order,
 satisfies `all(0.0 <= pct <= 1.0)`.
 """
 
+import collections
 import struct
 import subprocess
 import sys
@@ -25,7 +26,11 @@ import pytest
 
 from retro_roster_patcher.core.errors import ApiError, CapabilityError, RomError
 from retro_roster_patcher.core.models import SlotMapping
-from retro_roster_patcher.games.nhl94_genesis.models import TEAM_COUNT, NHL94GenPlayerRecord
+from retro_roster_patcher.games.nhl94_genesis.models import (
+    MODERN_NHL_TO_NHL94_GEN,
+    TEAM_COUNT,
+    NHL94GenPlayerRecord,
+)
 from retro_roster_patcher.games.nhl94_genesis.patcher import (
     MAX_PLAYERS_PER_SLOT,
     NHL94GenesisPatcher,
@@ -41,6 +46,8 @@ from tests.fixtures import synthetic_rom
 # `MODERN_NHL_TO_NHL94_GEN`. NHL94_GEN_TEAM_ORDER names them Boston and Chicago.
 BOS_SLOT = 1
 CHI_SLOT = 4
+# San Jose, one of the four slots two codes reach — "SJS" and the ESPN "SJ".
+SJS_SLOT = 19
 
 
 class FakeApi:
@@ -98,6 +105,29 @@ def _league_data(players, code="BOS", season=2025):
                 players=players,
                 extra={"leaders": {}},
             )
+        ],
+    )
+
+
+def _alias_league_data(*entries):
+    """`LeagueData` with one `TeamRoster` per `(team code, squad size)`, in order.
+
+    Separate from `_league_data` because the alias collision needs two rosters in
+    a chosen order, which is the only thing that decides which one lands in the
+    shared slot.
+    """
+    return LeagueData(
+        league=League(id=0, name="NHL", country="USA", country_code="US", season=2025),
+        teams=[
+            TeamRoster(
+                team=Team(id=i + 1, name=code, code=code),
+                players=[
+                    Player(id=i * 100 + n, name=f"{code}{n}", position="C", number=n + 1)
+                    for n in range(size)
+                ],
+                extra={"leaders": {}},
+            )
+            for i, (code, size) in enumerate(entries)
         ],
     )
 
@@ -436,6 +466,52 @@ def test_map_rosters_drops_a_team_with_no_rom_slot(patcher):
     # reachable through the split-process path: fetch to JSON, map from JSON.
     mapped = patcher.map_rosters(_league_data([Player(id=1, name="X", position="C")], code="SEA"))
     assert mapped.teams == {}
+
+
+def test_exactly_four_rom_slots_are_reachable_by_two_team_codes():
+    # The collision set is the whole reason `map_rosters` can be handed two
+    # `TeamRoster`s targeting one slot. Pinned as a set so a fifth alias added to
+    # the table has to come past this test rather than silently widening the
+    # blast radius of the guard below.
+    duplicated = collections.Counter(MODERN_NHL_TO_NHL94_GEN.values())
+    assert {slot: n for slot, n in duplicated.items() if n > 1} == {10: 2, 12: 2, 19: 2, 21: 2}
+    assert len(MODERN_NHL_TO_NHL94_GEN) == 30
+    assert len(set(MODERN_NHL_TO_NHL94_GEN.values())) == TEAM_COUNT
+
+
+def test_the_slot_a_pair_of_alias_codes_share_keeps_the_non_empty_squad(patcher):
+    # "SJS" and the ESPN spelling "SJ" both map to slot 19, so both can sit in one
+    # `LeagueData`. Upstream keyed its rosters by team code and stored a team only
+    # when its squad was non-empty, so an empty roster could never displace
+    # anything. Assigning `teams[slot]` unconditionally made the result depend on
+    # which spelling came last: an empty alias wiped the populated one, then
+    # `filled_slots()` dropped the slot, and `patch` left San Jose's 1994 roster,
+    # count byte, goalie byte and 64-byte line table untouched while still
+    # returning success with `teams_patched` short by one.
+    forwards = patcher.map_rosters(_alias_league_data(("SJS", 5), ("SJ", 0)))
+    assert len(forwards.teams[SJS_SLOT]) == 5
+    backwards = patcher.map_rosters(_alias_league_data(("SJ", 0), ("SJS", 5)))
+    assert len(backwards.teams[SJS_SLOT]) == 5
+
+
+def test_two_populated_alias_rosters_are_still_last_wins(patcher):
+    # The guard is only about empties, so it must not turn an ordinary overwrite
+    # into a first-wins rule — that is not what the unconditional assignment did
+    # and not what upstream did either. Three and five, so neither count is the
+    # other and neither is the 23-player cap.
+    mapped = patcher.map_rosters(_alias_league_data(("SJS", 5), ("SJ", 3)))
+    assert len(mapped.teams[SJS_SLOT]) == 3
+
+
+def test_an_empty_roster_still_claims_a_slot_no_other_code_filled(patcher):
+    # The counterpart to the guard: an empty squad that collides with nothing
+    # keeps its key, so the serialised `MappedRosters` still shows which ROM slots
+    # a provider team matched. `filled_slots()` is what keeps it away from the
+    # writer.
+    mapped = patcher.map_rosters(_alias_league_data(("SJS", 0), ("BOS", 4)))
+    assert sorted(mapped.teams) == [BOS_SLOT, SJS_SLOT]
+    assert mapped.teams[SJS_SLOT] == []
+    assert mapped.filled_slots() == [BOS_SLOT]
 
 
 def test_map_rosters_survives_a_team_roster_with_no_leaders_key(patcher):
