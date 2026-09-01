@@ -41,10 +41,13 @@ def package_bytes(package: str, name: str) -> bytes:
     library does not offer that, and rejecting it here covers `package_path`
     too.
 
-    Only absence becomes `MissingAssetError`. A genuine I/O fault — a
-    permission-denied read on an installed asset, say — propagates as itself,
-    because calling it "missing" sends the reader hunting for a packaging bug
-    that is not there.
+    Three outcomes. An absent file or an absent package becomes
+    `MissingAssetError`, and so does a malformed `name`. Everything else
+    propagates unchanged: a genuine I/O fault, such as a permission-denied read
+    on an installed asset, and a well-formed `name` that resolves to a directory
+    inside the package, which surfaces as `IsADirectoryError` in a plain
+    directory and in a zip alike. Reporting either of those as "missing" would
+    send the reader hunting for a packaging bug that is not there.
     """
     if name in ("", ".", "..") or "/" in name or "\\" in name:
         raise MissingAssetError(f"Not a single filename: {package}:{name}")
@@ -62,10 +65,12 @@ def package_path(package: str, name: str) -> str:
 
     The path is always a temporary copy, never the packaged file in place, since
     the package may live inside a zip. It is memoised per `(package, name)`: the
-    same path comes back for the lifetime of the process, exactly one temporary
-    file exists per asset, and it is unlinked at interpreter exit. If that file
+    same path comes back for the lifetime of the process, so at most one *live*
+    copy exists per asset, and it is unlinked at interpreter exit. If that copy
     is deleted from underneath, the next call materialises it again rather than
-    handing back a path to nothing.
+    handing back a path to nothing. A write that fails leaves its half-made file
+    behind unmemoised, for the exit hook rather than the next caller to clear,
+    so the temporary directory can hold more files than there are live copies.
 
     Callers must treat the returned path as read-only. Every caller is handed
     the same file, so writing to it changes what the next one reads.
