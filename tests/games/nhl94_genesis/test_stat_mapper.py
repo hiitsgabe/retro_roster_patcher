@@ -19,6 +19,8 @@ chosen so those two land on values the defaults do not carry, otherwise a mapper
 that ignored the stats entirely would satisfy the same equality.
 """
 
+import dataclasses
+
 import pytest
 
 from retro_roster_patcher.games.nhl94_genesis.models import NHL94GenPlayerAttributes
@@ -32,6 +34,20 @@ from retro_roster_patcher.sports.models import Player
 @pytest.fixture
 def mapper():
     return NHL94GenStatMapper()
+
+
+@pytest.fixture
+def position_defaults_restored():
+    """Snapshot `POSITION_DEFAULTS` and put it back afterwards.
+
+    The defect the aliasing tests below guard against is exactly that a mapped
+    record can *be* the module constant, so while that defect is present those
+    tests really do edit it. Leaving the edit in place would poison every test
+    that ran after them, and in a different file.
+    """
+    saved = {pos: dataclasses.replace(attrs) for pos, attrs in POSITION_DEFAULTS.items()}
+    yield
+    POSITION_DEFAULTS.update(saved)
 
 
 def _skater(**kwargs):
@@ -181,6 +197,51 @@ def test_handedness_is_one_for_right_and_zero_for_everything_else(mapper):
     ]
 
     assert hands == [1, 0, 0, 0, 0]
+
+
+# ── Position defaults are not shared ─────────────────────────────────────
+
+
+def test_two_records_at_one_position_do_not_share_an_attributes_object(mapper):
+    first = mapper.map_player(_skater(id=1, name="ONE"), "BOS")
+    second = mapper.map_player(_skater(id=2, name="TWO"), "BOS")
+
+    assert (first.attributes is second.attributes) is False
+    assert first.attributes == second.attributes
+
+
+def test_a_mapped_record_never_holds_the_module_default_itself(mapper):
+    record = mapper.map_player(_skater(position="D"), "BOS")
+
+    assert (record.attributes is POSITION_DEFAULTS["D"]) is False
+    assert record.attributes == POSITION_DEFAULTS["D"]
+
+
+def test_editing_one_records_attributes_leaves_the_module_default_alone(
+    mapper, position_defaults_restored
+):
+    # `NHL94GenPlayerRecord` is public API and its `attributes` field is a plain
+    # mutable dataclass, so one caller assignment is all it takes. While every
+    # record shared the constant, that assignment rewrote the defaults for every
+    # later player of that position in the process.
+    first = mapper.map_player(_skater(position="D", id=1), "BOS")
+    second = mapper.map_player(_skater(position="D", id=2), "BOS")
+
+    first.attributes.checking = 6
+
+    assert POSITION_DEFAULTS["D"].checking == 4
+    assert second.attributes.checking == 4
+
+
+def test_an_unknown_position_falls_back_to_centre_without_aliasing_it(mapper):
+    # `POSITION_DEFAULTS.get(pos, POSITION_DEFAULTS["C"])` — the fallback arm is
+    # a second route to the same shared object. The NHL provider returns "W" for
+    # a winger whose side is unrecorded, so this is reachable.
+    record = mapper.map_player(_skater(position="W"), "BOS")
+
+    assert record.position == "W"
+    assert record.attributes == POSITION_DEFAULTS["C"]
+    assert (record.attributes is POSITION_DEFAULTS["C"]) is False
 
 
 # ── Jersey numbers ───────────────────────────────────────────────────────

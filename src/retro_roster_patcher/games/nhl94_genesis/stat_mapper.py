@@ -5,6 +5,8 @@ Uses real season stats (G, A, PTS, +/-, PIM, etc.) when available,
 with position-based defaults as fallback.
 """
 
+import dataclasses
+
 from ...sports.models import Player
 from .models import (
     MODERN_NHL_TO_NHL94_GEN,
@@ -115,7 +117,13 @@ class NHL94GenStatMapper:
         if stats:
             attrs = self._map_stats(stats, pos, is_goalie)
         else:
-            attrs = POSITION_DEFAULTS.get(pos, POSITION_DEFAULTS["C"])
+            # Copied, not shared. `NHL94GenPlayerRecord.attributes` is public API
+            # and `NHL94GenPlayerAttributes` is a plain mutable dataclass, so
+            # handing out the module constant would make every record for a
+            # position the same object as every other one *and* as the default
+            # itself: one caller assignment would rewrite the defaults for the
+            # rest of the process. `_map_stats` already builds a fresh instance.
+            attrs = dataclasses.replace(POSITION_DEFAULTS.get(pos, POSITION_DEFAULTS["C"]))
 
         jersey = player.number or 1
 
