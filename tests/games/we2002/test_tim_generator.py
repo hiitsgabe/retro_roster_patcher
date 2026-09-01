@@ -11,6 +11,13 @@ No test here touches Pillow, which is an optional extra and is not installed in
 the dev venv. Four of them finish inside the transport, before `png_to_tim` is
 ever reached; the fifth substitutes `png_to_tim` so it can exercise the tempfile
 handling around it without needing the real converter.
+
+The rest reach the two pieces of `png_to_tim` that decide the output but take no
+image: `_tim_row_words`, which refuses a width the TIM pixel block cannot
+describe, and `_build_clut`, which fits however many palette entries the
+quantiser supplied into the fixed number the header declares. Both were pulled
+out of `png_to_tim` so they could be reached at all — inline, the only way to
+test them was to install the optional extra.
 """
 
 import os
@@ -20,7 +27,11 @@ import tempfile
 import pytest
 
 from retro_roster_patcher.core.errors import ApiError
-from retro_roster_patcher.games.we2002.tim_generator import TimGenerator
+from retro_roster_patcher.games.we2002.tim_generator import (
+    _TIM_PIXELS_PER_WORD,
+    TimGenerator,
+    _tim_row_words,
+)
 
 from ...conftest import TransportLeak
 
@@ -113,3 +124,89 @@ def test_the_downloaded_bytes_reach_png_to_tim_and_the_temp_file_is_removed(tmp_
     assert seen["path"].endswith(".png") is True
     assert os.path.exists(seen["path"]) is False
     assert list(tmp_path.iterdir()) == []
+
+
+# ── TIM geometry ─────────────────────────────────────────────────────────
+
+
+def test_the_row_width_is_the_pixel_count_divided_by_the_pixels_per_word():
+    # A TIM pixel block declares its width in 16-bit units, so a 4bpp row packs
+    # four pixels per unit and an 8bpp row two. 64 is chosen because the two
+    # answers differ — 16 and 32 — so a helper that ignored `bpp` would fail one.
+    assert _tim_row_words(64, 4) == 16
+    assert _tim_row_words(64, 8) == 32
+
+
+def test_a_width_that_is_not_a_whole_number_of_units_is_refused():
+    # At width 66 and 4bpp the declared stride is 16 units, 32 bytes, while the
+    # real packed row is 33 bytes, so every row after the first is shifted by
+    # one byte and the image shears. The block-length field stays
+    # self-consistent, so a size assertion on the output does not catch it.
+    with pytest.raises(ValueError, match="multiple of 4"):
+        _tim_row_words(66, 4)
+    with pytest.raises(ValueError, match="multiple of 2"):
+        _tim_row_words(65, 8)
+
+
+def test_the_width_rule_depends_on_the_depth_and_not_only_on_the_width():
+    # 66 is refused at 4bpp and accepted at 8bpp, which is what proves the check
+    # reads `bpp` rather than applying one divisor to everything.
+    assert _tim_row_words(66, 8) == 33
+    with pytest.raises(ValueError):
+        _tim_row_words(66, 4)
+
+
+def test_the_supported_depths_are_exactly_four_and_eight_bits():
+    # `png_to_tim` refuses anything else before it reaches `_tim_row_words`, and
+    # this is the table both of them agree on.
+    assert sorted(_TIM_PIXELS_PER_WORD) == [4, 8]
+    assert _TIM_PIXELS_PER_WORD == {4: 4, 8: 2}
+
+
+# ── CLUT ─────────────────────────────────────────────────────────────────
+
+
+def test_a_palette_shorter_than_the_clut_is_padded_rather_than_overrun():
+    # `Image.getpalette()` returns only the entries the quantiser used, not a
+    # fixed 768-byte table, so an image quantised to 16 colours that holds five
+    # distinct ones comes back with 15 ints. Indexing 16 entries out of that
+    # raised `IndexError` and lost the conversion.
+    gen = TimGenerator()
+    five_colours = [255, 0, 0, 0, 255, 0, 0, 0, 255, 255, 255, 255, 8, 8, 8]
+
+    clut = gen._build_clut(five_colours, 16)
+
+    assert len(clut) == 16
+    assert clut[:5] == [
+        gen._rgb_to_bgr555(255, 0, 0),
+        gen._rgb_to_bgr555(0, 255, 0),
+        gen._rgb_to_bgr555(0, 0, 255),
+        gen._rgb_to_bgr555(255, 255, 255),
+        gen._rgb_to_bgr555(8, 8, 8),
+    ]
+    # The unused slots are black, which is what index 0 of an unused entry would
+    # have shown anyway. Zero is not the value of any colour above.
+    assert clut[5:] == [0] * 11
+
+
+def test_a_palette_longer_than_the_clut_is_truncated_to_it(tmp_path):
+    # The other direction: `num_colors` is what the header declares and what
+    # `struct.pack` is given, so the list has to be exactly that long.
+    gen = TimGenerator()
+    long_palette = [1, 2, 3] * 256
+
+    assert len(gen._build_clut(long_palette, 16)) == 16
+    assert len(gen._build_clut(long_palette, 256)) == 256
+
+
+def test_a_palette_of_exactly_the_right_length_is_neither_padded_nor_cut():
+    # Every channel is at least 8 so no entry collapses to the black that
+    # padding uses; a clut that had been cut short and refilled would show a
+    # zero in the tail.
+    gen = TimGenerator()
+    exact = [8 + (i * 5) % 240 for i in range(16 * 3)]
+
+    clut = gen._build_clut(exact, 16)
+
+    assert clut == [gen._rgb_to_bgr555(*exact[i * 3 : i * 3 + 3]) for i in range(16)]
+    assert (0 in clut) is False

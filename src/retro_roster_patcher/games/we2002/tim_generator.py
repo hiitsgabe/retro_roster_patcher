@@ -15,8 +15,39 @@ except ImportError:
     PIL_AVAILABLE = False
 
 
+# A TIM pixel block declares its width in 16-bit units, so the number of pixels
+# a unit holds is the depth's divisor: four at 4bpp, two at 8bpp. `png_to_tim`
+# refuses any other depth before it gets this far.
+_TIM_PIXELS_PER_WORD = {4: 4, 8: 2}
+
+
+def _tim_row_words(width: int, bpp: int) -> int:
+    """Pixel-block width for `width` screen pixels, in 16-bit units.
+
+    Refuses a width that is not a whole number of units. At width 66 and 4bpp
+    the declared stride would be 16 units — 32 bytes — while the packed row is
+    really 33, so every row after the first is shifted by one byte and the image
+    shears. The block-length field is computed from the packed bytes rather than
+    from this number, so it stays self-consistent and a size check on the
+    finished TIM does not catch it. This is the only check that does.
+    """
+    per_word = _TIM_PIXELS_PER_WORD[bpp]
+    if width % per_word:
+        raise ValueError(
+            f"width {width} is not a multiple of {per_word}, which a {bpp}bpp TIM row requires"
+        )
+    return width // per_word
+
+
 class TimGenerator:
-    """Converts images to PSX TIM format."""
+    """Converts images to PSX TIM format.
+
+    Nothing in `src/` outside this module refers to `TimGenerator`, so no code
+    path in the library reaches `png_to_tim` today; `download_and_convert` is
+    its only caller and has no caller of its own. It is kept for a consumer that
+    wants team crests, and its network seam is covered because that seam is
+    shared with the sports clients.
+    """
 
     TIM_MAGIC = b"\x10\x00\x00\x00"
 
@@ -27,9 +58,6 @@ class TimGenerator:
                 "Pillow is required for TIM generation. Install with: pip install Pillow"
             )
 
-        img = Image.open(png_path).convert("RGB")
-        img = img.resize((width, height), Image.LANCZOS)
-
         if bpp == 4:
             num_colors = 16
         elif bpp == 8:
@@ -37,18 +65,25 @@ class TimGenerator:
         else:
             raise ValueError(f"Unsupported bpp: {bpp}. Use 4 or 8.")
 
+        # Refused before the download is decoded and resized, not after: a width
+        # the pixel block cannot describe produces a sheared image that no later
+        # check would reject.
+        tim_pixel_width = _tim_row_words(width, bpp)
+
+        img = Image.open(png_path).convert("RGB")
+        img = img.resize((width, height), Image.LANCZOS)
+
         # Quantize to palette
         img_quantized = img.quantize(colors=num_colors, method=Image.Quantize.MEDIANCUT)
-        palette = img_quantized.getpalette()  # flat RGB list, 768 bytes (256*3)
+        # A flat RGB list holding only the entries the quantiser actually used —
+        # three ints per colour, and NOT a fixed 768-byte table. An image
+        # quantised to 16 colours that holds five distinct ones comes back with
+        # 15 ints, so this can be shorter than `num_colors * 3`.
+        palette = img_quantized.getpalette()
         pixel_data_raw = list(img_quantized.getdata())
 
         # Build CLUT (Color Look-Up Table) in BGR555 format
-        clut_colors = []
-        for i in range(num_colors):
-            r = palette[i * 3]
-            g = palette[i * 3 + 1]
-            b = palette[i * 3 + 2]
-            clut_colors.append(self._rgb_to_bgr555(r, g, b))
+        clut_colors = self._build_clut(palette, num_colors)
         clut_data = struct.pack(f"<{num_colors}H", *clut_colors)
 
         # CLUT block: size(4) + x(2) + y(2) + w(2) + h(2) + data
@@ -64,11 +99,8 @@ class TimGenerator:
                 hi = (pixel_data_raw[i + 1] & 0xF) if i + 1 < len(pixel_data_raw) else 0
                 packed.append(lo | (hi << 4))
             pixel_bytes = bytes(packed)
-            # width in TIM pixel block = width/4 for 4bpp (width stored in 16-bit units)
-            tim_pixel_width = width // 4
         else:  # bpp == 8
             pixel_bytes = bytes(pixel_data_raw)
-            tim_pixel_width = width // 2
 
         # Pixel block: size(4) + x(2) + y(2) + w(2) + h(2) + data
         pixel_block_len = 12 + len(pixel_bytes)
@@ -124,13 +156,26 @@ class TimGenerator:
         finally:
             os.unlink(tmp_path)
 
+    def _build_clut(self, palette: list[int], num_colors: int) -> list[int]:
+        """`num_colors` BGR555 entries, from however many the quantiser supplied.
+
+        `Image.getpalette()` returns only the entries in use, so `palette` may
+        hold fewer than `num_colors * 3` ints; reading a fixed `num_colors`
+        entries out of it raised `IndexError` for any image with fewer distinct
+        colours than the depth allows. Short palettes are padded with black,
+        which is what an unused CLUT slot would have shown anyway, and a longer
+        one is cut — `struct.pack` is given exactly `num_colors` entries either
+        way.
+        """
+        supplied = min(len(palette) // 3, num_colors)
+        clut = [
+            self._rgb_to_bgr555(palette[i * 3], palette[i * 3 + 1], palette[i * 3 + 2])
+            for i in range(supplied)
+        ]
+        clut.extend([0] * (num_colors - supplied))
+        return clut
+
     def _rgb_to_bgr555(self, r: int, g: int, b: int) -> int:
         """Convert 8-bit RGB to 15-bit BGR555 (PSX color format)."""
         # Bit layout: STP(1) Blue(5) Green(5) Red(5)
         return ((b >> 3) << 10) | ((g >> 3) << 5) | (r >> 3)
-
-    def _build_tim_header(self, bpp: int, has_clut: bool) -> bytes:
-        """Build the 8-byte TIM file header."""
-        bpp_flag = {4: 0, 8: 1, 16: 2, 24: 3}.get(bpp, 0)
-        flags = bpp_flag | ((1 << 3) if has_clut else 0)
-        return self.TIM_MAGIC + struct.pack("<I", flags)
