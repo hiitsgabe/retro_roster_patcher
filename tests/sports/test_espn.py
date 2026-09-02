@@ -8,6 +8,7 @@ from retro_roster_patcher.sports.espn import EspnClient
 
 NHL_TEAMS_URL = "https://site.api.espn.com/apis/site/v2/sports/hockey/nhl/teams"
 SOCCER_ROSTER_URL = "https://site.api.espn.com/apis/site/v2/sports/soccer/{code}/teams/83/roster"
+HOCKEY_ROSTER_URL = "https://site.api.espn.com/apis/site/v2/sports/hockey/nhl/teams/5/roster"
 
 
 def _soccer_roster(*names):
@@ -53,6 +54,74 @@ def _roster_transport(bodies):
     def transport(url, headers, timeout):
         transport.calls.append(url)
         return bodies[url.split("/soccer/")[1].split("/")[0]]
+
+    transport.calls = []
+    return transport
+
+
+def _hockey_roster(*names):
+    """Build an NHL roster body in ESPN's position-grouped envelope."""
+    return json.dumps(
+        {
+            "athletes": [
+                {
+                    "position": "Centers",
+                    "items": [
+                        {
+                            "id": 200 + i,
+                            "displayName": name,
+                            "position": {"abbreviation": "C"},
+                            "jersey": str(i + 1),
+                        }
+                        for i, name in enumerate(names)
+                    ],
+                }
+            ]
+        }
+    ).encode()
+
+
+def _grouped_roster(*names):
+    """A roster body in the position-grouped envelope ESPN uses for MLB."""
+    return json.dumps(
+        {
+            "athletes": [
+                {
+                    "position": "Pitchers",
+                    "items": [
+                        {"id": 400 + i, "displayName": name, "jersey": str(i + 1)}
+                        for i, name in enumerate(names)
+                    ],
+                }
+            ]
+        }
+    ).encode()
+
+
+def _flat_roster(*names):
+    """A roster body in the flat envelope ESPN uses for the NBA."""
+    return json.dumps(
+        {
+            "athletes": [
+                {"id": 500 + i, "displayName": name, "jersey": str(i + 1)}
+                for i, name in enumerate(names)
+            ]
+        }
+    ).encode()
+
+
+def _sequence_transport(*bodies):
+    """Serve each body in turn, repeating the last, and log the URLs asked for.
+
+    `conftest.replay` serves one recorded body forever, which cannot tell a cache
+    hit from a second identical response. These tests need consecutive requests
+    to the same URL to differ, so that a cached answer is distinguishable from a
+    re-fetched one by its content and not only by the call count.
+    """
+
+    def transport(url, headers, timeout):
+        transport.calls.append(url)
+        return bodies[min(len(transport.calls) - 1, len(bodies) - 1)]
 
     transport.calls = []
     return transport
@@ -132,6 +201,164 @@ def test_a_repeated_squad_request_is_served_from_the_cache(tmp_path):
     assert [p.name for p in first] == ["Alpha One", "Alpha Two"]
     assert [p.name for p in second] == ["Alpha One", "Alpha Two"]
     assert transport.calls == [SOCCER_ROSTER_URL.format(code="eng.1")]
+
+
+# --- the season in the squad key ---
+#
+# The ESPN roster endpoints take no season and answer with the squad as it stands
+# today, so the season reaches the cache key and nothing else. Without it the key
+# has no time coordinate at all: nothing the caller can vary invalidates it, so
+# the first fetch a user ever ran was replayed for every later season, with no
+# network call, and reported as a success for the season that was asked for.
+#
+# Every test below drives two seasons whose correct answers differ, because a
+# single season proves nothing about a key that ignores the season, and pairs
+# them with a repeat of the first — a key that had grown *too* specific would
+# re-request that one, and losing the cache is a real cost on a per-team endpoint
+# a league fetch calls dozens of times.
+
+
+def test_two_seasons_get_two_hockey_squads_and_a_repeat_gets_the_cache(tmp_path):
+    transport = _sequence_transport(
+        _hockey_roster("Mats Sundin"),
+        _hockey_roster("Auston Matthews"),
+    )
+    client = EspnClient(str(tmp_path), transport=transport)
+
+    first = client.get_hockey_squad(5, 2024)
+    second = client.get_hockey_squad(5, 2026)
+    repeat = client.get_hockey_squad(5, 2024)
+
+    assert [p.name for p in first] == ["Mats Sundin"]
+    assert [p.name for p in second] == ["Auston Matthews"]
+    # Not "Auston Matthews": 2024 keeps its own answer rather than being
+    # overwritten by the later season's.
+    assert [p.name for p in repeat] == ["Mats Sundin"]
+    # Two requests for three calls, and both to the same URL — the season is not
+    # on the wire, only in the key. One request would be the collapsed key; three
+    # would be no cache at all.
+    assert transport.calls == [HOCKEY_ROSTER_URL, HOCKEY_ROSTER_URL]
+
+
+def test_the_hockey_squad_key_names_the_season_on_disk(tmp_path):
+    """The file name is the whole mechanism, so it is asserted directly.
+
+    The test above would also pass for a key built from something else that
+    happened to vary per call — a counter, or the request ordinal.
+    """
+    transport = _sequence_transport(_hockey_roster("Mats Sundin"))
+    client = EspnClient(str(tmp_path), transport=transport)
+    client.get_hockey_squad(5, 2024)
+
+    assert sorted(f.name for f in tmp_path.iterdir()) == ["espn_hockey_squad_5_2024.json"]
+
+
+def test_a_hockey_squad_asked_for_without_a_season_gets_its_own_key(tmp_path):
+    """`season=None` is a bucket, not a wildcard.
+
+    `get_hockey_squad` is on the public client surface with the season optional,
+    so an omitted season must not be served a named season's answer, nor serve
+    its own to one.
+    """
+    transport = _sequence_transport(
+        _hockey_roster("No Season"),
+        _hockey_roster("Season 2024"),
+    )
+    client = EspnClient(str(tmp_path), transport=transport)
+
+    anonymous = client.get_hockey_squad(5)
+    named = client.get_hockey_squad(5, 2024)
+
+    assert [p.name for p in anonymous] == ["No Season"]
+    assert [p.name for p in named] == ["Season 2024"]
+    assert sorted(f.name for f in tmp_path.iterdir()) == [
+        "espn_hockey_squad_5_2024.json",
+        "espn_hockey_squad_5_any.json",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("method", "body", "stem"),
+    [
+        ("get_baseball_squad", _grouped_roster, "espn_baseball_squad"),
+        ("get_basketball_squad", _flat_roster, "espn_basketball_squad"),
+    ],
+)
+def test_the_other_two_sports_squad_keys_carry_the_season_too(tmp_path, method, body, stem):
+    """The same fix on the two sports no registered game reaches yet.
+
+    `EspnClient` is a public client, not private to NHL94: leaving two of its
+    four squad methods keyed without a season would leave the next game that
+    wants MLB or NBA rosters with the bug this round removed, and no test to
+    notice. The bodies differ because the parsers do — baseball groups its
+    athletes by role and basketball returns a flat list — so one shared fixture
+    would silently parse to nothing for one of them.
+    """
+    transport = _sequence_transport(body("Alpha"), body("Beta"))
+    client = EspnClient(str(tmp_path), transport=transport)
+
+    first = getattr(client, method)(7, 2024)
+    second = getattr(client, method)(7, 2023)
+    repeat = getattr(client, method)(7, 2024)
+
+    assert [p.name for p in first] == ["Alpha"]
+    assert [p.name for p in second] == ["Beta"]
+    assert [p.name for p in repeat] == ["Alpha"]
+    assert sorted(f.name for f in tmp_path.iterdir()) == [
+        f"{stem}_7_2023.json",
+        f"{stem}_7_2024.json",
+    ]
+
+
+def test_two_seasons_get_two_soccer_squads_without_losing_the_league_code(tmp_path):
+    """The season joins the league code in the key; it does not replace it.
+
+    Two seasons and two league codes in one run, because the code was already
+    load-bearing — ESPN team ids are league-scoped — and a key rebuilt around the
+    season could have dropped it.
+    """
+    transport = _sequence_transport(
+        _soccer_roster("Alpha 2024"),
+        _soccer_roster("Alpha 2023"),
+        _soccer_roster("Beta 2024"),
+    )
+    client = EspnClient(str(tmp_path), transport=transport)
+
+    eng_2024 = client.get_squad(83, league_code="eng.1", season=2024)
+    eng_2023 = client.get_squad(83, league_code="eng.1", season=2023)
+    esp_2024 = client.get_squad(83, league_code="esp.1", season=2024)
+
+    assert [p.name for p in eng_2024] == ["Alpha 2024"]
+    assert [p.name for p in eng_2023] == ["Alpha 2023"]
+    assert [p.name for p in esp_2024] == ["Beta 2024"]
+    assert sorted(f.name for f in tmp_path.iterdir()) == [
+        "espn_squad_eng.1_83_2023.json",
+        "espn_squad_eng.1_83_2024.json",
+        "espn_squad_esp.1_83_2024.json",
+    ]
+
+
+def test_the_season_get_teams_was_given_and_dropped_now_reaches_its_key(tmp_path):
+    """`get_teams` always took a `season` and used it for nothing at all.
+
+    Neither the request nor the key carried it, so a caller that asked for two
+    seasons got one answer and no sign that its argument had been ignored.
+    """
+    transport = _sequence_transport(
+        _nhl_teams_body(("BOS", "Boston Bruins")),
+        _nhl_teams_body(("QUE", "Quebec Nordiques")),
+    )
+    client = EspnClient(str(tmp_path), transport=transport)
+
+    modern = client.get_teams(2001, 2024)
+    historical = client.get_teams(2001, 1994)
+
+    assert [t.name for t in modern] == ["Boston Bruins"]
+    assert [t.name for t in historical] == ["Quebec Nordiques"]
+    assert sorted(f.name for f in tmp_path.iterdir()) == [
+        "espn_teams_2001_1994.json",
+        "espn_teams_2001_2024.json",
+    ]
 
 
 def test_a_transport_failure_yields_no_teams_rather_than_crashing(tmp_path):

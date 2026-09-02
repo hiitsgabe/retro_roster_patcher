@@ -17,6 +17,7 @@ satisfies `all(0.0 <= pct <= 1.0)`.
 """
 
 import collections
+import json
 import struct
 import subprocess
 import sys
@@ -77,6 +78,52 @@ class FakeApi:
     def get_hockey_team_leaders(self, team_ref, season=None):
         self.leader_calls.append((team_ref, season))
         return dict(self._leaders)
+
+
+def _espn_teams_body():
+    """One NHL team in ESPN's envelope, mapped to a real NHL94 ROM slot."""
+    return json.dumps(
+        {
+            "sports": [
+                {
+                    "leagues": [
+                        {
+                            "teams": [
+                                {
+                                    "team": {
+                                        "id": 1,
+                                        "displayName": "Toronto Maple Leafs",
+                                        "abbreviation": "TOR",
+                                    }
+                                }
+                            ]
+                        }
+                    ]
+                }
+            ]
+        }
+    ).encode()
+
+
+def _espn_roster(*names):
+    """An NHL roster body in ESPN's position-grouped envelope."""
+    return json.dumps(
+        {
+            "athletes": [
+                {
+                    "items": [
+                        {
+                            "id": 300 + i,
+                            "displayName": name,
+                            "position": {"abbreviation": "C"},
+                            "jersey": str(i + 1),
+                        }
+                        for i, name in enumerate(names)
+                    ]
+                }
+            ]
+        }
+    ).encode()
 
 
 def _teams():
@@ -235,6 +282,54 @@ def test_the_client_is_given_the_cache_directory_and_the_transport(tmp_path, pro
     assert p.api.cache_dir == str(tmp_path / provider)
     assert p.api._transport is transport
     assert p.api.on_status == seen.append
+
+
+def test_two_seasons_through_one_cache_directory_do_not_share_a_squad(tmp_path):
+    """The defect this file's `FakeApi` cannot see, driven through a real client.
+
+    Everything else here swaps `patcher.api` for a fake, so the cache — which is
+    the client's, not the patcher's — is never exercised at all. This runs two
+    `fetch` calls with two different seasons against one real `EspnClient` and
+    one cache directory, which is exactly what a user gets: `default_cache_dir`
+    is a single fixed path for every run of every verb.
+
+    Before the season reached `get_hockey_squad`'s key, the second call made no
+    roster request, replayed the first season's squad, and returned it inside a
+    `League` stamped with the season that was asked for. The two rosters here are
+    deliberately different squads for the same team, because with one season, or
+    with two seasons whose answers agree, a key that ignores the season is
+    indistinguishable from one that does not.
+    """
+    bodies = {2024: _espn_roster("Mats Sundin"), 2026: _espn_roster("Auston Matthews")}
+    requested = []
+
+    def transport_for(season):
+        def transport(url, headers, timeout):
+            requested.append(url)
+            if url.endswith("/nhl/teams"):
+                return _espn_teams_body()
+            if "/roster" in url:
+                return bodies[season]
+            # The leaders endpoint. Empty, so nothing is cached under its key and
+            # the request count below counts rosters and team lists only.
+            return b"{}"
+
+        return transport
+
+    cache = tmp_path / "shared-cache"
+    first = NHL94GenesisPatcher(cache_dir=cache, transport=transport_for(2024)).fetch(season=2024)
+    rosters_after_first = [url for url in requested if "/roster" in url]
+    second = NHL94GenesisPatcher(cache_dir=cache, transport=transport_for(2026)).fetch(season=2026)
+
+    assert [p.name for p in first.teams[0].players] == ["Mats Sundin"]
+    assert [p.name for p in second.teams[0].players] == ["Auston Matthews"]
+    # One roster request per team per season, and the second season paid for its
+    # own. A collapsed key leaves this at 1.
+    assert len(rosters_after_first) == 1
+    assert len([url for url in requested if "/roster" in url]) == 2
+    # And the team list, whose key carries no season, was served from the cache
+    # both times — the fix is the squad key, not "cache less".
+    assert len([url for url in requested if url.endswith("/nhl/teams")]) == 1
 
 
 def test_the_cache_directory_exists_once_the_patcher_is_constructed(tmp_path):
@@ -400,12 +495,22 @@ def test_fetch_forwards_status_messages(tmp_path):
     assert seen == ["Fetching NHL teams..."]
 
 
-def test_the_espn_provider_is_asked_by_team_id_and_ignores_the_season(patcher):
-    # ESPN's roster endpoint serves the current squad only; passing a season
-    # would silently promise history it cannot deliver.
+def test_the_espn_provider_is_asked_by_team_id_and_told_the_season(patcher):
+    """Both ESPN calls take the season, for two different reasons.
+
+    The roster endpoint has no season and serves the current squad, so the
+    season reaches only `get_hockey_squad`'s cache key — which without it never
+    varied, and so served the first season a user ever fetched to every later
+    one. The leaders endpoint puts the season in the URL path and
+    `get_hockey_team_leaders` defaults it to a hard-coded year, so omitting it
+    made a `--season 2025` run ask ESPN for a different year's stats.
+
+    Team id and not code: that is the other half of the ESPN/NHL split this
+    fake exists to tell apart, and the sibling test below pins the code branch.
+    """
     patcher.fetch(season=2025)
-    assert patcher.api.squad_calls == [(1, None), (2, None)]
-    assert patcher.api.leader_calls == [(1, None), (2, None)]
+    assert patcher.api.squad_calls == [(1, 2025), (2, 2025)]
+    assert patcher.api.leader_calls == [(1, 2025), (2, 2025)]
 
 
 def test_the_nhl_provider_is_asked_by_team_code_and_season(tmp_path):

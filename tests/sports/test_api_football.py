@@ -595,6 +595,64 @@ def test_each_squad_team_caches_separately(tmp_path):
     assert transport.calls == [SQUAD_URL, f"{BASE}/players/squads?team=34"]
 
 
+def _squad_response(*names):
+    """A `/players/squads` body whose players are identifiable by name."""
+    return {
+        "response": [
+            {
+                "players": [
+                    {"id": 100 + i, "name": name, "position": "Midfielder", "number": i + 1}
+                    for i, name in enumerate(names)
+                ]
+            }
+        ]
+    }
+
+
+def test_each_squad_season_caches_separately(tmp_path):
+    """`/players/squads` takes no season and answers with the squad as it stands.
+
+    So the season reaches the key and not the URL — which is why both requests
+    below go to the same address, and why a key that dropped the season would
+    make only one of them. Two seasons whose correct answers differ, because
+    against a single season a key that ignored it would look identical; plus a
+    repeat of the first, because the fix must not cost the cache on a per-team
+    endpoint a league fetch calls dozens of times.
+
+    Before this, the first squad a user ever fetched was the squad every later
+    season got, with no request and no warning.
+    """
+    transport = _Transport(_squad_response("Alpha"), _squad_response("Beta"))
+    client = ApiFootballClient(api_key="k", cache_dir=str(tmp_path), transport=transport)
+
+    first = client.get_squad(33, 2024)
+    second = client.get_squad(33, 2023)
+    repeat = client.get_squad(33, 2024)
+
+    assert [p.name for p in first] == ["Alpha"]
+    assert [p.name for p in second] == ["Beta"]
+    assert [p.name for p in repeat] == ["Alpha"]
+    assert transport.calls == [SQUAD_URL, SQUAD_URL]
+
+
+def test_the_squad_key_names_the_season_on_disk(tmp_path):
+    """The file name is the mechanism, so it is asserted rather than inferred.
+
+    `_any` and not `None` for an omitted season: it is a bucket of its own, so a
+    caller that names no season is neither served a named season's answer nor
+    serves its own to one.
+    """
+    transport = _Transport(EMPTY_RESPONSE)
+    client = ApiFootballClient(api_key="k", cache_dir=str(tmp_path), transport=transport)
+    client.get_squad(33, 2024)
+    client.get_squad(33)
+
+    assert sorted(f.name for f in tmp_path.iterdir()) == [
+        "squad_33_2024.json",
+        "squad_33_any.json",
+    ]
+
+
 def test_each_player_stats_team_and_season_caches_separately(tmp_path):
     transport = _Transport(EMPTY_RESPONSE)
     client = ApiFootballClient(api_key="k", cache_dir=str(tmp_path), transport=transport)

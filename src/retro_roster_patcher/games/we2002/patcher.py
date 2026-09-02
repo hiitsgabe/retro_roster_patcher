@@ -259,10 +259,12 @@ class WE2002Patcher(Patcher):
                 # the order that matters under a rate limiter — whichever call
                 # goes second is the one that gets throttled, and losing the
                 # squad costs the whole team where losing the stats does not.
-                # `get_squad` takes a team id and nothing else; the squad
-                # endpoint serves the current squad and its cache key carries no
-                # season.
-                roster.players = self.api.get_squad(team.id)
+                # The squad endpoint serves the current squad and takes no
+                # season, so `season` here reaches the cache key and nothing
+                # else. Without it the key is the team id alone, which never
+                # changes, so the first fetch of a team froze its squad on disk
+                # and every later season replayed it and reported success.
+                roster.players = self.api.get_squad(team.id, season)
                 try:
                     # `get_player_stats` returns a list, re-keyed by player id
                     # because that is the shape `map_team_with_league_context`
