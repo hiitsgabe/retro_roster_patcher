@@ -13,9 +13,19 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, TypeVar
 
-T = TypeVar("T", bound=type)
+from .patcher import Patcher
 
-_REGISTRY: dict[str, type] = {}
+# The bound is what makes this module type-checkable: `Patcher` already declares
+# the six capability attributes `@register` stamps, so with it the writes below
+# and the reads in `list_patchers` both check, where a bare `type` needed a
+# suppression on each of the twelve. It is a static contract only — the decorator
+# runs no `issubclass` check and stamps whatever it is handed, which is why the
+# tests can register plain classes.
+# Importing `.patcher` costs no cycle: it imports `core.errors`, `core.models`
+# and `sports.models`, and none of those import this module.
+T = TypeVar("T", bound=Patcher)
+
+_REGISTRY: dict[str, type[Patcher]] = {}
 
 
 @dataclass(frozen=True)
@@ -52,27 +62,27 @@ def register(
     requires_slot_mapping: bool = False,
     requires_api_key: bool = False,
     providers: tuple[str, ...] = (),
-) -> Callable[[T], T]:
+) -> Callable[[type[T]], type[T]]:
     """Class decorator that records a patcher and stamps its capabilities."""
 
-    def decorator(cls: T) -> T:
+    def decorator(cls: type[T]) -> type[T]:
         if game_id in _REGISTRY:
             raise ValueError(
                 f"Patcher id {game_id!r} is already registered by {_REGISTRY[game_id].__name__}"
             )
-        cls.game_id = game_id  # type: ignore[attr-defined]
-        cls.platform = platform  # type: ignore[attr-defined]
-        cls.sport = sport  # type: ignore[attr-defined]
-        cls.requires_slot_mapping = requires_slot_mapping  # type: ignore[attr-defined]
-        cls.requires_api_key = requires_api_key  # type: ignore[attr-defined]
-        cls.providers = providers  # type: ignore[attr-defined]
+        cls.game_id = game_id
+        cls.platform = platform
+        cls.sport = sport
+        cls.requires_slot_mapping = requires_slot_mapping
+        cls.requires_api_key = requires_api_key
+        cls.providers = providers
         _REGISTRY[game_id] = cls
         return cls
 
     return decorator
 
 
-def get_patcher(game_id: str) -> type:
+def get_patcher(game_id: str) -> type[Patcher]:
     """Look up a patcher class by id."""
     try:
         return _REGISTRY[game_id]
@@ -85,12 +95,12 @@ def list_patchers() -> list[PatcherInfo]:
     """Describe every registered patcher, sorted by game id."""
     return [
         PatcherInfo(
-            game_id=cls.game_id,  # type: ignore[attr-defined]
-            platform=cls.platform,  # type: ignore[attr-defined]
-            sport=cls.sport,  # type: ignore[attr-defined]
-            requires_slot_mapping=cls.requires_slot_mapping,  # type: ignore[attr-defined]
-            requires_api_key=cls.requires_api_key,  # type: ignore[attr-defined]
-            providers=cls.providers,  # type: ignore[attr-defined]
+            game_id=cls.game_id,
+            platform=cls.platform,
+            sport=cls.sport,
+            requires_slot_mapping=cls.requires_slot_mapping,
+            requires_api_key=cls.requires_api_key,
+            providers=cls.providers,
         )
         for _, cls in sorted(_REGISTRY.items())
     ]
