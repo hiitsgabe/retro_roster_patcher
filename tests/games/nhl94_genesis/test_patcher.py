@@ -706,6 +706,24 @@ def test_patching_with_another_games_rosters_is_refused_before_the_rom_is_opened
     assert out.exists() is False
 
 
+def test_two_slots_holding_empty_rosters_count_as_no_teams_patched(tmp_path, patcher):
+    # The other half of what `PatchResult` documents about `teams_patched`. This
+    # game writes nothing per slot but the player records, so a slot with none
+    # is untouched and must not be counted — `filled_slots()` drops it before
+    # the loop even sees it. WE2002 answers `(2, 0)` for the same shape, because
+    # its writer also lays down the name, kit colours and flag.
+    rom = synthetic_rom.write_nhl94_genesis_rom(tmp_path / "nhl94.bin")
+    out = tmp_path / "out.bin"
+    empty = MappedRosters(game_id="nhl94-genesis", teams={BOS_SLOT: [], CHI_SLOT: []})
+
+    result = patcher.patch(rom_path=rom, output_path=out, rosters=empty)
+
+    assert (result.teams_patched, result.players_patched) == (0, 0)
+    # And the slots really were left alone, rather than counted as zero after a
+    # write that erased them.
+    assert _read_back(out, BOS_SLOT)[0][:2] == ["T01_PL00", "T01_PL01"]
+
+
 def test_patching_with_nothing_mapped_still_writes_an_output(tmp_path, patcher):
     # The checksum bypass alone is a worthwhile edit, and a zero-division on an
     # empty target list would be an odd way to fail.

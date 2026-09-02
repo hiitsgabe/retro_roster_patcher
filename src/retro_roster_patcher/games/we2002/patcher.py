@@ -379,6 +379,11 @@ class WE2002Patcher(Patcher):
                 # 22-man squad in slot 0 leaves eight records on the floor.
                 # `len(record.players)` would report all 22 as patched.
                 written = writer.write_team(slot, record, players=record.players, include_flag=True)
+                # Unconditional, unlike NHL94, and `PatchResult` documents why:
+                # `write_team` writes the names, abbreviations, force bars, kit
+                # colours and flag before it looks at `players`, so an in-range
+                # slot has changed the ROM even when the squad is empty. A slot
+                # out of range never gets here — it was filtered above.
                 teams_patched += 1
                 players_patched += written
 

@@ -38,6 +38,7 @@ from retro_roster_patcher.core.errors import (
 )
 from retro_roster_patcher.core.models import MappedRosters, RomSlot, SlotMapping
 from retro_roster_patcher.games.we2002 import patcher as patcher_module
+from retro_roster_patcher.games.we2002.models import WETeamRecord
 from retro_roster_patcher.games.we2002.patcher import MAX_ML_SLOTS, WE2002Patcher
 from retro_roster_patcher.games.we2002.ppf import PPFError
 from retro_roster_patcher.games.we2002.rom_writer import RomWriter, _slot_player_range
@@ -977,6 +978,36 @@ def test_patching_with_another_games_rosters_is_refused_before_the_rom_is_opened
     # file exists to be mistaken for a patched ROM.
     assert log == []
     assert out.exists() is False
+
+
+def test_a_slot_with_no_players_still_counts_as_a_team_patched(patcher, tmp_path, monkeypatch):
+    # `PatchResult` documents `teams_patched` as the slots something reached the
+    # ROM for, not the slots that got players, and this is the case where the
+    # two differ. `RomWriter.write_team` writes the names, abbreviations, force
+    # bars, kit colours and flag before it looks at `players`, so both slots
+    # below really did change the ROM. NHL94 answers `(0, 0)` for the same
+    # shape, because player records are the only thing it writes per slot.
+    log = []
+    monkeypatch.setattr(patcher_module, "RomWriter", _fake_writer_class(log))
+    _silence_translation(monkeypatch, log)
+    rom = _valid_rom(tmp_path)
+    empty = MappedRosters(
+        game_id="we2002",
+        teams={
+            0: WETeamRecord(name="Alpha", short_name="ALP", players=[]),
+            1: WETeamRecord(name="Beta", short_name="BET", players=[]),
+        },
+    )
+
+    result = patcher.patch(rom_path=rom, output_path=tmp_path / "out.bin", rosters=empty)
+
+    assert (result.teams_patched, result.players_patched) == (2, 0)
+    # The count is not bookkeeping over an empty loop: both writes went out, each
+    # carrying zero players and the flag.
+    assert [entry for entry in log if entry[0] == "write_team"] == [
+        ("write_team", 0, "Alpha", 0, True),
+        ("write_team", 1, "Beta", 0, True),
+    ]
 
 
 def test_patching_with_nothing_mapped_still_writes_an_output(patcher, tmp_path, monkeypatch):
