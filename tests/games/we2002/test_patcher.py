@@ -71,8 +71,9 @@ class FakeApi:
 
     Records every call it receives, in order, on `calls`, so a test can pin the
     arguments and not just the answers: `get_teams(league_id, season)` takes two
-    integers that a swap would leave undetectable otherwise. `get_squad` takes no
-    season and `get_player_stats` returns a list, both matching the real client.
+    integers that a swap would leave undetectable otherwise. `get_squad` takes a
+    season that reaches its cache key and not its request, and `get_player_stats`
+    returns a list, both matching the real client.
     """
 
     def __init__(self, team_count=4, squad_size=11, stats=None, calls=None):
@@ -91,8 +92,8 @@ class FakeApi:
         self.calls.append(("get_teams", league_id, season))
         return [Team(id=100 + i, name=f"Team {i}", code=f"T{i}") for i in range(self._team_count)]
 
-    def get_squad(self, team_id):
-        self.calls.append(("get_squad", team_id))
+    def get_squad(self, team_id, season=None):
+        self.calls.append(("get_squad", team_id, season))
         return [
             Player(id=team_id * 100 + i, name=f"P{i}", position="Midfielder")
             for i in range(self._squad_size)
@@ -116,8 +117,8 @@ class FailingApi(FakeApi):
         self._squad_errors = {} if squad_errors is None else squad_errors
         self._stats_errors = {} if stats_errors is None else stats_errors
 
-    def get_squad(self, team_id):
-        self.calls.append(("get_squad", team_id))
+    def get_squad(self, team_id, season=None):
+        self.calls.append(("get_squad", team_id, season))
         if team_id in self._squad_errors:
             raise self._squad_errors[team_id]
         return [
@@ -406,9 +407,9 @@ def test_fetch_asks_the_provider_for_exactly_what_it_needs(tmp_path):
     assert p.api.calls == [
         ("get_leagues", None, 2024, 39),
         ("get_teams", 39, 2024),
-        ("get_squad", 100),
+        ("get_squad", 100, 2024),
         ("get_player_stats", 100, 2024),
-        ("get_squad", 101),
+        ("get_squad", 101, 2024),
         ("get_player_stats", 101, 2024),
     ]
 
@@ -511,9 +512,9 @@ def test_fetch_publishes_the_team_list_before_the_squads(tmp_path):
         ("get_leagues", None, 2024, 39),
         ("get_teams", 39, 2024),
         ("partial", 2),
-        ("get_squad", 100),
+        ("get_squad", 100, 2024),
         ("get_player_stats", 100, 2024),
-        ("get_squad", 101),
+        ("get_squad", 101, 2024),
         ("get_player_stats", 101, 2024),
     ]
     assert len(published) == 1

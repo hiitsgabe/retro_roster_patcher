@@ -141,10 +141,22 @@ class ApiFootballClient:
                 self._save_cache(cache_key, data)
         return self._parse_teams(data)
 
-    def get_squad(self, team_id: int) -> list[Player]:
-        """Fetch current squad/roster for a team."""
+    def get_squad(self, team_id: int, season: int | None = None) -> list[Player]:
+        """Fetch current squad/roster for a team.
+
+        `season` reaches the cache key and not the request. `/players/squads`
+        takes no season and answers with the squad as it stands today, so a key
+        of the team id alone identifies a resource whose meaning is "now" and can
+        never be invalidated by anything the caller varies: the first fetch a
+        user ever runs freezes that squad on disk for the life of the cache
+        directory, and every later season replays it with no network call and
+        reports success. The season is the one coordinate the caller already has,
+        and putting it in the key is what makes the key mean what the answer
+        means. `EspnClient.get_hockey_squad` carries the same fix and the long
+        form of this argument, including why it is not a TTL.
+        """
         params = {"team": team_id}
-        cache_key = f"squad_{team_id}"
+        cache_key = f"squad_{team_id}_{season or 'any'}"
         cached = self._load_cache(cache_key)
         data = cached or self._request("/players/squads", params)
         if not cached and data:

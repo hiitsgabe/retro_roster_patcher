@@ -130,12 +130,18 @@ class EspnClient:
         return leagues
 
     def get_teams(self, league_id: int, season: int | None = None) -> list[Team]:
-        """Fetch all teams in a league."""
+        """Fetch all teams in a league.
+
+        `season` reaches the cache key and not the request: the endpoint has no
+        season parameter and answers with the current table. See
+        `get_hockey_squad` for why the key carries it anyway; this method is the
+        blunter case, because it was already *given* a season and dropped it.
+        """
         item = _ID_TO_LEAGUE.get(league_id)
         if not item:
             return []
         code = item["code"]
-        cache_key = f"espn_teams_{league_id}"
+        cache_key = f"espn_teams_{league_id}_{season or 'any'}"
         cached = self._load_cache(cache_key)
         if cached:
             return self._parse_teams(cached)
@@ -148,8 +154,13 @@ class EspnClient:
             self._save_cache(cache_key, data)
         return teams
 
-    def get_squad(self, team_id: int, league_code: str | None = None) -> list[Player]:
-        """Fetch current squad for a team."""
+    def get_squad(
+        self, team_id: int, league_code: str | None = None, season: int | None = None
+    ) -> list[Player]:
+        """Fetch current squad for a team.
+
+        `season` reaches the cache key only; see `get_hockey_squad`.
+        """
         # ESPN roster endpoint requires the league code; find it via team detail if
         # unknown. Resolved before the cache lookup because the code varies the
         # response — team ids are league-scoped, so a key of the id alone would
@@ -157,7 +168,7 @@ class EspnClient:
         code = league_code or self._find_league_code_for_team(team_id)
         if not code:
             return []
-        cache_key = f"espn_squad_{code}_{team_id}"
+        cache_key = f"espn_squad_{code}_{team_id}_{season or 'any'}"
         cached = self._load_cache(cache_key)
         if cached:
             return self._parse_squad(cached)
@@ -186,9 +197,34 @@ class EspnClient:
             self._save_cache(cache_key, data)
         return teams
 
-    def get_hockey_squad(self, team_id: int) -> list[Player]:
-        """Fetch current roster for an NHL team."""
-        cache_key = f"espn_hockey_squad_{team_id}"
+    def get_hockey_squad(self, team_id: int, season: int | None = None) -> list[Player]:
+        """Fetch current roster for an NHL team.
+
+        `season` does not reach the request — this endpoint has none, and serves
+        the current squad whatever the caller wants. It reaches the *cache key*,
+        and that is the whole point of the parameter.
+
+        Without it the key is `espn_hockey_squad_{team_id}` and identifies a
+        resource whose meaning is "now". A key with no time coordinate can never
+        be invalidated by anything the caller can vary, so the first fetch a user
+        ever runs freezes that squad on disk for the life of the cache directory:
+        every later `--season` replays it, is served with zero network calls, and
+        is reported as a success for the season that was asked for. Measured
+        before this change, through `NHL94GenesisPatcher.fetch` against one cache
+        directory: season 2024 then season 2026, the second run issued no roster
+        request at all, returned a player list equal to the first's in id, name,
+        position and number, and reported `League.season == 2026`. That is the
+        library answering with data it can see was fetched for a different
+        season, which is worse than either staleness or an empty result: both of
+        those are visible.
+
+        Deliberately not a TTL. A TTL is a divergence from the upstream this
+        client is a port of, it needs a wall clock, and it would still hand a
+        2024 squad to a 2026 request inside the window. The season is the one
+        coordinate the caller already supplies and the only one that makes the
+        key mean what the answer means.
+        """
+        cache_key = f"espn_hockey_squad_{team_id}_{season or 'any'}"
         cached = self._load_cache(cache_key)
         if cached:
             return self._parse_hockey_squad(cached)
@@ -249,9 +285,12 @@ class EspnClient:
             self._save_cache(cache_key, data)
         return teams
 
-    def get_baseball_squad(self, team_id: int) -> list[Player]:
-        """Fetch current roster for an MLB team."""
-        cache_key = f"espn_baseball_squad_{team_id}"
+    def get_baseball_squad(self, team_id: int, season: int | None = None) -> list[Player]:
+        """Fetch current roster for an MLB team.
+
+        `season` reaches the cache key only; see `get_hockey_squad`.
+        """
+        cache_key = f"espn_baseball_squad_{team_id}_{season or 'any'}"
         cached = self._load_cache(cache_key)
         if cached:
             return self._parse_baseball_squad(cached)
@@ -374,9 +413,12 @@ class EspnClient:
             self._save_cache(cache_key, data)
         return teams
 
-    def get_basketball_squad(self, team_id: int) -> list[Player]:
-        """Fetch current roster for an NBA team."""
-        cache_key = f"espn_basketball_squad_{team_id}"
+    def get_basketball_squad(self, team_id: int, season: int | None = None) -> list[Player]:
+        """Fetch current roster for an NBA team.
+
+        `season` reaches the cache key only; see `get_hockey_squad`.
+        """
+        cache_key = f"espn_basketball_squad_{team_id}_{season or 'any'}"
         cached = self._load_cache(cache_key)
         if cached:
             return self._parse_basketball_squad(cached)

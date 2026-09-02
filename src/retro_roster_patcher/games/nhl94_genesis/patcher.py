@@ -189,8 +189,16 @@ class NHL94GenesisPatcher(Patcher):
                 players = self.api.get_hockey_squad(team.code, season)
                 leaders = self.api.get_hockey_team_leaders(team.code, season)
             else:
-                players = self.api.get_hockey_squad(team.id)
-                leaders = self.api.get_hockey_team_leaders(team.id)
+                # ESPN honours neither: the roster endpoint has no season, and
+                # `get_hockey_team_leaders` defaults to a hard-coded year. Both
+                # got the season anyway, and for two different reasons. The
+                # roster's is the cache key, which without it never changed and
+                # so served the first season ever fetched forever. The leaders'
+                # is the request itself — the season is a path segment, so the
+                # default meant a `--season 2024` run asked ESPN for a different
+                # year's stats and stapled them to the squad.
+                players = self.api.get_hockey_squad(team.id, season)
+                leaders = self.api.get_hockey_team_leaders(team.id, season)
             rosters.append(
                 TeamRoster(
                     team=team,
