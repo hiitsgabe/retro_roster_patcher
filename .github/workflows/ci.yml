@@ -18,7 +18,7 @@ jobs:
       - run: ruff format --check .
       # `src tests`, not bare `mypy`: `[tool.mypy]`'s `files = ["src"]` is the
       # convenience default for an interactive run, and taking it here would
-      # leave `tests/` unchecked (measured: 45 source files bare, 84 with the
+      # leave `tests/` unchecked (measured: 45 source files bare, 93 with the
       # paths). This is the only mypy invocation in the repository, so these
       # explicit paths are what type-check `tests/` at all.
       - run: mypy src tests
