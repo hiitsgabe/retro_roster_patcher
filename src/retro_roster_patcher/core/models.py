@@ -27,8 +27,16 @@ PartialFn = Callable[[Any], None]
 class RomSlot:
     """One team-shaped hole in a ROM.
 
-    `current_name` is what the ROM says today; `display_name` is the canonical
-    name for this position from the game's own team order.
+    `current_name` is what the ROM says today, or a generic positional label
+    where the game's name table cannot yet be read: WE2002's reader does not
+    parse the variable-length name strings and answers `"ML Slot 6"`.
+
+    `display_name` is the canonical name for this position from the game's own
+    team order, and a producer must make it distinct across one ROM's slots. It
+    is the field a slot-picking UI lists, so a repeated value is not a cosmetic
+    flaw — it leaves the user unable to tell two rows apart. WE2002 filled it
+    from the slot's league group, one string for all 32 slots, until it was
+    changed to name the position: `"Master League Slot 6"`.
     """
 
     index: int

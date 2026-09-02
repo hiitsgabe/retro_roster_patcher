@@ -274,6 +274,20 @@ def test_analyze_reports_the_rom_name_and_the_canonical_name_separately(tmp_path
     assert (slot.index, slot.current_name, slot.display_name) == (20, "St Louis", "St. Louis")
 
 
+def test_every_slot_gets_its_own_display_name(tmp_path, patcher):
+    # The model requires `display_name` to be distinct across one ROM's slots,
+    # because it is the field a slot-picking UI lists. This game satisfies it by
+    # reading NHL94_GEN_TEAM_ORDER, whose 26 entries are 26 distinct strings;
+    # the assertion is here so the requirement is checked on both producers and
+    # not only on the one that used to break it.
+    rom = synthetic_rom.write_nhl94_genesis_rom(tmp_path / "nhl94.bin")
+
+    slots = patcher.analyze_rom(rom).slots
+
+    assert len(slots) == 26
+    assert len({slot.display_name for slot in slots}) == 26
+
+
 def test_analyzing_a_missing_file_raises_rom_error(tmp_path, patcher):
     with pytest.raises(RomError):
         patcher.analyze_rom(tmp_path / "nope.bin")
