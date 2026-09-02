@@ -43,11 +43,32 @@ print(result.output_path, result.teams_patched)
 
 ```
 retro-roster list
-retro-roster analyze --rom PATH [--game ID]
-retro-roster fetch   --game ID --season N [--league-id N] [--provider P] [--out rosters.json]
+retro-roster analyze --rom PATH [--game ID] [--cache-dir DIR]
+retro-roster fetch   --game ID --season N
+                     [--league-id N] [--provider P] [--api-key K]
+                     [--cache-dir DIR] [--assets-dir DIR] [--out rosters.json]
 retro-roster patch   --game ID --rom IN --out OUT
-                     (--season N | --rosters rosters.json) [--slot-map map.json]
+                     (--season N | --rosters rosters.json)
+                     [--league-id N] [--slot-map map.json] [--language CODE]
+                     [--provider P] [--api-key K] [--cache-dir DIR] [--assets-dir DIR]
 ```
+
+`list` reports what each game needs; several flags are optional to the parser and
+mandatory to a particular game:
+
+| Game | Needs |
+| --- | --- |
+| `nhl94-genesis` | No `--api-key` and no `--league-id`. It *refuses* `--slot-map`: it matches each team by its code. |
+| `we2002` | `--api-key` always. `--league-id` for `fetch` and for `patch --season` — api-football has no default league, and without one both fail with `CapabilityError` before any request goes out. `--slot-map` for every `patch`: the ROM's team slots are unnamed, so there is nothing to match teams against. |
+
+`--language` is honoured by games that ship translations — `we2002` takes `en`, `es`,
+`fr`, `pt` — and is a usage error on one that does not.
+
+`--assets-dir` is a directory the tool only ever reads. Its one use today is the
+community WE2002 menu translation `w202-english.ppf`, which this project does not
+redistribute: drop that file in and its menu records are merged into whichever
+language PPF `--language` selected. Without it the roster patch still applies and
+the menus stay Japanese.
 
 Add `--json` to any command to get newline-delimited JSON on stdout instead of human text:
 
