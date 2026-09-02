@@ -2,7 +2,18 @@
 
 Importing this package imports every game package, which is what populates the
 registry. Import cost is trivial (pure Python, no I/O at import time) and the
-alternative — lazy discovery — makes `list_patchers()` order-dependent.
+alternative — lazy discovery — makes `list_patchers()` order-dependent. The one
+module deliberately left out of that is `games.we2002.tim_generator`, which
+imports the optional `images` extra; `games/we2002/__init__.py` says why.
+
+`__all__` below is this library's whole root surface and
+`tests/test_public_api.py` pins it exactly. `RomFinder` is here rather than
+behind its dotted path because the two consumers this library was extracted for
+— a pygame launcher and a Flutter app over embedded CPython — both have to
+locate a ROM before they can patch one, and nothing in any `__all__` said the
+library already does that. The rest of the extracted services are exported from
+the package they belong to: `sports.team_colors`, `games.we2002.AfsHandler`,
+`games.we2002.CsvHandler`, `games.we2002.TimGenerator`.
 """
 
 # These core and sports imports must stay ahead of the game imports at the bottom of
@@ -22,6 +33,7 @@ from .core.errors import (
 from .core.models import MappedRosters, PatchResult, RomInfo, RomSlot, SlotMapping
 from .core.patcher import Patcher
 from .core.registry import PatcherInfo, get_patcher, list_patchers, register
+from .rom_finder import RomFinder, RomFinderConfig, RomFinderResult
 from .sports import DailyLimitError, RateLimitError, SeasonNotAvailableError
 from .sports.models import League, LeagueData, Player, PlayerStats, Team, TeamRoster
 from .sports.serde import league_data_from_dict, league_data_to_dict
@@ -55,6 +67,9 @@ __all__ = [
     "RateLimitError",
     "RetroRosterError",
     "RomError",
+    "RomFinder",
+    "RomFinderConfig",
+    "RomFinderResult",
     "RomInfo",
     "RomSlot",
     "SeasonNotAvailableError",
