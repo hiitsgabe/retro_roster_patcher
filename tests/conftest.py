@@ -10,25 +10,30 @@ down is invisible to it.
 
 The guard is autouse, so the claim covers every test in the suite instead of the
 ones whose authors thought to ask for it. Arming it by request would not: of the
-55 tests in `tests/games/nhl94_genesis/test_patcher.py`, 49 reach
+56 tests in `tests/games/nhl94_genesis/test_patcher.py`, 49 reach
 `NHL94GenesisPatcher.__init__` and get a client built with `transport=None` — 48
 an `EspnClient`, 3 an `NhlApiClient`, two of them both — and not one of the 49
 names this fixture. 40 come in through that file's `patcher` fixture, which
 builds a real client before overwriting `p.api` with a fake, and the other 9
 build a patcher of their own; the constructor-time exposure is identical either
 way. `tests/games/we2002/test_patcher.py` adds 57 more the same way through
-`ApiFootballClient`. Autouse covers 729 of the 737 tests a default run executes;
-the remaining 8 opt out explicitly. The suite collects 742 — `addopts` deselects
+`ApiFootballClient`. Autouse covers 851 of the 859 tests a default run executes;
+the remaining 8 opt out explicitly. The suite collects 864 — `addopts` deselects
 `tests/test_packaging.py`'s 5, which are covered too on the run that selects
-them — so 734 of 742 counted that way.
+them — so 856 of 864 counted that way.
 
-Every number in the paragraph above moves when anyone adds a test, and it has
-gone stale once already. Re-derive rather than adjust: `pytest --collect-only -q`
-prints the selected/collected pair, `pytest -m allow_default_transport
+Every number in the paragraph above moves when anyone adds a test; this is the
+fourth commit that has had to re-derive them. Re-derive rather than adjust:
+`pytest --collect-only -q` prints the selected/collected pair, `pytest -m allow_default_transport
 --collect-only -q` prints the opt-out count, and the per-file figures come from a
 throwaway `-p` plugin that wraps the three client `__init__`s and records which
-items reach them — source-grepping them gets the answer wrong, because one test
-builds two patchers and two more pass a transport of their own.
+items reach them with `transport=None`. Source-grepping gets the answer wrong in
+both directions: two tests build two patchers each, and three items pass a
+transport of their own — two parameters of one parametrized test, plus one that
+builds two clients. Bind the wrapped call against `inspect.signature` rather than
+reading a fixed positional index, too: `transport` is the fourth parameter of
+`EspnClient.__init__` and `NhlApiClient.__init__` and the fifth of
+`ApiFootballClient.__init__`.
 
 Disarming a negative safety net is silent — every other test stays green while
 the claim it enforces quietly stops holding. `tests/test_network_guard.py` is
