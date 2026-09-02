@@ -9,15 +9,26 @@ through `NHL94GenesisPatcher.__init__` and a live `ApiFootballClient` through
 down is invisible to it.
 
 The guard is autouse, so the claim covers every test in the suite instead of the
-ones whose authors thought to ask for it. Arming it by request did not: 41 tests
-in `tests/games/nhl94_genesis/test_patcher.py` construct a live `EspnClient` with
-`transport=None`, and exactly 3 of them requested this fixture. 34 of the rest
-come in through that file's `patcher` fixture, which builds a real client before
-overwriting `p.api` with a fake, and 4 build a patcher of their own — the same
-constructor-time exposure as the 3 that were guarded. Autouse now covers 537 of
-the 545 tests a default run executes; the remaining 8 opt out explicitly. The
-suite collects 550 — `addopts` deselects `tests/test_packaging.py`'s 5, which
-are covered too on the run that selects them — so 542 of 550 counted that way.
+ones whose authors thought to ask for it. Arming it by request would not: of the
+52 tests in `tests/games/nhl94_genesis/test_patcher.py`, 46 reach
+`NHL94GenesisPatcher.__init__` and get a client built with `transport=None` — 45
+an `EspnClient`, 3 an `NhlApiClient`, two of them both — and not one of the 46
+names this fixture. 37 come in through that file's `patcher` fixture, which
+builds a real client before overwriting `p.api` with a fake, and the other 9
+build a patcher of their own; the constructor-time exposure is identical either
+way. `tests/games/we2002/test_patcher.py` adds 54 more the same way through
+`ApiFootballClient`. Autouse covers 674 of the 682 tests a default run executes;
+the remaining 8 opt out explicitly. The suite collects 687 — `addopts` deselects
+`tests/test_packaging.py`'s 5, which are covered too on the run that selects
+them — so 679 of 687 counted that way.
+
+Every number in the paragraph above moves when anyone adds a test, and it has
+gone stale once already. Re-derive rather than adjust: `pytest --collect-only -q`
+prints the selected/collected pair, `pytest -m allow_default_transport
+--collect-only -q` prints the opt-out count, and the per-file figures come from a
+throwaway `-p` plugin that wraps the three client `__init__`s and records which
+items reach them — source-grepping them gets the answer wrong, because one test
+builds two patchers and two more pass a transport of their own.
 
 Disarming a negative safety net is silent — every other test stays green while
 the claim it enforces quietly stops holding. `tests/test_network_guard.py` is
