@@ -1,4 +1,5 @@
 import json
+import os
 
 import pytest
 
@@ -278,6 +279,41 @@ def test_fetch_creates_the_parent_directories_of_out(tmp_path, stub, base):
     assert json.loads(out.read_text())["league"]["name"] == "Test League"
 
 
+@pytest.fixture
+def unwritable_dir(tmp_path):
+    """A directory the process may enter and list but not create anything in."""
+    if os.geteuid() == 0:
+        pytest.skip("root ignores the write bit, so the directory would still be writable")
+    parent = tmp_path / "read-only"
+    parent.mkdir()
+    parent.chmod(0o500)
+    return parent
+
+
+def test_fetch_reports_an_out_path_it_cannot_create(tmp_path, stub, base, unwritable_dir, capsys):
+    # The mirror of `test_fetch_creates_the_parent_directories_of_out`: the same
+    # `mkdir` that makes a nested path work raises `PermissionError` on a
+    # read-only one, which used to leave the stream with no terminal event.
+    out = unwritable_dir / "nested" / "r.json"
+    code = main(["fetch", "--season", "2024", "--out", str(out), *base])
+    evts = events(capsys)
+    assert code == 1
+    assert evts[-1]["event"] == "error"
+    assert evts[-1]["type"] == "StorageError"
+    assert evts[-1]["msg"] == f"Cannot write {out}: Permission denied"
+
+
+def test_fetch_reports_an_out_file_it_cannot_open(tmp_path, stub, base, unwritable_dir, capsys):
+    # The parent exists here, so `mkdir(exist_ok=True)` succeeds and it is the
+    # `write_text` below it that fails. Two different calls, one message.
+    out = unwritable_dir / "r.json"
+    code = main(["fetch", "--season", "2024", "--out", str(out), *base])
+    evts = events(capsys)
+    assert code == 1
+    assert evts[-1]["type"] == "StorageError"
+    assert evts[-1]["msg"] == f"Cannot write {out}: Permission denied"
+
+
 def test_fetch_without_out_emits_the_rosters_on_the_protocol_stream(tmp_path, stub, base, capsys):
     # The stream is the sole delivery mechanism when `--out` is absent, so it
     # owes the caller exactly what the file would have held. Asserting a league
@@ -522,6 +558,21 @@ def test_patch_creates_the_parent_directories_of_out(tmp_path, stub, base):
     code = main(["patch", "--rom", str(rom), "--out", str(out), "--season", "2024", *base])
     assert code == 0
     assert out.read_bytes() == b"patched"
+
+
+def test_patch_reports_an_out_path_it_cannot_create(tmp_path, stub, base, unwritable_dir, capsys):
+    # The mirror of `test_patch_creates_the_parent_directories_of_out`. The stub
+    # never sees this: the failure is in `cmd_patch`, before `patcher.patch`.
+    rom = tmp_path / "in.bin"
+    rom.write_bytes(b"\x00" * 16)
+    out = unwritable_dir / "nested" / "out.bin"
+    code = main(["patch", "--rom", str(rom), "--out", str(out), "--season", "2024", *base])
+    evts = events(capsys)
+    assert code == 1
+    assert evts[-1]["event"] == "error"
+    assert evts[-1]["type"] == "StorageError"
+    assert evts[-1]["msg"] == f"Cannot write {out}: Permission denied"
+    assert [c[0] for c in StubPatcher.calls] == ["fetch", "map"]
 
 
 def test_patch_needs_exactly_one_roster_source(tmp_path, stub, base, capsys):

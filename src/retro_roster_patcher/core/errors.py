@@ -53,15 +53,17 @@ class CapabilityError(RetroRosterError):
 
 
 class StorageError(RetroRosterError):
-    """A directory this library must write to cannot be created or used.
+    """A path this tool must write to cannot be created or written.
 
-    Distinct from `RomError`, which is about the ROM the user named: this is
-    about the working storage the library needs whatever the ROM is. The cache
-    directory defaults under `$HOME`, which is read-only on a stock Batocera
-    install and on Android, so "cannot create the cache directory" is a real
-    first-run failure and not a theoretical one.
+    Distinct from `RomError`, which is about the ROM the user named and what is
+    inside it: this is about a destination, and the ROM's content has nothing to
+    do with whether it fails. The cache directory defaults under `$HOME`, which
+    is read-only on a stock Batocera install and on Android, so "cannot create
+    the cache directory" is a real first-run failure and not a theoretical one;
+    `--out` on a mounted share is the other half.
 
-    `ensure_cache_dir` is its only raise site in `src/`.
+    Raised from `ensure_cache_dir` and `as_storage_error` below, and from
+    nowhere else in `src/`.
     """
 
 
@@ -80,6 +82,22 @@ def ensure_cache_dir(path: Path | str) -> None:
         os.makedirs(path, exist_ok=True)
     except OSError as exc:
         raise StorageError(f"Cannot create cache directory {path}: {exc.strerror or exc}") from exc
+
+
+@contextmanager
+def as_storage_error(path: Path | str) -> Iterator[None]:
+    """Convert an `OSError` raised while writing `path` into a `StorageError`.
+
+    The CLI's two `--out` paths are the callers: `cmd_fetch` writes a rosters
+    file and `cmd_patch` creates the patched ROM's parent directory, both under
+    a path the operator supplied and neither of them inside a patcher. `path`
+    rather than `exc.filename` in the message, deliberately: the `OSError` names
+    the parent directory `mkdir` was called on, and the operator typed the file.
+    """
+    try:
+        yield
+    except OSError as exc:
+        raise StorageError(f"Cannot write {path}: {exc.strerror or exc}") from exc
 
 
 @contextmanager

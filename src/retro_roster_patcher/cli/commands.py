@@ -13,7 +13,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from ..core.errors import RomError
+from ..core.errors import RomError, as_storage_error
 from ..core.models import PartialFn, SlotMapping
 from ..core.patcher import Patcher
 from ..core.registry import get_patcher, list_patchers
@@ -164,8 +164,13 @@ def cmd_fetch(args: argparse.Namespace, renderer: Renderer) -> None:
     payload = league_data_to_dict(data)
 
     if args.out:
-        Path(args.out).parent.mkdir(parents=True, exist_ok=True)
-        Path(args.out).write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        # `--out` is an operator-supplied destination, so both calls can fail on
+        # a read-only mount or a full disk. Untyped, that `OSError` ended the
+        # NDJSON stream after a `progress` event with no terminal one.
+        out = Path(args.out)
+        with as_storage_error(out):
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     else:
         # No file to point at, so hand the data over on the protocol stream.
         # `partial` and not `result`: the summary is still the result.
@@ -208,7 +213,11 @@ def cmd_patch(args: argparse.Namespace, renderer: Renderer) -> None:
     mapped = patcher.map_rosters(data, slot_mapping=slot_mapping)
 
     out = Path(args.out)
-    out.parent.mkdir(parents=True, exist_ok=True)
+    # Before `patcher.patch`, so an unwritable `--out` costs neither the ROM
+    # copy nor the write. `Patcher.patch` types its own failures as `RomError`;
+    # this one is not about the ROM, and the patcher never sees it.
+    with as_storage_error(out):
+        out.parent.mkdir(parents=True, exist_ok=True)
     renderer.status(f"Writing {out}...")
     result = patcher.patch(
         rom_path=rom, output_path=out, rosters=mapped, on_progress=renderer.progress
