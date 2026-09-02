@@ -1,4 +1,23 @@
+"""What the package promises a consumer can import, and from where.
+
+Every set below is compared with `==`, never with `<=`. The subset form let a
+name ADDED to `__all__` ship unguarded, which is how the five sports models
+were 20% of the root surface and outside the only test describing it.
+
+The four `__all__`s here are the whole discoverable surface. A module that no
+`__all__` names is reachable only by a consumer who already knows its private-
+looking dotted path, which for two of the three consumers of this library — a
+pygame launcher and a Flutter app over embedded CPython — means not reachable.
+"""
+
+import subprocess
+import sys
+import textwrap
+
+import pytest
+
 import retro_roster_patcher as rrp
+from retro_roster_patcher import games, sports
 
 
 def test_the_root_exports_exactly_these_names():
@@ -20,6 +39,9 @@ def test_the_root_exports_exactly_these_names():
         "RateLimitError",
         "RetroRosterError",
         "RomError",
+        "RomFinder",
+        "RomFinderConfig",
+        "RomFinderResult",
         "RomInfo",
         "RomSlot",
         "SeasonNotAvailableError",
@@ -50,3 +72,95 @@ def test_all_is_sorted_and_free_of_duplicates():
     # Comparing against the sorted *set* covers both: sorted(["A", "A", "B"]) equals
     # its input, so a duplicate surviving a merge would pass a plain sorted() check.
     assert rrp.__all__ == sorted(set(rrp.__all__))
+
+
+def test_the_sports_package_exports_exactly_these_names():
+    # `team_colors` is the palette cache a UI needs to offer the user when the
+    # provider ships no team colours, and it was reachable only by its own
+    # dotted path. It is exported as a module rather than as ten loose names:
+    # `load_color_cache` and `save_color_cache` beside `League` and `Player`
+    # would read as one namespace where there are two.
+    expected = {
+        "DailyLimitError",
+        "League",
+        "LeagueData",
+        "Player",
+        "PlayerStats",
+        "RateLimitError",
+        "SeasonNotAvailableError",
+        "Team",
+        "TeamRoster",
+        "team_colors",
+    }
+    assert set(sports.__all__) == expected
+    for name in sports.__all__:
+        assert hasattr(sports, name), name
+
+
+def test_the_sports_all_is_sorted_and_free_of_duplicates():
+    assert sports.__all__ == sorted(set(sports.__all__))
+
+
+def test_the_we2002_package_exports_exactly_these_names():
+    expected = {"AfsHandler", "CsvHandler", "TimGenerator", "WE2002Patcher"}
+    assert set(games.we2002.__all__) == expected
+    for name in games.we2002.__all__:
+        assert hasattr(games.we2002, name), name
+
+
+def test_the_nhl94_package_exports_exactly_these_names():
+    expected = {"NHL94GenesisPatcher"}
+    assert set(games.nhl94_genesis.__all__) == expected
+    for name in games.nhl94_genesis.__all__:
+        assert hasattr(games.nhl94_genesis, name), name
+
+
+def test_reaching_tim_generator_is_what_imports_it_and_a_plain_import_does_not(tmp_path):
+    # `TimGenerator` is the sole reason the optional `images` extra exists: its
+    # module does `try: from PIL import Image` at import time. Exporting it
+    # eagerly would make every `import retro_roster_patcher` attempt a
+    # third-party import — a sys.path scan on a package that is deliberately
+    # absent — and the root docstring promises no I/O at import time. So the
+    # export is a module `__getattr__`, and this is the test that says so.
+    #
+    # In a subprocess because `sys.modules` is process-global: this file's own
+    # siblings import `tim_generator` directly, so an in-process check would
+    # pass or fail on test ordering rather than on the export.
+    source = textwrap.dedent(
+        """
+        import sys
+
+        import retro_roster_patcher
+        from retro_roster_patcher.games import we2002
+
+        name = "retro_roster_patcher.games.we2002.tim_generator"
+        print(name in sys.modules)
+        cls = we2002.TimGenerator
+        print(name in sys.modules)
+        print(cls.__module__ + ":" + cls.__name__)
+        """
+    )
+    proc = subprocess.run(
+        [sys.executable, "-c", source],
+        # `-c` puts the child's cwd on its `sys.path`, so an inherited cwd
+        # holding a `retro_roster_patcher/` directory would shadow the installed
+        # package. `tmp_path` holds nothing.
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout.splitlines() == [
+        "False",
+        "True",
+        "retro_roster_patcher.games.we2002.tim_generator:TimGenerator",
+    ]
+
+
+def test_the_lazy_export_still_refuses_a_name_it_does_not_have():
+    # A module `__getattr__` that answered every name would make a typo like
+    # `we2002.WE2002Pacher` a silent success returning something wrong, and
+    # would make the `hasattr` loop above vacuous.
+    with pytest.raises(AttributeError, match="NotAThing"):
+        _ = games.we2002.NotAThing
