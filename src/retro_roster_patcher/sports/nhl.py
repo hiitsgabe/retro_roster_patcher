@@ -9,6 +9,7 @@ import os
 from collections.abc import Callable
 from typing import Any
 
+from ..core.errors import ensure_cache_dir
 from . import _http
 from .models import Player, Team
 
@@ -27,7 +28,7 @@ class NhlApiClient:
         self.cache_dir = cache_dir
         self.on_status = on_status
         self._transport = transport
-        os.makedirs(cache_dir, exist_ok=True)
+        ensure_cache_dir(cache_dir)
 
     # ------------------------------------------------------------------
     # Public interface (mirrors EspnClient hockey methods)

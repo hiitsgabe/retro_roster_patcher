@@ -19,9 +19,19 @@ PPF3 spec: github.com/meunierd/ppf/blob/master/ppfdev/PPF3.txt
 import os
 import struct
 
+from ...core.errors import RomError
 
-class PPFError(Exception):
-    """Raised when a PPF patch cannot be applied."""
+
+class PPFError(RomError):
+    """Raised when a PPF patch cannot be applied.
+
+    A `RomError` rather than a bare `RetroRosterError`: every failure below
+    leaves the target image either untouched or half-patched, and the one
+    production caller — `patcher._apply_translation` — runs inside
+    `WE2002Patcher.patch`, whose interface docstring promises `RomError` on any
+    write failure. A `RetroRosterError` would satisfy `main` while still making
+    that promise false.
+    """
 
     pass
 

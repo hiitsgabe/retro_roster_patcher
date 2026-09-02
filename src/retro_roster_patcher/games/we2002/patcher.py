@@ -47,7 +47,7 @@ from pathlib import Path
 from typing import Any
 
 from ...core.assets import MissingAssetError
-from ...core.errors import ApiError, CapabilityError, MappingError, RomError
+from ...core.errors import ApiError, CapabilityError, MappingError, RomError, as_rom_error
 from ...core.models import (
     MappedRosters,
     PartialFn,
@@ -156,7 +156,13 @@ class WE2002Patcher(Patcher):
         # reports no slots and `is_valid=False`.
         if not Path(rom_path).exists():
             raise RomError(f"ROM not found: {rom_path}")
-        info = RomReader(str(rom_path)).get_rom_info()
+        # `validate_rom` is size-only, so any file of 100 MB or more reaches
+        # `read_slot_palettes`, which opens it. Without this the `PermissionError`
+        # from a ROM on a yanked mount or with the read bit off walked out of
+        # `analyze_rom`, past `cmd_analyze`'s `except RomError` and past `main`,
+        # while the NHL94 sibling answered the same file with a clean `RomError`.
+        with as_rom_error(rom_path):
+            info = RomReader(str(rom_path)).get_rom_info()
         return RomInfo(
             path=info.path,
             size=info.size,
@@ -325,49 +331,58 @@ class WE2002Patcher(Patcher):
         if not RomReader(str(rom_path)).validate_rom():
             raise RomError(f"Too small to be a WE2002 ROM, or not a WE2002 ROM: {rom_path}")
 
-        self.status("Preparing ROM...")
-        # The constructor copies the ROM to `output_path`, so the file the
-        # translation patches below exists by the time it runs.
-        writer = RomWriter(str(rom_path), str(output_path))
-        self._apply_translation(output_path, language, on_progress)
+        # Everything from here down reads the input ROM or writes the output
+        # one, and `Patcher.patch` promises `RomError` on any write failure.
+        # `RomWriter.__init__` `shutil.copy2`s the input, and `validate_rom`
+        # above is size-only, so an unreadable 700 MB image passed every guard
+        # and then raised `PermissionError` out of the whole CLI, ending the
+        # NDJSON stream after three `status` events with no terminal one.
+        # Only `OSError` is converted: `_apply_translation` already catches its
+        # own, and anything else from the writer is a bug in the writer.
+        with as_rom_error(rom_path):
+            self.status("Preparing ROM...")
+            # The constructor copies the ROM to `output_path`, so the file the
+            # translation patches below exists by the time it runs.
+            writer = RomWriter(str(rom_path), str(output_path))
+            self._apply_translation(output_path, language, on_progress)
 
-        # The range is re-checked here even though `map_rosters` refuses an
-        # out-of-range slot: `teams` is a plain dict, and a caller may hand
-        # `patch` a `MappedRosters` it built itself. `RomWriter.write_team`
-        # returns silently for a slot outside 0..31, so an unchecked one would
-        # be counted as patched without reaching the ROM. Sorted so the writes
-        # go out in slot order regardless of the mapping's insertion order.
-        slots = sorted(slot for slot in rosters.teams if 0 <= slot < MAX_ML_SLOTS)
+            # The range is re-checked here even though `map_rosters` refuses an
+            # out-of-range slot: `teams` is a plain dict, and a caller may hand
+            # `patch` a `MappedRosters` it built itself. `RomWriter.write_team`
+            # returns silently for a slot outside 0..31, so an unchecked one would
+            # be counted as patched without reaching the ROM. Sorted so the writes
+            # go out in slot order regardless of the mapping's insertion order.
+            slots = sorted(slot for slot in rosters.teams if 0 <= slot < MAX_ML_SLOTS)
 
-        teams_patched = 0
-        players_patched = 0
-        for i, slot in enumerate(slots):
-            record = rosters.teams[slot]
+            teams_patched = 0
+            players_patched = 0
+            for i, slot in enumerate(slots):
+                record = rosters.teams[slot]
+                if on_progress is not None:
+                    on_progress(0.05 + 0.9 * (i / len(slots)), f"Writing slot {slot}...")
+                # `players=` is not optional in practice: without it `write_team`
+                # writes names, kits and the flag, and no players at all.
+                #
+                # The whole list goes over, and the count comes back: the writer's
+                # loop is bounded by the slot's ROM capacity (14 or 15 places), so a
+                # 22-man squad in slot 0 leaves eight records on the floor.
+                # `len(record.players)` would report all 22 as patched.
+                written = writer.write_team(slot, record, players=record.players, include_flag=True)
+                teams_patched += 1
+                players_patched += written
+
+            # Every `write_team` above queued a 3D-jersey TEX patch. Without this
+            # they are all discarded when the writer goes out of scope.
+            writer.flush_tex_patches()
+
             if on_progress is not None:
-                on_progress(0.05 + 0.9 * (i / len(slots)), f"Writing slot {slot}...")
-            # `players=` is not optional in practice: without it `write_team`
-            # writes names, kits and the flag, and no players at all.
-            #
-            # The whole list goes over, and the count comes back: the writer's
-            # loop is bounded by the slot's ROM capacity (14 or 15 places), so a
-            # 22-man squad in slot 0 leaves eight records on the floor.
-            # `len(record.players)` would report all 22 as patched.
-            written = writer.write_team(slot, record, players=record.players, include_flag=True)
-            teams_patched += 1
-            players_patched += written
-
-        # Every `write_team` above queued a 3D-jersey TEX patch. Without this
-        # they are all discarded when the writer goes out of scope.
-        writer.flush_tex_patches()
-
-        if on_progress is not None:
-            on_progress(1.0, "Saving patched ROM...")
-        self.status("Saving patched ROM...")
-        writer.finalize()
-        # `finalize` returns `None`, so the output file itself is the only
-        # evidence available that anything was written.
-        if not Path(output_path).exists():
-            raise RomError(f"Failed to write patched ROM to {output_path}")
+                on_progress(1.0, "Saving patched ROM...")
+            self.status("Saving patched ROM...")
+            writer.finalize()
+            # `finalize` returns `None`, so the output file itself is the only
+            # evidence available that anything was written.
+            if not Path(output_path).exists():
+                raise RomError(f"Failed to write patched ROM to {output_path}")
 
         return PatchResult(
             output_path=str(output_path),

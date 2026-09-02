@@ -2,6 +2,20 @@
 
 Exit codes: 0 success, 1 typed error, 2 usage error. Nothing else. A consumer
 that only reads the exit code still learns whether to look at stdout.
+
+Every one of those three ends the NDJSON stream with a terminal event, and so
+does the fourth thing that can happen: an untyped exception, which is a bug in
+this project rather than a failure the user can act on. The last `except`
+announces it on the stream and then re-raises it unchanged, so the traceback,
+the exception and CPython's own exit status are exactly what they would be with
+no clause there at all. It buys the Dart bridge a terminal event instead of a
+dead pipe and buys the bug nothing: it is not caught, not laundered into a typed
+error, and not given a tidy `return 1`.
+
+That the library does not reach it is the actual guarantee, and it is enforced
+elsewhere: `tests/core/test_errors.py` walks the package and fails if any
+exception class is defined outside `RetroRosterError`, and the two conversion
+points in `core/errors.py` type the `OSError`s the filesystem raises.
 """
 
 from __future__ import annotations
@@ -134,6 +148,13 @@ def main(argv: list[str] | None = None) -> int:
     except KeyboardInterrupt:
         renderer.error(KeyboardInterrupt("interrupted"))
         return 1
+    except Exception as exc:
+        # Announce and re-raise; see the module docstring. `BaseException` is
+        # deliberately not caught: `SystemExit` is how `parser.error` reports
+        # exit 2, and the suite's network sentinel is a `BaseException` precisely
+        # so no `except` in this tree can swallow it.
+        renderer.error(exc)
+        raise
     return 0
 
 
