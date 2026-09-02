@@ -149,7 +149,26 @@ class MappedRosters:
 
 @dataclass
 class PatchResult:
-    """A successful patch. Failures raise instead of returning this."""
+    """A successful patch. Failures raise instead of returning this.
+
+    `teams_patched` counts the slots something reached the ROM for, and
+    `players_patched` counts the player records that reached it. The first is
+    not "slots that got players", and the two games make the difference
+    visible, so a UI that renders `teams_patched` alone gets a number whose
+    meaning depends on the game:
+
+    - NHL94 writes nothing per slot but player records, so a slot whose writer
+      wrote none is not counted. Two slots holding empty rosters give `(0, 0)`.
+    - WE2002 also writes the team name, abbreviations, kit colours and flag,
+      all of which land whether or not a squad was supplied, so an in-range
+      slot always counts. Two slots holding a record with no players give
+      `(2, 0)`.
+
+    One convention, two units of work — not two conventions. Unifying the
+    numbers would mean either dropping WE2002 slots whose name and kit really
+    did change, or counting NHL94 slots where nothing did. A consumer that
+    wants "slots that received a squad" must read `players_patched` too.
+    """
 
     output_path: str
     teams_patched: int = 0

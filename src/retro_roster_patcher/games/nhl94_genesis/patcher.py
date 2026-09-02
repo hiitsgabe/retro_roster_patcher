@@ -324,6 +324,11 @@ class NHL94GenesisPatcher(Patcher):
                     # way nothing reached the image, so nothing is counted and
                     # the header — which would index a lines table into players
                     # that do not exist — is not written either.
+                    #
+                    # WE2002 counts an empty slot where this game does not, and
+                    # `PatchResult` documents why: this game writes nothing per
+                    # slot but the player records, so with none written the slot
+                    # is untouched.
                     continue
                 writer.write_team_header(slot, players, actual_count=written)
             except IndexError as exc:
