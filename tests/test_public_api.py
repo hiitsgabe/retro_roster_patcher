@@ -1,12 +1,13 @@
 import retro_roster_patcher as rrp
 
 
-def test_the_documented_names_are_importable_from_the_root():
+def test_the_root_exports_exactly_these_names():
     expected = {
         "__version__",
         "ApiError",
         "CapabilityError",
         "DailyLimitError",
+        "League",
         "LeagueData",
         "MappedRosters",
         "MappingError",
@@ -14,6 +15,8 @@ def test_the_documented_names_are_importable_from_the_root():
         "Patcher",
         "PatcherInfo",
         "PatchResult",
+        "Player",
+        "PlayerStats",
         "RateLimitError",
         "RetroRosterError",
         "RomError",
@@ -22,13 +25,20 @@ def test_the_documented_names_are_importable_from_the_root():
         "SeasonNotAvailableError",
         "SlotMapping",
         "StorageError",
+        "Team",
+        "TeamRoster",
         "get_patcher",
         "league_data_from_dict",
         "league_data_to_dict",
         "list_patchers",
         "register",
     }
-    assert expected <= set(rrp.__all__)
+    # Equality, not `expected <= set(...)`. Under the subset form a name ADDED to
+    # `__all__` shipped unguarded, which is how the five sports models — `League`,
+    # `Player`, `PlayerStats`, `Team`, `TeamRoster` — were 20% of the real surface
+    # and outside the only test that claims to describe it. Equality is what makes
+    # this file able to fail on an accidental export as well as on a lost one.
+    assert set(rrp.__all__) == expected
     # Iterate __all__, not `expected`: ruff's F822 (undefined name in __all__) is
     # suppressed inside __init__.py, so a stale or typo'd entry would otherwise ship
     # green and only blow up in consumer code as `from ... import *` -> AttributeError.
