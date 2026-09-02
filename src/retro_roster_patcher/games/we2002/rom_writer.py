@@ -2696,22 +2696,14 @@ class RomWriter:
         if tex_index not in self._tex_sizes:
             return
 
+        # Upstream appended a line to a hard-coded "/tmp/tex_debug.log" here, on
+        # every call, whether or not it went on to patch anything. Removed: it
+        # wrote outside the caller's control to a shared world-writable path, it
+        # grew without bound, and it made the method raise outright on a platform
+        # with no /tmp — which includes Android, where the Flutter consumer runs.
+        # Nothing downstream reads it, and it never touched the image, so the
+        # bytes this method produces are unchanged.
         best_idx = _find_best_tex_match(target_rgb)
-        with open("/tmp/tex_debug.log", "a") as _dbg:
-            if best_idx is not None and best_idx != tex_index:
-                src_color = _TEX_JERSEY_COLORS[best_idx]
-                # strict=False for the same reason as in `_find_best_tex_match`:
-                # a ragged pair must not turn a debug log line into a ValueError.
-                dist = sum((a - b) ** 2 for a, b in zip(target_rgb, src_color, strict=False))
-                _dbg.write(
-                    f"[TEX] Patch TEX_{tex_index:02d}: want RGB{target_rgb} -> "
-                    f"best TEX_{best_idx:02d} RGB{src_color} dist={dist}\n"
-                )
-            else:
-                reason = "no match" if best_idx is None else "same slot"
-                _dbg.write(
-                    f"[TEX] Patch TEX_{tex_index:02d}: want RGB{target_rgb} -> SKIP ({reason})\n"
-                )
         if best_idx is None or best_idx == tex_index:
             return
 
