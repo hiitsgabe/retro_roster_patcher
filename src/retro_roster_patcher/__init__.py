@@ -34,7 +34,7 @@ from .core.models import MappedRosters, PatchResult, RomInfo, RomSlot, SlotMappi
 from .core.patcher import Patcher
 from .core.registry import PatcherInfo, get_patcher, list_patchers, register
 from .rom_finder import RomFinder, RomFinderConfig, RomFinderResult
-from .sports import DailyLimitError, RateLimitError, SeasonNotAvailableError
+from .sports import DailyLimitError, RateLimitError, SeasonNotAvailableError, Transport
 from .sports.models import League, LeagueData, Player, PlayerStats, Team, TeamRoster
 from .sports.serde import league_data_from_dict, league_data_to_dict
 
@@ -77,6 +77,11 @@ __all__ = [
     "StorageError",
     "Team",
     "TeamRoster",
+    # The type of the `transport=` keyword both patcher constructors accept.
+    # Reachable from the root because the patchers are: `get_patcher` hands back
+    # a class a consumer then constructs, and it should not have to reach into
+    # `sports` — or worse, `sports._http` — to annotate what it passes.
+    "Transport",
     "__version__",
     "get_patcher",
     "league_data_from_dict",

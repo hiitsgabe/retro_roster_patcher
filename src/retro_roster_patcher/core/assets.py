@@ -15,6 +15,14 @@ from importlib import resources
 
 from .errors import RetroRosterError
 
+# `package_bytes` has no caller in `src/` outside `package_path` below, which is
+# exactly why this list is here: nothing else in the tree says it is API rather
+# than a leftover. It is the primary of the two — both target platforms run the
+# library from inside an archive, where reading an asset by path does not work
+# at all — and `package_path` is the fallback for the one API that insists on a
+# path, the PPF applier.
+__all__ = ["MissingAssetError", "package_bytes", "package_path"]
+
 # One temporary copy per asset, keyed by `(package, name)`. Without it every
 # `package_path` call left another temp file and another `atexit` callback
 # behind, and the orchestrator calls it once per patch run.

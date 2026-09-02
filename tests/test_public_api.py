@@ -49,6 +49,7 @@ def test_the_root_exports_exactly_these_names():
         "StorageError",
         "Team",
         "TeamRoster",
+        "Transport",
         "get_patcher",
         "league_data_from_dict",
         "league_data_to_dict",
@@ -80,16 +81,25 @@ def test_the_sports_package_exports_exactly_these_names():
     # dotted path. It is exported as a module rather than as ten loose names:
     # `load_color_cache` and `save_color_cache` beside `League` and `Player`
     # would read as one namespace where there are two.
+    #
+    # The three clients are a stated deliverable of this extraction and this
+    # package re-exported their exceptions but not them. `Transport` is the type
+    # of a public keyword parameter on seven public callables and lived only in
+    # the private `_http`.
     expected = {
+        "ApiFootballClient",
         "DailyLimitError",
+        "EspnClient",
         "League",
         "LeagueData",
+        "NhlApiClient",
         "Player",
         "PlayerStats",
         "RateLimitError",
         "SeasonNotAvailableError",
         "Team",
         "TeamRoster",
+        "Transport",
         "team_colors",
     }
     assert set(sports.__all__) == expected
@@ -99,6 +109,26 @@ def test_the_sports_package_exports_exactly_these_names():
 
 def test_the_sports_all_is_sorted_and_free_of_duplicates():
     assert sports.__all__ == sorted(set(sports.__all__))
+
+
+def test_the_public_transport_type_is_the_one_the_clients_are_annotated_with():
+    # Re-export, not a second alias. Two structurally identical Callable aliases
+    # would type-check the same and drift the moment one is edited, and the
+    # point of naming it publicly is that a consumer wiring its own HTTP — the
+    # stated reason `_http` exists — writes the same type the library does.
+    from retro_roster_patcher.sports import _http
+
+    assert sports.Transport is _http.Transport
+
+
+def test_core_assets_declares_its_own_surface():
+    # `package_bytes` has no caller in src/ outside `package_path` beside it, so
+    # nothing but this says it is API rather than a leftover. It is the function
+    # a consumer wants: both target platforms run from inside an archive, where
+    # reading an asset by path does not work.
+    from retro_roster_patcher.core import assets
+
+    assert set(assets.__all__) == {"MissingAssetError", "package_bytes", "package_path"}
 
 
 def test_the_we2002_package_exports_exactly_these_names():
