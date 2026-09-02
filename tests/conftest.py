@@ -10,17 +10,17 @@ down is invisible to it.
 
 The guard is autouse, so the claim covers every test in the suite instead of the
 ones whose authors thought to ask for it. Arming it by request would not: of the
-52 tests in `tests/games/nhl94_genesis/test_patcher.py`, 46 reach
-`NHL94GenesisPatcher.__init__` and get a client built with `transport=None` — 45
-an `EspnClient`, 3 an `NhlApiClient`, two of them both — and not one of the 46
-names this fixture. 37 come in through that file's `patcher` fixture, which
+55 tests in `tests/games/nhl94_genesis/test_patcher.py`, 49 reach
+`NHL94GenesisPatcher.__init__` and get a client built with `transport=None` — 48
+an `EspnClient`, 3 an `NhlApiClient`, two of them both — and not one of the 49
+names this fixture. 40 come in through that file's `patcher` fixture, which
 builds a real client before overwriting `p.api` with a fake, and the other 9
 build a patcher of their own; the constructor-time exposure is identical either
-way. `tests/games/we2002/test_patcher.py` adds 54 more the same way through
-`ApiFootballClient`. Autouse covers 711 of the 719 tests a default run executes;
-the remaining 8 opt out explicitly. The suite collects 724 — `addopts` deselects
+way. `tests/games/we2002/test_patcher.py` adds 57 more the same way through
+`ApiFootballClient`. Autouse covers 728 of the 736 tests a default run executes;
+the remaining 8 opt out explicitly. The suite collects 741 — `addopts` deselects
 `tests/test_packaging.py`'s 5, which are covered too on the run that selects
-them — so 716 of 724 counted that way.
+them — so 733 of 741 counted that way.
 
 Every number in the paragraph above moves when anyone adds a test, and it has
 gone stale once already. Re-derive rather than adjust: `pytest --collect-only -q`
