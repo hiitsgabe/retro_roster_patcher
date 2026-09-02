@@ -1,7 +1,6 @@
 import argparse
 import io
 import json
-import os
 from pathlib import Path
 
 import pytest
@@ -10,12 +9,9 @@ from retro_roster_patcher.cli import commands
 from retro_roster_patcher.cli.__main__ import build_parser, main
 from retro_roster_patcher.cli.commands import UsageError, build_patcher, default_cache_dir
 from retro_roster_patcher.cli.render import JsonRenderer
+from retro_roster_patcher.games.we2002.rom_reader import RomReader
+from tests.cli.conftest import events
 from tests.fixtures.synthetic_rom import write_nhl94_genesis_rom
-
-
-def events(capsys) -> list[dict]:
-    out = capsys.readouterr().out
-    return [json.loads(line) for line in out.splitlines()]
 
 
 def run(argv, capsys) -> tuple[int, list[dict]]:
@@ -72,12 +68,6 @@ def test_list_without_json_prints_a_table(capsys):
 
 
 # -- analyze ----------------------------------------------------------------
-
-
-@pytest.fixture
-def cache(tmp_path):
-    """Never let a test touch the real `~/.cache` — WE2002 creates its cache dir."""
-    return ["--cache-dir", str(tmp_path / "cache")]
 
 
 def test_analyze_identifies_a_synthetic_nhl94_rom(tmp_path, cache, capsys):
@@ -216,37 +206,36 @@ def test_an_unknown_game_id_is_a_usage_error(tmp_path, cache, capsys):
 # -- the sweep's RomError policy --------------------------------------------
 
 
-@pytest.fixture
-def unreadable_rom(tmp_path):
-    """A file `Path.is_file()` accepts but `open()` refuses.
+def test_the_unreadable_rom_fixture_is_big_enough_for_we2002_to_open_it(unreadable_rom):
+    """Without this the WE2002 arm below is vacuous.
 
-    This is the only input that reaches `cmd_analyze`'s `except RomError`: a path
-    that is not a readable file — missing, or a directory — is rejected by the
-    `is_file` guard before any patcher runs, and a readable file that is not the
-    right game comes back `is_valid=False` instead of raising. Measured: NHL94's
-    reader returns `RomError` here while WE2002's returns `is_valid=False`, so
-    one patcher rejects and one reports.
+    `validate_rom` is size-only and short-circuits `get_rom_info` below 100 MB,
+    so a smaller fixture never reaches the line that opens the file and the
+    `--game we2002` case would be measuring the size gate, not the read.
     """
-    if os.geteuid() == 0:
-        pytest.skip("root ignores the read bit, so the file would still be readable")
-    rom = tmp_path / "locked.bin"
-    rom.write_bytes(b"\x00" * 4096)
-    rom.chmod(0o000)
-    return rom
+    assert RomReader(str(unreadable_rom)).validate_rom() is True
 
 
 def test_a_sweep_swallows_a_patcher_that_rejects_the_rom(unreadable_rom, cache, capsys):
     code, evts = run(["analyze", "--rom", str(unreadable_rom), "--json", *cache], capsys)
     assert code == 0
     assert [e["event"] for e in evts] == ["result"]
+    assert evts[-1]["matches"] == []
 
 
+@pytest.mark.parametrize("game_id", ["nhl94-genesis", "we2002"])
 def test_an_explicit_game_re_raises_the_rejection_the_sweep_would_swallow(
-    unreadable_rom, cache, capsys
+    game_id, unreadable_rom, cache, capsys
 ):
-    argv = ["analyze", "--rom", str(unreadable_rom), "--game", "nhl94-genesis", "--json", *cache]
+    """Both patchers, because the two used to disagree on this input.
+
+    NHL94 answered `RomError`; WE2002 raised `PermissionError` out of `main`
+    with nothing at all on stdout. The parametrisation is the symmetry claim.
+    """
+    argv = ["analyze", "--rom", str(unreadable_rom), "--game", game_id, "--json", *cache]
     code, evts = run(argv, capsys)
     assert code == 1
+    assert evts[-1]["event"] == "error"
     assert evts[-1]["type"] == "RomError"
 
 
@@ -360,16 +349,35 @@ def test_the_cache_dir_flag_defaults_to_the_default_cache_dir(tmp_path):
 
 
 def test_main_lets_an_untyped_bug_out_instead_of_reporting_it_as_a_typed_error(monkeypatch):
-    # `except RetroRosterError`, not `except Exception`: an untyped exception out
-    # of a handler is a bug in this project, and laundering it into a clean exit
-    # 1 with an `error` event would dress that bug up as the typed failure the
-    # module docstring promises exit 1 means.
+    # The last clause in `main` announces an untyped exception and re-raises it
+    # rather than returning 1. An untyped exception out of a handler is a bug in
+    # this project, and laundering it into a clean exit 1 with an `error` event
+    # would dress that bug up as the typed failure the module docstring promises
+    # exit 1 means. `pytest.raises` here is the claim that it is not caught.
     def explode(args, renderer):
         raise RuntimeError("a bug, not a typed failure")
 
     monkeypatch.setattr(commands, "cmd_list", explode)
     with pytest.raises(RuntimeError, match="a bug, not a typed failure"):
         main(["list", "--json"])
+
+
+def test_main_still_closes_the_stream_before_letting_an_untyped_bug_out(monkeypatch, capsys):
+    # The other half of the clause above. Without the `renderer.error` call an
+    # NDJSON consumer sees the pipe close mid-stream with no terminal event and
+    # cannot tell a crash from a hang; with it, the stream always ends with one.
+    # The `type` is the real class name, so nothing about the event pretends the
+    # bug was a handled failure.
+    def explode(args, renderer):
+        raise RuntimeError("a bug, not a typed failure")
+
+    monkeypatch.setattr(commands, "cmd_list", explode)
+    with pytest.raises(RuntimeError):
+        main(["list", "--json"])
+    evts = events(capsys)
+    assert [e["event"] for e in evts] == ["error"]
+    assert evts[-1]["type"] == "RuntimeError"
+    assert evts[-1]["msg"] == "a bug, not a typed failure"
 
 
 def test_the_sweep_lets_an_untyped_bug_out_instead_of_calling_it_a_rejection(tmp_path, monkeypatch):

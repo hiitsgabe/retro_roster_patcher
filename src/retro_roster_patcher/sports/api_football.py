@@ -1,4 +1,13 @@
-"""API-Football client with local JSON caching."""
+"""API-Football client with local JSON caching.
+
+The three exception classes below are `ApiError` subclasses. All three describe
+what `ApiError` already names — "an upstream sports API failed, rate-limited, or
+returned nothing usable" — and all three are raised on paths a caller reaches
+through `Patcher.fetch`, whose interface docstring promises `ApiError`. As bare
+`Exception`s they walked straight out of the CLI: a free-plan season restriction
+is the commonest failure a free-tier user meets, and it ended the NDJSON stream
+after a single `progress` event with no terminal `error`.
+"""
 
 import json
 import os
@@ -6,23 +15,24 @@ import time
 from collections.abc import Callable
 from typing import Any
 
+from ..core.errors import ApiError, ensure_cache_dir
 from . import _http
 from .models import League, Player, PlayerStats, Team
 
 
-class RateLimitError(Exception):
+class RateLimitError(ApiError):
     """Raised when the API rate limit is hit and all retries are exhausted."""
 
     pass
 
 
-class DailyLimitError(Exception):
+class DailyLimitError(ApiError):
     """Raised when the daily API request quota is exceeded."""
 
     pass
 
 
-class SeasonNotAvailableError(Exception):
+class SeasonNotAvailableError(ApiError):
     """Raised when the API-Football plan doesn't allow access to the requested season."""
 
     def __init__(self, season: int, api_message: str = ""):
@@ -71,7 +81,7 @@ class ApiFootballClient:
         self.cache_dir = cache_dir
         self.on_status = on_status  # Optional callable(message: str) for status updates
         self._transport = transport
-        os.makedirs(cache_dir, exist_ok=True)
+        ensure_cache_dir(cache_dir)
 
     def get_featured_leagues(self) -> list[League]:
         """Return hardcoded featured leagues with dynamically computed seasons."""
