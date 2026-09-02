@@ -1,8 +1,11 @@
 """In-tree registry of game patchers.
 
-A plain dict rather than `importlib.metadata` entry points: with ten first-party
-games in this repository, plugin discovery would add versioning and debugging cost
-for no benefit. Games register themselves at import time via `@register`, and
+A plain dict rather than `importlib.metadata` entry points: the two games in this
+repository — and the eight more the plan migrates out of `console_utilities` — are
+all first-party and in-tree, so plugin discovery would add versioning and debugging
+cost for nothing it could discover that this dict does not already hold. (The "ten
+patchers" in the design document count the upstream application's, not this
+repository's.) Games register themselves at import time via `@register`, and
 `retro_roster_patcher/__init__.py` imports every game package so the dict is
 populated by the time anyone calls `get_patcher`.
 """
