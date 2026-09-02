@@ -934,6 +934,31 @@ def test_patch_reports_progress_and_ends_at_one(patcher, tmp_path, monkeypatch):
     ]
 
 
+def test_patching_with_another_games_rosters_is_refused_before_the_rom_is_opened(
+    patcher, tmp_path, monkeypatch
+):
+    # `MappedRosters.game_id` is written by every `map_rosters` and was read by
+    # nobody. Handing NHL94's rosters to this patcher was accepted and reached
+    # the write loop, where `record.players` on the list NHL94 stores per slot
+    # raised `AttributeError: 'list' object has no attribute 'players'` —
+    # outside `RetroRosterError`, so a consumer catching the library's own
+    # hierarchy did not catch it.
+    log = []
+    monkeypatch.setattr(patcher_module, "RomWriter", _fake_writer_class(log))
+    _silence_translation(monkeypatch, log)
+    rom = _valid_rom(tmp_path)
+    out = tmp_path / "out.bin"
+    foreign = MappedRosters(game_id="nhl94-genesis", teams={0: ["not a WETeamRecord"]})
+
+    with pytest.raises(MappingError, match="nhl94-genesis"):
+        patcher.patch(rom_path=rom, output_path=out, rosters=foreign)
+
+    # Refused ahead of every other guard, so no writer was built and no output
+    # file exists to be mistaken for a patched ROM.
+    assert log == []
+    assert out.exists() is False
+
+
 def test_patching_with_nothing_mapped_still_writes_an_output(patcher, tmp_path, monkeypatch):
     # The translation alone is a worthwhile edit, and a zero-division on an empty
     # slot list would be an odd way to fail.

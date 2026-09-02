@@ -272,6 +272,11 @@ class NHL94GenesisPatcher(Patcher):
         on_progress: ProgressFn | None = None,
         **options: Any,
     ) -> PatchResult:
+        # First, ahead of every other guard and ahead of the first status
+        # message: it is the one check that costs no I/O, and the failure it
+        # prevents is the writer choking on another game's record type with an
+        # exception outside this library's hierarchy.
+        rosters.require_game(self.game_id)
         self.status("Validating ROM...")
         reader = NHL94GenesisRomReader(str(rom_path))
         if not reader.load() or not reader.validate():
