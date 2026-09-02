@@ -98,7 +98,7 @@ def test_registering_the_same_id_twice_is_an_error():
     assert "dummy" in message
     assert "First" in message
     assert get_patcher("dummy") is First
-    assert not hasattr(Second, "game_id")
+    assert hasattr(Second, "game_id") is False
 
 
 def test_list_patchers_is_sorted_and_describes_each_game():

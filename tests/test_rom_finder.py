@@ -398,7 +398,7 @@ def test_the_local_scan_skips_folders_that_do_not_exist(tmp_path):
     _write(tmp_path / "genesis" / "NHL 94 (USA).bin")
     # The precondition, stated rather than implied: "megadrive" is configured first
     # and is absent, so the scan has to survive it before it ever reaches "genesis".
-    assert not (tmp_path / "megadrive").exists()
+    assert (tmp_path / "megadrive").exists() is False
 
     assert RomFinder()._scan_local(GENESIS, str(tmp_path)) == str(
         tmp_path / "genesis" / "NHL 94 (USA).bin"

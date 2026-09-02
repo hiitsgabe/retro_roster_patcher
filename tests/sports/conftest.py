@@ -105,7 +105,7 @@ def assert_public_members_are_classified():
     def _assert(client_class, network_calls, offline_members):
         # A name in both tables satisfies the union below while meaning two
         # contradictory things, and its offline claim would go unchecked.
-        assert not set(network_calls) & set(offline_members)
+        assert (set(network_calls) & set(offline_members)) == set()
         public = {name for name in dir(client_class) if not name.startswith("_")}
         assert public == set(network_calls) | set(offline_members)
 

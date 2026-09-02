@@ -65,8 +65,9 @@ def test_the_root_exports_exactly_these_names():
     # Iterate __all__, not `expected`: ruff's F822 (undefined name in __all__) is
     # suppressed inside __init__.py, so a stale or typo'd entry would otherwise ship
     # green and only blow up in consumer code as `from ... import *` -> AttributeError.
-    for name in rrp.__all__:
-        assert hasattr(rrp, name), name
+    # Collected into a list compared with `==` rather than asserted per name: the
+    # failure then names every unresolvable entry at once instead of the first.
+    assert [name for name in rrp.__all__ if not hasattr(rrp, name)] == []
 
 
 def test_all_is_sorted_and_free_of_duplicates():
@@ -103,8 +104,7 @@ def test_the_sports_package_exports_exactly_these_names():
         "team_colors",
     }
     assert set(sports.__all__) == expected
-    for name in sports.__all__:
-        assert hasattr(sports, name), name
+    assert [name for name in sports.__all__ if not hasattr(sports, name)] == []
 
 
 def test_the_sports_all_is_sorted_and_free_of_duplicates():
@@ -134,15 +134,14 @@ def test_core_assets_declares_its_own_surface():
 def test_the_we2002_package_exports_exactly_these_names():
     expected = {"AfsHandler", "CsvHandler", "TimGenerator", "WE2002Patcher"}
     assert set(games.we2002.__all__) == expected
-    for name in games.we2002.__all__:
-        assert hasattr(games.we2002, name), name
+    assert [name for name in games.we2002.__all__ if not hasattr(games.we2002, name)] == []
 
 
 def test_the_nhl94_package_exports_exactly_these_names():
     expected = {"NHL94GenesisPatcher"}
     assert set(games.nhl94_genesis.__all__) == expected
-    for name in games.nhl94_genesis.__all__:
-        assert hasattr(games.nhl94_genesis, name), name
+    nhl94 = games.nhl94_genesis
+    assert [name for name in nhl94.__all__ if not hasattr(nhl94, name)] == []
 
 
 def test_reaching_tim_generator_is_what_imports_it_and_a_plain_import_does_not(tmp_path):
@@ -198,6 +197,6 @@ def test_the_lazy_export_is_visible_to_dir():
 def test_the_lazy_export_still_refuses_a_name_it_does_not_have():
     # A module `__getattr__` that answered every name would make a typo like
     # `we2002.WE2002Pacher` a silent success returning something wrong, and
-    # would make the `hasattr` loop above vacuous.
+    # would make the `hasattr` comprehension above vacuous.
     with pytest.raises(AttributeError, match="NotAThing"):
         _ = games.we2002.NotAThing

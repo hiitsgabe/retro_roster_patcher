@@ -18,22 +18,51 @@ def test_get_nhl_teams_parses_the_recorded_standings(tmp_path, replay):
 
     # Exactly the league, not "at least most of it": the dated fixture URL exists to
     # keep this set stable, so a loose bound would tolerate the drift it prevents.
+    # Kept beside the table below because the table is keyed by `code`: two teams
+    # parsed with the same code would collapse into one entry and still match it.
     assert len(teams) == 32
-    assert all(t.name for t in teams)
-    assert all(t.short_name for t in teams)
-    # `id` is deliberately not checked: the standings payload carries no team ID
-    # and the parser hardcodes 0.
-
-    # One team spelled out, because "non-empty" passes just as happily on the full
-    # name leaking into the short field, or on the wrong nested `default` key.
-    bruins = next(t for t in teams if t.code == "BOS")
-    assert bruins.name == "Boston Bruins"
-    assert bruins.short_name == "Bruins"
-
-    # And one team whose common name overruns the 12-character cut, which is the
-    # width the ROM's team-name field allows. Nothing else in the suite sees it.
-    knights = next(t for t in teams if t.code == "VGK")
-    assert knights.short_name == "Golden Knigh"
+    # Every value spelled out rather than "every name is non-empty". Non-emptiness is
+    # satisfied by the full name leaking into the short field, by the wrong nested
+    # `default` key, and by a team's name landing on its neighbour — all of which this
+    # table fails on. Two entries are load-bearing on their own: `UTA` and `VGK` are
+    # the only teams whose common name overruns the 12-character cut, which is the
+    # width the ROM's team-name field allows, and nothing else in the suite sees it.
+    # `id` is deliberately absent: the standings payload carries no team ID and the
+    # parser hardcodes 0.
+    assert {t.code: (t.name, t.short_name) for t in teams} == {
+        "ANA": ("Anaheim Ducks", "Ducks"),
+        "BOS": ("Boston Bruins", "Bruins"),
+        "BUF": ("Buffalo Sabres", "Sabres"),
+        "CAR": ("Carolina Hurricanes", "Hurricanes"),
+        "CBJ": ("Columbus Blue Jackets", "Blue Jackets"),
+        "CGY": ("Calgary Flames", "Flames"),
+        "CHI": ("Chicago Blackhawks", "Blackhawks"),
+        "COL": ("Colorado Avalanche", "Avalanche"),
+        "DAL": ("Dallas Stars", "Stars"),
+        "DET": ("Detroit Red Wings", "Red Wings"),
+        "EDM": ("Edmonton Oilers", "Oilers"),
+        "FLA": ("Florida Panthers", "Panthers"),
+        "LAK": ("Los Angeles Kings", "Kings"),
+        "MIN": ("Minnesota Wild", "Wild"),
+        "MTL": ("Montréal Canadiens", "Canadiens"),
+        "NJD": ("New Jersey Devils", "Devils"),
+        "NSH": ("Nashville Predators", "Predators"),
+        "NYI": ("New York Islanders", "Islanders"),
+        "NYR": ("New York Rangers", "Rangers"),
+        "OTT": ("Ottawa Senators", "Senators"),
+        "PHI": ("Philadelphia Flyers", "Flyers"),
+        "PIT": ("Pittsburgh Penguins", "Penguins"),
+        "SEA": ("Seattle Kraken", "Kraken"),
+        "SJS": ("San Jose Sharks", "Sharks"),
+        "STL": ("St. Louis Blues", "Blues"),
+        "TBL": ("Tampa Bay Lightning", "Lightning"),
+        "TOR": ("Toronto Maple Leafs", "Maple Leafs"),
+        "UTA": ("Utah Hockey Club", "Utah Hockey "),
+        "VAN": ("Vancouver Canucks", "Canucks"),
+        "VGK": ("Vegas Golden Knights", "Golden Knigh"),
+        "WPG": ("Winnipeg Jets", "Jets"),
+        "WSH": ("Washington Capitals", "Capitals"),
+    }
 
 
 def test_the_standings_url_is_pinned_and_results_are_cached(tmp_path, replay):
@@ -57,7 +86,35 @@ def test_get_hockey_squad_parses_the_recorded_roster(tmp_path, replay):
     # parsed last and is what a truncated group tuple drops silently.
     assert len(players) == 22
     assert sum(p.position == "G" for p in players) == 2
-    assert all(p.name for p in players)
+    # Every name, in order, rather than "every name is non-empty": the order is the
+    # claim above (goalies last), and non-emptiness would survive the roster arriving
+    # shifted by one, duplicated, or with a group parsed off the wrong key. `name` is
+    # `f"{first} {last}".strip()`, so it also fails on half a name — which is what the
+    # `first_name`/`last_name` spot check below exists to disambiguate.
+    assert [p.name for p in players] == [
+        "Michael Eyssimont",
+        "Morgan Geekie",
+        "James Hagens",
+        "Tanner Jeannot",
+        "Mark Kastelic",
+        "Marat Khusnutdinov",
+        "Sean Kuraly",
+        "Elias Lindholm",
+        "Fraser Minten",
+        "Casey Mittelstadt",
+        "David Pastrnak",
+        "JJ Peterka",
+        "Alex Steeves",
+        "Pavel Zacha",
+        "Jonathan Aspirot",
+        "Henri Jokiharju",
+        "Hampus Lindholm",
+        "Mason Lohrei",
+        "Charlie McAvoy",
+        "Nikita Zadorov",
+        "Joonas Korpisalo",
+        "Jeremy Swayman",
+    ]
 
     # The NHL-specific transform this client exists for: the payload codes wings as
     # bare L and R, and the ROM roster format wants LW and RW. Set equality rather
