@@ -172,7 +172,14 @@ class WE2002Patcher(Patcher):
                 RomSlot(
                     index=slot.index,
                     current_name=slot.current_name,
-                    display_name=slot.league_group,
+                    # The group plus the slot's 1-based number, not the bare
+                    # group. `RomSlot.display_name` must be distinct across a
+                    # ROM's slots because it is what a slot-picking UI lists,
+                    # and `league_group` is "Master League" for all 32 of them —
+                    # forwarding it gave a consumer one string thirty-two times.
+                    # This game is the one that *requires* a slot mapping, so it
+                    # is precisely the one whose slots a UI has to render.
+                    display_name=f"{slot.league_group} Slot {slot.index + 1}",
                 )
                 for slot in info.team_slots
             ],

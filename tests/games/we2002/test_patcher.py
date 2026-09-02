@@ -816,11 +816,31 @@ def test_a_file_large_enough_to_be_the_game_reports_its_thirty_two_slots(patcher
     assert info.path == str(rom)
     assert info.extra == {"version": "WE2002"}
     assert len(info.slots) == 32
-    # `display_name` carries the reader's `league_group`, not a second copy of
-    # the name, and `current_name` is 1-based where `index` is 0-based.
-    assert info.slots[5] == RomSlot(index=5, current_name="ML Slot 6", display_name="Master League")
+    # `display_name` names the position: the reader's `league_group` plus the
+    # slot's 1-based number, where `index` is 0-based. It used to be the bare
+    # `league_group`, which is one string for all 32 slots, so a UI listing the
+    # field the model documents for that purpose showed "Master League" thirty-
+    # two times.
+    assert info.slots[5] == RomSlot(
+        index=5, current_name="ML Slot 6", display_name="Master League Slot 6"
+    )
     assert info.slots[0].index == 0
     assert info.slots[31].current_name == "ML Slot 32"
+    assert info.slots[31].display_name == "Master League Slot 32"
+
+
+def test_every_slot_gets_its_own_display_name(patcher, tmp_path):
+    # The model requires `display_name` to be distinct across one ROM's slots,
+    # because it is the field a slot-picking UI lists and WE2002 is the patcher
+    # that *requires* a slot mapping. Thirty-two slots, so the count is what
+    # separates a correct producer from the one-value-repeated one this replaced.
+    rom = tmp_path / "we2002.bin"
+    with rom.open("wb") as handle:
+        handle.truncate(100 * 1024 * 1024)
+
+    info = patcher.analyze_rom(rom)
+
+    assert len({slot.display_name for slot in info.slots}) == 32
 
 
 # ── patch ────────────────────────────────────────────────────────────────
