@@ -188,6 +188,13 @@ def test_reaching_tim_generator_is_what_imports_it_and_a_plain_import_does_not(t
     ]
 
 
+def test_the_lazy_export_is_visible_to_dir():
+    # A module's default `dir()` reports its dict, so without a `__dir__` the
+    # one export that is not imported eagerly is the one export a consumer
+    # browsing the package cannot see.
+    assert "TimGenerator" in dir(games.we2002)
+
+
 def test_the_lazy_export_still_refuses_a_name_it_does_not_have():
     # A module `__getattr__` that answered every name would make a typo like
     # `we2002.WE2002Pacher` a silent success returning something wrong, and

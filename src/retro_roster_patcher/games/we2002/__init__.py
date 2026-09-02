@@ -35,3 +35,14 @@ def __getattr__(name: str) -> Any:
 
         return TimGenerator
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+def __dir__() -> list[str]:
+    """List the lazy name too.
+
+    Without this, `dir()` reports only what is in the module dict, so the one
+    export that is not imported eagerly is the one export a consumer browsing
+    the package cannot see — which is the whole failure this export exists to
+    fix.
+    """
+    return sorted(set(globals()) | set(__all__))

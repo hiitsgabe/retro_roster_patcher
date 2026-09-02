@@ -17,10 +17,10 @@ names this fixture. 40 come in through that file's `patcher` fixture, which
 builds a real client before overwriting `p.api` with a fake, and the other 9
 build a patcher of their own; the constructor-time exposure is identical either
 way. `tests/games/we2002/test_patcher.py` adds 57 more the same way through
-`ApiFootballClient`. Autouse covers 728 of the 736 tests a default run executes;
-the remaining 8 opt out explicitly. The suite collects 741 — `addopts` deselects
+`ApiFootballClient`. Autouse covers 729 of the 737 tests a default run executes;
+the remaining 8 opt out explicitly. The suite collects 742 — `addopts` deselects
 `tests/test_packaging.py`'s 5, which are covered too on the run that selects
-them — so 733 of 741 counted that way.
+them — so 734 of 742 counted that way.
 
 Every number in the paragraph above moves when anyone adds a test, and it has
 gone stale once already. Re-derive rather than adjust: `pytest --collect-only -q`
