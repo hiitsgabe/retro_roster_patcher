@@ -198,14 +198,43 @@ def _rosters_for_patch(
     )
 
 
+def _patch_options(game_id: str, args: argparse.Namespace, patcher: Patcher) -> dict[str, Any]:
+    """Resolve the flags that reach `patch` as `**options`.
+
+    `Patcher.patch` ends in `**options`, so an option the patcher does not
+    understand is dropped without a word. That makes forwarding `--language`
+    unconditionally worse than not offering the flag at all: the user asks for
+    Spanish menus, gets Japanese ones, and the run reports success. So the check
+    is here, against the patcher the user actually named, and a flag that cannot
+    be honoured is a `UsageError` — the same answer `build_patcher` gives
+    `--assets-dir` on a patcher whose `__init__` does not take it.
+
+    Duck-typed on a `languages` attribute rather than on a signature, because
+    `**options` has no signature to inspect, and not on `PatcherInfo`, because
+    that dataclass crosses the IPC boundary in `list`'s payload. Absent means
+    "this game ships no translations", which is the truth for NHL94.
+    """
+    language = getattr(args, "language", "")
+    if not language:
+        return {}
+    codes: tuple[str, ...] = tuple(getattr(patcher, "languages", ()))
+    if not codes:
+        raise UsageError(f"{game_id} does not take --language")
+    if language not in codes:
+        raise UsageError(f"{game_id} has no language {language!r}; it has {', '.join(codes)}")
+    return {"language": language}
+
+
 def cmd_patch(args: argparse.Namespace, renderer: Renderer) -> None:
     rom = Path(args.rom)
     if not rom.is_file():
         raise RomError(f"No such ROM: {rom}")
 
     patcher = build_patcher(args.game, args, renderer)
-    # Slot map first: a malformed one is then rejected without paying for the
-    # fetch whose data it would have been mapped against.
+    # Options first, then the slot map: this one costs no I/O at all, and the
+    # slot map is a file read. Both precede the fetch, so a bad flag is rejected
+    # without paying for the network round trips its data would have come from.
+    options = _patch_options(args.game, args, patcher)
     slot_mapping = _load_slot_map(args.slot_map)
     data = _rosters_for_patch(args, patcher, renderer)
 
@@ -220,6 +249,6 @@ def cmd_patch(args: argparse.Namespace, renderer: Renderer) -> None:
         out.parent.mkdir(parents=True, exist_ok=True)
     renderer.status(f"Writing {out}...")
     result = patcher.patch(
-        rom_path=rom, output_path=out, rosters=mapped, on_progress=renderer.progress
+        rom_path=rom, output_path=out, rosters=mapped, on_progress=renderer.progress, **options
     )
     renderer.result({"kind": "patch", **result.to_dict()})

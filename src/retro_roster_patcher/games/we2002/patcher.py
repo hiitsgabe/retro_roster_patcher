@@ -68,7 +68,7 @@ from .ppf import PPFError, apply_ppf
 from .rom_reader import RomReader
 from .rom_writer import RomWriter
 from .stat_mapper import StatMapper
-from .translations.we2002 import LANGUAGES, ensure_ppf
+from .translations.we2002 import LANGUAGE_CODES, LANGUAGES, ensure_ppf
 
 # The ROM has two team tables: 32 Master League slots and 63 national slots
 # (`_SQUADRE_ML` and `_SQUADRE_NAZ` in `rom_writer.py`). `slot_index` here means
@@ -110,6 +110,27 @@ class WE2002Patcher(Patcher):
     explicit slot mapping. `default_slot_mapping` produces the sequential one the
     old UI used, as a starting point.
     """
+
+    #: Language codes `patch` accepts in `options["language"]`, in menu order.
+    #:
+    #: Declared on the class so a caller can ask *before* calling. `patch`
+    #: validates `options["language"]` itself and raises `CapabilityError` for a
+    #: code outside this set, but that is too late for the two callers that
+    #: matter: a UI has to offer the choice before it has anything to patch, and
+    #: `cli.commands._patch_options` has to tell a `--language` on NHL94 apart
+    #: from a `--language` here, which no amount of inspecting `patch` can do —
+    #: its signature ends in `**options`, so it accepts every keyword and honours
+    #: two.
+    #:
+    #: Not a `@register` capability. `PatcherInfo` is the registry's public
+    #: description of a patcher and it crosses the IPC boundary in `list`'s
+    #: payload, so a field there is a surface change. A plain class attribute is
+    #: the same duck-typed boundary check `build_patcher` already applies to
+    #: `--assets-dir`, and absent means "ships no translations". `PatcherInfo` is
+    #: the right long-term home — that dataclass documents itself as driving
+    #: "which arguments to prompt for" — and moving it there is a surface change
+    #: to make deliberately, not as a side effect of adding a CLI flag.
+    languages: tuple[str, ...] = tuple(LANGUAGE_CODES)
 
     def __init__(
         self,

@@ -123,6 +123,16 @@ def build_parser() -> argparse.ArgumentParser:
     p_patch.add_argument("--season", type=int, default=None, help="fetch this season inline")
     p_patch.add_argument("--rosters", default="", help="use a rosters file from `fetch`")
     p_patch.add_argument("--slot-map", default="", help="JSON list of slot mappings")
+    # No `choices=`: which codes are valid depends on the game, and this parser is
+    # built before `--game` is read. `cmd_patch` checks it against the patcher the
+    # user actually named, and lists that game's codes when it refuses. The codes
+    # named here are `WE2002Patcher.languages`, pinned against it by
+    # `test_the_language_help_names_exactly_the_codes_we2002_ships`.
+    p_patch.add_argument(
+        "--language",
+        default="",
+        help="menu language, for a game that ships translations (we2002: en, es, fr, pt)",
+    )
     p_patch.set_defaults(handler=commands.cmd_patch)
 
     return parser

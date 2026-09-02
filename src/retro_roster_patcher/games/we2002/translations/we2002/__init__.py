@@ -22,7 +22,15 @@ LANGUAGES = {
     "pt": "Portuguese",
 }
 
-# Ordered list for UI cycling
+# The codes on their own, in the order a menu should offer them. Derived from
+# `LANGUAGES` rather than written out again, so the two cannot drift apart.
+#
+# `WE2002Patcher.languages` is this list, and that is what `cli.commands`
+# validates `--language` against and what `patch --help` prints. Order is
+# load-bearing there: `LANGUAGES` is a mapping and a caller is entitled to treat
+# it as unordered, where the sequence a UI cycles through, the help text a user
+# reads and the list a refusal prints should be stable and should start at the
+# default.
 LANGUAGE_CODES = list(LANGUAGES.keys())
 
 
