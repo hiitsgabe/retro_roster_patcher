@@ -430,7 +430,7 @@ def test_a_pointer_that_only_get_info_dereferences_does_not_escape_as_index_erro
 def test_fetch_returns_league_data_for_the_teams_that_have_slots(patcher):
     data = patcher.fetch(season=2025)
 
-    assert isinstance(data, LeagueData)
+    assert type(data) is LeagueData
     # The whole `League`, not just name and season: `LeagueData` is what crosses
     # the fetch → JSON → map boundary, and every field but `season` is synthesised
     # here — this game has no league endpoint to read them from — so nothing else
@@ -564,7 +564,7 @@ def test_map_rosters_keys_by_rom_slot_index(patcher):
 def test_map_rosters_produces_the_writer_s_record_type(patcher):
     records = patcher.map_rosters(patcher.fetch(season=2025)).teams[BOS_SLOT]
     first = records[0]
-    assert isinstance(first, NHL94GenPlayerRecord)
+    assert type(first) is NHL94GenPlayerRecord
     assert (first.name, first.position, first.jersey_number, first.is_goalie) == (
         "P0",
         "C",

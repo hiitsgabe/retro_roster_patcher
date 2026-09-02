@@ -11,7 +11,10 @@ PYPROJECT = Path(__file__).resolve().parent.parent / "pyproject.toml"
 
 
 def test_version_is_exposed():
-    assert isinstance(retro_roster_patcher.__version__, str)
+    # `type(...) is str`, not `isinstance`: a str subclass here would be a sign that
+    # `__version__` is something computed (a lazy proxy, a Path part) rather than the
+    # literal the next test compares against pyproject.toml.
+    assert type(retro_roster_patcher.__version__) is str
 
 
 def test_version_matches_pyproject():

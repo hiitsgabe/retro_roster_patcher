@@ -118,19 +118,32 @@ def test_a_huge_body_is_truncated_in_the_error():
 
     with pytest.raises(ApiError) as excinfo:
         _http.get_json("https://example.test/p", transport=transport)
-    assert len(str(excinfo.value)) < 500
+    # The exact tail, not a bound on the whole message: 200 is the snippet width, so
+    # equality fails on a wider snippet, a narrower one, and a snippet taken from the
+    # wrong end, none of which a `< 500` would have noticed. The full length is
+    # deliberately not pinned — the head of the message is `json`'s own "Expecting
+    # value: line 1 column 1 (char 0)", wording CPython is free to reword.
+    tail = "(body was 100000 bytes starting b'" + "x" * 200 + "')"
+    assert str(excinfo.value)[-len(tail) :] == tail
 
 
 def test_an_already_parsed_body_is_truncated_in_the_error():
     # Where a replay transport returning `json.load(f)` instead of raw bytes lands.
+    body = {"players": [{"name": "x" * 100} for _ in range(500)]}
+
     def transport(url, headers, timeout):
-        return {"players": [{"name": "x" * 100} for _ in range(500)]}
+        return body
 
     with pytest.raises(ApiError) as excinfo:
         _http.get_json("https://example.test/p", transport=transport)
     message = str(excinfo.value)
     assert "a dict:" in message
-    assert len(message) < 500
+    # `repr(body)` is ~19kB, so this pins both that it is truncated to 200 characters
+    # and that the ellipsis marking the truncation is there. Computed from the test's
+    # own input rather than from `_http._BODY_SNIPPET`, so widening the constant is a
+    # failure here instead of a silently-agreeing pair.
+    tail = "(body was a dict: " + repr(body)[:200] + "...)"
+    assert message[-len(tail) :] == tail
 
 
 def test_an_empty_body_is_reported_as_empty():
@@ -248,4 +261,11 @@ def test_the_timeout_is_honoured(server_url):
     # which is fast enough to pass the elapsed-time bound without a timeout.
     with pytest.raises(ApiError, match="failed: timed out"):
         _http.get_json(f"{server_url}/slow", timeout=0.05)
+    # The one bound in this suite that is not a weakened equality. Elapsed wall time
+    # has no exact value to pin, and the claim being made *is* an inequality: the
+    # client gave up before the handler's `sleep(SLOW_RESPONSE_SECONDS)` returned,
+    # i.e. `timeout=` ended the request rather than the server ending it. Pinning
+    # elapsed time to anything narrower would fail on a loaded CI box, and the
+    # `match=` above is what stops the other way a fast failure could happen —
+    # connection-refused — from satisfying this test.
     assert time.monotonic() - started < SLOW_RESPONSE_SECONDS
