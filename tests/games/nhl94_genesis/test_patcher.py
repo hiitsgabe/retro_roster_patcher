@@ -24,8 +24,8 @@ import textwrap
 
 import pytest
 
-from retro_roster_patcher.core.errors import ApiError, CapabilityError, RomError
-from retro_roster_patcher.core.models import SlotMapping
+from retro_roster_patcher.core.errors import ApiError, CapabilityError, MappingError, RomError
+from retro_roster_patcher.core.models import MappedRosters, SlotMapping
 from retro_roster_patcher.games.nhl94_genesis.models import (
     MODERN_NHL_TO_NHL94_GEN,
     TEAM_COUNT,
@@ -670,6 +670,26 @@ def test_patch_reports_progress_and_ends_at_one(tmp_path, patcher):
         (0.5, "Writing Chicago..."),
         (1.0, "Saving patched ROM..."),
     ]
+
+
+def test_patching_with_another_games_rosters_is_refused_before_the_rom_is_opened(tmp_path, patcher):
+    # `MappedRosters.game_id` is written by every `map_rosters` and was read by
+    # nobody. Handing WE2002's rosters to this patcher was accepted, because
+    # `filled_slots()` calls any truthy value a filled slot, and failed deep in
+    # `write_team_roster` on whatever the value is not: `AttributeError` for the
+    # stand-in below, `TypeError: 'WETeamRecord' object is not iterable` for the
+    # real thing. Both are outside `RetroRosterError`, so a consumer catching
+    # the library's own hierarchy did not catch either.
+    rom = synthetic_rom.write_nhl94_genesis_rom(tmp_path / "nhl94.bin")
+    out = tmp_path / "out.bin"
+    foreign = MappedRosters(game_id="we2002", teams={0: "not a list of records"})
+
+    with pytest.raises(MappingError, match="we2002"):
+        patcher.patch(rom_path=rom, output_path=out, rosters=foreign)
+
+    # Refused ahead of every other guard, so no output file exists to be
+    # mistaken for a patched ROM.
+    assert out.exists() is False
 
 
 def test_patching_with_nothing_mapped_still_writes_an_output(tmp_path, patcher):

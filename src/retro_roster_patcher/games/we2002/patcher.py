@@ -315,6 +315,10 @@ class WE2002Patcher(Patcher):
         on_progress: ProgressFn | None = None,
         **options: Any,
     ) -> PatchResult:
+        # First, ahead of every other guard: it is the one check that costs no
+        # I/O, and the failure it prevents is the writer choking on another
+        # game's record type with an exception outside this library's hierarchy.
+        rosters.require_game(self.game_id)
         language = options.get("language", "en")
         if language not in LANGUAGES:
             raise CapabilityError(

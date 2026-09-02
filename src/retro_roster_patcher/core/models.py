@@ -11,6 +11,8 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
+from .errors import MappingError
+
 # Reported as a fraction 0.0-1.0 plus a human-readable message.
 ProgressFn = Callable[[float, str], None]
 
@@ -99,10 +101,30 @@ class MappedRosters:
 
     `teams` maps ROM slot index to that game's own player-record type. The
     library treats the values as opaque; only the owning patcher interprets them.
+
+    `game_id` records which patcher's `map_rosters` produced the values, and is
+    what makes handing them to a different patcher a reported error rather than
+    a crash: every `patch` implementation calls `require_game` first.
     """
 
     game_id: str
     teams: dict[int, Any] = field(default_factory=dict)
+
+    def require_game(self, game_id: str) -> None:
+        """Raise `MappingError` unless these rosters were mapped for `game_id`.
+
+        The values in `teams` are one game's private record type, so the wrong
+        game's rosters do not fail at the boundary — they fail inside the writer
+        on an attribute or an iteration the value does not support, with an
+        `AttributeError` or `TypeError` that is outside this library's exception
+        hierarchy. A consumer holding rosters for several games (both target
+        applications do) would not catch that by catching `RetroRosterError`.
+        """
+        if self.game_id != game_id:
+            raise MappingError(
+                f"These rosters were mapped for {self.game_id!r}, "
+                f"not for {game_id!r}; re-run map_rosters on the {game_id!r} patcher"
+            )
 
     def filled_slots(self) -> list[int]:
         """Slot indices whose mapped value is truthy, in ascending order.
