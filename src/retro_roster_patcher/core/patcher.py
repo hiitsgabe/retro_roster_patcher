@@ -104,8 +104,12 @@ class Patcher(ABC):
         stays free of network I/O and of credentials so `retro-roster analyze`
         can instantiate every registered patcher purely to inspect a ROM — an
         operation that never reaches a provider. It is not free of side effects:
-        every sports client `os.makedirs` its cache directory from its own
-        constructor, and the patchers build their client eagerly.
+        every sports client creates its cache directory from its own constructor
+        through `errors.ensure_cache_dir`, and the patchers build their client
+        eagerly. So constructing a patcher can raise `StorageError` — on a
+        read-only `$HOME`, which is the Batocera and Android default — and that
+        is the one failure that happens before any method of this interface is
+        called.
         """
         if self.requires_api_key and not self.api_key:
             raise CapabilityError(f"{self._subject()} requires an api_key")
@@ -140,6 +144,15 @@ class Patcher(ABC):
         `RomInfo(is_valid=False)` instead of raising, because `retro-roster
         analyze` probes every registered patcher against one ROM to discover
         which of them recognises it.
+
+        "Unreadable" includes the `OSError` the filesystem raises — a revoked
+        read bit, a yanked USB or SMB mount, an EIO. That is not automatic, and
+        the two implementations get there differently: NHL94's reader answers
+        `load() -> False` because it catches its own, and WE2002's does not, so
+        its patcher wraps the call in `errors.as_rom_error`. Either way the
+        caller sees `RomError`, which is the only thing this sentence promises.
+        `cmd_analyze` catches `RomError` per patcher and `continue`s, so
+        anything else aborts the whole sweep.
         """
 
     @abstractmethod
@@ -153,7 +166,10 @@ class Patcher(ABC):
         """Pull roster data for one season.
 
         Implementations call `self.check_api_key()` first. Raises `ApiError` on
-        upstream failure.
+        upstream failure — including the provider-specific subclasses, which is
+        why they are subclasses: `sports.api_football` raises `RateLimitError`,
+        `DailyLimitError` and `SeasonNotAvailableError`, and a caller that only
+        wants "the provider failed" catches `ApiError` and gets all three.
         """
 
     @abstractmethod
@@ -179,4 +195,12 @@ class Patcher(ABC):
         on_progress: ProgressFn | None = None,
         **options: Any,
     ) -> PatchResult:
-        """Write the patched ROM. Raises `RomError` on any write failure."""
+        """Write the patched ROM.
+
+        Raises `RomError` on any write failure, the filesystem's `OSError`s
+        included. As in `analyze_rom` the two implementations reach that
+        differently: NHL94's writer returns `False` from `finalize`, and
+        WE2002's raises, so its patcher wraps the whole write in
+        `errors.as_rom_error`. An unwritable `--out` *directory* is not this —
+        the CLI creates it before calling, and reports `StorageError`.
+        """
