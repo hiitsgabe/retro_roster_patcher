@@ -548,7 +548,7 @@ def test_the_games_table_matches_the_registry():
     expected = [
         (info.game_id, info.platform, info.sport, info.providers) for info in rrp.list_patchers()
     ]
-    assert len(expected) == 4
+    assert len(expected) == 5
     assert documented == expected
 
 
