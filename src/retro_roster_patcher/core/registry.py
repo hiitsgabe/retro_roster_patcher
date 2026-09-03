@@ -39,8 +39,8 @@ class PatcherInfo:
     whether a slot-mapping step is needed, which providers to offer.
 
     This crosses the IPC boundary in `list`'s JSON payload, so a field here is
-    public surface. `requires_api_key` was one until round F removed the last
-    provider that took a credential. It is deleted rather than pinned to
+    public surface. `requires_api_key` was such a field, until the last provider
+    that took a credential was removed. It is deleted rather than pinned to
     `False`: a field whose value can no longer vary tells a consumer nothing,
     and the one thing it would still do is invite a UI to render a permanent
     'API key: no' beside every game.

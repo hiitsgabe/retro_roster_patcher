@@ -522,9 +522,9 @@ def test_the_nhl_provider_is_asked_by_team_code_and_season(tmp_path):
 
 def test_fetch_needs_no_credential(patcher):
     # `fetch` opened with a `check_api_key()` call, and the class carried a
-    # `requires_api_key` capability for it to read, until round F removed both
-    # along with the only provider that ever wanted a key. This game never
-    # needed one; what it pins now is that fetching takes nothing but a season.
+    # `requires_api_key` capability for it to read; both went with the only
+    # provider that ever wanted a key. This game never needed one; what it pins
+    # now is that fetching takes nothing but a season.
     assert [tr.team.code for tr in patcher.fetch(season=2025).teams] == ["BOS", "CHI"]
 
 

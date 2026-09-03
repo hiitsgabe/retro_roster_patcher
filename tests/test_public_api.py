@@ -85,10 +85,10 @@ def test_the_sports_package_exports_exactly_these_names():
     # public keyword parameter on seven public callables and lived only in the
     # private `_http`.
     #
-    # There were three clients and three exported `ApiError` subclasses until
-    # round F deleted `ApiFootballClient`. The exceptions went with it because
-    # it was the only thing that raised them, and an exported exception nothing
-    # can raise is a consumer's `except` clause that silently never fires.
+    # There were three clients and three exported `ApiError` subclasses. The
+    # subclasses were API-Football's and were deleted with `ApiFootballClient`,
+    # because it was the only thing that raised them, and an exported exception
+    # nothing can raise is a consumer's `except` clause that silently never fires.
     # `ApiError` from `core.errors` is what "the provider failed" catches.
     expected = {
         "EspnClient",

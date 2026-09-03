@@ -11,9 +11,11 @@ The two provider tests below are about WHERE in the stream a failure lands, not
 about which provider produced it. `fetch` degrades gracefully per team, but only
 from the squad loop on: its first two steps — resolving the league and listing
 its teams — are outside that loop, and a failure in either used to escape.
-Until round F these were driven by API-Football's free-plan and quota envelopes;
-ESPN meters neither, so they are driven by the two failures ESPN can produce at
-exactly those two points, and the event sequences they assert are unchanged.
+API-Football's free-plan and quota envelopes once drove these; ESPN meters
+neither, so they are driven instead by the two failures ESPN can produce at
+exactly those two points. The event sequences they assert did not have to change
+with them, which is the point: a sequence follows where the failure lands, not
+which provider raised it.
 """
 
 import json

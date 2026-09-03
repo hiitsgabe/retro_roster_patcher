@@ -110,11 +110,11 @@ def test_a_cache_dir_is_the_only_thing_construction_needs():
 
 
 def test_an_api_key_argument_is_refused_rather_than_ignored():
-    # `api_key` was a keyword parameter here until round F deleted the last
-    # provider that took a credential. It is gone rather than accepted and
-    # dropped: a caller still passing one believes a credential is in use, and
-    # a parameter that silently does nothing never tells them otherwise. This
-    # pins that they get `TypeError` at the call site instead.
+    # `api_key` was a keyword parameter here while a provider still took a
+    # credential. It is gone rather than accepted and dropped: a caller still
+    # passing one believes a credential is in use, and a parameter that silently
+    # does nothing never tells them otherwise. This pins that they get
+    # `TypeError` at the call site instead.
     with pytest.raises(TypeError):
         FakePatcher(cache_dir=Path("/tmp"), api_key="k")  # type: ignore[call-arg]
 

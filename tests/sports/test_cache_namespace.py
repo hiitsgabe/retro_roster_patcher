@@ -12,11 +12,11 @@ Reading that off the source is how the reviewer found no collision; it is not a
 proof, because a key template is easy to miss by eye and easy to add later
 without noticing this constraint exists.
 
-A third client, `ApiFootballClient`, was here until round F. It namespaced
-nothing — its four stems were the bare words `leagues`, `teams`, `squad` and
-`players` — and a test named exactly that risk. Both the client and the risk
-are gone; what remains is the discipline the two survivors keep, which is what
-a third client added later has to be held to.
+A third client, `ApiFootballClient`, was covered here too before it was deleted.
+It namespaced nothing — its four stems were the bare words `leagues`, `teams`,
+`squad` and `players` — and a test named exactly that risk. Both the client and
+the risk are gone; what remains is the discipline the two survivors keep, which
+is what a third client added later has to be held to.
 
 This file executes it instead. Each client's own test module already carries a
 `NETWORK_CALLS` table naming every method that reaches the wire, and

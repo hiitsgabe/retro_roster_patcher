@@ -141,8 +141,8 @@ def _as_float(value: Any) -> float:
 class EspnClient:
     """Client for ESPN's public API — no key, no rate limits.
 
-    Four sports, not the two this said until round E: soccer for WE2002, hockey
-    for NHL94, and baseball and basketball for the games the plan migrates next.
+    Four sports: soccer for WE2002, hockey for NHL94, and baseball and
+    basketball for the games the plan migrates next.
     """
 
     def __init__(
