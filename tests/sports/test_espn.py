@@ -296,8 +296,8 @@ def test_the_other_two_sports_squad_keys_carry_the_season_too(tmp_path, method, 
 
     `EspnClient` is a public client, not private to NHL94: leaving two of its
     four squad methods keyed without a season would leave the next game that
-    wants MLB or NBA rosters with the bug this round removed, and no test to
-    notice. The bodies differ because the parsers do — baseball groups its
+    wants MLB or NBA rosters serving one season's squad for another, and no test
+    to notice. The bodies differ because the parsers do — baseball groups its
     athletes by role and basketball returns a flat list — so one shared fixture
     would silently parse to nothing for one of them.
     """
@@ -1157,8 +1157,8 @@ def test_a_soccer_methods_parameters_are_exactly_these_in_this_order(method, exp
     # empty with nothing raised anywhere.
     #
     # Fixing the call site would have fixed that one line. This pins the order
-    # itself, so the mistake cannot come back through the signature. Until round
-    # F the pin was "a positional superset of `ApiFootballClient`'s", which said
-    # the same thing by comparison; with that client deleted the list is written
-    # out here instead, which is the same guard and one fewer indirection.
+    # itself, so the mistake cannot come back through the signature. The pin was
+    # once written as "a positional superset of `ApiFootballClient`'s", which
+    # said the same thing by comparison; with that client deleted the list is
+    # written out here instead, which is the same guard and one fewer indirection.
     assert list(inspect.signature(getattr(EspnClient, method)).parameters) == expected
