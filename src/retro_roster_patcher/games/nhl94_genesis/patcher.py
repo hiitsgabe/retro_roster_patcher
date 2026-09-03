@@ -162,9 +162,6 @@ class NHL94GenesisPatcher(Patcher):
         league_id: int | None = None,
         on_progress: ProgressFn | None = None,
     ) -> LeagueData:
-        # A no-op for this game, which needs no key. Called anyway so every
-        # `fetch` in the codebase opens the same way and a later capability
-        # change is a decorator edit rather than a code edit.
         self.status("Fetching NHL teams...")
         teams = self.api.get_nhl_teams()
         if not teams:
