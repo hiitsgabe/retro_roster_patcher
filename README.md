@@ -15,27 +15,25 @@
 </p>
 
 Retro sports games shipped with the rosters of their release year and no way to change
-them. This tool fetches a current squad from a live sports API, maps each player onto the
-attribute scale the game actually stores, and writes the result directly into the binary
-team tables of a ROM you already own — so a 1994 cartridge lines up with a 2025 season.
+them. This tool fetches a squad from a live sports API, maps each player onto the attribute
+scale the game actually stores, and writes the result into the binary team tables of a ROM
+you already own — so a 1994 cartridge lines up with a 2025 season.
 
-Two games are supported today:
+| Game | `--game` | Platform | Sport | Providers |
+| --- | --- | --- | --- | --- |
+| NHL 94 | `nhl94-genesis` | `genesis` | `hockey` | `espn`, `nhl` |
+| Winning Eleven 2002 | `we2002` | `psx` | `soccer` | `espn` |
 
-| Game | Platform | Sport | Data source |
-| --- | --- | --- | --- |
-| NHL 94 | Sega Genesis | Hockey | ESPN or the NHL API, no key |
-| Winning Eleven 2002 | PlayStation | Soccer | ESPN, no key |
-
-WE2002 also gets its menus translated out of Japanese — English, Spanish, French and
-Portuguese patches are generated and applied as part of the same run.
+Every provider is keyless: no credential to supply, and no flag or environment variable for
+one. WE2002 also gets its menus translated out of Japanese as part of the same run.
 
 **This project ships no game data.** It patches a ROM or ISO you supply, and never
 redistributes one. The tests build synthetic images byte by byte rather than committing a
 real dump.
 
 Zero runtime dependencies — the standard library only, so it drops into an embedded or
-sandboxed interpreter without a wheel to build. Usable as a library or as a CLI, and the
-CLI speaks newline-delimited JSON so another process can drive it. It was extracted from a
+sandboxed interpreter with no wheel to build. Usable as a library or as a CLI, and the CLI
+speaks newline-delimited JSON so another process can drive it. It was extracted from a
 pygame launcher for exactly that reason; a Flutter app over embedded CPython is the other
 consumer.
 
@@ -45,85 +43,332 @@ consumer.
 pip install retro-roster-patcher
 ```
 
-## Library
+## Quick start
 
-```python
-from pathlib import Path
-from retro_roster_patcher import get_patcher
-
-patcher = get_patcher("nhl94-genesis")(cache_dir=Path("~/.cache/rrp").expanduser())
-data = patcher.fetch(season=2025)
-rosters = patcher.map_rosters(data)
-result = patcher.patch(
-    rom_path=Path("nhl94.bin"),
-    output_path=Path("nhl94-2025.bin"),
-    rosters=rosters,
-)
-print(result.output_path, result.teams_patched)
-```
-
-## CLI
-
-```
+```bash
 retro-roster list
-retro-roster analyze --rom PATH [--game ID] [--cache-dir DIR]
-retro-roster fetch   --game ID --season N
-                     [--league-id N] [--provider P]
-                     [--cache-dir DIR] [--assets-dir DIR] [--out rosters.json]
-retro-roster patch   --game ID --rom IN --out OUT
-                     (--season N | --rosters rosters.json)
-                     [--league-id N] [--slot-map map.json] [--language CODE]
-                     [--provider P] [--cache-dir DIR] [--assets-dir DIR]
+retro-roster analyze --rom nhl94.bin
+retro-roster fetch --game nhl94-genesis --provider nhl --season 2025 --out rosters.json
+retro-roster patch --game nhl94-genesis --rom nhl94.bin --out nhl94-2025.bin --rosters rosters.json
 ```
 
-`list` reports what each game needs; several flags are optional to the parser and
-mandatory to a particular game:
+`fetch` and `patch` are separate verbs so you can inspect — or hand-edit — `rosters.json`
+before anything touches a ROM. `patch --season N` does both in one run instead.
 
-| Game | Needs |
+## Command line
+
+Four verbs: `list`, `analyze`, `fetch`, `patch`. `req` below means the verb refuses to run
+without the flag, `yes` means it accepts it, `-` means it does not.
+
+| Flag | `list` | `analyze` | `fetch` | `patch` | Meaning |
+| --- | --- | --- | --- | --- | --- |
+| `--help` | yes | yes | yes | yes | usage for that verb |
+| `--json` | yes | yes | yes | yes | newline-delimited JSON on stdout instead of human text |
+| `--game` | - | yes | req | req | patcher id from the table above |
+| `--rom` | - | req | - | req | input ROM or ISO |
+| `--out` | - | - | yes | req | where to write the rosters file / the patched ROM |
+| `--season` | - | - | req | yes | season year, e.g. `2025` |
+| `--rosters` | - | - | - | yes | patch from a `fetch` file instead of `--season` |
+| `--slot-map` | - | - | - | yes | JSON list of slot mappings |
+| `--language` | - | - | - | yes | menu language, for a game that ships translations |
+| `--provider` | - | - | yes | yes | data provider, when the game offers more than one |
+| `--league-id` | - | - | yes | yes | provider league id |
+| `--cache-dir` | - | yes | yes | yes | where caches and generated assets live |
+| `--assets-dir` | - | - | yes | yes | directory of user-supplied assets, read only |
+
+`--json` and `--help` are accepted on either side of the verb. `analyze` without `--game`
+probes every registered patcher and reports the ones that recognise the file. `patch` needs
+exactly one of `--season` and `--rosters`; both, or neither, is a usage error.
+
+### What each game requires
+
+| Game | Requires |
 | --- | --- |
-| `nhl94-genesis` | No `--league-id`. It *refuses* `--slot-map`: it matches each team by its code. |
+| `nhl94-genesis` | No `--league-id`. It *refuses* `--slot-map`: it matches each team by its three-letter code. |
 | `we2002` | `--league-id` for `fetch` and for `patch --season` — there is no default league, and without one both fail with `CapabilityError` before any request goes out. `--slot-map` for every `patch`: the ROM's team slots are unnamed, so there is nothing to match teams against. |
 
-`--language` is honoured by games that ship translations — `we2002` takes `en`, `es`,
-`fr`, `pt` — and is a usage error on one that does not.
+League ids are the provider's own. ESPN's soccer ids run from 2001 (Premier League) through
+2016, in `sports.espn.ESPN_LEAGUES`. An id the chosen provider does not know is reported as
+`ApiError: League N not found`.
 
-`--assets-dir` is a directory the tool only ever reads. Its one use today is the
-community WE2002 menu translation `w202-english.ppf`, which this project does not
-redistribute: drop that file in and its menu records are merged into whichever
-language PPF `--language` selected. Without it the roster patch still applies and
-the menus stay Japanese.
+A slot map is a JSON array of `{"slot_index", "team_id", "team_name"}` objects, which is
+what `SlotMapping.to_dict()` produces:
 
-Add `--json` to any command to get newline-delimited JSON on stdout instead of human text:
+```python
+import json
+from pathlib import Path
 
-```json
-{"event":"status","msg":"Validating ROM..."}
-{"event":"progress","pct":0.42,"msg":"Fetching Boston Bruins..."}
-{"event":"partial","data":{}}
-{"kind":"patch","output_path":"nhl94-2025.bin","teams_patched":26,"players_patched":598,"event":"result","ok":true}
-{"event":"error","type":"RomError","msg":"Not a valid NHL94 Genesis ROM: nhl94.bin"}
+from retro_roster_patcher import SlotMapping
+
+mappings = [
+    SlotMapping(slot_index=0, team_id=359, team_name="Arsenal"),
+    SlotMapping(slot_index=1, team_id=364, team_name="Liverpool"),
+]
+Path("slot-map.json").write_text(json.dumps([m.to_dict() for m in mappings], indent=2))
 ```
 
-`fetch` without `--out` adds a `partial` event whose `data` is the whole rosters payload,
-since there is no file to point at.
+### Translations and user assets
 
-In `--json` mode stdout carries protocol and nothing else; logs go to stderr. Exit codes are
-`0` success, `1` typed error, `2` usage error.
+`--language` is honoured by games that ship translations — `we2002` takes `en`, `es`, `fr`
+and `pt` — and is a usage error on a game that does not, rather than a flag silently
+dropped.
 
-Every provider is keyless, so there is no credential to supply and no flag or
-environment variable for one.
+`--assets-dir` is a directory the tool only ever reads. Its one use today is the community
+WE2002 menu translation `w202-english.ppf`, which this project does not redistribute: drop
+that file in and its menu records are merged into whichever language PPF `--language`
+selected. Without it the roster patch still applies and the menus stay Japanese.
 
-League ids are the provider's own. ESPN's soccer ids run from 2001 (Premier League)
-through 2016, in `ESPN_LEAGUES`. An id the chosen provider does not know is
-reported as `ApiError: League N not found`.
+## Library
+
+Everything the CLI does is a call on a `Patcher`. `list_patchers()` describes what is
+registered without instantiating anything:
+
+```python
+from retro_roster_patcher import list_patchers
+
+for info in list_patchers():
+    print(info.game_id, info.platform, info.sport, info.providers)
+```
+
+`get_patcher(game_id)` returns the class; you construct it. The four methods are
+`analyze_rom`, `fetch`, `map_rosters` and `patch`, in that order — `fetch` and `map_rosters`
+are split from `patch` so a caller can preview, cache or edit between them without repeating
+the network step. The block below is not executed by the test suite: it needs a provider and
+a ROM.
+
+```python no-run
+from pathlib import Path
+
+from retro_roster_patcher import RetroRosterError, get_patcher
+
+patcher = get_patcher("nhl94-genesis")(
+    cache_dir=Path("~/.cache/retro-roster-patcher").expanduser(),
+    provider="nhl",
+)
+try:
+    data = patcher.fetch(season=2025)
+    rosters = patcher.map_rosters(data)
+    result = patcher.patch(
+        rom_path=Path("nhl94.bin"),
+        output_path=Path("nhl94-2025.bin"),
+        rosters=rosters,
+    )
+except RetroRosterError as exc:
+    raise SystemExit(f"{type(exc).__name__}: {exc}") from exc
+
+print(result.output_path, result.teams_patched, result.players_patched)
+```
+
+`RetroRosterError` heads the hierarchy, so one `except` catches everything this library
+reports, including the filesystem errors it converts at its boundaries. Catch a subclass
+when you want to react differently: `RomError`, `ApiError`, `MappingError`,
+`CapabilityError`, `StorageError`, `MissingAssetError`. Constructors take optional
+`on_status` and `on_partial` callbacks and `fetch`/`patch` take `on_progress`; the CLI wires
+those to the events below.
+
+`league_data_to_dict` and `league_data_from_dict` are the round trip behind
+`fetch --out` / `patch --rosters`, so a consumer can hold rosters in its own store.
+
+### Root exports
+
+`from retro_roster_patcher import ...`
+
+- Errors: `RetroRosterError`, `ApiError`, `CapabilityError`, `MappingError`,
+  `MissingAssetError`, `RomError`, `StorageError`
+- Registry: `Patcher`, `PatcherInfo`, `get_patcher`, `list_patchers`, `register`
+- Game-side models: `MappedRosters`, `PatchResult`, `RomInfo`, `RomSlot`, `SlotMapping`
+- Sports models: `League`, `LeagueData`, `Player`, `PlayerStats`, `Team`, `TeamRoster`
+- Serialisation: `league_data_from_dict`, `league_data_to_dict`
+- Finding a ROM on disk: `RomFinder`, `RomFinderConfig`, `RomFinderResult`
+- Also: `Transport`, `__version__`
+
+`from retro_roster_patcher.sports import ...`
+
+- Clients: `EspnClient`, `NhlApiClient`, `Transport`, `team_colors`
+- Models: `League`, `LeagueData`, `Player`, `PlayerStats`, `Team`, `TeamRoster`
+
+## The `--json` protocol
+
+With `--json`, stdout carries protocol and nothing else: one JSON object per line, flushed
+per line. Human logs and progress go to stderr. This is the surface the pygame launcher and
+the Flutter bridge code against.
+
+### Events
+
+Every line has an `event` key.
+
+| `event` | Other keys | Emitted |
+| --- | --- | --- |
+| `status` | `msg` | when a step begins |
+| `progress` | `pct` (0.0-1.0), `msg` | during a fetch or a patch |
+| `partial` | `data` | for an intermediate payload worth rendering before the end |
+| `result` | `ok` (always `true`), `kind`, plus the payload's own keys | on success, as the last line |
+| `error` | `type` (the exception class name), `msg` | on failure, as the last line |
+
+```json
+{"event":"status","msg":"Fetching NHL teams..."}
+{"event":"progress","pct":0.42,"msg":"Fetching Boston Bruins..."}
+{"kind":"patch","output_path":"nhl94-2025.bin","teams_patched":26,"players_patched":598,"event":"result","ok":true}
+```
+
+Guarantees a consumer may rely on:
+
+- Exactly one terminal line per run, `result` or `error`, and nothing after it.
+- `status`, `progress` and `partial` appear zero or more times, only before the terminal
+  line. `list` and `analyze` emit the terminal line alone.
+- `pct` is clamped to `[0.0, 1.0]` and restarts at 0 for each phase, so it is not monotone
+  across a whole `patch --season` run — that run fetches and then writes.
+- `result` sets `event` and `ok` last, so a payload carrying keys of those names cannot
+  overwrite the two a consumer parses on.
+- `fetch` without `--out` emits the entire rosters payload as a `partial` before its
+  `result`, because there is no file to point at.
+
+### Result payloads
+
+The `kind` key says which payload a `result` carries.
+
+| `kind` | Verb | Payload keys |
+| --- | --- | --- |
+| `patchers` | `list` | `patchers[]`, each `game_id`, `platform`, `sport`, `requires_slot_mapping`, `providers[]` |
+| `rom_info` | `analyze` | `matches[]`, each `path`, `size`, `game_id`, `is_valid`, `slots[]`, `extra` |
+| `rosters` | `fetch` | `league`, `season`, `teams`, `players`, `output_path` |
+| `patch` | `patch` | `output_path`, `teams_patched`, `players_patched` |
+
+### Exit codes
+
+| Exit | Meaning | On the stream |
+| --- | --- | --- |
+| `0` | success | a `result` line |
+| `1` | a typed error, an interrupt, or a bug in this library | an `error` line |
+| `2` | usage error | an `error` line, unless argparse rejected the argv itself |
+
+A consumer that only reads the exit code still learns whether to look at stdout. Two edges
+are worth knowing. When argparse rejects the argv — an unknown verb, a missing required flag
+— it prints usage as plain text on stderr and exits 2 without writing any JSON, because no
+renderer has been chosen yet. And an untyped exception is a bug in this project rather than
+something you can act on: the `error` line is written and then the exception is re-raised
+unchanged, so a Python traceback follows on stderr and the exit status is CPython's.
+
+## How a player becomes a number
+
+Neither game stores a rating anyone published. Both numbers below are this project's own
+arithmetic over a provider's season totals, and the two games do it differently. Some
+attributes are measured; several are estimated from position and age, because no feed
+publishes them at all.
+
+### WE2002: ranked against the league, 1-9
+
+Fifteen attributes per player. Ten are earned, five are always estimated.
+
+The ten are grouped into categories — offensive, defensive, body balance, stamina, pass
+accuracy, shoot power, shoot accuracy, technique, dribble, aggression — each a small formula
+over `PlayerStats` fields (`offensive` is goals + 0.7 x assists + 0.3 x shots on target, and
+so on). Every player in the *whole fetched league* is pooled, the formula is evaluated for
+each, and a player's percentile is the share of the pool scoring strictly below him. That
+percentile becomes the rating: 95th and up is a 9, then 85 → 8, 70 → 7, 50 → 6, 35 → 5,
+20 → 4, 10 → 3, 3 → 2, and the rest a 1. Position adjustments follow (a midfielder gains a
+point of passing, a goalkeeper is capped at 3 for shooting accuracy), then everything is
+clamped back into 1-9.
+
+So a 9 means top 5% *of the league you fetched*, not top 5% of the world. Patch the Premier
+League and the Chilean Primera División from the same tool and the two ROMs are not on a
+common scale.
+
+The five that are never measured — speed, acceleration, jump power, heading and curve — come
+from a position base nudged by age. A 24-year-old attacker is quick because attackers are
+quick and he is young, not because anyone timed him.
+
+**`unsupplied`, and why zero is not an answer.** Every count on `PlayerStats` is declared
+`int` or `float` and is never `None`, so a consumer can do arithmetic without a guard. That
+leaves a provider which does not measure duels nowhere to say so except by writing `0` — and
+a zero reads as a *measurement*, ranking the player below everyone who was measured and
+padding the denominator for everyone who was. `PlayerStats.unsupplied` names the fields
+carrying filler rather than data. A player whose provider did not measure a category's
+inputs is dropped from that category's ranking entirely, and his rating comes from a
+position-and-age estimator instead of a percentile he was never in. ESPN, the only soccer
+provider here, reports no duels and no dribbles, which is why body balance, technique and
+dribble have estimators and the other seven categories do not.
+
+A player with no stats at all, or with zero appearances, skips the percentiles and takes a
+position default adjusted for age: under 23 gains pace and stamina and loses technique; from
+31 it goes the other way.
+
+### NHL94: measured against a fixed yardstick, 0-6
+
+Twelve attributes on a 0-6 scale, and no league ranking anywhere. Each stat is scaled
+linearly inside a fixed window, so a 40-goal season is a 6 no matter what the rest of the
+league did:
+
+| Attribute | From | Window |
+| --- | --- | --- |
+| Shot power, shot accuracy | goals | 0-40 |
+| Pass accuracy | assists | 0-55 |
+| Stick handling, offensive awareness | points | 0-90 |
+| Defensive awareness | plus/minus | -30 to +40 |
+| Roughness, aggression | penalty minutes | 0-80 |
+| Agility (goalies) | save percentage | .880-.930 |
+| Defensive awareness (goalies) | goals against average | 3.5 down to 2.0 |
+
+Speed, agility, checking and endurance are position defaults, with a single point of speed
+and agility added for a skater past 50 points. Weight class is `(pounds - 140) // 8`, clamped
+to 0-14. A player the provider has no stats for gets the position defaults untouched.
+
+In short: WE2002 grades on a curve, NHL94 against an absolute yardstick, and in both games
+the physical attributes are priors rather than measurements.
+
+## Limits
+
+- **Past seasons are not historical squads, except on the `nhl` provider.** ESPN's roster
+  endpoints take no season parameter at all; they serve the current squad. `--season 2003`
+  against ESPN therefore returns today's players labelled 2003, and reports success. For
+  `nhl94-genesis`, `--provider nhl` is the real answer: the NHL API serves squads back to
+  1993. For `we2002` there is no second provider, so a past season is a present squad with a
+  past label. (Per-player soccer *statistics* are fetched per season and are genuinely that
+  season's; only the squad list is current.)
+- **Two games.** Adding a third is a `@register`ed `Patcher` subclass, below.
+- **No ROMs, no ISOs, no dumps.** You supply the image.
+- **The community WE2002 English menu PPF is not redistributed.** See `--assets-dir`.
+
+## Adding a game
+
+A patcher is a `Patcher` subclass decorated with `@register`. Its package is imported from
+`retro_roster_patcher/__init__.py`, at the bottom of the import block, so the decorator has
+run by the time anyone calls `get_patcher`. The registry is an in-tree dict, not entry
+points: every game here is first-party.
+
+```python no-run
+from retro_roster_patcher.core.patcher import Patcher
+from retro_roster_patcher.core.registry import register
+
+
+@register("mygame", platform="snes", sport="basketball", providers=("espn",))
+class MyGamePatcher(Patcher):
+    def analyze_rom(self, rom_path): ...
+    def fetch(self, *, season, league_id=None, on_progress=None): ...
+    def map_rosters(self, data, slot_mapping=None): ...
+    def patch(self, *, rom_path, output_path, rosters, on_progress=None, **options): ...
+```
+
+`register`'s keyword arguments become the capability record `list` reports and the CLI
+enforces. Set `requires_slot_mapping=True` if the ROM's team slots cannot be matched
+automatically; `Patcher.check_slot_mapping` then rejects both a missing mapping and an
+unwanted one.
 
 ## Development
 
 ```bash
 pip install -e ".[dev]"
 pytest
+ruff check . && ruff format --check .
+mypy src tests
 ```
 
-That run reports `5 deselected`: `tests/test_packaging.py` asserts the import came from an
-installed distribution, so it fails against the source tree by design. Running that file on
-its own selects nothing and exits `5`. CI's `wheel` job selects it with `-m packaging` after
-installing a built wheel.
+That test run reports `5 deselected`: `tests/test_packaging.py` asserts the import came from
+an installed distribution, so it fails against the source tree by design. Running that file
+on its own selects nothing and exits `5`. CI's `wheel` job selects it with `-m packaging`
+after installing a built wheel.
+
+`tests/test_readme.py` pins this file against the code: the flag table against the argument
+parser, the exported names against `__all__`, the event and payload tables against the
+renderer and the command handlers, the games table against the registry, and every Python
+example against the interpreter. A claim here that stops being true fails the build.
