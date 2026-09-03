@@ -1,5 +1,7 @@
 """Maps real-world player stats to WE2002's 1-9 attribute scale."""
 
+from collections.abc import Callable
+
 from .models import (
     Player,
     PlayerStats,
@@ -96,6 +98,34 @@ class StatMapper:
         ),
     }
 
+    #: Which `PlayerStats` fields each percentile category is computed from.
+    #:
+    #: This table is what makes `PlayerStats.unsupplied` actionable. A record is
+    #: a set of measurements plus a list of the fields on it that are filler, and
+    #: an attribute is only meaningful if every field its formula reads was
+    #: really measured. Naming the inputs per category is the smallest thing that
+    #: says so; deriving them from the lambdas below is not possible, because a
+    #: lambda's body is not introspectable at the level of the attributes it
+    #: touches.
+    #:
+    #: Every key here must be a key of `_compute_percentiles`'s `categories` and
+    #: every value a field of `PlayerStats`; `test_stat_mapper.py` asserts both,
+    #: because a typo in either direction is silent — a category whose inputs are
+    #: misspelt can never be found unsupplied, which is exactly the bug this
+    #: table exists to fix.
+    CATEGORY_INPUTS = {
+        "offensive": ("goals", "assists", "shots_on"),
+        "defensive": ("tackles_total", "interceptions", "blocks"),
+        "body_balance": ("duels_won", "duels_total"),
+        "stamina": ("minutes", "appearances"),
+        "pass_accuracy": ("passes_accuracy",),
+        "shoot_power": ("shots_total", "goals"),
+        "shoot_accuracy": ("goals", "shots_total"),
+        "technique": ("dribbles_success", "dribbles_attempts"),
+        "dribble": ("dribbles_success",),
+        "aggression": ("fouls_committed", "cards_yellow", "cards_red"),
+    }
+
     # Position code mapping
     POSITION_CODES = {
         "Goalkeeper": 0,
@@ -155,40 +185,93 @@ class StatMapper:
         stats: PlayerStats | None,
         percentiles: dict[str, dict[int, float]],
     ) -> WEPlayerAttributes:
-        """Convert a real player's stats to WE2002 format."""
+        """Convert a real player's stats to WE2002 format.
+
+        Three of the ten percentile categories are rated from the player's
+        position and age instead when his provider did not measure their inputs —
+        see `_rate` for why that is not the same as rating him on a zero. The
+        other seven have no estimator and cannot reach one: no provider in this
+        tree leaves them unsupplied, and inventing an estimator for a case that
+        cannot occur would be untestable against anything real.
+        """
         if not stats or stats.appearances == 0:
             return self._fallback_attributes(player)
 
-        pid = stats.player_id
         attrs = WEPlayerAttributes(
-            offensive=self._percentile_to_rating(percentiles.get("offensive", {}).get(pid, 50)),
-            defensive=self._percentile_to_rating(percentiles.get("defensive", {}).get(pid, 50)),
-            body_balance=self._percentile_to_rating(
-                percentiles.get("body_balance", {}).get(pid, 50)
+            offensive=self._rate(player, stats, percentiles, "offensive"),
+            defensive=self._rate(player, stats, percentiles, "defensive"),
+            body_balance=self._rate(
+                player, stats, percentiles, "body_balance", self._estimate_body_balance
             ),
-            stamina=self._percentile_to_rating(percentiles.get("stamina", {}).get(pid, 50)),
+            stamina=self._rate(player, stats, percentiles, "stamina"),
             speed=self._estimate_speed(player),
             acceleration=self._estimate_speed(player),
-            pass_accuracy=self._percentile_to_rating(
-                percentiles.get("pass_accuracy", {}).get(pid, 50)
-            ),
-            shoot_power=self._percentile_to_rating(percentiles.get("shoot_power", {}).get(pid, 50)),
-            shoot_accuracy=self._percentile_to_rating(
-                percentiles.get("shoot_accuracy", {}).get(pid, 50)
-            ),
+            pass_accuracy=self._rate(player, stats, percentiles, "pass_accuracy"),
+            shoot_power=self._rate(player, stats, percentiles, "shoot_power"),
+            shoot_accuracy=self._rate(player, stats, percentiles, "shoot_accuracy"),
             jump_power=self._estimate_jump(player),
             heading=self._estimate_heading(player),
-            technique=self._percentile_to_rating(percentiles.get("technique", {}).get(pid, 50)),
-            dribble=self._percentile_to_rating(percentiles.get("dribble", {}).get(pid, 50)),
+            technique=self._rate(player, stats, percentiles, "technique", self._estimate_technique),
+            dribble=self._rate(player, stats, percentiles, "dribble", self._estimate_dribble),
             curve=self._estimate_curve(player),
-            aggression=self._percentile_to_rating(percentiles.get("aggression", {}).get(pid, 50)),
+            aggression=self._rate(player, stats, percentiles, "aggression"),
         )
         return self._apply_position_adjustments(attrs, player.position)
+
+    def _rate(
+        self,
+        player: Player,
+        stats: PlayerStats,
+        percentiles: dict[str, dict[int, float]],
+        category: str,
+        estimate: Callable[[Player], int] | None = None,
+    ) -> int:
+        """Rate one category from the league percentile, or from `estimate`.
+
+        A category is only rateable if every `PlayerStats` field its formula
+        reads was actually measured. When one was not, the record carries a
+        filler zero, and `_compute_percentiles` has already left this player out
+        of that category's ranking — so there is no percentile here to fall back
+        on, and the `50` default below would hand every such player the same
+        mid-table rating. That is a constant, and a constant cannot tell a
+        working mapper from a broken one.
+
+        `estimate` is the honest answer instead: derive the attribute from
+        position and age, exactly as `speed`, `acceleration`, `jump_power`,
+        `heading` and `curve` — five attributes no provider has ever supplied —
+        are already derived. The rating is then a stated prior rather than a
+        measurement of something nobody measured.
+
+        A category with no estimator keeps the `50`. That path is unreachable
+        today, for the reason in `map_player`, and turning it into an exception
+        would convert an absent stat into a crash in the one place the whole
+        point is not to.
+        """
+        if any(name in stats.unsupplied for name in self.CATEGORY_INPUTS[category]):
+            if estimate is not None:
+                return estimate(player)
+        return self._percentile_to_rating(percentiles.get(category, {}).get(stats.player_id, 50))
 
     def _compute_percentiles(
         self, all_stats: dict[int, PlayerStats]
     ) -> dict[str, dict[int, float]]:
-        """Compute league-wide percentiles for each stat category."""
+        """Compute league-wide percentiles for each stat category.
+
+        A player whose provider did not measure one of a category's inputs is
+        left out of that category's ranking entirely rather than ranked on the
+        filler zero his record carries. Two things go wrong if he is not:
+
+          * he is placed below every player who was measured, so an unmeasured
+            stat reads as the worst possible performance;
+          * he drags the denominator, so in a league where some records come
+            from a provider that measures duels and some from one that does not,
+            the measured players' percentiles are computed against a population
+            that includes non-answers.
+
+        `n` is therefore per-category and not `len(all_stats)`. With a provider
+        that measures everything — API-Football — nothing is skipped and this is
+        the same computation it always was.
+        """
         if not all_stats:
             return {}
 
@@ -210,8 +293,11 @@ class StatMapper:
 
         percentiles: dict[str, dict[int, float]] = {}
         for cat_name, extract_fn in categories.items():
+            inputs = self.CATEGORY_INPUTS[cat_name]
             raw_values = {}
             for pid, stats in all_stats.items():
+                if any(name in stats.unsupplied for name in inputs):
+                    continue
                 raw_values[pid] = extract_fn(stats)
 
             sorted_values = sorted(raw_values.values())
@@ -327,6 +413,66 @@ class StatMapper:
         """Estimate curve from position (wingers/playmakers higher)."""
         base = {"Goalkeeper": 3, "Defender": 3, "Midfielder": 5, "Attacker": 5}
         return base.get(player.position, 4)
+
+    # The three below rate the attributes whose stats not every provider
+    # measures. They are reached from `_rate`, never from `map_player` directly,
+    # and only for a player whose record says the inputs are filler.
+    #
+    # Each position base is the same number `FALLBACK_ATTRS` uses for that
+    # attribute and position, so the two paths into "no measurement" — no stats
+    # at all, and stats from a provider that does not measure this — agree
+    # wherever age carries no signal.
+    #
+    # They do not agree everywhere, and deliberately: `_fallback_attributes` is
+    # ported code held byte-for-byte by this tree's port audit, and it applies an
+    # age term to `technique` but not to `body_balance` or `dribble`.
+    # `_estimate_technique` reproduces its rule exactly; the other two add the
+    # age term it lacks, because a player who has 28 appearances and no duel
+    # data has an age that means something — he is playing — where a player with
+    # no record at all may not have kicked a ball. When the port constraint
+    # lifts, `_fallback_attributes` should call these three rather than carry its
+    # own numbers.
+
+    def _estimate_body_balance(self, player: Player) -> int:
+        """Estimate body balance from position and age.
+
+        Peaks in the middle years: strength has arrived and has not yet gone.
+        """
+        base = {"Goalkeeper": 6, "Defender": 6, "Midfielder": 5, "Attacker": 5}
+        val = base.get(player.position, 5)
+        if 25 <= player.age <= 30:
+            val += 1
+        elif player.age < 21 or player.age > 33:
+            val -= 1
+        return max(1, min(9, val))
+
+    def _estimate_technique(self, player: Player) -> int:
+        """Estimate technique from position and age.
+
+        Improves with years on the pitch, which is `_fallback_attributes`'s rule
+        for the same attribute, reproduced: minus one under 23, plus one from 31.
+        """
+        base = {"Goalkeeper": 4, "Defender": 4, "Midfielder": 6, "Attacker": 6}
+        val = base.get(player.position, 5)
+        if player.age < 23:
+            val -= 1
+        elif player.age > 30:
+            val += 1
+        return max(1, min(9, val))
+
+    def _estimate_dribble(self, player: Player) -> int:
+        """Estimate dribbling from position and age.
+
+        The opposite age curve to technique: running at defenders is the part of
+        a player's game that goes first.
+        """
+        base = {"Goalkeeper": 3, "Defender": 3, "Midfielder": 6, "Attacker": 6}
+        val = base.get(player.position, 5)
+        if player.age < 27:
+            val += 1
+        elif player.age > 32:
+            val -= 1
+        return max(1, min(9, val))
 
     def _select_best_22(
         self,
