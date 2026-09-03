@@ -43,11 +43,6 @@ from retro_roster_patcher.games.we2002.models import WETeamRecord
 from retro_roster_patcher.games.we2002.patcher import MAX_ML_SLOTS, WE2002Patcher
 from retro_roster_patcher.games.we2002.ppf import PPFError
 from retro_roster_patcher.games.we2002.rom_writer import RomWriter, _slot_player_range
-from retro_roster_patcher.sports.api_football import (
-    ApiFootballClient,
-    DailyLimitError,
-    RateLimitError,
-)
 from retro_roster_patcher.sports.espn import EspnClient
 from retro_roster_patcher.sports.models import (
     League,
@@ -69,7 +64,7 @@ def _signature_facts(fn):
 
 
 class FakeApi:
-    """Stands in for ApiFootballClient.
+    """Stands in for `EspnClient`, the only provider client this patcher builds.
 
     Records every call it receives, in order, on `calls`, so a test can pin the
     arguments and not just the answers: `get_teams(league_id, season)` takes two
@@ -279,23 +274,40 @@ def test_the_patcher_is_registered_with_its_capabilities():
     assert cls.platform == "psx"
     assert cls.sport == "soccer"
     assert cls.requires_slot_mapping is True
-    # False, and per-provider rather than per-patcher: the default provider is
-    # keyless, so a UI reading this flag must not prompt for a credential. It is
-    # `check_api_key` that refuses a keyless `api-football`, below.
-    assert cls.requires_api_key is False
-    # Order is load-bearing: `Patcher.__init__` takes `providers[0]` as the
-    # default, so ESPN being first is what makes WE2002 work without a key.
-    assert cls.providers == ("espn", "api-football")
+    # One provider, and it needs no credential. `Patcher.__init__` takes
+    # `providers[0]` as the default, so this tuple is also what makes a caller
+    # that names no provider get the keyless ESPN client.
+    assert cls.providers == ("espn",)
 
 
-def test_the_fake_api_matches_the_real_client_signatures():
-    # The fake is the only thing standing between these tests and the real
-    # client. If it accepts arguments the real one does not, `fetch` can call the
-    # real client wrongly and every test here still passes.
-    for name in ("get_leagues", "get_teams", "get_squad", "get_player_stats"):
-        fake = _signature_facts(getattr(FakeApi, name))
-        real = _signature_facts(getattr(ApiFootballClient, name))
-        assert fake == real
+@pytest.mark.parametrize("name", ["get_leagues", "get_teams", "get_squad", "get_player_stats"])
+def test_the_fake_api_accepts_every_call_the_real_client_accepts(name):
+    # The fake is the only thing standing between most tests in this file and
+    # the real client. If it accepts arguments the real one does not, `fetch`
+    # can call the real client wrongly and every test here still passes.
+    #
+    # A prefix rather than the equality this used to assert: the modelled client
+    # was `ApiFootballClient`, whose four signatures the fake matched exactly.
+    # `EspnClient` appends an optional `league_code` to two of them, so equality
+    # is no longer the true relation. Names and kinds only, not defaults —
+    # `fetch` passes every one of these positionally and always, so an ESPN
+    # default is not load-bearing at the call site, whereas a renamed or
+    # reordered parameter is.
+    fake = [(p, k) for p, k, _ in _signature_facts(getattr(FakeApi, name))]
+    real = [(p, k) for p, k, _ in _signature_facts(getattr(EspnClient, name))]
+    assert real[: len(fake)] == fake
+
+
+@pytest.mark.parametrize("name", ["get_leagues", "get_teams", "get_squad", "get_player_stats"])
+def test_every_real_parameter_the_fake_omits_has_a_default(name):
+    # The other half of the prefix claim above. A prefix match alone would still
+    # let the real client grow a REQUIRED fifth parameter that `fetch` never
+    # passes, which the fake could not reveal and which would fail only against
+    # the real client. `inspect.Parameter.empty` is the sentinel for "no
+    # default", so this says every parameter past the prefix is optional.
+    fake = _signature_facts(getattr(FakeApi, name))
+    tail = _signature_facts(getattr(EspnClient, name))[len(fake) :]
+    assert [p for p, _, default in tail if default is inspect.Parameter.empty] == []
 
 
 def test_the_fake_writer_matches_the_real_writer_signatures():
@@ -311,8 +323,8 @@ def test_the_fake_writer_matches_the_real_writer_signatures():
     # `__init__` is in the loop for the same reason and needs it most: `patch`
     # constructs the writer before it calls anything on it, so a parameter added
     # there fails ahead of every other call. The client's constructor needs no
-    # equivalent guard — the wiring test below builds a real `ApiFootballClient`
-    # and would raise.
+    # equivalent guard — the wiring test below builds a real `EspnClient` and
+    # would raise.
     fake = _fake_writer_class([])
     for name in ("__init__", "write_team", "flush_tex_patches", "finalize"):
         assert _signature_facts(getattr(fake, name)) == _signature_facts(getattr(RomWriter, name))
@@ -322,10 +334,9 @@ def test_the_fake_writer_matches_the_real_writer_signatures():
 
 
 def test_construction_creates_the_cache_directory(tmp_path):
-    # `ApiFootballClient.__init__` does it, which is why this patcher's own
-    # `__init__` does not. Construction is not free of side effects; it is free
-    # of network I/O and of credentials, which is the property `analyze_rom`
-    # depends on.
+    # `EspnClient.__init__` does it, which is why this patcher's own `__init__`
+    # does not. Construction is not free of side effects; it is free of network
+    # I/O, which is the property `analyze_rom` depends on.
     cache = tmp_path / "cache"
     assert cache.exists() is False
 
@@ -334,38 +345,12 @@ def test_construction_creates_the_cache_directory(tmp_path):
     assert p.cache_dir.is_dir() is True
 
 
-def test_the_client_is_given_the_cache_directory_the_key_and_the_transport(tmp_path):
-    # No test in this file runs a method on a real client. Every test that calls
-    # `fetch` swaps in `FakeApi` first, bar
-    # `test_an_api_key_is_mandatory_at_fetch_time`, which stops at
-    # `check_api_key` ahead of the first client call. Construction is therefore
-    # the only place the real wiring shows, and it takes two tests to see all of
-    # it: this one, and the keyless case below for the key itself. A transport
-    # that never reaches the client leaves it free to open a real socket, and a
-    # cache directory that never reaches it puts the JSON cache somewhere else.
-    def transport(url, headers, timeout):
-        raise AssertionError("no test may reach the network")
-
-    seen = []
-    p = WE2002Patcher(
-        cache_dir=tmp_path / "cache",
-        provider="api-football",
-        api_key="test-key",
-        on_status=seen.append,
-        transport=transport,
-    )
-
-    assert type(p.api) is ApiFootballClient
-    assert p.api.cache_dir == str(tmp_path / "cache")
-    assert p.api._transport is transport
-    assert p.api.on_status == seen.append
-    assert p.api.api_key == "test-key"
-
-
-def test_the_default_provider_builds_the_keyless_espn_client(tmp_path):
-    # The same three wirings for the other branch. `EspnClient` takes its cache
-    # directory and status callback positionally and has no `api_key` at all,
-    # which is the whole point of the round.
+def test_construction_builds_the_espn_client_with_the_cache_dir_and_the_transport(tmp_path):
+    # Most tests in this file swap in `FakeApi` before calling `fetch`, so
+    # construction is the only place the real wiring shows. A transport that
+    # never reaches the client leaves it free to open a real socket, and a cache
+    # directory that never reaches it puts the JSON cache somewhere else.
+    # `EspnClient` takes its cache directory and status callback positionally.
     def transport(url, headers, timeout):
         raise AssertionError("no test may reach the network")
 
@@ -379,34 +364,33 @@ def test_the_default_provider_builds_the_keyless_espn_client(tmp_path):
     assert p.api.on_status == seen.append
 
 
-def test_a_patcher_built_without_a_key_gives_the_client_an_empty_one(tmp_path):
-    # `ApiFootballClient` types `api_key` as `str`, so `None` cannot be passed
-    # through. `check_api_key` is what refuses the missing key, at the top of
-    # `fetch`; the client never sees a request before that.
-    p = WE2002Patcher(cache_dir=tmp_path / "cache", provider="api-football")
+def test_naming_the_one_supported_provider_builds_the_same_client(tmp_path):
+    # `--provider espn` is still accepted, so a caller or a saved command line
+    # that spells the default out keeps working now that it is the only choice.
+    p = WE2002Patcher(cache_dir=tmp_path / "cache", provider="espn")
 
-    assert p.api_key is None
-    assert p.api.api_key == ""
-
-
-def test_an_api_key_is_mandatory_at_fetch_time_for_api_football(tmp_path):
-    # Construction stays free of credentials so `analyze` can inspect a ROM.
-    p = WE2002Patcher(cache_dir=tmp_path / "cache", provider="api-football")
-    with pytest.raises(CapabilityError, match="api_key"):
-        p.fetch(season=2024, league_id=39)
+    assert p.provider == "espn"
+    assert type(p.api) is EspnClient
 
 
-def test_the_default_provider_needs_no_api_key_at_fetch_time(tmp_path):
-    # The claim the round is for. `requires_api_key` is `False` on the class, so
-    # the base guard passes anything; this pins that the override does not refuse
-    # the keyless case it was added to allow. It gets as far as the league
-    # lookup, which is one step past `check_api_key`.
+def test_the_deleted_provider_is_refused_by_name(tmp_path):
+    # `api-football` was a supported provider until round F. A caller still
+    # passing it must be told the name is unsupported rather than silently
+    # served ESPN, which would answer a request for a different provider's data
+    # with this one's and differently-scoped league ids.
+    with pytest.raises(CapabilityError, match="does not support provider 'api-football'"):
+        WE2002Patcher(cache_dir=tmp_path / "cache", provider="api-football")
+
+
+def test_fetch_needs_no_credential_of_any_kind(tmp_path):
+    # The claim the round is for: a patcher built with nothing but a cache
+    # directory fetches a league. There is no key to supply and no guard left to
+    # refuse one, so `fetch` reaches the league lookup on the first call.
     p = WE2002Patcher(cache_dir=tmp_path / "cache")
     p.api = FakeApi()
 
     data = p.fetch(season=2024, league_id=2001)
 
-    assert p.api_key is None
     assert [tr.team.id for tr in data.teams] == [100, 101, 102, 103]
 
 
@@ -476,24 +460,31 @@ def test_one_team_whose_squad_fails_costs_that_team_and_not_the_league(tmp_path)
     assert [tr.loading for tr in data.teams] == [False, False, False, False]
 
 
-def test_a_rate_limit_partway_through_a_league_keeps_the_teams_already_fetched(tmp_path):
-    # `RateLimitError` and `DailyLimitError` mean different things to a user —
-    # one is "wait", the other is "upgrade" — so they get different messages.
-    # Before this, either one raised out of `fetch` and lost the whole league.
+def test_two_squad_failures_partway_through_a_league_keep_the_teams_already_fetched(tmp_path):
+    # Before this, a failure raised out of `fetch` and lost the whole league.
+    # Two distinct failures rather than one, because the first team must survive
+    # the second team's error *and* the third's: a single failing team cannot
+    # tell "the loop continues" from "the loop stops after the first error".
+    #
+    # Until round F the two arms above the broad one named API-Football's
+    # `RateLimitError` and `DailyLimitError` and gave each a message of its own.
+    # ESPN meters neither, so every squad failure now carries the provider's own
+    # text, and that each team keeps its OWN reason is what this pins.
     p = _make_patcher(tmp_path)
     p.api = FailingApi(
         team_count=3,
         squad_errors={
-            101: RateLimitError("too fast"),
-            102: DailyLimitError("out of requests"),
+            101: RuntimeError("too fast"),
+            102: ValueError("malformed squad document"),
         },
     )
 
     data = p.fetch(season=2024, league_id=39)
 
     assert [len(tr.players) for tr in data.teams] == [11, 0, 0]
-    assert data.teams[1].error == "Rate limit reached — squad unavailable"
-    assert data.teams[2].error == "Daily API limit reached — upgrade your plan"
+    assert data.teams[0].error == ""
+    assert data.teams[1].error == "Failed to load squad: too fast"
+    assert data.teams[2].error == "Failed to load squad: malformed squad document"
 
 
 def test_a_stats_failure_costs_the_ratings_and_not_the_squad(tmp_path):
@@ -598,12 +589,11 @@ def test_a_league_with_no_teams_raises_api_error(tmp_path):
 
 # ── fetch and map through a real ESPN client ─────────────────────────────
 #
-# Every test above swaps in `FakeApi`, which is a stand-in for
-# `ApiFootballClient`. That leaves the ESPN branch — the default one — driven by
-# nothing, and it is the branch where the argument order, the league-code
-# resolution and the unmeasured-stat declaration all have to line up at once. So
-# this section drives a real `EspnClient` over a fake transport, from `fetch`
-# through `map_rosters` to the attributes that reach the ROM.
+# Every test above swaps in `FakeApi`, so the real client's own behaviour —
+# the argument order, the league-code resolution and the unmeasured-stat
+# declaration, which all have to line up at once — is driven by nothing. So this
+# section drives a real `EspnClient` over a fake transport, from `fetch` through
+# `map_rosters` to the attributes that reach the ROM.
 
 # One team of five, spread across positions and ages so that the three attributes
 # ESPN cannot measure have something to be derived from. Their statistics

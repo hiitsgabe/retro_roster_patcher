@@ -61,7 +61,6 @@ from ...core.models import (
 from ...core.patcher import Patcher
 from ...core.registry import register
 from ...sports import _http
-from ...sports.api_football import ApiFootballClient, DailyLimitError, RateLimitError
 from ...sports.espn import EspnClient
 from ...sports.models import LeagueData, Team, TeamRoster
 from .models import WETeamRecord
@@ -101,13 +100,7 @@ def _parse_hex_colour(value: str) -> tuple[int, int, int] | None:
     platform="psx",
     sport="soccer",
     requires_slot_mapping=True,
-    # False because the default provider needs no key. It is a claim about the
-    # patcher — "this cannot work without a credential" — and with ESPN it can.
-    # `check_api_key` below still refuses a keyless `api-football`, which is the
-    # narrower claim `requires_api_key` has no way to express and which the
-    # keyless-by-default NHL94 sibling has never needed.
-    requires_api_key=False,
-    providers=("espn", "api-football"),
+    providers=("espn",),
 )
 class WE2002Patcher(Patcher):
     """Soccer ROMs have fixed, unnamed team slots.
@@ -116,20 +109,16 @@ class WE2002Patcher(Patcher):
     explicit slot mapping. `default_slot_mapping` produces the sequential one the
     old UI used, as a starting point.
 
-    Providers: `espn` needs no key and is the default; `api-football` needs one.
-    Neither offers historical seasons here — ESPN's roster endpoint serves the
-    current squad whatever season is asked for, and API-Football's free plan
-    refuses old ones — so `fetch`'s `season` reaches the statistics documents and
-    the cache keys rather than the squad.
+    The only provider is `espn`, which needs no credential. It offers no
+    historical seasons here — its roster endpoint serves the current squad
+    whatever season is asked for — so `fetch`'s `season` reaches the statistics
+    documents and the cache keys rather than the squad.
 
-    League ids are provider-scoped and always have been: `--league-id 39` is the
-    Premier League to API-Football and `--league-id 2001` is the Premier League
-    to ESPN. ESPN's own identifiers are the string codes `eng.1` and `esp.1`, but
-    `ESPN_LEAGUES` has always carried an integer id per code and `EspnClient`
-    translates internally, so `--league-id` stays `type=int` and no CLI surface
-    moves. Passing one provider's id to the other yields
-    `ApiError("League ... not found")`, which is the same answer an id neither
-    knows has always given.
+    League ids are ESPN's: `--league-id 2001` is the Premier League. ESPN's own
+    identifiers are the string codes `eng.1` and `esp.1`, but `ESPN_LEAGUES` has
+    always carried an integer id per code and `EspnClient` translates
+    internally, so `--league-id` stays `type=int`. An id ESPN does not know
+    yields `ApiError("League ... not found")`.
     """
 
     #: Language codes `patch` accepts in `options["language"]`, in menu order.
@@ -175,46 +164,13 @@ class WE2002Patcher(Patcher):
         # `w202-english.ppf`, which this project does not redistribute.
         self.assets_dir = Path(assets_dir) if assets_dir is not None else None
         self.mapper = StatMapper()
-        # `Any` for the same reason NHL94's is: `fetch` drives whichever of two
-        # clients the provider names, and no single type describes both. Here the
-        # four methods `fetch` calls do agree — `EspnClient`'s two soccer methods
-        # are positional supersets of `ApiFootballClient`'s, which
-        # `test_espn.py` holds them to — so the looseness costs less than it does
-        # there, but a `Protocol` naming four methods for two concrete classes,
-        # one of which round F deletes, would outlive its usefulness by a round.
-        #
-        # `ApiFootballClient` types `api_key` as `str`, but a patcher may be
-        # built without one so `analyze_rom` can inspect a ROM: `check_api_key`
-        # is what refuses a missing key, and it runs at the top of `fetch`,
-        # before any client method is reached. Both clients
-        # `os.makedirs(cache_dir, exist_ok=True)` from their own constructors, so
-        # there is no directory to create here.
-        if self.provider == "api-football":
-            self.api: Any = ApiFootballClient(
-                api_key=self.api_key or "",
-                cache_dir=str(self.cache_dir),
-                on_status=on_status,
-                transport=transport,
-            )
-        else:
-            self.api = EspnClient(str(self.cache_dir), on_status, transport=transport)
-
-    def check_api_key(self) -> None:
-        """Refuse a keyless `api-football`, and only that.
-
-        The base implementation reads the class-level `requires_api_key`, which
-        is now `False` because the default provider needs no credential. That is
-        the right answer for the patcher as a whole and the wrong one for one of
-        its two providers: `ApiFootballClient` sends `x-apisports-key: ""`, the
-        API answers with an error envelope, `_request` returns `{}`, and `fetch`
-        raises `ApiError("League 39 not found for season 2024")` — a message that
-        blames the league for a missing key.
-
-        Round F removes the provider and this override with it.
-        """
-        if self.provider == "api-football" and not self.api_key:
-            raise CapabilityError(f"{self._subject()} requires an api_key for api-football")
-        super().check_api_key()
+        # One provider, so this could be typed `EspnClient`. It stays `Any`
+        # because the tests substitute a stand-in that implements the four
+        # methods `fetch` calls and nothing else, which is the seam that lets
+        # `fetch`'s per-team error handling be exercised without a client at
+        # all. `EspnClient` creates its cache directory from its own
+        # constructor, so there is none to create here.
+        self.api: Any = EspnClient(str(self.cache_dir), on_status, transport=transport)
 
     # -- analyze ------------------------------------------------------------
 
@@ -308,20 +264,16 @@ class WE2002Patcher(Patcher):
                 # the order that matters under a rate limiter — whichever call
                 # goes second is the one that gets throttled, and losing the
                 # squad costs the whole team where losing the stats does not.
-                # Neither provider's squad endpoint takes a season — both serve
-                # the squad as it stands today — so `season` here reaches the
-                # cache key and nothing else. Without it the key is the team id
-                # alone, which never changes, so the first fetch of a team froze
-                # its squad on disk and every later season replayed it and
-                # reported success.
+                # ESPN's squad endpoint takes no season — it serves the squad as
+                # it stands today — so `season` here reaches the cache key and
+                # nothing else. Without it the key is the team id alone, which
+                # never changes, so the first fetch of a team froze its squad on
+                # disk and every later season replayed it and reported success.
                 #
-                # Positional, and it stays that way for both providers only
-                # because `EspnClient.get_squad`'s parameters are
-                # `ApiFootballClient.get_squad`'s with `league_code` appended.
-                # ESPN needs that code and is not given it here: it resolves the
-                # code from the team list `get_teams` cached three lines up,
-                # which is the arrangement `_find_league_code_for_team` exists
-                # for and which keeps this one call site provider-agnostic.
+                # `league_code` is ESPN's third parameter and is not given here:
+                # the client resolves it from the team list `get_teams` cached
+                # three lines up, which is what `_find_league_code_for_team`
+                # exists for.
                 roster.players = self.api.get_squad(team.id, season)
                 try:
                     # `get_player_stats` returns a list, re-keyed by player id
@@ -331,31 +283,21 @@ class WE2002Patcher(Patcher):
                     # failure costs ratings and not the team.
                     #
                     # ESPN answers this with one request per athlete — about 25 a
-                    # team — where API-Football answers with one. That is why the
-                    # squad still goes first: it is now the cheap call as well as
-                    # the indispensable one.
+                    # team — so the squad, a single request, is both the cheap
+                    # call and the indispensable one. That is why it goes first.
                     stats = self.api.get_player_stats(team.id, season)
                     roster.player_stats = {ps.player_id: ps for ps in stats}
                 except Exception:
                     self.status(
                         f"{team.name}: stats unavailable, ratings will use position defaults"
                     )
-            # Both are API-Football's own; ESPN has no quota and raises neither,
-            # so under the default provider these two arms are unreachable and
-            # the broad one below is what catches a failed fetch. Round F removes
-            # them with the client.
-            except DailyLimitError:
-                roster.error = "Daily API limit reached — upgrade your plan"
-                self.status(f"{team.name}: {roster.error}")
-            except RateLimitError:
-                roster.error = "Rate limit reached — squad unavailable"
-                self.status(f"{team.name}: {roster.error}")
             except Exception as exc:
                 # As broad as upstream's, and deliberately so — a provider can
                 # fail in ways this module has no list of. `TransportLeak` is a
                 # `BaseException` precisely so the network guard still escapes
-                # this, and `check_api_key` has already run, so a missing key
-                # raises before the loop rather than becoming 20 team errors.
+                # this. Two arms above this one used to name API-Football's
+                # rate-limit and quota errors; ESPN meters neither, so with that
+                # provider gone this is the only arm a failed squad reaches.
                 roster.error = f"Failed to load squad: {exc}"
                 self.status(f"{team.name}: {roster.error}")
             rosters.append(roster)
