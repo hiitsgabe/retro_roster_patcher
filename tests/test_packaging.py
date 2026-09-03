@@ -59,9 +59,59 @@ def test_the_translation_ppf_is_readable_as_package_data():
     assert data[:5] == b"PPF10"
 
 
+def _shipped_game_packages() -> set[str]:
+    """Game ids implied by the subpackages actually present in the distribution.
+
+    Derived from the installed tree rather than from the registry, because the
+    claim below is that importing the root package registers *every* game that
+    shipped. Comparing the registry to itself would assert nothing; comparing it
+    to the directories is what catches the real failure mode -- a game package
+    that is present on disk and never imported, so `@register` never runs and the
+    game silently does not exist. That is one forgotten line in
+    `retro_roster_patcher/__init__.py`, and it has been forgotten before.
+
+    The id is the package name with underscores as hyphens, which is the
+    convention every game follows. A game that breaks it fails here, which is the
+    intended outcome: the convention is what lets this check stay honest without
+    a hand-maintained list.
+    """
+    games = Path(retro_roster_patcher.__file__).parent / "games"
+    return {
+        entry.name.replace("_", "-")
+        for entry in games.iterdir()
+        if entry.is_dir() and not entry.name.startswith("_")
+    }
+
+
 def test_the_registry_is_populated_by_importing_the_root_package():
-    ids = {info.game_id for info in retro_roster_patcher.list_patchers()}
-    assert ids == {"nhl94-genesis", "we2002"}
+    # Runs in a subprocess, and that is the whole test. In-process this claim
+    # cannot be made: `tests/games/<id>/` imports each game package directly, so
+    # `@register` has already run for every game by the time this file executes,
+    # and the registry looks complete even when `retro_roster_patcher/__init__.py`
+    # imports none of them. Measured -- commenting out one import line left this
+    # green in-process and failed only the two subprocess tests below.
+    #
+    # A clean interpreter that imports nothing but the root package is the only
+    # place the claim is falsifiable.
+    proc = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import json, retro_roster_patcher as r;"
+            "print(json.dumps(sorted(i.game_id for i in r.list_patchers())))",
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    ids = set(json.loads(proc.stdout))
+    shipped = _shipped_game_packages()
+    # Guards against zero-over-zero without a count that rots on the next
+    # migration: an empty `games/` would make both sides empty and the comparison
+    # below vacuous, so two games that have shipped since v0.1 are pinned by name.
+    assert "we2002" in shipped
+    assert "nhl94-genesis" in shipped
+    assert ids == shipped
 
 
 def test_the_console_script_installed_by_project_scripts_runs():
@@ -75,7 +125,11 @@ def test_the_console_script_installed_by_project_scripts_runs():
     proc = subprocess.run(
         [str(script), "list", "--json"], capture_output=True, text=True, check=True
     )
-    assert _game_ids(proc.stdout) == {"nhl94-genesis", "we2002"}
+    # Compared against this process's registry, not a literal set. Not circular:
+    # the claim is that a separate process, resolving the package through the
+    # installed console script, sees the same games this one does.
+    expected = {info.game_id for info in retro_roster_patcher.list_patchers()}
+    assert _game_ids(proc.stdout) == expected
 
 
 def test_the_cli_package_runs_as_a_module():
@@ -89,4 +143,7 @@ def test_the_cli_package_runs_as_a_module():
         text=True,
         check=True,
     )
-    assert _game_ids(proc.stdout) == {"nhl94-genesis", "we2002"}
+    # As above: a separate process reaching the package through `-m` rather than
+    # the launcher must see the same games.
+    expected = {info.game_id for info in retro_roster_patcher.list_patchers()}
+    assert _game_ids(proc.stdout) == expected
