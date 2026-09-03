@@ -1,6 +1,7 @@
 import io
 import json
 import sys
+from typing import Protocol
 
 import pytest
 
@@ -436,13 +437,30 @@ def test_the_renderer_protocol_pins_the_members_handlers_may_call():
     # member quietly dropped from the Protocol is not: both renderers would keep
     # satisfying a smaller surface, and the contract Tasks 23-25 code against
     # would narrow with nothing to show for it.
-    assert sorted(Renderer.__protocol_attrs__) == [
+    #
+    # Read off the class dict rather than `__protocol_attrs__`: that attribute is
+    # a CPython implementation detail added in 3.12, and `requires-python` is
+    # >=3.11, so naming it failed the 3.11 leg of the matrix while passing 3.12
+    # and 3.13. Every non-public name in `vars(Renderer)` is dunder-or-underscore
+    # (`_is_protocol`, `_abc_impl`, `__subclasshook__` and friends), so filtering
+    # on the leading underscore leaves exactly the five declared members.
+    assert sorted(n for n in vars(Renderer) if not n.startswith("_")) == [
         "error",
         "partial",
         "progress",
         "result",
         "status",
     ]
+
+
+def test_the_renderer_protocol_derives_straight_from_protocol():
+    # What makes the enumeration above complete. `vars()` sees one class body,
+    # where `__protocol_attrs__` also saw members inherited from a base protocol.
+    # The two agree only while nothing sits between `Renderer` and `Protocol`, so
+    # if anyone introduces an intermediate protocol this fails and says to walk
+    # the MRO — rather than leaving the pin above silently blind to the half of
+    # the surface it no longer sees.
+    assert Renderer.__bases__ == (Protocol,)
 
 
 @pytest.mark.parametrize("renderer_cls", [HumanRenderer, JsonRenderer])
