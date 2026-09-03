@@ -4,9 +4,9 @@ The network-leak sentinel and the fixture that arms it live at the root of the
 suite rather than under `tests/sports/`, because the claim they enforce — that
 no test in this repository opens a socket — is not specific to the sports client
 tests. `tests/games/` constructs live `EspnClient` and `NhlApiClient` objects
-through `NHL94GenesisPatcher.__init__`, and a live `EspnClient` through
-`WE2002Patcher.__init__`, and conftest scoping means a fixture one directory
-down is invisible to it.
+through `NHL94GenesisPatcher.__init__` and `NHL94SNESPatcher.__init__`, and a
+live `EspnClient` through `WE2002Patcher.__init__`, and conftest scoping means a
+fixture one directory down is invisible to it.
 
 The guard is autouse, so the claim covers every test in the suite instead of the
 ones whose authors thought to ask for it. Arming it by request would not: of the
@@ -16,20 +16,23 @@ an `EspnClient`, 3 an `NhlApiClient`, two of them both — and not one of the 49
 names this fixture. 40 come in through that file's `patcher` fixture, which
 builds a real client before overwriting `p.api` with a fake, and the other 9
 build a patcher of their own; the constructor-time exposure is identical either
-way. Of the 76 tests in `tests/games/we2002/test_patcher.py`, 57 add the same
-exposure through `EspnClient`. Autouse covers 909 of the 917 tests a default
-run executes; the remaining 8 opt out explicitly. The suite collects 922 —
-`addopts` deselects `tests/test_packaging.py`'s 5, which are covered too on the
-run that selects them — so 914 of 922 counted that way.
+way. Of the 62 tests in `tests/games/nhl94_snes/test_patcher.py`, 57 add the
+same exposure — 55 an `EspnClient`, 2 an `NhlApiClient`, none of them both — and
+of the 76 tests in `tests/games/we2002/test_patcher.py`, 57 add it through
+`EspnClient`. Across the whole suite 212 items reach a client built with
+`transport=None`. Autouse covers 1132 of the 1140 tests a default run executes;
+the remaining 8 opt out explicitly. The suite collects 1145 — `addopts`
+deselects `tests/test_packaging.py`'s 5, which are covered too on the run that
+selects them — so 1137 of 1145 counted that way.
 
 Every number in the paragraph above moves when anyone adds a test; this is the
-fifth commit that has had to re-derive them. Re-derive rather than adjust:
+sixth commit that has had to re-derive them. Re-derive rather than adjust:
 `pytest --collect-only -q` prints the selected/collected pair, `pytest -m allow_default_transport
 --collect-only -q` prints the opt-out count, and the per-file figures come from a
 throwaway `-p` plugin that wraps both client `__init__`s and records which items
 reach them with `transport=None`. Source-grepping gets the answer wrong in both
-directions: two tests build two clients each, and seven items under
-`tests/games/` pass a transport of their own, one of which also builds two.
+directions: two tests build two clients each, and nine items under
+`tests/games/` pass a transport of their own, two of which also build two.
 Bind the wrapped call against `inspect.signature` rather than reading a fixed
 positional index, too — `transport` is the fourth parameter of both
 `EspnClient.__init__` and `NhlApiClient.__init__` today, but it is the binding
