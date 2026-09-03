@@ -57,14 +57,15 @@ def test_list_without_json_prints_a_table(capsys):
     lines = capsys.readouterr().out.splitlines()
     assert code == 0
     # Both assertions pin the column widths, which `_patchers` computes from the
-    # data: GAME is padded to 13 because `nhl94-genesis` is 13 characters wide.
-    # That couples both strings to the widest values in the whole registry, since
-    # `widths` maxes over every row: a third game whose id exceeds 13, platform
-    # exceeds 8 or sport exceeds 6 characters re-pads the header *and* this row,
-    # and both lines below have to be updated with it. Pinning two lines rather
-    # than the whole blob narrows that coupling; it does not remove it.
-    assert lines[0] == "GAME           PLATFORM  SPORT   SLOT-MAP  PROVIDERS"
-    assert "nhl94-genesis  genesis   hockey  no        espn,nhl" in lines
+    # data: GAME is padded to 17 because `nbalive95-genesis` is 17 characters
+    # wide, and SPORT to 10 because `basketball` is. That couples both strings to
+    # the widest values in the whole registry, since `widths` maxes over every
+    # row: a further game whose id exceeds 17, platform exceeds 8 or sport
+    # exceeds 10 characters re-pads the header *and* this row, and both lines
+    # below have to be updated with it. Pinning two lines rather than the whole
+    # blob narrows that coupling; it does not remove it.
+    assert lines[0] == "GAME               PLATFORM  SPORT       SLOT-MAP  PROVIDERS"
+    assert "nhl94-genesis      genesis   hockey      no        espn,nhl" in lines
 
 
 # -- analyze ----------------------------------------------------------------
@@ -149,7 +150,7 @@ def test_analyze_builds_every_registered_patcher_to_sweep_one_rom(
     monkeypatch.setattr(commands, "build_patcher", spy)
     code, evts = run(["analyze", "--rom", str(rom), "--json", *cache], capsys)
     assert code == 0
-    assert visited == ["nhl94-genesis", "nhl94-snes", "we2002"]
+    assert visited == ["nbalive95-genesis", "nhl94-genesis", "nhl94-snes", "we2002"]
     assert [e["event"] for e in evts] == ["result"]
 
 
