@@ -309,9 +309,10 @@ league did:
 | Agility (goalies) | save percentage | .880-.930 |
 | Defensive awareness (goalies) | goals against average | 3.5 down to 2.0 |
 
-Speed, agility, checking and endurance are position defaults, with a single point of speed
-and agility added for a skater past 50 points. Weight class is `(pounds - 140) // 8`, clamped
-to 0-14. A player the provider has no stats for gets the position defaults untouched.
+A skater's speed, agility, checking and endurance are position defaults, with a single point
+of speed and agility added past 50 points; a goalie's are fixed constants, and only the two
+rows above are read off his stat line. Weight class is `(pounds - 140) // 8`, clamped to
+0-14. A player the provider has no stats for gets the position defaults untouched.
 
 In short: WE2002 grades on a curve, NHL94 against an absolute yardstick, and in both games
 the physical attributes are priors rather than measurements.
@@ -325,7 +326,7 @@ the physical attributes are priors rather than measurements.
   1993. For `we2002` there is no second provider, so a past season is a present squad with a
   past label. (Per-player soccer *statistics* are fetched per season and are genuinely that
   season's; only the squad list is current.)
-- **Two games.** Adding a third is a `@register`ed `Patcher` subclass, below.
+- **Two games.** A third is a `Patcher` subclass and a `@register` line; see below.
 - **No ROMs, no ISOs, no dumps.** You supply the image.
 - **The community WE2002 English menu PPF is not redistributed.** See `--assets-dir`.
 
