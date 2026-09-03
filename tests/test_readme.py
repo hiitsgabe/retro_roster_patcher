@@ -46,6 +46,7 @@ from retro_roster_patcher.core.patcher import Patcher
 from retro_roster_patcher.core.registry import PatcherInfo, register
 from retro_roster_patcher.games.we2002.translations.we2002 import LANGUAGES
 from retro_roster_patcher.sports.models import League, LeagueData
+from tests.fixtures import synthetic_rom
 
 README = Path(__file__).resolve().parent.parent / "README.md"
 TEXT = README.read_text(encoding="utf-8")
@@ -336,6 +337,35 @@ def test_the_exit_code_table_matches_what_the_cli_returns(tmp_path):
     assert json.loads(success.stdout.splitlines()[-1])["event"] == "result"
     assert json.loads(usage.stdout.splitlines()[-1])["type"] == "UsageError"
     assert json.loads(typed.stdout.splitlines()[-1])["type"] == "RomError"
+
+
+def test_list_and_analyze_emit_the_terminal_line_alone(tmp_path):
+    """The protocol section's one claim about a whole verb's output.
+
+    Run in process against a `JsonRenderer` writing to a buffer, so the count is
+    of lines the renderer produced and not of lines that survived a pipe. A
+    `self.status(...)` added to either patcher's `analyze_rom` would make this
+    two lines and is exactly the drift the sentence is exposed to; the file says
+    "the terminal line alone", so one line is the assertion.
+    """
+    rom = tmp_path / "nhl94.bin"
+    rom.write_bytes(bytes(synthetic_rom.build_nhl94_genesis_rom()))
+
+    listed = io.StringIO()
+    commands.cmd_list(argparse.Namespace(), render.JsonRenderer(out=listed))
+    assert len(listed.getvalue().splitlines()) == 1
+
+    analysed = io.StringIO()
+    commands.cmd_analyze(
+        argparse.Namespace(rom=str(rom), game="", cache_dir=str(tmp_path / "cache")),
+        render.JsonRenderer(out=analysed),
+    )
+    lines = analysed.getvalue().splitlines()
+    assert len(lines) == 1
+    # And it really is the terminal line, not a lone `status` that happened to
+    # be the only thing written.
+    assert json.loads(lines[0])["event"] == "result"
+    assert json.loads(lines[0])["kind"] == "rom_info"
 
 
 def test_argparse_rejecting_the_argv_writes_no_json(tmp_path):
