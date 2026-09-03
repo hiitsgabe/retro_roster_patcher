@@ -45,6 +45,7 @@ from .sports.serde import league_data_from_dict, league_data_to_dict
 # holds it there: left in one block, ruff's import sorter files `.games`
 # alphabetically between `.core` and `.sports` and the ordering this comment
 # describes is silently undone.
+from .games import nbalive95_genesis as _nbalive95_genesis  # noqa: E402,F401
 from .games import nhl94_genesis as _nhl94_genesis  # noqa: E402,F401
 from .games import nhl94_snes as _nhl94_snes  # noqa: E402,F401
 from .games import we2002 as _we2002  # noqa: E402,F401

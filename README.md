@@ -21,6 +21,7 @@ you already own — so a 1994 cartridge lines up with a 2025 season.
 
 | Game | `--game` | Platform | Sport | Providers |
 | --- | --- | --- | --- | --- |
+| NBA Live 95 (Genesis) | `nbalive95-genesis` | `genesis` | `basketball` | `espn` |
 | NHL 94 (Genesis) | `nhl94-genesis` | `genesis` | `hockey` | `espn`, `nhl` |
 | NHL 94 (SNES) | `nhl94-snes` | `snes` | `hockey` | `espn`, `nhl` |
 | Winning Eleven 2002 | `we2002` | `psx` | `soccer` | `espn` |
@@ -85,6 +86,7 @@ exactly one of `--season` and `--rosters`; both, or neither, is a usage error.
 
 | Game | Requires |
 | --- | --- |
+| `nbalive95-genesis` | No `--league-id`, and it *refuses* `--slot-map`: it matches each team by its abbreviation. A 2 MB (2 097 152-byte) Genesis dump. `analyze` reports `is_valid: false` unless all 360 player pointers resolve, which rules out every file shorter than 2 064 604 bytes — the ported reader's own 1 572 864-byte floor accepts those and then silently patches nothing for the last twelve teams. |
 | `nhl94-genesis` | No `--league-id`. It *refuses* `--slot-map`: it matches each team by its three-letter code. |
 | `nhl94-snes` | No `--league-id`, and it *refuses* `--slot-map` for the same reason as its Genesis sibling. An 8 Mbit (1 048 576-byte) dump, headerless or with the 512-byte copier header. `analyze` reports `is_valid: false` for a file whose 28 team blocks it cannot find, which includes every file too short to hold the pointer table 927 207 bytes in. |
 | `we2002` | `--league-id` for `fetch` and for `patch --season` — there is no default league, and without one both fail with `CapabilityError` before any request goes out. `--slot-map` for every `patch`: the ROM's team slots are unnamed, so there is nothing to match teams against. |
@@ -253,8 +255,8 @@ unchanged, so a Python traceback follows on stderr and the exit status is CPytho
 
 ## How a player becomes a number
 
-Neither game stores a rating anyone published. Both numbers below are this project's own
-arithmetic over a provider's season totals, and the two games do it differently. Some
+None of these games stores a rating anyone published. Every number below is this project's
+own arithmetic over a provider's season totals, and the three do it differently. Some
 attributes are measured; several are estimated from position and age, because no feed
 publishes them at all.
 
@@ -316,8 +318,48 @@ of speed and agility added past 50 points; a goalie's are fixed constants, and o
 rows above are read off his stat line. Weight class is `(pounds - 140) // 8`, clamped to
 0-14. A player the provider has no stats for gets the position defaults untouched.
 
-In short: WE2002 grades on a curve, NHL94 against an absolute yardstick, and in both games
-the physical attributes are priors rather than measurements.
+### NBA Live 95: scaled inside fixed windows, 25-99
+
+Sixteen attributes. The scale the ROM stores is 0-99, but the mapper clamps to a floor of
+25, so nothing this tool writes is ever rated below 25. Every input is a per-game average
+from ESPN's team-leaders endpoint, scaled linearly inside a window and clamped:
+
+| Attribute | From | Window |
+| --- | --- | --- |
+| Field goals | field-goal percentage | .380-.550 |
+| Three-point | three-point percentage | .250-.420 |
+| Free throw | free-throw percentage | .600-.920 |
+| Stealing | steals per game | 0.3-2.0 |
+| Blocks | blocks per game | 0.1-2.5 |
+| Offensive rebounding | offensive rebounds per game | 0.3-3.5 |
+| Defensive rebounding | defensive rebounds per game | 1.0-9.0 |
+| Passing | assists per game | 1.0-10.0 |
+| Offensive awareness | points per game | 5.0-30.0 |
+| Defensive awareness | 2 x steals + 1.5 x blocks + 0.5 x defensive rebounds | 1.0-12.0 |
+| Quickness | 2 x steals + 0.5 x assists | 1.0-8.0 |
+| Jumping | 2 x blocks, plus 5 if field-goal percentage is over .500 | 0.5-8.0 |
+| Dribbling | 0.8 x assists + 2 x max(0, 2 - turnovers / assists) | 1.0-10.0 |
+| Strength | 0.8 x rebounds, plus 2 for a centre or power forward | 1.0-10.0 |
+
+The two attributes missing from that table, dunking and speed, are position constants with
+one bonus each: dunking starts at 35 for a point guard through 60 for a power forward and
+gains 10 above .520 shooting, and speed starts at 35 for a centre through 75 for a point
+guard and gains 8 above 1.2 steals a game. A player the provider has no stats for gets a
+whole row of position defaults and none of the windows above.
+
+Height is always a position default — 6'2" at point guard through 6'11" at centre — because
+ESPN's roster response carries no height. Weight is ESPN's when it reports one. Experience
+is age minus 21, floored at zero. The roster is the top 12 by minutes played, two per
+position and then the best remaining.
+
+Two fields are written but never derived, and both are inherited from the code this port
+came from. `season_stats` is 17 zeros for every patched player, which erases the 1994 season
+line the cartridge shipped with — ESPN's leaders endpoint publishes averages, not the games,
+minutes, makes and attempts those fields hold, so there is nothing honest to put there. Skin
+tone and hair style are written as 0 for everyone, so every patched player looks the same.
+
+In short: WE2002 grades on a curve, NHL94 and NBA Live 95 against absolute yardsticks, and
+in all three the physical attributes are priors rather than measurements.
 
 ## Limits
 
@@ -325,10 +367,11 @@ the physical attributes are priors rather than measurements.
   endpoints take no season parameter at all; they serve the current squad. `--season 2003`
   against ESPN therefore returns today's players labelled 2003, and reports success. For
   `nhl94-genesis`, `--provider nhl` is the real answer: the NHL API serves squads back to
-  1993. For `we2002` there is no second provider, so a past season is a present squad with a
-  past label. (Per-player soccer *statistics* are fetched per season and are genuinely that
-  season's; only the squad list is current.)
-- **Two games.** A third is a `Patcher` subclass and a `@register` line; see below.
+  1993. For `we2002` and `nbalive95-genesis` there is no second provider, so a past season is
+  a present squad with a past label. (Per-player soccer *statistics* are fetched per season
+  and are genuinely that season's, as are NBA team leaders; only the squad list is current.)
+- **Four patchers, three sports.** A fifth is a `Patcher` subclass and a `@register` line;
+  see below.
 - **No ROMs, no ISOs, no dumps.** You supply the image.
 - **The community WE2002 English menu PPF is not redistributed.** See `--assets-dir`.
 
