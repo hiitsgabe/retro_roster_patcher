@@ -1,4 +1,10 @@
-"""ESPN public API client for soccer and hockey roster data — no API key required."""
+"""ESPN public API client — no API key required.
+
+Two hosts. `site.api.espn.com` serves team lists and rosters for all four sports;
+`sports.core.api.espn.com` serves per-player statistics, as team "leaders" for
+hockey, baseball and basketball and as a per-athlete statistics document for
+soccer. Both are keyless and neither rate-limits.
+"""
 
 import json
 import os
