@@ -202,7 +202,7 @@ Every line has an `event` key.
 | `status` | `msg` | when a step begins |
 | `progress` | `pct` (0.0-1.0), `msg` | during a fetch or a patch |
 | `partial` | `data` | for an intermediate payload worth rendering before the end |
-| `result` | `ok` (always `true`), `kind`, plus the payload's own keys | on success, as the last line |
+| `result` | `ok` (always true), `kind`, plus the payload's own keys | on success, as the last line |
 | `error` | `type` (the exception class name), `msg` | on failure, as the last line |
 
 ```json
