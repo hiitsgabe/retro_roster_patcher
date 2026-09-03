@@ -3,6 +3,7 @@
 import inspect
 import json
 from dataclasses import fields
+from datetime import datetime
 
 import pytest
 
@@ -1117,6 +1118,27 @@ def test_the_teams_cached_for_one_season_do_not_resolve_another_seasons_squad(tm
     client.get_teams(2001, 2025)
     assert client.get_squad(1, season=2024) == []
     assert transport.calls == ["https://site.api.espn.com/apis/site/v2/sports/soccer/eng.1/teams"]
+
+
+# --- the season on the league the caller is answered with ---
+
+
+def test_a_league_carries_the_season_it_was_asked_about(tmp_path):
+    # `WE2002Patcher.fetch` puts this object straight onto the `LeagueData` it
+    # returns and `serde` writes it to the rosters file, so a `League` that
+    # ignored the argument stamped every rosters file with the current calendar
+    # year whatever season produced it.
+    client = EspnClient(str(tmp_path))
+    assert client.get_leagues(id=2001, season=2024)[0].season == 2024
+    assert client.get_leagues(season=2024)[0].season == 2024
+
+
+def test_a_league_asked_for_without_a_season_falls_back_to_the_calendar_year(tmp_path):
+    # Which is what `get_featured_leagues` wants: a featured list has no season
+    # in the question.
+    client = EspnClient(str(tmp_path))
+    assert client.get_leagues(id=2001)[0].season == datetime.now().year
+    assert client.get_featured_leagues()[0].season == datetime.now().year
 
 
 # --- the two soccer signatures against API-Football's ---
