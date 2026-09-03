@@ -12,8 +12,8 @@ any one outside the hierarchy that is not in its short, justified allow-list.
 The subclasses live where they are raised — `MissingAssetError` in
 `core/assets.py`, `PPFError` in `games/we2002/ppf.py` — so this module is the
 root of the hierarchy and not the whole of it. `sports/` defines none of its
-own: it did until round F, when `sports/api_football.py` took its three
-provider-specific `ApiError` subclasses with it, and its two remaining clients
+own: the three provider-specific `ApiError` subclasses it once held belonged to
+the API-Football client and were deleted with it, and the two remaining clients
 report every upstream failure as a plain `ApiError`.
 
 This module imports nothing from the rest of the package so that any module may

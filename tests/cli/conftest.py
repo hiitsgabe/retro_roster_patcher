@@ -6,8 +6,8 @@ in `test_fetch_patch.py`, which is the only file that needs one.
 There is no environment guard either. An autouse fixture used to delete
 `$RETRO_ROSTER_API_KEY`, because `--api-key` defaulted to it and a machine with
 a real key exported would have fed it to every patcher these tests build. The
-flag and the variable both went in round F; nothing reads the environment now,
-which `test_fetch_patch.py` pins rather than assumes.
+flag is gone and nothing reads the variable now, which `test_fetch_patch.py`
+pins rather than assumes.
 """
 
 import json

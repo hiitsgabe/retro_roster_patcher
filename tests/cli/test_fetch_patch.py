@@ -373,8 +373,8 @@ def test_an_unknown_provider_is_exit_one(tmp_path, stub, base, capsys):
 
 @pytest.mark.parametrize("verb", ["fetch", "patch"])
 def test_no_verb_accepts_an_api_key_flag(verb):
-    # `--api-key`, defaulting to `$RETRO_ROSTER_API_KEY`, was on every
-    # network-touching verb until round F. Argparse answers an unknown flag
+    # `--api-key`, defaulting to `$RETRO_ROSTER_API_KEY`, was once on every
+    # network-touching verb and is gone. Argparse answers an unknown flag
     # with exit 2, so this is the parser refusing it rather than accepting and
     # discarding it — the difference between telling an operator their key is
     # not wanted and silently ignoring the one they supplied.

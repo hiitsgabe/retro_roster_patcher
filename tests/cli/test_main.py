@@ -122,9 +122,7 @@ def test_analyze_builds_every_registered_patcher_to_sweep_one_rom(
     # Construction has to stay cheap and demand nothing but a cache directory,
     # because `analyze` builds every registered patcher just to ask each one
     # whether it recognises the file. It is why no capability guard runs in
-    # `__init__`. Until round F this test was named for the api key it managed
-    # without; there is no key to manage without now, and the property it was
-    # really pinning — every patcher gets built — is unchanged.
+    # `__init__`.
     #
     # The spy is what makes the name true. `code == 0` and a single `result` are
     # satisfied identically by a sweep that stops after `nhl94-genesis` and never

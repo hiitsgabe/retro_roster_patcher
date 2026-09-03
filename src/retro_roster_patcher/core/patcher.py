@@ -57,8 +57,8 @@ class Patcher(ABC):
         `Path`, because callers across the JSON boundary — the NDJSON IPC surface
         and the CLI — can only hand over strings.
 
-        There is no `api_key` parameter. There was one until round F, when the
-        last provider that wanted a credential was deleted; it is removed rather
+        There is no `api_key` parameter. There was one while a provider still
+        took a credential; it is removed rather
         than accepted and ignored, because a parameter that silently does
         nothing lets a caller believe a credential is in use. Passing one now
         raises `TypeError` at the call site, which is where the mistaken belief

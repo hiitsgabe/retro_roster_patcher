@@ -374,7 +374,7 @@ def test_naming_the_one_supported_provider_builds_the_same_client(tmp_path):
 
 
 def test_the_deleted_provider_is_refused_by_name(tmp_path):
-    # `api-football` was a supported provider until round F. A caller still
+    # `api-football` was a supported provider and no longer is. A caller still
     # passing it must be told the name is unsupported rather than silently
     # served ESPN, which would answer a request for a different provider's data
     # with this one's and differently-scoped league ids.
@@ -466,7 +466,7 @@ def test_two_squad_failures_partway_through_a_league_keep_the_teams_already_fetc
     # the second team's error *and* the third's: a single failing team cannot
     # tell "the loop continues" from "the loop stops after the first error".
     #
-    # Until round F the two arms above the broad one named API-Football's
+    # The two arms above the broad one once named API-Football's
     # `RateLimitError` and `DailyLimitError` and gave each a message of its own.
     # ESPN meters neither, so every squad failure now carries the provider's own
     # text, and that each team keeps its OWN reason is what this pins.

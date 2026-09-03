@@ -96,10 +96,11 @@ def test_the_walk_finds_a_class_in_every_subpackage_that_defines_one(qualname):
     and reports green.
 
     `sports` is absent because it defines no exception class of its own. It had
-    one entry here, `sports.api_football.SeasonNotAvailableError`, until round F
-    deleted that module; its two remaining clients raise `core.errors.ApiError`
-    directly. The test below is what keeps the walk's reach into `sports` under
-    guard now that no class of its own can demonstrate it.
+    one entry here, `SeasonNotAvailableError`, which went with the
+    `sports.api_football` module that defined it; the two remaining clients raise
+    `core.errors.ApiError` directly. The test below is what keeps the walk's
+    reach into `sports` under guard now that no class of its own can
+    demonstrate it.
     """
     assert qualname in _DISCOVERED
 
@@ -120,7 +121,8 @@ def test_the_walk_imports_every_subpackage_whether_or_not_it_defines_an_exceptio
 
     The sentinel above can only speak for a subpackage that already defines an
     exception, which makes it silently weaker the moment one stops — exactly
-    what happened to `sports` in round F. A `sports` module that grows an
+    what happened to `sports` when `sports.api_football` was deleted and took
+    the only exception class the package defined. A `sports` module that grows an
     exception class tomorrow is caught by the hierarchy guard only if the walk
     imported it, and this is the assertion that says it did.
     """

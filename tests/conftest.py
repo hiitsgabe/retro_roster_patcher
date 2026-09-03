@@ -17,8 +17,7 @@ names this fixture. 40 come in through that file's `patcher` fixture, which
 builds a real client before overwriting `p.api` with a fake, and the other 9
 build a patcher of their own; the constructor-time exposure is identical either
 way. Of the 76 tests in `tests/games/we2002/test_patcher.py`, 57 add the same
-exposure through `EspnClient` — until round F that count was identical and the
-client was `ApiFootballClient`. Autouse covers 909 of the 917 tests a default
+exposure through `EspnClient`. Autouse covers 909 of the 917 tests a default
 run executes; the remaining 8 opt out explicitly. The suite collects 922 —
 `addopts` deselects `tests/test_packaging.py`'s 5, which are covered too on the
 run that selects them — so 914 of 922 counted that way.
