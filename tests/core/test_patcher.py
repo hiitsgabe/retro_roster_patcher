@@ -15,7 +15,6 @@ class FakePatcher(Patcher):
     platform = "genesis"
     sport = "hockey"
     requires_slot_mapping = False
-    requires_api_key = False
     # Widened from the inferred `tuple[str]` so subclasses may declare no providers.
     providers: tuple[str, ...] = ("espn",)
 
@@ -23,7 +22,6 @@ class FakePatcher(Patcher):
         return RomInfo(path=str(rom_path), size=0, game_id=self.game_id)
 
     def fetch(self, *, season, league_id=None, on_progress=None):
-        self.check_api_key()
         return LeagueData(league=League(id=1, name="NHL", country="US"), teams=[])
 
     def map_rosters(self, data, slot_mapping=None):
@@ -37,7 +35,6 @@ class FakePatcher(Patcher):
 class SlotPatcher(FakePatcher):
     game_id = "fake-slots"
     requires_slot_mapping = True
-    requires_api_key = True
 
 
 class NoProviderPatcher(FakePatcher):
@@ -54,7 +51,6 @@ class UndecoratedPatcher(Patcher):
     """
 
     requires_slot_mapping = True
-    requires_api_key = True
 
     def analyze_rom(self, rom_path): ...
 
@@ -80,11 +76,8 @@ def test_the_four_interface_methods_are_all_abstract():
 
 def test_constructor_stores_the_common_arguments():
     seen = []
-    patcher = FakePatcher(
-        cache_dir=Path("/tmp/cache"), api_key="k", provider="espn", on_status=seen.append
-    )
+    patcher = FakePatcher(cache_dir=Path("/tmp/cache"), provider="espn", on_status=seen.append)
     assert patcher.cache_dir == Path("/tmp/cache")
-    assert patcher.api_key == "k"
     assert patcher.provider == "espn"
     patcher.status("hello")
     assert seen == ["hello"]
@@ -109,21 +102,25 @@ def test_partial_forwards_to_the_callback():
     assert seen == [{"teams": []}]
 
 
-def test_a_key_requiring_patcher_can_still_be_constructed_without_a_key():
+def test_a_cache_dir_is_the_only_thing_construction_needs():
     # `retro-roster analyze` instantiates every registered patcher just to
     # inspect a ROM. Reading a ROM never touches the network, so construction
-    # must not demand a key.
-    SlotPatcher(cache_dir=Path("/tmp"))
+    # must demand nothing beyond somewhere to cache.
+    assert SlotPatcher(cache_dir=Path("/tmp")).cache_dir == Path("/tmp")
 
 
-def test_missing_api_key_is_rejected_when_fetch_is_called():
+def test_an_api_key_argument_is_refused_rather_than_ignored():
+    # `api_key` was a keyword parameter here until round F deleted the last
+    # provider that took a credential. It is gone rather than accepted and
+    # dropped: a caller still passing one believes a credential is in use, and
+    # a parameter that silently does nothing never tells them otherwise. This
+    # pins that they get `TypeError` at the call site instead.
+    with pytest.raises(TypeError):
+        FakePatcher(cache_dir=Path("/tmp"), api_key="k")  # type: ignore[call-arg]
+
+
+def test_fetch_needs_no_credential():
     patcher = SlotPatcher(cache_dir=Path("/tmp"))
-    with pytest.raises(CapabilityError, match="api_key"):
-        patcher.fetch(season=2024)
-
-
-def test_fetch_succeeds_once_a_key_is_supplied():
-    patcher = SlotPatcher(cache_dir=Path("/tmp"), api_key="k")
     data = patcher.fetch(season=2024)
     assert data.league.name == "NHL"
     assert data.teams == []
@@ -150,11 +147,9 @@ def test_provider_is_none_when_none_are_declared():
 
 def test_guard_errors_name_the_class_when_game_id_is_unset():
     # Before `@register` stamps a game_id, an error built from it alone would
-    # read " requires an api_key" — a leading space and no subject.
+    # read " requires a slot mapping" — a leading space and no subject.
     patcher = UndecoratedPatcher(cache_dir=Path("/tmp"))
     assert patcher.game_id == ""
-    with pytest.raises(CapabilityError, match="UndecoratedPatcher requires an api_key"):
-        patcher.check_api_key()
     with pytest.raises(CapabilityError, match="UndecoratedPatcher requires a slot mapping"):
         patcher.check_slot_mapping(None)
     with pytest.raises(CapabilityError, match="UndecoratedPatcher does not support provider"):
@@ -175,13 +170,13 @@ def test_slot_mapping_on_an_auto_mapping_patcher_raises():
 
 
 def test_missing_slot_mapping_on_a_slot_patcher_raises():
-    patcher = SlotPatcher(cache_dir=Path("/tmp"), api_key="k")
+    patcher = SlotPatcher(cache_dir=Path("/tmp"))
     with pytest.raises(CapabilityError, match="requires a slot mapping"):
         patcher.map_rosters(LeagueData(league=League(id=1, name="NHL", country="US"), teams=[]))
 
 
 def test_an_empty_slot_mapping_list_counts_as_missing():
-    patcher = SlotPatcher(cache_dir=Path("/tmp"), api_key="k")
+    patcher = SlotPatcher(cache_dir=Path("/tmp"))
     with pytest.raises(CapabilityError, match="requires a slot mapping"):
         patcher.map_rosters(
             LeagueData(league=League(id=1, name="NHL", country="US"), teams=[]),
@@ -194,7 +189,7 @@ def test_the_happy_paths_pass_the_guard():
         LeagueData(league=League(id=1, name="NHL", country="US"), teams=[])
     )
     assert auto.game_id == "fake"
-    slotted = SlotPatcher(cache_dir=Path("/tmp"), api_key="k").map_rosters(
+    slotted = SlotPatcher(cache_dir=Path("/tmp")).map_rosters(
         LeagueData(league=League(id=1, name="NHL", country="US"), teams=[]),
         slot_mapping=[SlotMapping(slot_index=0, team_id=1)],
     )

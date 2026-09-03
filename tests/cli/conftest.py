@@ -2,6 +2,12 @@
 
 Nothing here registers a patcher; the stub patcher and its registry cleanup live
 in `test_fetch_patch.py`, which is the only file that needs one.
+
+There is no environment guard either. An autouse fixture used to delete
+`$RETRO_ROSTER_API_KEY`, because `--api-key` defaulted to it and a machine with
+a real key exported would have fed it to every patcher these tests build. The
+flag and the variable both went in round F; nothing reads the environment now,
+which `test_fetch_patch.py` pins rather than assumes.
 """
 
 import json
@@ -15,18 +21,6 @@ from retro_roster_patcher.games.we2002.rom_reader import _MIN_VALID_SIZE
 def events(capsys) -> list[dict]:
     out = capsys.readouterr().out
     return [json.loads(line) for line in out.splitlines()]
-
-
-@pytest.fixture(autouse=True)
-def _no_ambient_api_key(monkeypatch):
-    """Keep a real `$RETRO_ROSTER_API_KEY` out of the CLI tests.
-
-    `--api-key` defaults to that variable, so on a machine with a real key
-    exported every patcher these tests build would receive it. The two tests that
-    need a value put a dummy one back with `monkeypatch.setenv`; the one that
-    covers the empty fallback relies on this deletion.
-    """
-    monkeypatch.delenv("RETRO_ROSTER_API_KEY", raising=False)
 
 
 @pytest.fixture

@@ -146,7 +146,6 @@ class WE2002Patcher(Patcher):
         self,
         cache_dir: Path | str,
         *,
-        api_key: str | None = None,
         provider: str | None = None,
         on_status: StatusFn | None = None,
         on_partial: PartialFn | None = None,
@@ -155,7 +154,6 @@ class WE2002Patcher(Patcher):
     ) -> None:
         super().__init__(
             cache_dir,
-            api_key=api_key,
             provider=provider,
             on_status=on_status,
             on_partial=on_partial,
@@ -221,7 +219,6 @@ class WE2002Patcher(Patcher):
         league_id: int | None = None,
         on_progress: ProgressFn | None = None,
     ) -> LeagueData:
-        self.check_api_key()
         if league_id is None:
             raise CapabilityError("we2002 requires a league_id; there is no default league")
 

@@ -72,7 +72,6 @@ MAX_PLAYERS_PER_SLOT = 23
     platform="genesis",
     sport="hockey",
     requires_slot_mapping=False,
-    requires_api_key=False,
     providers=("espn", "nhl"),
 )
 class NHL94GenesisPatcher(Patcher):
@@ -87,7 +86,6 @@ class NHL94GenesisPatcher(Patcher):
         self,
         cache_dir: Path | str,
         *,
-        api_key: str | None = None,
         provider: str | None = None,
         on_status: StatusFn | None = None,
         on_partial: PartialFn | None = None,
@@ -95,7 +93,6 @@ class NHL94GenesisPatcher(Patcher):
     ) -> None:
         super().__init__(
             cache_dir,
-            api_key=api_key,
             provider=provider,
             on_status=on_status,
             on_partial=on_partial,
@@ -168,7 +165,6 @@ class NHL94GenesisPatcher(Patcher):
         # A no-op for this game, which needs no key. Called anyway so every
         # `fetch` in the codebase opens the same way and a later capability
         # change is a decorator edit rather than a code edit.
-        self.check_api_key()
         self.status("Fetching NHL teams...")
         teams = self.api.get_nhl_teams()
         if not teams:

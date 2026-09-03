@@ -269,8 +269,6 @@ def we2002_run(tmp_path, monkeypatch):
                     "patch",
                     "--game",
                     "we2002",
-                    "--api-key",
-                    "dummy-key",
                     "--rom",
                     str(rom),
                     "--out",

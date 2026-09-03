@@ -78,7 +78,6 @@ def build_patcher(game_id: str, args: argparse.Namespace, renderer: Renderer) ->
     """Instantiate a registered patcher wired to the renderer's callbacks."""
     cls = resolve_patcher_class(game_id)
     kwargs: dict[str, Any] = {
-        "api_key": getattr(args, "api_key", None) or None,
         "provider": getattr(args, "provider", None) or None,
         "on_status": renderer.status,
         "on_partial": _partial_adapter(renderer),

@@ -23,7 +23,6 @@ class StubPatcher(Patcher):
         return RomInfo(path=str(rom_path), size=0, game_id=self.game_id)
 
     def fetch(self, *, season, league_id=None, on_progress=None):
-        self.check_api_key()
         if self.fail_with is not None:
             raise self.fail_with
         if on_progress:
@@ -369,30 +368,30 @@ def test_an_unknown_provider_is_exit_one(tmp_path, stub, base, capsys):
     assert events(capsys)[-1]["type"] == "CapabilityError"
 
 
-# -- the api key default ----------------------------------------------------
+# -- credentials, of which there are none -----------------------------------
 
 
-def test_the_api_key_flag_defaults_to_the_environment_variable(monkeypatch):
-    # Parsing only, so no patcher is built and the game id is never looked up.
-    # The default is read when `build_parser` runs, hence `setenv` before it.
+@pytest.mark.parametrize("verb", ["fetch", "patch"])
+def test_no_verb_accepts_an_api_key_flag(verb):
+    # `--api-key`, defaulting to `$RETRO_ROSTER_API_KEY`, was on every
+    # network-touching verb until round F. Argparse answers an unknown flag
+    # with exit 2, so this is the parser refusing it rather than accepting and
+    # discarding it — the difference between telling an operator their key is
+    # not wanted and silently ignoring the one they supplied.
+    with pytest.raises(SystemExit) as excinfo:
+        build_parser().parse_args(
+            [verb, "--game", "nhl94-genesis", "--season", "2024", "--api-key", "k"]
+        )
+    assert excinfo.value.code == 2
+
+
+def test_the_api_key_environment_variable_changes_nothing(monkeypatch):
+    # The flag read `$RETRO_ROSTER_API_KEY` for its default, so a machine with
+    # one exported fed it to every patcher. Nothing reads it now, and the
+    # parsed namespace carries no attribute for it at all.
     monkeypatch.setenv("RETRO_ROSTER_API_KEY", "dummy-env-key")
     args = build_parser().parse_args(["fetch", "--game", "nhl94-genesis", "--season", "2024"])
-    assert args.api_key == "dummy-env-key"
-
-
-def test_an_explicit_api_key_beats_the_environment_variable(monkeypatch):
-    monkeypatch.setenv("RETRO_ROSTER_API_KEY", "dummy-env-key")
-    args = build_parser().parse_args(
-        ["fetch", "--game", "nhl94-genesis", "--season", "2024", "--api-key", "dummy-flag-key"]
-    )
-    assert args.api_key == "dummy-flag-key"
-
-
-def test_with_no_environment_variable_the_api_key_defaults_to_empty():
-    # `tests/cli/conftest.py` deletes the variable for every test in this
-    # directory, so this is the state a machine without one is in.
-    args = build_parser().parse_args(["fetch", "--game", "nhl94-genesis", "--season", "2024"])
-    assert args.api_key == ""
+    assert hasattr(args, "api_key") is False
 
 
 # -- the flags argparse itself enforces -------------------------------------

@@ -196,7 +196,6 @@ def test_the_patcher_is_registered_with_its_capabilities():
     assert cls.platform == "genesis"
     assert cls.sport == "hockey"
     assert cls.requires_slot_mapping is False
-    assert cls.requires_api_key is False
     assert cls.providers == ("espn", "nhl")
 
 
@@ -521,15 +520,11 @@ def test_the_nhl_provider_is_asked_by_team_code_and_season(tmp_path):
     assert p.api.leader_calls == [("BOS", 1994), ("CHI", 1994)]
 
 
-def test_fetch_consults_the_declared_api_key_capability(patcher):
-    # This game needs no key, so `check_api_key` is a no-op today and deleting
-    # the call from `fetch` is invisible. Flipping the capability on the instance
-    # is what makes the call observable — and the day the capability changes for
-    # real, `fetch` is already wired to honour it.
-    patcher.requires_api_key = True
-    with pytest.raises(CapabilityError, match="requires an api_key"):
-        patcher.fetch(season=2025)
-    patcher.api_key = "dummy-not-a-real-key"
+def test_fetch_needs_no_credential(patcher):
+    # `fetch` opened with a `check_api_key()` call, and the class carried a
+    # `requires_api_key` capability for it to read, until round F removed both
+    # along with the only provider that ever wanted a key. This game never
+    # needed one; what it pins now is that fetching takes nothing but a season.
     assert [tr.team.code for tr in patcher.fetch(season=2025).teams] == ["BOS", "CHI"]
 
 
