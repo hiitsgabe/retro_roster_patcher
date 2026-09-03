@@ -136,7 +136,11 @@ def _as_float(value: Any) -> float:
 
 
 class EspnClient:
-    """Client for ESPN's public soccer and hockey API — no key, no rate limits."""
+    """Client for ESPN's public API — no key, no rate limits.
+
+    Four sports, not the two this said until round E: soccer for WE2002, hockey
+    for NHL94, and baseball and basketball for the games the plan migrates next.
+    """
 
     def __init__(
         self,
@@ -289,23 +293,26 @@ class EspnClient:
         and a live one issue their per-athlete requests in the same sequence.
         """
         cache_key = f"espn_soccer_leaders_{code}_{team_id}_{season}"
-        cached = self._load_cache(cache_key)
-        if cached is None:
+        document = self._load_cache(cache_key)
+        if document is None:
             url = f"{SOCCER_CORE_URL}/{code}/seasons/{season}/types/1/teams/{team_id}/leaders"
             if self.on_status:
                 self.on_status(f"Fetching stats for team {team_id}...")
             try:
-                cached = _http.get_json(url, transport=self._transport)
+                document = _http.get_json(url, transport=self._transport)
             except Exception:
                 return []
-            if not isinstance(cached, dict):
+            if not isinstance(document, dict):
                 return []
-            if cached:
-                self._save_cache(cache_key, cached)
+            # Cache what named at least one athlete, as the teams methods cache
+            # only what parsed to at least one team: an empty body is a truthy
+            # response and caching it would freeze the empty answer on disk.
+            if document:
+                self._save_cache(cache_key, document)
 
         athlete_ids: list[int] = []
         seen = set()
-        for category in cached.get("categories") or []:
+        for category in document.get("categories") or []:
             if not isinstance(category, dict):
                 continue
             for entry in category.get("leaders") or []:
@@ -324,6 +331,15 @@ class EspnClient:
     def _soccer_athlete_stats(
         self, team_id: int, code: str, season: int, athlete_id: int
     ) -> PlayerStats | None:
+        """One athlete's statistics document, parsed, or `None` if there is none.
+
+        The athlete is in the key as well as the team and the season: this is the
+        request a league fetch makes five hundred times, and caching per team
+        would mean one interrupted run costs every athlete in it.
+
+        A failed request costs this athlete and not the other twenty-four, which
+        is the same bargain `WE2002Patcher.fetch` makes per team.
+        """
         cache_key = f"espn_soccer_stats_{code}_{team_id}_{season}_{athlete_id}"
         data = self._load_cache(cache_key)
         if data is None:
