@@ -80,13 +80,53 @@ NHL_TEAM_MAP = {
 _ID_TO_LEAGUE = {item["id"]: item for item in ESPN_LEAGUES}
 _CODE_TO_LEAGUE = {item["code"]: item for item in ESPN_LEAGUES}
 
+# The `PlayerStats` fields ESPN's soccer statistics document has no counterpart
+# for, out of the twenty. The other sixteen plus `lineups` are mapped in
+# `_parse_athlete_stats`; the document carries 96 fields and none of them counts
+# duels contested, duels won, dribbles attempted or dribbles completed.
+#
+# This is what every record built here declares in `PlayerStats.unsupplied`, and
+# it is the difference between an attribute derived from position and age and an
+# attribute that percentiles a filler zero to the floor of the whole league. See
+# `games/we2002/stat_mapper.py`'s `CATEGORY_INPUTS`.
+SOCCER_UNSUPPLIED_STATS = (
+    "duels_total",
+    "duels_won",
+    "dribbles_attempts",
+    "dribbles_success",
+)
+
+# ESPN publishes four average-match-rating fields and, for soccer, leaves all
+# four at 0.0 — measured across the recorded document's `general` category. The
+# first that is populated wins, so a feed that starts filling one is not thrown
+# away; `PlayerStats.rating` is `None` when none of them is, exactly as
+# `api_football` renders an absent rating.
+_RATING_FIELDS = (
+    "avgRatingFromCorrespondent",
+    "avgRatingFromDataFeed",
+    "avgRatingFromEditor",
+    "avgRatingFromUser",
+)
+
 SOCCER_BASE_URL = "https://site.api.espn.com/apis/site/v2/sports/soccer"
+SOCCER_CORE_URL = "https://sports.core.api.espn.com/v2/sports/soccer/leagues"
 HOCKEY_BASE_URL = "https://site.api.espn.com/apis/site/v2/sports/hockey"
 HOCKEY_CORE_URL = "https://sports.core.api.espn.com/v2/sports/hockey/leagues/nhl"
 BASEBALL_BASE_URL = "https://site.api.espn.com/apis/site/v2/sports/baseball"
 BASEBALL_CORE_URL = "https://sports.core.api.espn.com/v2/sports/baseball/leagues/mlb"
 BASKETBALL_BASE_URL = "https://site.api.espn.com/apis/site/v2/sports/basketball"
 BASKETBALL_CORE_URL = "https://sports.core.api.espn.com/v2/sports/basketball/leagues/nba"
+
+
+def _as_float(value: Any) -> float:
+    """A statistic's numeric value, or `0.0` for anything that is not one.
+
+    ESPN sends every statistic as a JSON number, but a `null` in one field must
+    not cost the other ninety-five, and `int(None)` raises.
+    """
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        return 0.0
+    return float(value)
 
 
 class EspnClient:
@@ -155,17 +195,27 @@ class EspnClient:
         return teams
 
     def get_squad(
-        self, team_id: int, league_code: str | None = None, season: int | None = None
+        self, team_id: int, season: int | None = None, league_code: str | None = None
     ) -> list[Player]:
         """Fetch current squad for a team.
 
         `season` reaches the cache key only; see `get_hockey_squad`.
+
+        The parameter order is `ApiFootballClient.get_squad`'s with `league_code`
+        appended, and that is not cosmetic. WE2002's `fetch` has one call site for
+        both providers and passes the season positionally; with `league_code`
+        second — where it used to be — the season landed in it, and a league code
+        of `2024` matches nothing, so every squad came back empty with no error
+        anywhere. Both soccer methods on this client are now strict positional
+        supersets of API-Football's, which makes that class of mistake
+        unrepresentable rather than merely fixed at the one call site;
+        `test_espn.py` pins the agreement.
         """
-        # ESPN roster endpoint requires the league code; find it via team detail if
-        # unknown. Resolved before the cache lookup because the code varies the
-        # response — team ids are league-scoped, so a key of the id alone would
-        # serve one competition's roster for another's request.
-        code = league_code or self._find_league_code_for_team(team_id)
+        # ESPN roster endpoint requires the league code; find it via the cached
+        # team lists if unknown. Resolved before the cache lookup because the code
+        # varies the response — team ids are league-scoped, so a key of the id
+        # alone would serve one competition's roster for another's request.
+        code = league_code or self._find_league_code_for_team(team_id, season)
         if not code:
             return []
         cache_key = f"espn_squad_{code}_{team_id}_{season or 'any'}"
@@ -177,9 +227,105 @@ class EspnClient:
             self._save_cache(cache_key, data)
         return self._parse_squad(data)
 
-    def get_player_stats(self, team_id: int, season: int) -> list[PlayerStats]:
-        """ESPN doesn't provide historical stats — return empty list."""
-        return []
+    def get_player_stats(
+        self, team_id: int, season: int, league_code: str | None = None
+    ) -> list[PlayerStats]:
+        """Fetch per-player season statistics for a soccer team.
+
+        ESPN's core API serves soccer through the same shape the hockey, baseball
+        and basketball leaders calls above already use, and it needs no key. Two
+        steps, because there is no bulk endpoint — `/athletes` on a team is a 404:
+
+          * the team's `leaders` document enumerates the athletes who have any
+            statistic this season, as `$ref` links, twelve categories deep;
+          * each athlete's own `statistics` document carries the 96 fields
+            `_parse_athlete_stats` reads 17 of.
+
+        That is one request plus one per athlete, about 25 a team and 500 for a
+        20-team league, against API-Football's 60. The cache is therefore
+        load-bearing rather than an optimisation, and it is per athlete: a league
+        fetch interrupted at the twelfth team keeps everything the first eleven
+        cost. Every key carries the season, for the reason `get_hockey_squad`
+        gives at length.
+
+        Only the athletes the leaders document names get a record. A squad is
+        larger than that — the recorded fixtures are 29 and 25 — so the rest
+        reach `StatMapper.map_player` with no stats and are rated from position
+        and age, which is what that path is for.
+
+        This method used to `return []` under the docstring "ESPN doesn't provide
+        historical stats". That was measured and is false: seasons 2024 and 2025
+        both answer 200, and it is the sentence that kept WE2002 tied to a paid
+        provider.
+        """
+        code = league_code or self._find_league_code_for_team(team_id, season)
+        if not code:
+            return []
+        stats = []
+        for athlete_id in self._soccer_stat_athletes(team_id, code, season):
+            parsed = self._soccer_athlete_stats(team_id, code, season, athlete_id)
+            if parsed is not None:
+                stats.append(parsed)
+        return stats
+
+    def _soccer_stat_athletes(self, team_id: int, code: str, season: int) -> list[int]:
+        """Ids of the athletes the team's leaders document names, in first-seen order.
+
+        Twelve categories of twenty-five entries each name the same athletes over
+        and over, so this deduplicates; the order is stable so that a cached run
+        and a live one issue their per-athlete requests in the same sequence.
+        """
+        cache_key = f"espn_soccer_leaders_{code}_{team_id}_{season}"
+        cached = self._load_cache(cache_key)
+        if cached is None:
+            url = f"{SOCCER_CORE_URL}/{code}/seasons/{season}/types/1/teams/{team_id}/leaders"
+            if self.on_status:
+                self.on_status(f"Fetching stats for team {team_id}...")
+            try:
+                cached = _http.get_json(url, transport=self._transport)
+            except Exception:
+                return []
+            if not isinstance(cached, dict):
+                return []
+            if cached:
+                self._save_cache(cache_key, cached)
+
+        athlete_ids: list[int] = []
+        seen = set()
+        for category in cached.get("categories") or []:
+            if not isinstance(category, dict):
+                continue
+            for entry in category.get("leaders") or []:
+                if not isinstance(entry, dict):
+                    continue
+                pid = self._extract_pid(entry.get("athlete"))
+                # `_extract_pid` answers with whatever sat after `/athletes/`, so
+                # a link this client does not recognise reaches here as a
+                # non-numeric string rather than as `None`.
+                if pid is None or not pid.isdigit() or pid in seen:
+                    continue
+                seen.add(pid)
+                athlete_ids.append(int(pid))
+        return athlete_ids
+
+    def _soccer_athlete_stats(
+        self, team_id: int, code: str, season: int, athlete_id: int
+    ) -> PlayerStats | None:
+        cache_key = f"espn_soccer_stats_{code}_{team_id}_{season}_{athlete_id}"
+        data = self._load_cache(cache_key)
+        if data is None:
+            url = (
+                f"{SOCCER_CORE_URL}/{code}/seasons/{season}/types/1"
+                f"/teams/{team_id}/athletes/{athlete_id}/statistics"
+            )
+            try:
+                data = _http.get_json(url, transport=self._transport)
+            except Exception:
+                return None
+            if not isinstance(data, dict) or not data:
+                return None
+            self._save_cache(cache_key, data)
+        return self._parse_athlete_stats(athlete_id, data)
 
     # ------------------------------------------------------------------
     # Hockey-specific methods (NHL)
@@ -575,16 +721,105 @@ class EspnClient:
         with open(path, "w") as f:
             json.dump(data, f)
 
-    def _find_league_code_for_team(self, team_id: int) -> str | None:
-        """Find which league a team belongs to by checking cached team lists."""
+    def _find_league_code_for_team(self, team_id: int, season: int | None = None) -> str | None:
+        """Find which league a team belongs to by checking cached team lists.
+
+        The key here has to be the one `get_teams` writes, which since the season
+        joined it is `espn_teams_{id}_{season or 'any'}`. This method was still
+        reading `espn_teams_{id}`, a name nothing writes any more, so it found
+        nothing whatever was cached and always answered `None` — and a `None` here
+        makes `get_squad` return an empty list without issuing a request, which
+        is silent. Both callers now hand their season down.
+
+        Only the season's own key is consulted, and deliberately: the season is in
+        every key in this client precisely so that one season's answer is never
+        served for another's question, and a fallback to a neighbouring season's
+        team list would resolve a team that changed competition to the wrong
+        league code. A caller that has not fetched the league's teams for the
+        season it is asking about gets `None`, which is the honest answer.
+        """
         for item in ESPN_LEAGUES:
-            cache_key = f"espn_teams_{item['id']}"
-            cached = self._load_cache(cache_key)
-            if cached:
-                teams = self._parse_teams(cached)
-                if any(t.id == team_id for t in teams):
-                    return str(item["code"])
+            cached = self._load_cache(f"espn_teams_{item['id']}_{season or 'any'}")
+            if not cached:
+                continue
+            if any(t.id == team_id for t in self._parse_teams(cached)):
+                return str(item["code"])
         return None
+
+    def _parse_athlete_stats(self, athlete_id: int, data: dict) -> PlayerStats | None:
+        """Build a `PlayerStats` from one athlete's ESPN statistics document.
+
+        `splits.categories[]` is a list of named groups — `defensive`, `general`,
+        `goalKeeping`, `offensive` — each holding `stats[]` of `{name, value,
+        displayValue}`. Every value arrives as a float, including the counts, so
+        the integer fields are converted rather than assigned.
+
+        `general.passPct` is a *fraction*: the recorded document reads `0.768`
+        where `displayValue` says `"0.8"`. `PlayerStats.passes_accuracy` is
+        declared a percentage and API-Football fills it with one, so it is scaled
+        by 100 here. Getting this wrong is invisible — `pass_accuracy` is
+        percentiled league-wide, and scaling every player's value by the same
+        constant leaves the ranking, and so every rating, completely unchanged.
+        It only shows up against a concrete number, which is why
+        `test_espn.py` asserts 76.8 and not a band.
+
+        Returns `None` for a document with no categories at all, so that a
+        goalkeeper-only or empty record does not become a player with twenty
+        zeroes, which `map_player` would read as a real season.
+        """
+        splits = data.get("splits")
+        categories = splits.get("categories") if isinstance(splits, dict) else None
+        if not categories:
+            return None
+        groups: dict[str, dict[str, float]] = {}
+        for category in categories:
+            if not isinstance(category, dict):
+                continue
+            groups[str(category.get("name", ""))] = {
+                str(stat.get("name", "")): _as_float(stat.get("value"))
+                for stat in category.get("stats") or []
+                if isinstance(stat, dict)
+            }
+        general = groups.get("general", {})
+        offensive = groups.get("offensive", {})
+        defensive = groups.get("defensive", {})
+
+        rating = None
+        for name in _RATING_FIELDS:
+            if general.get(name, 0.0) > 0:
+                rating = general[name]
+                break
+
+        return PlayerStats(
+            player_id=athlete_id,
+            appearances=int(general.get("appearances", 0)),
+            minutes=int(general.get("minutes", 0)),
+            goals=int(offensive.get("totalGoals", 0)),
+            assists=int(offensive.get("goalAssists", 0)),
+            shots_total=int(offensive.get("totalShots", 0)),
+            shots_on=int(offensive.get("shotsOnTarget", 0)),
+            passes_total=int(offensive.get("totalPasses", 0)),
+            passes_accuracy=general.get("passPct", 0.0) * 100,
+            tackles_total=int(defensive.get("totalTackles", 0)),
+            interceptions=int(defensive.get("interceptions", 0)),
+            blocks=int(defensive.get("blockedShots", 0)),
+            duels_total=0,
+            duels_won=0,
+            dribbles_attempts=0,
+            dribbles_success=0,
+            fouls_committed=int(general.get("foulsCommitted", 0)),
+            fouls_drawn=int(general.get("foulsSuffered", 0)),
+            cards_yellow=int(general.get("yellowCards", 0)),
+            cards_red=int(general.get("redCards", 0)),
+            rating=rating,
+            # `starts`, not `appearances`: this drives `_select_best_22`, which
+            # orders a squad by times in the starting XI.
+            lineups=int(general.get("starts", 0)),
+            # The four zeroes above are filler and this is what says so. Without
+            # it they are indistinguishable from a measurement, and the three
+            # attributes computed from them collapse to the league floor.
+            unsupplied=SOCCER_UNSUPPLIED_STATS,
+        )
 
     def _parse_teams(self, data: dict) -> list[Team]:
         if not isinstance(data, dict):
