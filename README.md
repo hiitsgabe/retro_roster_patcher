@@ -24,7 +24,7 @@ Two games are supported today:
 | Game | Platform | Sport | Data source |
 | --- | --- | --- | --- |
 | NHL 94 | Sega Genesis | Hockey | ESPN or the NHL API, no key |
-| Winning Eleven 2002 | PlayStation | Soccer | ESPN, no key (or API-Football with one) |
+| Winning Eleven 2002 | PlayStation | Soccer | ESPN, no key |
 
 WE2002 also gets its menus translated out of Japanese — English, Spanish, French and
 Portuguese patches are generated and applied as part of the same run.
@@ -68,12 +68,12 @@ print(result.output_path, result.teams_patched)
 retro-roster list
 retro-roster analyze --rom PATH [--game ID] [--cache-dir DIR]
 retro-roster fetch   --game ID --season N
-                     [--league-id N] [--provider P] [--api-key K]
+                     [--league-id N] [--provider P]
                      [--cache-dir DIR] [--assets-dir DIR] [--out rosters.json]
 retro-roster patch   --game ID --rom IN --out OUT
                      (--season N | --rosters rosters.json)
                      [--league-id N] [--slot-map map.json] [--language CODE]
-                     [--provider P] [--api-key K] [--cache-dir DIR] [--assets-dir DIR]
+                     [--provider P] [--cache-dir DIR] [--assets-dir DIR]
 ```
 
 `list` reports what each game needs; several flags are optional to the parser and
@@ -81,8 +81,8 @@ mandatory to a particular game:
 
 | Game | Needs |
 | --- | --- |
-| `nhl94-genesis` | No `--api-key` and no `--league-id`. It *refuses* `--slot-map`: it matches each team by its code. |
-| `we2002` | `--league-id` for `fetch` and for `patch --season` — neither provider has a default league, and without one both fail with `CapabilityError` before any request goes out. `--slot-map` for every `patch`: the ROM's team slots are unnamed, so there is nothing to match teams against. `--api-key` only with `--provider api-football`; the default ESPN provider needs none. |
+| `nhl94-genesis` | No `--league-id`. It *refuses* `--slot-map`: it matches each team by its code. |
+| `we2002` | `--league-id` for `fetch` and for `patch --season` — there is no default league, and without one both fail with `CapabilityError` before any request goes out. `--slot-map` for every `patch`: the ROM's team slots are unnamed, so there is nothing to match teams against. |
 
 `--language` is honoured by games that ship translations — `we2002` takes `en`, `es`,
 `fr`, `pt` — and is a usage error on one that does not.
@@ -109,14 +109,12 @@ since there is no file to point at.
 In `--json` mode stdout carries protocol and nothing else; logs go to stderr. Exit codes are
 `0` success, `1` typed error, `2` usage error.
 
-API keys come from `--api-key` or `$RETRO_ROSTER_API_KEY`. Only
-`--provider api-football` needs one; every other provider is keyless.
+Every provider is keyless, so there is no credential to supply and no flag or
+environment variable for one.
 
-League ids are the provider's own, so the same competition has a different id under
-each. ESPN's soccer ids run from 2001 (Premier League) through 2016, in
-`ESPN_LEAGUES`; API-Football's are its published ids, of which 39 is the Premier
-League. An id the chosen provider does not know is reported as
-`ApiError: League N not found`.
+League ids are the provider's own. ESPN's soccer ids run from 2001 (Premier League)
+through 2016, in `ESPN_LEAGUES`. An id the chosen provider does not know is
+reported as `ApiError: League N not found`.
 
 ## Development
 
