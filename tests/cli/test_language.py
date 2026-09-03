@@ -152,7 +152,7 @@ def test_a_language_outside_the_games_set_is_a_usage_error(tmp_path, stubs, caps
 
 
 def test_the_refusal_is_a_terminal_error_event_on_the_stream(tmp_path, stubs, capsys):
-    """Round A's contract: every failure ends the NDJSON stream with one.
+    """The NDJSON contract: every failure ends the stream with a terminal error.
 
     `UsageError` is the one exception class in `src/` outside
     `RetroRosterError`, sanctioned in `tests/core/test_errors.py`, and `main`

@@ -383,9 +383,9 @@ def test_the_deleted_provider_is_refused_by_name(tmp_path):
 
 
 def test_fetch_needs_no_credential_of_any_kind(tmp_path):
-    # The claim the round is for: a patcher built with nothing but a cache
-    # directory fetches a league. There is no key to supply and no guard left to
-    # refuse one, so `fetch` reaches the league lookup on the first call.
+    # A patcher built with nothing but a cache directory fetches a league. There
+    # is no key to supply and no guard left to refuse one, so `fetch` reaches the
+    # league lookup on the first call.
     p = WE2002Patcher(cache_dir=tmp_path / "cache")
     p.api = FakeApi()
 
@@ -768,10 +768,11 @@ def test_every_espn_record_says_which_stats_were_not_measured(tmp_path):
 
 
 def test_a_squad_fetched_from_espn_is_not_uniformly_clumsy_after_mapping(tmp_path):
-    # The round, end to end. Every one of these five records carries a filler
-    # zero for duels and dribbles; without the declaration on them all three
-    # attributes percentile to 1 for the entire league, and the ratings that are
-    # supplied stay correct and hide it.
+    # Fetched from ESPN and mapped to ROM attributes, end to end, rather than
+    # from a hand-built `PlayerStats`. Every one of these five records carries a
+    # filler zero for duels and dribbles; without the declaration on them all
+    # three attributes percentile to 1 for the entire league, and the ratings
+    # that are supplied stay correct and hide it.
     #
     # Concrete values rather than a spread, because a spread alone would also be
     # produced by rating the players on the wrong thing.
@@ -802,8 +803,8 @@ def test_a_squad_fetched_from_espn_is_not_uniformly_clumsy_after_mapping(tmp_pat
 
 
 def test_the_three_estimated_attributes_take_more_than_one_value_across_the_squad(tmp_path):
-    # The measurement the round is judged by, on the real client rather than on a
-    # hand-built `PlayerStats`. One distinct value is the bug; these are the
+    # The spread the estimators produce, measured on the real client rather than
+    # on a hand-built `PlayerStats`. One distinct value is the bug; these are the
     # counts the estimators produce for this squad.
     p = _espn_patcher(tmp_path)
     data = p.fetch(season=2025, league_id=2001)

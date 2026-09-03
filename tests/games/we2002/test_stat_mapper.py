@@ -302,8 +302,8 @@ def test_every_declared_input_is_a_field_that_exists_on_player_stats():
 
 
 def test_the_three_categories_ESPN_cannot_supply_are_exactly_the_estimated_ones():
-    # The claim the whole round rests on: these three categories, and only these
-    # three, read a field ESPN does not measure.
+    # The claim the rest of this file rests on: these three categories, and only
+    # these three, read a field ESPN does not measure.
     orphaned = {
         category
         for category, inputs in StatMapper.CATEGORY_INPUTS.items()
@@ -312,7 +312,7 @@ def test_the_three_categories_ESPN_cannot_supply_are_exactly_the_estimated_ones(
     assert orphaned == {"body_balance", "technique", "dribble"}
 
 
-# --- the collapse this round exists to fix ---
+# --- an undeclared absence collapses the squad, a declared one does not ---
 
 
 def test_an_undeclared_absence_puts_the_whole_squad_on_the_floor(mapper):
@@ -364,9 +364,9 @@ def test_one_absent_input_is_enough_to_stop_a_category_being_rated(mapper, attri
 
 
 def test_the_declared_absence_is_what_produces_the_spread(mapper):
-    # The counts the round is measured by, asserted rather than implied. A test
-    # that only checked the ratings were in 1..9 would pass on the floored squad
-    # above, which is the failure mode this whole file is written against.
+    # The distinct-value counts, asserted rather than implied. A test that only
+    # checked the ratings were in 1..9 would pass on the floored squad above,
+    # which is the failure mode this whole file is written against.
     assert len(set(_rate_squad(mapper, "body_balance"))) == 1
     assert len(set(_rate_squad(mapper, "body_balance", ABSENT_FROM_ESPN))) == 4
     assert len(set(_rate_squad(mapper, "dribble"))) == 1
@@ -494,7 +494,7 @@ def test_an_estimate_is_clamped_into_the_roms_one_to_nine_scale(mapper):
 def test_a_player_with_no_stats_at_all_still_takes_the_untouched_fallback(mapper):
     # The estimators are reached from `_rate`, which only runs for a player who
     # has a record. A player with none takes `_fallback_attributes`, which is
-    # ported code this round does not move.
+    # ported code the estimators deliberately leave alone.
     attrs = mapper.map_player(SQUAD[3], None, {})
     assert attrs.body_balance == 5
     assert attrs.dribble == 6

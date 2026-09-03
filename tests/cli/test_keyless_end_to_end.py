@@ -1,6 +1,6 @@
 """Both games fetched through `main` with no credential of any kind.
 
-Round F deleted the only provider that ever took an API key, along with the
+The only provider that ever took an API key is gone, and with it the
 `--api-key` flag, the `api_key` constructor parameter and the `requires_api_key`
 capability. Every other test of that removal is local: the parser refuses the
 flag, the constructor raises `TypeError`, the `list` payload has no such field.
