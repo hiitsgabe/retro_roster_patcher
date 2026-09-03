@@ -23,7 +23,6 @@ from retro_roster_patcher.games.nhl94_snes.models import (
 )
 from retro_roster_patcher.games.nhl94_snes.rom_reader import NHL94SNESRomReader
 from retro_roster_patcher.games.nhl94_snes.rom_writer import (
-    LINE_ASSIGN_OFFSET,
     LINE_COUNT,
     LINE_SLOTS,
     NHL94SNESRomWriter,
@@ -32,7 +31,12 @@ from retro_roster_patcher.games.nhl94_snes.rom_writer import (
 )
 from tests.fixtures import synthetic_snes_rom as fixture
 
+# Both read from the fixture, which transcribes the team block layout
+# independently, and never from `rom_writer`. Importing the writer's own
+# `LINE_ASSIGN_OFFSET` to say where the writer put the line table is a
+# tautology: move the constant and the assertion moves with it.
 PLAYER_COUNT_BYTE = fixture.PLAYER_COUNT_OFFSET
+LINE_TABLE_BYTE = fixture.LINE_ASSIGN_OFFSET
 
 #: Bytes one `_records()` entry occupies: a 2-byte length word, a 15-character
 #: name and 8 stat bytes.
@@ -57,13 +61,18 @@ def _records(count, *, name="Fourteen Char", goalies=2):
 
     Every field varies with the index, so a writer that wrote one record `count`
     times, or wrote them in reverse, fails on a value rather than on a length.
+
+    Jerseys step by four rather than by one, so the run reaches 17. Below 16 a
+    BCD byte and a plain integer decode to the same number -- 10 is 0x10 packed
+    and 0x0A plain, and `decode_player_stats` reads both back as 10 -- so a
+    consecutive 1..n run cannot tell the writer's BCD from no encoding at all.
     """
     made = []
     for i in range(count):
         made.append(
             NHL94PlayerRecord(
                 name=f"{name}{i:02d}",
-                jersey_number=i + 1,
+                jersey_number=i * 4 + 1,
                 weight_class=i % 15,
                 handedness=i % 2,
                 is_goalie=i < goalies,
@@ -391,7 +400,7 @@ def test_the_header_write_fills_exactly_fifty_six_line_bytes(tmp_path):
     after = bytes(writer.data or b"")
     base = fixture.team_base(5)
     changed = [i for i in range(base, base + fixture.TEAM_HEADER_SIZE) if before[i] != after[i]]
-    lines = list(range(base + LINE_ASSIGN_OFFSET, base + LINE_ASSIGN_OFFSET + 56))
+    lines = list(range(base + LINE_TABLE_BYTE, base + LINE_TABLE_BYTE + 56))
     # The count byte and the line table, and nothing else in the header --
     # byte 18's team overall in particular is left alone.
     assert changed == [base + PLAYER_COUNT_BYTE, *lines]
@@ -410,8 +419,9 @@ def test_the_eight_lines_index_goalies_forwards_and_defencemen_by_position(tmp_p
     writer.write_team_header(5, 9, 4)
     data = writer.data
     assert data is not None
-    base = fixture.team_base(5) + LINE_ASSIGN_OFFSET
-    table = [list(data[base + i * LINE_SLOTS : base + (i + 1) * LINE_SLOTS]) for i in range(8)]
+    base = fixture.team_base(5) + LINE_TABLE_BYTE
+    slots = fixture.LINE_SLOTS
+    table = [list(data[base + i * slots : base + (i + 1) * slots]) for i in range(8)]
     # Forwards 2..10, defencemen 11..14, and `di`/`fi` clamp to the last one.
     assert table == [
         [0, 11, 12, 2, 3, 4, 2],  # SC1

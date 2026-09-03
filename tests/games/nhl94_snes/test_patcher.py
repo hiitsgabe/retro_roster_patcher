@@ -644,6 +644,12 @@ def test_an_out_of_range_slot_index_is_dropped_after_the_json_boundary(patcher, 
     )
     result = patcher.patch(rom_path=rom, output_path=out, rosters=mapped)
     assert result.teams_patched == 0
+    # And nothing was written for them either. `teams_patched` alone does not
+    # say that: slot -1 gets past the writer's only bounds test, which is
+    # `team_index >= TEAM_COUNT`, resolves the four bytes *before* the pointer
+    # table as a pointer, and lands a two-byte terminator wherever that points
+    # -- then reports 0 written and is skipped here.
+    assert out.read_bytes() == rom.read_bytes()
 
 
 def test_rosters_mapped_for_another_game_are_refused(patcher, rom, tmp_path):
