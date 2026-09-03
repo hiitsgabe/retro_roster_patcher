@@ -254,6 +254,16 @@ SQUAD = [
 ]
 
 
+# What each of the three attributes rates to for `SQUAD`, in `SQUAD` order, once
+# the records say their zeros are filler. Named once because three tests assert
+# against them and a fourth asserts how many distinct values they hold.
+ESTIMATED = {
+    "body_balance": [6, 7, 5, 4, 5, 6, 5],
+    "dribble": [4, 3, 2, 7, 6, 7, 5],
+    "technique": [3, 4, 5, 6, 8, 6, 7],
+}
+
+
 def _squad_stats(unsupplied=()):
     """One `PlayerStats` per player in `SQUAD`, all identical but for the id.
 
@@ -321,13 +331,36 @@ def test_a_declared_absence_rates_the_squad_from_position_and_age(mapper):
     # are filler. Concrete values, not a range: `_estimate_body_balance` bases
     # goalkeepers and defenders at 6 and everyone else at 5, adds one for the
     # 25-30 peak and takes one off under 21 and over 33.
-    assert _rate_squad(mapper, "body_balance", ABSENT_FROM_ESPN) == [6, 7, 5, 4, 5, 6, 5]
+    assert _rate_squad(mapper, "body_balance", ABSENT_FROM_ESPN) == ESTIMATED["body_balance"]
     # `_estimate_dribble`: 3 for goalkeepers and defenders, 6 for the rest, plus
     # one under 27 and minus one over 32.
-    assert _rate_squad(mapper, "dribble", ABSENT_FROM_ESPN) == [4, 3, 2, 7, 6, 7, 5]
+    assert _rate_squad(mapper, "dribble", ABSENT_FROM_ESPN) == ESTIMATED["dribble"]
     # `_estimate_technique`: 4 and 6, minus one under 23 and plus one from 31,
     # and then the midfielders' +1 from `_apply_position_adjustments` on top.
-    assert _rate_squad(mapper, "technique", ABSENT_FROM_ESPN) == [3, 4, 5, 6, 8, 6, 7]
+    assert _rate_squad(mapper, "technique", ABSENT_FROM_ESPN) == ESTIMATED["technique"]
+
+
+@pytest.mark.parametrize(
+    ("attribute", "absent_field"),
+    [
+        ("body_balance", "duels_won"),
+        ("body_balance", "duels_total"),
+        ("technique", "dribbles_success"),
+        ("technique", "dribbles_attempts"),
+        ("dribble", "dribbles_success"),
+    ],
+)
+def test_one_absent_input_is_enough_to_stop_a_category_being_rated(mapper, attribute, absent_field):
+    # Every entry in `CATEGORY_INPUTS` has to be load-bearing on its own, and no
+    # test that declares all four ESPN absences at once can show that: with all
+    # four named, dropping any one name from the table changes nothing.
+    #
+    # It is not hypothetical which half goes missing. `body_balance` is
+    # `duels_won / max(duels_total, 1)`, so a provider that reports duels won and
+    # not duels contested gives that ratio a filler denominator of 1 and turns a
+    # count into a percentage a hundred times too large — a rating that is
+    # confidently wrong rather than merely floored.
+    assert _rate_squad(mapper, attribute, (absent_field,)) == ESTIMATED[attribute]
 
 
 def test_the_declared_absence_is_what_produces_the_spread(mapper):
