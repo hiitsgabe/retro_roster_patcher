@@ -96,9 +96,9 @@ def get_json(
     clients all do, preserving their previous behaviour exactly.
 
     Error messages quote the full URL, query string included. That is safe while
-    every provider authenticates by header (API-Football sends `x-apisports-key`
-    that way); a provider that takes its key as a `?api_key=` param would leak it
-    into any log that catches the `ApiError`, so redact here if one ever does.
+    no provider authenticates at all — both clients read keyless endpoints. A
+    provider that took a credential as a query parameter would leak it into any
+    log that catches the `ApiError`, so redact here if one ever does.
     """
     if params:
         query = urllib.parse.urlencode(

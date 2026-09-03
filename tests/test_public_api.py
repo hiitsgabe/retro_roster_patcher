@@ -25,7 +25,6 @@ def test_the_root_exports_exactly_these_names():
         "__version__",
         "ApiError",
         "CapabilityError",
-        "DailyLimitError",
         "League",
         "LeagueData",
         "MappedRosters",
@@ -36,7 +35,6 @@ def test_the_root_exports_exactly_these_names():
         "PatchResult",
         "Player",
         "PlayerStats",
-        "RateLimitError",
         "RetroRosterError",
         "RomError",
         "RomFinder",
@@ -44,7 +42,6 @@ def test_the_root_exports_exactly_these_names():
         "RomFinderResult",
         "RomInfo",
         "RomSlot",
-        "SeasonNotAvailableError",
         "SlotMapping",
         "StorageError",
         "Team",
@@ -83,21 +80,23 @@ def test_the_sports_package_exports_exactly_these_names():
     # `load_color_cache` and `save_color_cache` beside `League` and `Player`
     # would read as one namespace where there are two.
     #
-    # The three clients are a stated deliverable of this extraction and this
-    # package re-exported their exceptions but not them. `Transport` is the type
-    # of a public keyword parameter on seven public callables and lived only in
-    # the private `_http`.
+    # The clients are a stated deliverable of this extraction and this package
+    # re-exported their exceptions but not them. `Transport` is the type of a
+    # public keyword parameter on seven public callables and lived only in the
+    # private `_http`.
+    #
+    # There were three clients and three exported `ApiError` subclasses until
+    # round F deleted `ApiFootballClient`. The exceptions went with it because
+    # it was the only thing that raised them, and an exported exception nothing
+    # can raise is a consumer's `except` clause that silently never fires.
+    # `ApiError` from `core.errors` is what "the provider failed" catches.
     expected = {
-        "ApiFootballClient",
-        "DailyLimitError",
         "EspnClient",
         "League",
         "LeagueData",
         "NhlApiClient",
         "Player",
         "PlayerStats",
-        "RateLimitError",
-        "SeasonNotAvailableError",
         "Team",
         "TeamRoster",
         "Transport",

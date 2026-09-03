@@ -1,7 +1,7 @@
 """The on-disk cache of user-picked team colours.
 
-API-Football serves no team colours, so the user picks them once and this module
-persists the choice. Two things therefore matter enough to be pinned literally:
+No provider this library reads serves team colours, so the user picks them once
+and this module persists the choice. Two things therefore matter enough to be pinned literally:
 the JSON the file actually contains — a later release that reads it back has no
 other contract — and the rule that a colour already on a `Team` is never replaced,
 because that rule is what keeps a cached fallback from clobbering a real one.

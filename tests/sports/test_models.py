@@ -66,10 +66,10 @@ def test_provider_specific_data_survives_on_the_roster_extra():
 
 
 def test_a_player_stats_built_without_the_field_claims_every_stat_was_measured():
-    # The default is what keeps `api_football` -- which names no absences and
-    # measures all twenty -- producing exactly what it produced before this field
-    # existed, and what makes a rosters file written before it deserialise as the
-    # fully-measured record it is.
+    # Empty means "every stat here was measured", which is what a provider that
+    # names no absences produces and what makes a rosters file written before
+    # this field existed deserialise as the fully-measured record it is. Only
+    # ESPN populates it, with the four stats its soccer document omits.
     assert _BASE_STATS.unsupplied == ()
 
 

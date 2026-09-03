@@ -34,7 +34,7 @@ from .core.models import MappedRosters, PatchResult, RomInfo, RomSlot, SlotMappi
 from .core.patcher import Patcher
 from .core.registry import PatcherInfo, get_patcher, list_patchers, register
 from .rom_finder import RomFinder, RomFinderConfig, RomFinderResult
-from .sports import DailyLimitError, RateLimitError, SeasonNotAvailableError, Transport
+from .sports import Transport
 from .sports.models import League, LeagueData, Player, PlayerStats, Team, TeamRoster
 from .sports.serde import league_data_from_dict, league_data_to_dict
 
@@ -53,7 +53,6 @@ __version__ = "0.1.0.dev0"
 __all__ = [
     "ApiError",
     "CapabilityError",
-    "DailyLimitError",
     "League",
     "LeagueData",
     "MappedRosters",
@@ -64,7 +63,6 @@ __all__ = [
     "PatcherInfo",
     "Player",
     "PlayerStats",
-    "RateLimitError",
     "RetroRosterError",
     "RomError",
     "RomFinder",
@@ -72,7 +70,6 @@ __all__ = [
     "RomFinderResult",
     "RomInfo",
     "RomSlot",
-    "SeasonNotAvailableError",
     "SlotMapping",
     "StorageError",
     "Team",

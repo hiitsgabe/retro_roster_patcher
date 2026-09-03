@@ -165,11 +165,14 @@ class Patcher(ABC):
     ) -> LeagueData:
         """Pull roster data for one season.
 
-        Implementations call `self.check_api_key()` first. Raises `ApiError` on
-        upstream failure — including the provider-specific subclasses, which is
-        why they are subclasses: `sports.api_football` raises `RateLimitError`,
-        `DailyLimitError` and `SeasonNotAvailableError`, and a caller that only
-        wants "the provider failed" catches `ApiError` and gets all three.
+        Raises `ApiError` on upstream failure. No provider defines a subclass of
+        it: three lived in `sports/api_football.py` and went with that module, so
+        `except ApiError` is both the general answer and the only one.
+
+        A failure that costs part of a fetch rather than all of it is not an
+        exception. WE2002 loses one team's squad to a per-team `TeamRoster.error`
+        and carries on, because a league is dozens of requests and one of them
+        failing must not cost the other dozens.
         """
 
     @abstractmethod

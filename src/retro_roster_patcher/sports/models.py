@@ -1,4 +1,4 @@
-"""Shared data models for sports API clients (API-Football, ESPN, etc.)."""
+"""Shared data models for sports API clients (ESPN, the NHL API)."""
 
 from __future__ import annotations
 
@@ -117,11 +117,11 @@ class TeamRoster:
     players: list[Player] = field(default_factory=list)
     player_stats: dict[int, PlayerStats] = field(default_factory=dict)
     loading: bool = False  # True while squad is still being fetched
-    error: str = ""  # Non-empty if squad fetch failed (e.g. rate limit)
+    error: str = ""  # Non-empty if this team's squad fetch failed
     # Provider-shaped data that PlayerStats cannot hold. ESPN and the NHL API
-    # return "team leaders" as a nested dict keyed by player id; PlayerStats is
-    # an API-Football shape and would lose it. Only the patcher that put a key
-    # here reads it back.
+    # return "team leaders" as a nested dict keyed by player id, and
+    # PlayerStats is a flat per-player record that would lose it. Only the
+    # patcher that put a key here reads it back.
     extra: dict[str, Any] = field(default_factory=dict)
 
 

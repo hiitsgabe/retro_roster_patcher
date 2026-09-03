@@ -16,7 +16,10 @@ from . import _http
 from .models import League, Player, PlayerStats, Team
 
 # Maps our internal league IDs to ESPN league codes.
-# IDs start at 2000 to avoid clashing with API-Football IDs.
+# IDs start at 2000 because they once had to not clash with a second
+# provider's. That provider is gone; the numbering stays, because these ids
+# are what `--league-id` takes and renumbering them would silently
+# repoint every saved command line and rosters file.
 ESPN_LEAGUES = [
     {"id": 2001, "code": "eng.1", "name": "Premier League", "country": "England"},
     {"id": 2002, "code": "esp.1", "name": "La Liga", "country": "Spain"},
@@ -105,8 +108,8 @@ SOCCER_UNSUPPLIED_STATS = (
 # ESPN publishes four average-match-rating fields and, for soccer, leaves all
 # four at 0.0 — measured across the recorded document's `general` category. The
 # first that is populated wins, so a feed that starts filling one is not thrown
-# away; `PlayerStats.rating` is `None` when none of them is, exactly as
-# `api_football` renders an absent rating.
+# away; `PlayerStats.rating` is `None` when none of them is, which is the
+# representation `PlayerStats` has always used for an absent rating.
 _RATING_FIELDS = (
     "avgRatingFromCorrespondent",
     "avgRatingFromDataFeed",
@@ -154,7 +157,7 @@ class EspnClient:
         ensure_cache_dir(cache_dir)
 
     # ------------------------------------------------------------------
-    # Public interface (mirrors ApiFootballClient)
+    # Public interface
     # ------------------------------------------------------------------
 
     def get_featured_leagues(self) -> list[League]:
@@ -218,15 +221,15 @@ class EspnClient:
 
         `season` reaches the cache key only; see `get_hockey_squad`.
 
-        The parameter order is `ApiFootballClient.get_squad`'s with `league_code`
-        appended, and that is not cosmetic. WE2002's `fetch` has one call site for
-        both providers and passes the season positionally; with `league_code`
-        second — where it used to be — the season landed in it, and a league code
-        of `2024` matches nothing, so every squad came back empty with no error
-        anywhere. Both soccer methods on this client are now strict positional
-        supersets of API-Football's, which makes that class of mistake
-        unrepresentable rather than merely fixed at the one call site;
-        `test_espn.py` pins the agreement.
+        `season` is second and `league_code` third, and that order is not
+        cosmetic. WE2002's `fetch` passes the season positionally; with
+        `league_code` second — where it used to be — the season landed in it, a
+        league code of `2024` matched nothing, and every squad came back empty
+        with no error anywhere. The order was originally fixed by making this
+        signature a positional superset of `ApiFootballClient.get_squad`'s. That
+        client is gone, so `test_espn.py` now pins the parameter list of both
+        soccer methods directly — the same guard, without a second class to hold
+        it against.
         """
         # ESPN roster endpoint requires the league code; find it via the cached
         # team lists if unknown. Resolved before the cache lookup because the code
@@ -259,7 +262,7 @@ class EspnClient:
             `_parse_athlete_stats` reads 17 of.
 
         That is one request plus one per athlete, about 25 a team and 500 for a
-        20-team league, against API-Football's 60. The cache is therefore
+        20-team league. The cache is therefore
         load-bearing rather than an optimisation, and it is per athlete: a league
         fetch interrupted at the twelfth team keeps everything the first eleven
         cost. Every key carries the season, for the reason `get_hockey_squad`
@@ -791,12 +794,11 @@ class EspnClient:
 
         `general.passPct` is a *fraction*: the recorded document reads `0.768`
         where `displayValue` says `"0.8"`. `PlayerStats.passes_accuracy` is
-        declared a percentage and API-Football fills it with one, so it is scaled
-        by 100 here. Getting this wrong is invisible — `pass_accuracy` is
-        percentiled league-wide, and scaling every player's value by the same
-        constant leaves the ranking, and so every rating, completely unchanged.
-        It only shows up against a concrete number, which is why
-        `test_espn.py` asserts 76.8 and not a band.
+        declared a percentage, so it is scaled by 100 here. Getting this wrong is
+        invisible — `pass_accuracy` is percentiled league-wide, and scaling every
+        player's value by the same constant leaves the ranking, and so every
+        rating, completely unchanged. It only shows up against a concrete number,
+        which is why `test_espn.py` asserts 76.8 and not a band.
 
         Returns `None` for a document with no categories at all, so that a
         goalkeeper-only or empty record does not become a player with twenty

@@ -1,17 +1,22 @@
-"""Every cache file the three clients can write, in one shared directory.
+"""Every cache file the two clients can write, in one shared directory.
 
 `cli.commands.default_cache_dir` hands the same `~/.cache/retro-roster-patcher`
-to every patcher, and every patcher hands it straight to its client, so all
-three clients write their `{key}.json` files side by side into one flat
-directory. `_load_cache` validates only that what it reads back is a `dict`, so
-two clients agreeing on a key would silently serve one provider's payload to the
+to every patcher, and every patcher hands it straight to its client, so both
+clients write their `{key}.json` files side by side into one flat directory.
+`_load_cache` validates only that what it reads back is a `dict`, so two
+clients agreeing on a key would silently serve one provider's payload to the
 other and the reader would parse it to an empty list rather than fail.
 
-ESPN prefixes every key `espn_`, the NHL client prefixes `nhl_api_`, and
-API-Football prefixes nothing at all (`leagues_`, `teams_`, `squad_`,
-`players_`). Reading that off the source is how the reviewer found no collision;
-it is not a proof, because a key template is easy to miss by eye and easy to add
-later without noticing this constraint exists.
+ESPN prefixes every key `espn_` and the NHL client prefixes `nhl_api_`.
+Reading that off the source is how the reviewer found no collision; it is not a
+proof, because a key template is easy to miss by eye and easy to add later
+without noticing this constraint exists.
+
+A third client, `ApiFootballClient`, was here until round F. It namespaced
+nothing — its four stems were the bare words `leagues`, `teams`, `squad` and
+`players` — and a test named exactly that risk. Both the client and the risk
+are gone; what remains is the discipline the two survivors keep, which is what
+a third client added later has to be held to.
 
 This file executes it instead. Each client's own test module already carries a
 `NETWORK_CALLS` table naming every method that reaches the wire, and
@@ -29,10 +34,8 @@ import json
 
 import pytest
 
-from retro_roster_patcher.sports.api_football import ApiFootballClient
 from retro_roster_patcher.sports.espn import EspnClient
 from retro_roster_patcher.sports.nhl import NhlApiClient
-from tests.sports.test_api_football import NETWORK_CALLS as AF_CALLS
 from tests.sports.test_espn import NETWORK_CALLS as ESPN_CALLS
 from tests.sports.test_nhl import NETWORK_CALLS as NHL_CALLS
 
@@ -41,8 +44,8 @@ from tests.sports.test_nhl import NETWORK_CALLS as NHL_CALLS
 # a response worth caching — the teams methods cache only what parsed to at least
 # one team, the leaders methods only a non-empty stat dict — so the envelopes are
 # merged rather than chosen between: `sports` for the ESPN team lists,
-# `categories` for ESPN leaders, `skaters` for NHL club stats, `response` for
-# API-Football, and `athletes` for the roster parsers.
+# `categories` for ESPN leaders, `skaters` for NHL club stats, and `athletes`
+# for the roster parsers.
 OMNIBUS = json.dumps(
     {
         "sports": [
@@ -54,7 +57,6 @@ OMNIBUS = json.dumps(
         ],
         "categories": [{"abbreviation": "G", "leaders": [{"athlete": {"id": 1}, "value": 1}]}],
         "skaters": [{"playerId": 1, "goals": 1}],
-        "response": [{"players": [{"id": 1, "name": "Player", "position": "Midfielder"}]}],
         "athletes": [{"items": [{"id": 1, "displayName": "Player", "jersey": "1"}]}],
     }
 ).encode()
@@ -67,8 +69,8 @@ def _transport(url, headers, timeout):
 def _drive(build, calls, cache_dir):
     """Call every method in a client's network table and list what it cached.
 
-    `cache_dir` is created by the client's own constructor, which every one of
-    the three does through `ensure_cache_dir`.
+    `cache_dir` is created by the client's own constructor, which both of them
+    do through `ensure_cache_dir`.
     """
     client = build(str(cache_dir))
     for name, (args, kwargs) in calls.items():
@@ -81,6 +83,7 @@ def _drive(build, calls, cache_dir):
 # publishes no bulk soccer endpoint, so it caches the team's leaders document and
 # then one statistics document per athlete named in it. The `OMNIBUS` body's
 # `categories` name a single athlete, so it writes two files rather than one.
+# It is the only method in either client whose cache is one-to-many.
 ESPN_EXTRA_FILES = 1
 
 
@@ -92,11 +95,7 @@ def _nhl(cache_dir):
     return NhlApiClient(cache_dir, transport=_transport)
 
 
-def _api_football(cache_dir):
-    return ApiFootballClient(api_key="dummy-key", cache_dir=cache_dir, transport=_transport)
-
-
-CLIENTS = [(_espn, ESPN_CALLS), (_nhl, NHL_CALLS), (_api_football, AF_CALLS)]
+CLIENTS = [(_espn, ESPN_CALLS), (_nhl, NHL_CALLS)]
 
 
 # A directory per client, so that each list is that client's names and nothing
@@ -110,11 +109,6 @@ def espn_files(tmp_path):
 @pytest.fixture
 def nhl_files(tmp_path):
     return _drive(_nhl, NHL_CALLS, tmp_path / "nhl")
-
-
-@pytest.fixture
-def api_football_files(tmp_path):
-    return _drive(_api_football, AF_CALLS, tmp_path / "af")
 
 
 def test_every_espn_key_is_namespaced_to_espn(espn_files):
@@ -138,46 +132,23 @@ def test_the_nhl_table_wrote_a_file_for_every_method_it_names(nhl_files):
     assert len(nhl_files) == len(NHL_CALLS)
 
 
-def test_api_football_keys_carry_no_namespace_at_all(api_football_files):
-    """The whole of the risk, named exactly.
-
-    API-Football's four stems are ordinary English words that any later client
-    for any other sport would reach for first. Nothing prevents the collision;
-    what this pins is which four words are taken, so that adding a fifth, or a
-    second client that wants one of them, is a decision someone makes rather
-    than a file two clients overwrite in turn.
-    """
-    assert {name.split("_")[0] for name in api_football_files} == {
-        "leagues",
-        "teams",
-        "squad",
-        "players",
-    }
-
-
-def test_the_api_football_table_wrote_a_file_for_every_method_it_names(api_football_files):
-    assert len(api_football_files) == len(AF_CALLS)
-
-
-def test_no_two_clients_claim_the_same_cache_file_name(espn_files, nhl_files, api_football_files):
+def test_no_two_clients_claim_the_same_cache_file_name(espn_files, nhl_files):
     """The claim the prefix discipline exists to make, stated over real names.
 
-    Pairwise and not one three-way union, so a failure says which two clients
-    collided. Set intersection and not a length comparison: the empty set is the
-    claim, and it reads as the claim.
+    Set intersection and not a length comparison: the empty set is the claim,
+    and it reads as the claim. One pair today; a third client restores the
+    pairwise form, which is why it was written that way.
     """
     assert set(espn_files) & set(nhl_files) == set()
-    assert set(espn_files) & set(api_football_files) == set()
-    assert set(nhl_files) & set(api_football_files) == set()
 
 
-def test_all_three_clients_share_one_directory_without_overwriting_each_other(tmp_path):
+def test_both_clients_share_one_directory_without_overwriting_each_other(tmp_path):
     """The arrangement the CLI actually creates, driven end to end.
 
     `default_cache_dir` is one path for every run of every verb, and each
     patcher passes it straight to its client's constructor, so this is not a
     hypothetical: it is what a machine that has run both games looks like. Every
-    method of every client, into one directory, and the count has to be the sum —
+    method of both clients, into one directory, and the count has to be the sum —
     one file fewer is one client's answer sitting under another's name, which
     `_load_cache` would hand back without complaint because its only check is
     `isinstance(data, dict)`.
@@ -187,4 +158,4 @@ def test_all_three_clients_share_one_directory_without_overwriting_each_other(tm
     for build, calls in CLIENTS:
         written = _drive(build, calls, shared)
 
-    assert len(written) == (len(ESPN_CALLS) + ESPN_EXTRA_FILES + len(NHL_CALLS) + len(AF_CALLS))
+    assert len(written) == (len(ESPN_CALLS) + ESPN_EXTRA_FILES + len(NHL_CALLS))

@@ -134,9 +134,9 @@ def test_the_absences_come_back_as_a_tuple_and_not_the_json_array():
 
 
 def test_a_file_written_before_the_field_existed_reads_as_fully_measured():
-    # Every rosters file on disk today came from API-Football, which measures all
-    # twenty stats. Absent has to mean "nothing is missing" or those files would
-    # load as players about whom nothing is known.
+    # Every rosters file written before this field existed came from a provider
+    # that measured all twenty stats. Absent has to mean "nothing is missing" or
+    # those files would load as players about whom nothing is known.
     raw = league_data_to_dict(sample())
     del raw["teams"][0]["player_stats"][18]["unsupplied"]
     restored = league_data_from_dict(raw)

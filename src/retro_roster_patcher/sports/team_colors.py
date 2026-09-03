@@ -1,8 +1,8 @@
 """Local cache for user-assigned team colors.
 
-When using API-Football (which doesn't provide team colors), the user picks
-primary and secondary colors from a palette. These choices are persisted to
-a JSON file keyed by team ID so they don't need to be re-picked each session.
+No provider this library reads supplies team colors, so the user picks primary
+and secondary ones from a palette. These choices are persisted to a JSON file
+keyed by team ID so they don't need to be re-picked each session.
 """
 
 import json
