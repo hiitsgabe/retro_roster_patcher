@@ -46,7 +46,8 @@ SOURCES = {
         "/seasons/2025/types/1/teams/364/leaders"
     ),
     # One athlete's full season statistics: 96 fields across defensive, general,
-    # goalKeeping and offensive. This is the document that replaces API-Football.
+    # goalKeeping and offensive. This is the document every soccer rating is
+    # now derived from.
     "espn_soccer_athlete_stats.json": (
         "https://sports.core.api.espn.com/v2/sports/soccer/leagues/eng.1"
         "/seasons/2025/types/1/teams/364/athletes/304901/statistics"

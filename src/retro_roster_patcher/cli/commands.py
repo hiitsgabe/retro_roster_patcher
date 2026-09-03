@@ -184,7 +184,7 @@ def _rosters_for_patch(
 ) -> LeagueData:
     # Equal booleans mean neither flag was given or both were, which is exactly
     # the pair of usage errors. Checked before anything expensive: the fetch
-    # below is a provider request, and API-Football rate-limits those.
+    # below is a league's worth of provider requests.
     if bool(args.season) == bool(args.rosters):
         raise UsageError("patch needs exactly one of --season or --rosters")
     if args.rosters:

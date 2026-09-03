@@ -269,8 +269,9 @@ class StatMapper:
             that includes non-answers.
 
         `n` is therefore per-category and not `len(all_stats)`. With a provider
-        that measures everything — API-Football — nothing is skipped and this is
-        the same computation it always was.
+        that measures everything nothing is skipped and this is the same
+        computation it always was; ESPN, which measures all but four of the
+        twenty, is why the distinction exists at all.
         """
         if not all_stats:
             return {}
@@ -568,8 +569,8 @@ class StatMapper:
         display name of two or more words in a non-Latin script — Cyrillic,
         Arabic, Hangul — arrives here as `" "`. A single-word one arrives as
         `""` and always took the fallback correctly, which is why this went
-        unnoticed. `api_football` passes `name` through as `p.get("name", "")`
-        with no cleaning of its own.
+        unnoticed. The provider's own `name` reaches here uncleaned; nothing
+        upstream of this method normalises it.
 
         The order matters and is not interchangeable: stripping the provider
         string before conversion would not help, because `"Ivanov Petrov"` in

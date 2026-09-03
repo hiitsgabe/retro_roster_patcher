@@ -9,7 +9,6 @@ import pytest
 
 from retro_roster_patcher.games.we2002.stat_mapper import StatMapper
 from retro_roster_patcher.sports import espn
-from retro_roster_patcher.sports.api_football import ApiFootballClient
 from retro_roster_patcher.sports.espn import EspnClient
 from retro_roster_patcher.sports.models import PlayerStats
 from tests.sports.conftest import FIXTURES
@@ -822,7 +821,7 @@ def test_the_recorded_statistics_document_becomes_one_player_stats(tmp_path):
 def test_the_pass_percentage_arrives_as_a_fraction_and_is_stored_as_a_percentage(tmp_path):
     # `general.passPct` reads `0.768` in the recorded document where
     # `displayValue` says `"0.8"`; `PlayerStats.passes_accuracy` is declared a
-    # percentage and API-Football fills it with one.
+    # percentage, so the fraction is scaled rather than stored as it arrives.
     #
     # This is the one field whose unit cannot be caught by any rating assertion:
     # `pass_accuracy` is percentiled league-wide, so scaling every player by the
@@ -833,9 +832,9 @@ def test_the_pass_percentage_arrives_as_a_fraction_and_is_stored_as_a_percentage
 
 
 def test_the_recorded_document_leaves_the_rating_unset(tmp_path):
-    # All four `avgRatingFrom*` fields read 0.0 for soccer. `api_football`
-    # renders an absent rating as `None`, so this one does too rather than
-    # claiming every player was rated zero out of ten.
+    # All four `avgRatingFrom*` fields read 0.0 for soccer. `None` is what
+    # `PlayerStats.rating` has always used for an absent rating, so this
+    # answers with that rather than claiming every player was rated zero.
     client = EspnClient(str(tmp_path), transport=_recorded_transport())
     assert client.get_player_stats(364, 2025, league_code="eng.1")[0].rating is None
 
@@ -1141,21 +1140,25 @@ def test_a_league_asked_for_without_a_season_falls_back_to_the_calendar_year(tmp
     assert client.get_featured_leagues()[0].season == datetime.now().year
 
 
-# --- the two soccer signatures against API-Football's ---
+# --- the two soccer signatures, pinned by name and order ---
 
 
-@pytest.mark.parametrize("method", ["get_squad", "get_player_stats"])
-def test_a_soccer_method_is_a_positional_superset_of_api_footballs(method):
-    # `WE2002Patcher.fetch` has one call site per method for both providers and
-    # passes the season positionally. When `get_squad`'s second parameter was
-    # `league_code`, the season landed in it, `"2024"` matched no league, and
-    # every squad came back empty with nothing raised anywhere.
+@pytest.mark.parametrize(
+    ("method", "expected"),
+    [
+        ("get_squad", ["self", "team_id", "season", "league_code"]),
+        ("get_player_stats", ["self", "team_id", "season", "league_code"]),
+    ],
+)
+def test_a_soccer_methods_parameters_are_exactly_these_in_this_order(method, expected):
+    # `WE2002Patcher.fetch` calls both of these positionally and passes the
+    # season second. When `get_squad`'s second parameter was `league_code`, the
+    # season landed in it, `"2024"` matched no league, and every squad came back
+    # empty with nothing raised anywhere.
     #
-    # Fixing the call site would have fixed that one line. Holding the ESPN
-    # signature to API-Football's as a prefix makes the mistake unrepresentable,
-    # and this is the assertion that keeps it true after `api_football` is
-    # deleted and there is nothing left to compare against by hand.
-    espn_params = list(inspect.signature(getattr(EspnClient, method)).parameters)
-    football_params = list(inspect.signature(getattr(ApiFootballClient, method)).parameters)
-    assert espn_params[: len(football_params)] == football_params
-    assert espn_params[len(football_params) :] == ["league_code"]
+    # Fixing the call site would have fixed that one line. This pins the order
+    # itself, so the mistake cannot come back through the signature. Until round
+    # F the pin was "a positional superset of `ApiFootballClient`'s", which said
+    # the same thing by comparison; with that client deleted the list is written
+    # out here instead, which is the same guard and one fewer indirection.
+    assert list(inspect.signature(getattr(EspnClient, method)).parameters) == expected

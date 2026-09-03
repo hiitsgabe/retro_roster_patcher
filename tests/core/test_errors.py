@@ -38,7 +38,7 @@ from retro_roster_patcher.core.errors import (
 _DELIBERATELY_OUTSIDE = frozenset({"retro_roster_patcher.cli.commands.UsageError"})
 
 
-def _walk_exception_classes() -> dict[str, type[BaseException]]:
+def _walk_exception_classes() -> tuple[dict[str, type[BaseException]], frozenset[str]]:
     """Every exception class defined under `src/retro_roster_patcher/`.
 
     Keyed by `module.qualname`, so a class re-exported from a second module is
@@ -47,6 +47,9 @@ def _walk_exception_classes() -> dict[str, type[BaseException]]:
     already imports every game at import time, so this adds no import that a
     plain `import retro_roster_patcher` does not already perform except for the
     CLI modules.
+
+    The set of module names the walk imported comes back too, so the tests below
+    can hold the walk to its reach without going through the classes it found.
     """
     found: dict[str, type[BaseException]] = {}
     modules = [retro_roster_patcher]
@@ -61,10 +64,10 @@ def _walk_exception_classes() -> dict[str, type[BaseException]]:
             if not obj.__module__.startswith(retro_roster_patcher.__name__):
                 continue
             found[f"{obj.__module__}.{obj.__qualname__}"] = obj
-    return found
+    return found, frozenset(m.__name__ for m in modules)
 
 
-_DISCOVERED = _walk_exception_classes()
+_DISCOVERED, _WALKED_MODULES = _walk_exception_classes()
 _MUST_BE_IN_HIERARCHY = sorted(set(_DISCOVERED) - _DELIBERATELY_OUTSIDE)
 
 
@@ -81,19 +84,47 @@ def test_every_exception_class_in_the_package_is_a_retro_roster_error(qualname):
     [
         "retro_roster_patcher.core.errors.RetroRosterError",
         "retro_roster_patcher.core.assets.MissingAssetError",
-        "retro_roster_patcher.sports.api_football.SeasonNotAvailableError",
         "retro_roster_patcher.games.we2002.ppf.PPFError",
         "retro_roster_patcher.cli.commands.UsageError",
     ],
 )
-def test_the_walk_reaches_every_subpackage_that_defines_an_exception(qualname):
-    """One class per subpackage that defines one: core, sports, games, cli.
+def test_the_walk_finds_a_class_in_every_subpackage_that_defines_one(qualname):
+    """One class per subpackage that defines one: core, games, cli.
 
     Without this the parametrised guard above would pass vacuously if the walk
     silently stopped importing — an empty `parametrize` list collects zero tests
     and reports green.
+
+    `sports` is absent because it defines no exception class of its own. It had
+    one entry here, `sports.api_football.SeasonNotAvailableError`, until round F
+    deleted that module; its two remaining clients raise `core.errors.ApiError`
+    directly. The test below is what keeps the walk's reach into `sports` under
+    guard now that no class of its own can demonstrate it.
     """
     assert qualname in _DISCOVERED
+
+
+@pytest.mark.parametrize(
+    "module",
+    [
+        "retro_roster_patcher.core.errors",
+        "retro_roster_patcher.sports",
+        "retro_roster_patcher.sports.espn",
+        "retro_roster_patcher.sports.nhl",
+        "retro_roster_patcher.games.we2002.ppf",
+        "retro_roster_patcher.cli.commands",
+    ],
+)
+def test_the_walk_imports_every_subpackage_whether_or_not_it_defines_an_exception(module):
+    """The reach claim, stated over modules instead of over what they contain.
+
+    The sentinel above can only speak for a subpackage that already defines an
+    exception, which makes it silently weaker the moment one stops — exactly
+    what happened to `sports` in round F. A `sports` module that grows an
+    exception class tomorrow is caught by the hierarchy guard only if the walk
+    imported it, and this is the assertion that says it did.
+    """
+    assert module in _WALKED_MODULES
 
 
 def test_the_allow_list_has_no_stale_entries():

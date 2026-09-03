@@ -10,9 +10,11 @@ convention anyone has to remember: `tests/core/test_errors.py` walks the whole
 package, collects every class that derives from `BaseException`, and fails on
 any one outside the hierarchy that is not in its short, justified allow-list.
 The subclasses live where they are raised — `MissingAssetError` in
-`core/assets.py`, `PPFError` in `games/we2002/ppf.py`, the three API-Football
-ones in `sports/api_football.py` — so this module is the root of the hierarchy
-and not the whole of it.
+`core/assets.py`, `PPFError` in `games/we2002/ppf.py` — so this module is the
+root of the hierarchy and not the whole of it. `sports/` defines none of its
+own: it did until round F, when `sports/api_football.py` took its three
+provider-specific `ApiError` subclasses with it, and its two remaining clients
+report every upstream failure as a plain `ApiError`.
 
 This module imports nothing from the rest of the package so that any module may
 import it without creating a cycle.

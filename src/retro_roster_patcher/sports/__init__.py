@@ -1,12 +1,15 @@
 """Sports data sources, shared across game patchers.
 
-The three clients are a deliverable of this extraction in their own right, so
-they are exported beside the models they return. The three API-Football
-exceptions are here for the same reason: a consumer calling
-`ApiFootballClient` directly needs to be able to name the free-plan and quota
-failures without importing from the implementation module. All three are
-`ApiError` subclasses, so a consumer that only wants "the provider failed" can
-keep catching `ApiError` from `retro_roster_patcher.core.errors`.
+The two clients are a deliverable of this extraction in their own right, so they
+are exported beside the models they return. Neither takes a credential: every
+endpoint this package reads is keyless.
+
+This package used to export three `ApiError` subclasses — `RateLimitError`,
+`DailyLimitError` and `SeasonNotAvailableError` — so that a consumer could name
+API-Football's free-plan and quota failures. That client is gone and nothing
+else ever raised them, so they are gone too rather than left as an `except`
+clause that can never fire. A consumer that wants "the provider failed" catches
+`ApiError` from `retro_roster_patcher.core.errors`, which is what it always was.
 
 `Transport` is re-exported from the private `_http` because it is the type of a
 public keyword parameter on seven callables — the three clients, the two
@@ -19,19 +22,13 @@ module to annotate an argument the library asks it for. The definition stays in
 `team_colors` is re-exported as a module, not unpacked into this namespace: it
 is a bag of cache functions over one JSON file, and `load_color_cache` beside
 `League` would read as one namespace where there are two. Exported at all
-because API-Football ships no team colours, so a UI has to offer the user a
+because no provider here ships team colours, so a UI has to offer the user a
 palette and remember the choice, and until now nothing in any `__all__` said
 the library already does that.
 """
 
 from . import team_colors
 from ._http import Transport
-from .api_football import (
-    ApiFootballClient,
-    DailyLimitError,
-    RateLimitError,
-    SeasonNotAvailableError,
-)
 from .espn import EspnClient
 from .models import (
     League,
@@ -44,16 +41,12 @@ from .models import (
 from .nhl import NhlApiClient
 
 __all__ = [
-    "ApiFootballClient",
-    "DailyLimitError",
     "EspnClient",
     "League",
     "LeagueData",
     "NhlApiClient",
     "Player",
     "PlayerStats",
-    "RateLimitError",
-    "SeasonNotAvailableError",
     "Team",
     "TeamRoster",
     "Transport",
