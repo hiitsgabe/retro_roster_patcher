@@ -418,6 +418,20 @@ def test_a_roster_is_cut_to_twelve(mapper):
     assert len(mapper.select_roster(players, stats)) == 12
 
 
+def test_a_very_large_squad_is_still_cut_to_twelve(mapper):
+    """The trailing `selected[:12]` is REDUNDANT and this says so.
+
+    Ten come from the position pass and both fill loops test `len(selected) >=
+    12` before every append, so the list can never exceed twelve and the slice
+    can never truncate. A mutation to `selected[:13]` survives the whole suite
+    for exactly that reason: it is an equivalent mutant, not a hole. Kept here
+    because "cut to twelve" is the behaviour a caller depends on however it is
+    achieved.
+    """
+    players, stats = _squad(["PG", "SG", "SF", "PF", "C"] * 20)
+    assert len(mapper.select_roster(players, stats)) == 12
+
+
 def test_a_roster_takes_two_of_each_position_first(mapper):
     players, stats = _squad(["PG", "SG", "SF", "PF", "C"] * 5)
     chosen = mapper.select_roster(players, stats)

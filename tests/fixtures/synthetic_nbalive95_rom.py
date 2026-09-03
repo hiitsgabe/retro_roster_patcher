@@ -57,6 +57,17 @@ TITLE = "NBA LIVE 95"
 CHECKSUM_OFFSET = 0x18E
 CHECKSUM_FILLER = 0xDEAD
 
+#: Non-zero bytes at exactly the offset the header checksum starts summing from.
+#:
+#: `_fix_checksum` sums big-endian words from 0x200 to the end of the file, and
+#: everything from the Genesis header to the first player record would otherwise
+#: be zero -- which makes the first word of the sum a zero, and an off-by-one in
+#: the start offset invisible. This is the byte pattern that makes the boundary
+#: itself observable, so it must begin at 0x200 and its first word must not be
+#: zero.
+CHECKSUM_REGION_START = 0x200
+BOOT_FILLER = bytes([0x4E, 0xF9, 0x00, 0x00, 0x02, 0x10, 0x60, 0xFE] * 4)
+
 #: Six bytes of 68000 that `apply_patches` replaces with three NOPs: a
 #: `JSR $001F9270`. Any six bytes would do; these are the instruction the
 #: upstream comment says is there, so a test asserting the site changed is
@@ -336,6 +347,8 @@ def build_nbalive95_rom(
     rom[TITLE_OFFSET : TITLE_OFFSET + len(encoded_title)] = encoded_title
     if size >= CHECKSUM_OFFSET + 2:
         struct.pack_into(">H", rom, CHECKSUM_OFFSET, CHECKSUM_FILLER)
+    if size >= CHECKSUM_REGION_START + len(BOOT_FILLER):
+        rom[CHECKSUM_REGION_START : CHECKSUM_REGION_START + len(BOOT_FILLER)] = BOOT_FILLER
     if size >= CHECKSUM_BYPASS_OFFSET + len(ORIGINAL_JSR):
         rom[CHECKSUM_BYPASS_OFFSET : CHECKSUM_BYPASS_OFFSET + len(ORIGINAL_JSR)] = ORIGINAL_JSR
 

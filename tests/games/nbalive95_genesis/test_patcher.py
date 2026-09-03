@@ -616,6 +616,22 @@ def test_the_two_all_star_slots_and_the_slammers_are_never_mapped(patcher):
     assert [slot for slot in mapped.teams if slot >= NBA_TEAM_COUNT] == []
 
 
+def test_a_team_mapped_to_an_all_star_slot_is_dropped(patcher, monkeypatch):
+    """The `NBA_TEAM_COUNT` cap itself, rather than the table's silence about it.
+
+    No entry in `MODERN_NBA_TO_NBALIVE95` reaches 27-29 today, so widening the
+    guard to `TEAM_COUNT` changes nothing observable -- which makes the guard
+    untested unless the table is made to reach there. Injecting one entry is
+    what turns it into a real branch: without the cap this slot is mapped, and
+    `patch` then writes a real squad over the East All-Stars.
+    """
+    from retro_roster_patcher.games.nbalive95_genesis import models
+
+    monkeypatch.setitem(models.MODERN_NBA_TO_NBALIVE95, "EAS", 27)
+    assert patcher.mapper.get_team_slot("EAS") == 27
+    assert patcher.map_rosters(_league_data(("EAS", 14))).teams == {}
+
+
 def test_a_populated_alias_takes_the_slot(patcher):
     mapped = patcher.map_rosters(_league_data(("GS", 14)))
     assert len(mapped.teams[GS_SLOT].players) == 12
