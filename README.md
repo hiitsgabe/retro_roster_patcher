@@ -14,7 +14,30 @@
   <img src="https://img.shields.io/badge/license-MIT-green" alt="MIT">
 </p>
 
-Zero runtime dependencies. Usable as a library or as a CLI.
+Retro sports games shipped with the rosters of their release year and no way to change
+them. This tool fetches a current squad from a live sports API, maps each player onto the
+attribute scale the game actually stores, and writes the result directly into the binary
+team tables of a ROM you already own — so a 1994 cartridge lines up with a 2025 season.
+
+Two games are supported today:
+
+| Game | Platform | Sport | Data source |
+| --- | --- | --- | --- |
+| NHL 94 | Sega Genesis | Hockey | ESPN or the NHL API, no key |
+| Winning Eleven 2002 | PlayStation | Soccer | API-Football, key required |
+
+WE2002 also gets its menus translated out of Japanese — English, Spanish, French and
+Portuguese patches are generated and applied as part of the same run.
+
+**This project ships no game data.** It patches a ROM or ISO you supply, and never
+redistributes one. The tests build synthetic images byte by byte rather than committing a
+real dump.
+
+Zero runtime dependencies — the standard library only, so it drops into an embedded or
+sandboxed interpreter without a wheel to build. Usable as a library or as a CLI, and the
+CLI speaks newline-delimited JSON so another process can drive it. It was extracted from a
+pygame launcher for exactly that reason; a Flutter app over embedded CPython is the other
+consumer.
 
 ## Install
 
