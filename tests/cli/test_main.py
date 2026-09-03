@@ -42,13 +42,8 @@ def test_list_json_exposes_the_capability_flags_a_ui_needs(capsys):
     _, evts = run(["list", "--json"], capsys)
     by_id = {p["game_id"]: p for p in evts[0]["patchers"]}
     assert by_id["we2002"]["requires_slot_mapping"] is True
-    # False since WE2002 grew a keyless provider and made it the default. The
-    # flag is what a UI reads to decide whether to prompt for a credential, and
-    # prompting for one nobody needs is the harm. `WE2002Patcher.check_api_key`
-    # still refuses a keyless `api-football`, which this flag cannot express
-    # because it is per-patcher and the requirement is per-provider.
     assert by_id["we2002"]["requires_api_key"] is False
-    assert by_id["we2002"]["providers"] == ["espn", "api-football"]
+    assert by_id["we2002"]["providers"] == ["espn"]
     assert by_id["nhl94-genesis"]["requires_slot_mapping"] is False
 
 

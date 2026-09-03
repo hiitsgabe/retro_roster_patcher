@@ -3,14 +3,17 @@
 Every test here drives `main` and asserts on the exit code and on the NDJSON
 stream, because the harm these cover is not "the wrong exception type" — it is a
 Dart bridge watching a pipe close with no terminal event. Each one reproduced a
-real escape before `core/errors.py` grew its two conversion points and before
-the three API-Football errors joined the hierarchy; at that commit the last event
-on the stream was a `progress` or a `status`, or there was no event at all.
+real escape before `core/errors.py` grew its two conversion points; at that
+commit the last event on the stream was a `progress` or a `status`, or there was
+no event at all.
 
-The API-Football payloads below are the shapes the provider really returns for a
-free-plan season and for an exhausted daily quota; `_check_plan_error` matches on
-`errors.plan` containing "Free plans" and `_request` on a non-empty
-`errors.requests`.
+The two provider tests below are about WHERE in the stream a failure lands, not
+about which provider produced it. `fetch` degrades gracefully per team, but only
+from the squad loop on: its first two steps — resolving the league and listing
+its teams — are outside that loop, and a failure in either used to escape.
+Until round F these were driven by API-Football's free-plan and quota envelopes;
+ESPN meters neither, so they are driven by the two failures ESPN can produce at
+exactly those two points, and the event sequences they assert are unchanged.
 """
 
 import json
@@ -23,55 +26,33 @@ from retro_roster_patcher.sports import _http
 
 from .conftest import events
 
-_PLAN_RESTRICTED = json.dumps(
-    {"errors": {"plan": "Free plans do not have access to this season."}, "response": []}
-).encode()
+# ESPN's teams endpoint answers with a list of groups, each holding teams. This
+# is that shape carrying none, which is what an id ESPN serves no table for
+# returns — a truthy body that parses to zero teams.
+_NO_TEAMS = json.dumps({"sports": [{"leagues": [{"teams": []}]}]}).encode()
 
-_QUOTA_EXHAUSTED = json.dumps(
-    {"errors": {"requests": "You have reached the request limit for the day"}, "response": []}
-).encode()
-
-_ONE_LEAGUE = json.dumps(
-    {
-        "errors": [],
-        "response": [
-            {
-                "league": {"id": 71, "name": "Serie A"},
-                "country": {"name": "Brazil"},
-                "seasons": [{"year": 1990}],
-            }
-        ],
-    }
-).encode()
+# 2001 is the Premier League in `ESPN_LEAGUES`; 71 is in no entry of it.
+_KNOWN_LEAGUE_ID = 2001
+_UNKNOWN_LEAGUE_ID = 71
 
 
-def _fetch_argv(cache_dir, season=1990):
-    # `--provider` is explicit because every failure below is API-Football's own
-    # — a free-plan season and an exhausted daily quota are shapes only it
-    # returns — and WE2002's default provider is now the keyless ESPN one, which
-    # has neither a plan nor a quota. Without the flag these tests would drive a
-    # client that cannot produce the condition they are named after and would
-    # still exit 1, on a different error.
+def _fetch_argv(cache_dir, league_id, season=1990):
     return [
         "--json",
         "fetch",
         "--game",
         "we2002",
-        "--provider",
-        "api-football",
-        "--api-key",
-        "not-a-real-key",
         "--season",
         str(season),
         "--league-id",
-        "71",
+        str(league_id),
         "--cache-dir",
         str(cache_dir),
     ]
 
 
 def _serve(monkeypatch, by_endpoint):
-    """Answer API-Football from a dict of endpoint fragment -> response body.
+    """Answer the provider from a dict of URL fragment -> response body.
 
     Replaces `_http.default_transport`, which the suite-wide network guard has
     already replaced with a raising sentinel, so this reaches every call site in
@@ -92,55 +73,64 @@ def _serve(monkeypatch, by_endpoint):
     return asked
 
 
-# -- the provider: a season the plan does not cover --------------------------
+# -- the provider: a league it does not serve, on fetch's first step ---------
 
 
-def test_a_free_plan_season_fails_on_the_first_request_of_the_fetch(tmp_path, monkeypatch):
-    """Pins where it fails, so the two tests below are not about a later call."""
-    asked = _serve(monkeypatch, {"": _PLAN_RESTRICTED})
-    main(_fetch_argv(tmp_path / "cache"))
-    assert asked == ["leagues"]
+def test_an_unknown_league_fails_before_any_request_is_made(tmp_path, monkeypatch):
+    """Pins where it fails, so the two tests below are not about a later call.
+
+    `EspnClient.get_leagues` filters a module constant, so an id outside it is
+    refused without a socket. That is the earliest `fetch` can fail, which is
+    the position these three tests are about.
+    """
+    asked = _serve(monkeypatch, {"": _NO_TEAMS})
+    main(_fetch_argv(tmp_path / "cache", _UNKNOWN_LEAGUE_ID))
+    assert asked == []
 
 
-def test_a_free_plan_season_exits_one(tmp_path, monkeypatch):
-    _serve(monkeypatch, {"": _PLAN_RESTRICTED})
-    assert main(_fetch_argv(tmp_path / "cache")) == 1
+def test_an_unknown_league_exits_one(tmp_path, monkeypatch):
+    _serve(monkeypatch, {"": _NO_TEAMS})
+    assert main(_fetch_argv(tmp_path / "cache", _UNKNOWN_LEAGUE_ID)) == 1
 
 
-def test_a_free_plan_season_ends_the_stream_with_a_terminal_error(tmp_path, monkeypatch, capsys):
-    _serve(monkeypatch, {"": _PLAN_RESTRICTED})
-    main(_fetch_argv(tmp_path / "cache"))
+def test_an_unknown_league_ends_the_stream_with_a_terminal_error(tmp_path, monkeypatch, capsys):
+    _serve(monkeypatch, {"": _NO_TEAMS})
+    main(_fetch_argv(tmp_path / "cache", _UNKNOWN_LEAGUE_ID))
     evts = events(capsys)
     # The whole sequence, not just the last event: the escape this covers left a
     # lone `progress` on the stream, which `evts[-1]["event"] == "error"` alone
     # would not have distinguished from a stream that never started.
     assert [e["event"] for e in evts] == ["progress", "error"]
-    assert evts[-1]["type"] == "SeasonNotAvailableError"
-    assert evts[-1]["msg"] == "Season 1990 not available on current plan"
+    assert evts[-1]["type"] == "ApiError"
+    assert evts[-1]["msg"] == "League 71 not found for season 1990"
 
 
-# -- the provider: the daily quota, on a request outside the graceful loop ----
+# -- the provider: an empty table, on the step outside the graceful loop ------
 
 
-def test_an_exhausted_quota_on_the_teams_call_exits_one(tmp_path, monkeypatch):
-    _serve(monkeypatch, {"/leagues": _ONE_LEAGUE, "/teams": _QUOTA_EXHAUSTED})
-    assert main(_fetch_argv(tmp_path / "cache")) == 1
+def test_a_league_with_no_teams_exits_one(tmp_path, monkeypatch):
+    _serve(monkeypatch, {"/teams": _NO_TEAMS})
+    assert main(_fetch_argv(tmp_path / "cache", _KNOWN_LEAGUE_ID)) == 1
 
 
-def test_an_exhausted_quota_on_the_teams_call_is_a_terminal_error(tmp_path, monkeypatch, capsys):
-    """`fetch` degrades gracefully per team, but only from request three on.
+def test_a_league_with_no_teams_is_a_terminal_error(tmp_path, monkeypatch, capsys):
+    """`fetch` degrades gracefully per team, but only from the squad loop on.
 
-    Requests one and two — leagues and teams — are outside that loop, so the
-    same provider condition used to be a per-team status message in one place
-    and an uncaught traceback in the other.
+    The teams call is outside that loop, so a failure there used to be a
+    per-team status message in one place and an uncaught traceback in the other.
+    The second `progress` is what distinguishes this position from the one
+    above: the fetch got past the league and died on the request after it. The
+    `status` between them is the client announcing the request it is about to
+    make, which is what tells this apart from a league that resolved and then
+    never asked anything.
     """
-    asked = _serve(monkeypatch, {"/leagues": _ONE_LEAGUE, "/teams": _QUOTA_EXHAUSTED})
-    main(_fetch_argv(tmp_path / "cache"))
+    asked = _serve(monkeypatch, {"/teams": _NO_TEAMS})
+    main(_fetch_argv(tmp_path / "cache", _KNOWN_LEAGUE_ID))
     evts = events(capsys)
-    assert asked == ["leagues", "teams"]
-    assert [e["event"] for e in evts] == ["progress", "progress", "error"]
-    assert evts[-1]["type"] == "DailyLimitError"
-    assert evts[-1]["msg"] == "You have reached the request limit for the day"
+    assert asked == ["teams"]
+    assert [e["event"] for e in evts] == ["progress", "progress", "status", "error"]
+    assert evts[-1]["type"] == "ApiError"
+    assert evts[-1]["msg"] == "League 2001 has no teams for season 1990"
 
 
 # -- the filesystem: a cache directory that cannot be created ----------------
@@ -216,8 +206,6 @@ def _patch_argv(rom, tmp_path, cache_dir):
         "patch",
         "--game",
         "we2002",
-        "--api-key",
-        "not-a-real-key",
         "--rom",
         str(rom),
         "--out",
