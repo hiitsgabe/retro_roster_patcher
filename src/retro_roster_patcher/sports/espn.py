@@ -166,11 +166,18 @@ class EspnClient:
     def get_leagues(
         self, country: str | None = None, season: int | None = None, id: int | None = None
     ) -> list[League]:
-        """Return ESPN leagues, optionally filtered by id."""
+        """Return ESPN leagues, optionally filtered by id.
+
+        `season` is carried onto the `League` it answers with. It reaches nothing
+        else — this list is a module constant — but `WE2002Patcher.fetch` puts
+        that object straight onto the `LeagueData` it returns and `serde` writes
+        it to the rosters file, so a `League` that ignored the argument reported
+        the current calendar year for every season the caller asked about.
+        """
         if id is not None:
             item = _ID_TO_LEAGUE.get(id)
-            return [self._league_from_item(item)] if item else []
-        leagues = [self._league_from_item(item) for item in ESPN_LEAGUES]
+            return [self._league_from_item(item, season)] if item else []
+        leagues = [self._league_from_item(item, season) for item in ESPN_LEAGUES]
         if country:
             leagues = [x for x in leagues if x.country.lower() == country.lower()]
         return leagues
@@ -677,7 +684,13 @@ class EspnClient:
     # Internal helpers
     # ------------------------------------------------------------------
 
-    def _league_from_item(self, item: dict) -> League:
+    def _league_from_item(self, item: dict, season: int | None = None) -> League:
+        """One `ESPN_LEAGUES` entry as a `League`.
+
+        The current calendar year is the fallback and not the answer: it is what
+        `get_featured_leagues` wants, since a featured list has no season in the
+        question, and it is what a caller who named no season gets.
+        """
         from datetime import datetime
 
         return League(
@@ -686,7 +699,7 @@ class EspnClient:
             country=item["country"],
             country_code="",
             logo_url="",
-            season=datetime.now().year,
+            season=season or datetime.now().year,
             teams_count=0,
         )
 

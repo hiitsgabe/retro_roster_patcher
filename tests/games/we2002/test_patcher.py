@@ -728,6 +728,9 @@ def test_fetch_over_espn_returns_a_squad_and_its_statistics(tmp_path):
 
     assert data.league.id == 2001
     assert data.league.name == "Premier League"
+    # The season the caller asked for, not the calendar year. This object is
+    # what `serde` writes to the rosters file `patch` reads back.
+    assert data.league.season == 2025
     assert [tr.team.id for tr in data.teams] == [364]
     assert [p.name for p in data.teams[0].players] == [name for _, name, _, _ in _ESPN_SQUAD]
     assert sorted(data.teams[0].player_stats) == [11, 12, 13, 14, 15]
