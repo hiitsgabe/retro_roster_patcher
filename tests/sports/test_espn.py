@@ -1,10 +1,17 @@
 """ESPN client against a recorded response. Never touches the network."""
 
+import inspect
 import json
+from dataclasses import fields
 
 import pytest
 
+from retro_roster_patcher.games.we2002.stat_mapper import StatMapper
+from retro_roster_patcher.sports import espn
+from retro_roster_patcher.sports.api_football import ApiFootballClient
 from retro_roster_patcher.sports.espn import EspnClient
+from retro_roster_patcher.sports.models import PlayerStats
+from tests.sports.conftest import FIXTURES
 
 NHL_TEAMS_URL = "https://site.api.espn.com/apis/site/v2/sports/hockey/nhl/teams"
 SOCCER_ROSTER_URL = "https://site.api.espn.com/apis/site/v2/sports/soccer/{code}/teams/83/roster"
@@ -442,6 +449,9 @@ def test_a_raising_status_callback_is_not_mistaken_for_a_failed_fetch(tmp_path, 
 NETWORK_CALLS = {
     "get_teams": ((2001,), {}),
     "get_squad": ((359,), {"league_code": "eng.1"}),
+    # Reaches the wire for the leaders document; the empty body it gets back
+    # names no athletes, so no per-athlete request follows.
+    "get_player_stats": ((359, 2025), {"league_code": "eng.1"}),
     "get_nhl_teams": ((), {}),
     "get_hockey_squad": ((1,), {}),
     "get_hockey_team_leaders": ((1,), {}),
@@ -454,7 +464,7 @@ NETWORK_CALLS = {
 }
 
 # Public members that answer from module constants and never make a request.
-OFFLINE_MEMBERS = {"get_featured_leagues", "get_leagues", "get_player_stats"}
+OFFLINE_MEMBERS = {"get_featured_leagues", "get_leagues"}
 
 
 def test_the_leak_guard_covers_every_public_member(assert_public_members_are_classified):
@@ -635,3 +645,495 @@ def test_an_athlete_sent_as_null_is_skipped_rather_than_crashing(tmp_path):
     ).encode()
     client = EspnClient(str(tmp_path), transport=_body_transport(body))
     assert client.get_hockey_team_leaders(5) == {}
+
+
+# --- soccer per-player statistics, from ESPN's core API ---
+#
+# `get_player_stats` returned `[]` under the docstring "ESPN doesn't provide
+# historical stats". It does: the same core API the three leaders methods above
+# already use serves soccer, keyless, and `tests/fixtures/api/record.py` carries
+# the two URLs these fixtures were recorded from. There is no bulk endpoint —
+# `/athletes` on a team is a 404 — so it is the team's leaders document to
+# enumerate the athletes, then one statistics document each.
+
+SOCCER_LEADERS_URL = (
+    "https://sports.core.api.espn.com/v2/sports/soccer/leagues/eng.1"
+    "/seasons/2025/types/1/teams/364/leaders"
+)
+
+# The 25 athletes the recorded leaders document names, in first-seen order across
+# its twelve categories. Spelled out because `get_player_stats` requests one
+# document per athlete in this order, and the URL list is the only thing that can
+# show it asked for the right ones.
+RECORDED_ATHLETES = [
+    304901,
+    249524,
+    173896,
+    157892,
+    257206,
+    274632,
+    303748,
+    235662,
+    249299,
+    323110,
+    234306,
+    379588,
+    251634,
+    190257,
+    104943,
+    196876,
+    281119,
+    102053,
+    250183,
+    274742,
+    152479,
+    356075,
+    194121,
+    280806,
+    414255,
+]
+
+# Which of ESPN's four statistics categories each field the parser reads lives
+# in. The recorded document is the authority; this is what lets a synthetic body
+# put a value where the parser will look for it.
+_CATEGORY_OF = {
+    "appearances": "general",
+    "minutes": "general",
+    "starts": "general",
+    "passPct": "general",
+    "foulsCommitted": "general",
+    "foulsSuffered": "general",
+    "yellowCards": "general",
+    "redCards": "general",
+    "avgRatingFromCorrespondent": "general",
+    "avgRatingFromEditor": "general",
+    "totalGoals": "offensive",
+    "goalAssists": "offensive",
+    "totalShots": "offensive",
+    "shotsOnTarget": "offensive",
+    "totalPasses": "offensive",
+    "totalTackles": "defensive",
+    "interceptions": "defensive",
+    "blockedShots": "defensive",
+}
+
+
+def _soccer_stats_url(athlete_id, season=2025, team_id=364, code="eng.1"):
+    return (
+        f"https://sports.core.api.espn.com/v2/sports/soccer/leagues/{code}"
+        f"/seasons/{season}/types/1/teams/{team_id}/athletes/{athlete_id}/statistics"
+    )
+
+
+def _soccer_leaders_body(*athlete_ids, categories=1):
+    """A leaders body naming these athletes, by `$ref`, in every category."""
+    return json.dumps(
+        {
+            "categories": [
+                {
+                    "abbreviation": f"C{c}",
+                    "leaders": [
+                        {
+                            "athlete": {
+                                "$ref": "http://sports.core.api.espn.com/v2/sports/soccer"
+                                f"/leagues/eng.1/seasons/2025/athletes/{aid}?lang=en&region=us"
+                            },
+                            "value": 1.0,
+                        }
+                        for aid in athlete_ids
+                    ],
+                }
+                for c in range(categories)
+            ]
+        }
+    ).encode()
+
+
+def _athlete_stats_body(**stats):
+    """A statistics document in ESPN's `splits.categories[].stats[]` shape."""
+    groups = {}
+    for name, value in stats.items():
+        groups.setdefault(_CATEGORY_OF[name], []).append({"name": name, "value": value})
+    return json.dumps(
+        {
+            "splits": {
+                "categories": [{"name": name, "stats": entries} for name, entries in groups.items()]
+            }
+        }
+    ).encode()
+
+
+def _soccer_transport(leaders_body, by_athlete, fallback=b"{}"):
+    """Serve the leaders body for the leaders URL and a document per athlete."""
+
+    def transport(url, headers, timeout):
+        transport.calls.append(url)
+        if url.endswith("/leaders"):
+            return leaders_body
+        athlete_id = int(url.split("/athletes/")[1].split("/")[0])
+        return by_athlete.get(athlete_id, fallback)
+
+    transport.calls = []
+    return transport
+
+
+def _recorded_transport():
+    """Replay the two recorded documents: the real leaders list, one real athlete."""
+    leaders = (FIXTURES / "espn_soccer_leaders.json").read_bytes()
+    athlete = (FIXTURES / "espn_soccer_athlete_stats.json").read_bytes()
+
+    def transport(url, headers, timeout):
+        transport.calls.append(url)
+        return leaders if url.endswith("/leaders") else athlete
+
+    transport.calls = []
+    return transport
+
+
+# --- the recorded documents ---
+
+
+def test_the_recorded_statistics_document_becomes_one_player_stats(tmp_path):
+    # Field for field against the document `record.py` fetched, so that a
+    # provider renaming `totalGoals` or moving it between categories fails here
+    # rather than showing up as a league of strikers who never scored.
+    client = EspnClient(str(tmp_path), transport=_recorded_transport())
+    stats = client.get_player_stats(364, 2025, league_code="eng.1")
+
+    assert stats[0].player_id == 304901
+    assert stats[0].appearances == 28
+    assert stats[0].minutes == 1810
+    assert stats[0].lineups == 21
+    assert stats[0].goals == 11
+    assert stats[0].assists == 4
+    assert stats[0].shots_total == 65
+    assert stats[0].shots_on == 19
+    assert stats[0].passes_total == 400
+    assert stats[0].tackles_total == 11
+    assert stats[0].interceptions == 3
+    assert stats[0].blocks == 17
+    assert stats[0].fouls_committed == 35
+    assert stats[0].fouls_drawn == 12
+    assert stats[0].cards_yellow == 0
+    assert stats[0].cards_red == 0
+
+
+def test_the_pass_percentage_arrives_as_a_fraction_and_is_stored_as_a_percentage(tmp_path):
+    # `general.passPct` reads `0.768` in the recorded document where
+    # `displayValue` says `"0.8"`; `PlayerStats.passes_accuracy` is declared a
+    # percentage and API-Football fills it with one.
+    #
+    # This is the one field whose unit cannot be caught by any rating assertion:
+    # `pass_accuracy` is percentiled league-wide, so scaling every player by the
+    # same hundred leaves the ranking, and therefore every rating in the game,
+    # exactly as it was. Only the concrete number shows it.
+    client = EspnClient(str(tmp_path), transport=_recorded_transport())
+    assert client.get_player_stats(364, 2025, league_code="eng.1")[0].passes_accuracy == 76.8
+
+
+def test_the_recorded_document_leaves_the_rating_unset(tmp_path):
+    # All four `avgRatingFrom*` fields read 0.0 for soccer. `api_football`
+    # renders an absent rating as `None`, so this one does too rather than
+    # claiming every player was rated zero out of ten.
+    client = EspnClient(str(tmp_path), transport=_recorded_transport())
+    assert client.get_player_stats(364, 2025, league_code="eng.1")[0].rating is None
+
+
+def test_the_recorded_leaders_document_names_twenty_five_athletes_once_each(tmp_path):
+    # Twelve categories of twenty-five entries name the same players over and
+    # over. Without the deduplication this is 300 statistics requests a team.
+    client = EspnClient(str(tmp_path), transport=_recorded_transport())
+    assert client._soccer_stat_athletes(364, "eng.1", 2025) == RECORDED_ATHLETES
+
+
+def test_the_requests_are_the_leaders_document_and_then_one_per_athlete(tmp_path):
+    transport = _recorded_transport()
+    client = EspnClient(str(tmp_path), transport=transport)
+    client.get_player_stats(364, 2025, league_code="eng.1")
+
+    assert transport.calls[0] == SOCCER_LEADERS_URL
+    assert transport.calls[1] == _soccer_stats_url(304901)
+    assert transport.calls == [SOCCER_LEADERS_URL] + [
+        _soccer_stats_url(aid) for aid in RECORDED_ATHLETES
+    ]
+
+
+# --- what the records say they do not measure ---
+
+
+def test_every_record_declares_the_four_stats_espn_never_reports(tmp_path):
+    client = EspnClient(str(tmp_path), transport=_recorded_transport())
+    stats = client.get_player_stats(364, 2025, league_code="eng.1")
+    assert stats[0].unsupplied == (
+        "duels_total",
+        "duels_won",
+        "dribbles_attempts",
+        "dribbles_success",
+    )
+    assert {s.unsupplied for s in stats} == {stats[0].unsupplied}
+
+
+def test_the_four_names_are_fields_that_exist_on_player_stats():
+    # A misspelt name here matches no field, so the mapper goes on rating the
+    # filler zero and the collapse it exists to prevent comes back silently.
+    declared = {f.name for f in fields(PlayerStats)}
+    assert (set(espn.SOCCER_UNSUPPLIED_STATS) - declared) == set()
+
+
+def test_the_declared_absences_are_exactly_the_fields_left_at_zero(tmp_path):
+    # The filler values and the declaration have to agree: a field named absent
+    # but actually filled would throw a measurement away, and a field left at
+    # zero and not named is the original bug.
+    client = EspnClient(str(tmp_path), transport=_recorded_transport())
+    stats = client.get_player_stats(364, 2025, league_code="eng.1")[0]
+    assert stats.duels_total == 0
+    assert stats.duels_won == 0
+    assert stats.dribbles_attempts == 0
+    assert stats.dribbles_success == 0
+
+
+def test_the_client_and_the_mapper_agree_on_which_categories_are_orphaned():
+    # The two constants are declared in different packages and neither imports
+    # the other. This is what keeps them describing the same three attributes.
+    orphaned = {
+        category
+        for category, inputs in StatMapper.CATEGORY_INPUTS.items()
+        if set(inputs) & set(espn.SOCCER_UNSUPPLIED_STATS)
+    }
+    assert orphaned == {"body_balance", "technique", "dribble"}
+
+
+# --- the records differ where the documents differ ---
+
+
+def test_three_athletes_with_three_documents_get_three_different_records(tmp_path):
+    # A fixture where every player scores the same cannot tell a working parser
+    # from one that returns a constant, and the recorded fixture is a single
+    # athlete replayed for all 25. These three differ in every field asserted.
+    transport = _soccer_transport(
+        _soccer_leaders_body(1, 2, 3),
+        {
+            1: _athlete_stats_body(
+                appearances=30.0, minutes=2700.0, starts=30.0, totalGoals=24.0, passPct=0.83
+            ),
+            2: _athlete_stats_body(
+                appearances=20.0, minutes=900.0, starts=8.0, totalGoals=3.0, passPct=0.71
+            ),
+            3: _athlete_stats_body(
+                appearances=5.0, minutes=140.0, starts=1.0, totalGoals=0.0, passPct=0.6
+            ),
+        },
+    )
+    client = EspnClient(str(tmp_path), transport=transport)
+    stats = client.get_player_stats(364, 2025, league_code="eng.1")
+
+    assert [s.player_id for s in stats] == [1, 2, 3]
+    assert [s.appearances for s in stats] == [30, 20, 5]
+    assert [s.minutes for s in stats] == [2700, 900, 140]
+    assert [s.lineups for s in stats] == [30, 8, 1]
+    assert [s.goals for s in stats] == [24, 3, 0]
+    assert [s.passes_accuracy for s in stats] == [83.0, 71.0, 60.0]
+
+
+def test_a_populated_rating_field_is_kept(tmp_path):
+    # The zero the recorded document carries is not a rule about the endpoint, so
+    # a feed that starts filling one of the four is not discarded.
+    transport = _soccer_transport(
+        _soccer_leaders_body(1, 2),
+        {
+            1: _athlete_stats_body(appearances=10.0, avgRatingFromCorrespondent=7.4),
+            2: _athlete_stats_body(appearances=10.0, avgRatingFromCorrespondent=0.0),
+        },
+    )
+    client = EspnClient(str(tmp_path), transport=transport)
+    stats = client.get_player_stats(364, 2025, league_code="eng.1")
+    assert stats[0].rating == 7.4
+    assert stats[1].rating is None
+
+
+def test_a_later_rating_field_is_used_when_the_first_is_empty(tmp_path):
+    transport = _soccer_transport(
+        _soccer_leaders_body(1),
+        {1: _athlete_stats_body(avgRatingFromCorrespondent=0.0, avgRatingFromEditor=6.9)},
+    )
+    client = EspnClient(str(tmp_path), transport=transport)
+    assert client.get_player_stats(364, 2025, league_code="eng.1")[0].rating == 6.9
+
+
+# --- documents that are not there or not usable ---
+
+
+def test_an_athlete_whose_document_has_no_categories_yields_no_record(tmp_path):
+    # A player with twenty zeroes is not the same as a player with no record:
+    # `map_player` reads `appearances == 0` and falls back, but every other
+    # consumer would see a full season of nothing.
+    transport = _soccer_transport(
+        _soccer_leaders_body(1, 2),
+        {1: _athlete_stats_body(appearances=30.0, totalGoals=9.0)},
+        fallback=json.dumps({"splits": {"categories": []}}).encode(),
+    )
+    client = EspnClient(str(tmp_path), transport=transport)
+    stats = client.get_player_stats(364, 2025, league_code="eng.1")
+    assert [s.player_id for s in stats] == [1]
+    assert transport.calls == [
+        SOCCER_LEADERS_URL,
+        _soccer_stats_url(1),
+        _soccer_stats_url(2),
+    ]
+
+
+def test_a_null_stat_value_costs_that_field_and_not_the_record(tmp_path):
+    transport = _soccer_transport(
+        _soccer_leaders_body(1),
+        {1: _athlete_stats_body(appearances=30.0, minutes=None, totalGoals=9.0)},
+    )
+    client = EspnClient(str(tmp_path), transport=transport)
+    stats = client.get_player_stats(364, 2025, league_code="eng.1")
+    assert stats[0].minutes == 0
+    assert stats[0].goals == 9
+
+
+def test_a_leaders_document_that_fails_to_arrive_yields_no_stats(tmp_path):
+    def failing(url, headers, timeout):
+        raise OSError("connection reset")
+
+    client = EspnClient(str(tmp_path), transport=failing)
+    assert client.get_player_stats(364, 2025, league_code="eng.1") == []
+
+
+def test_stats_for_a_team_in_no_known_league_are_not_requested(tmp_path):
+    # No league code, and nothing cached to resolve one from, so there is no URL
+    # to build. Asserted through the call log: returning `[]` after asking for a
+    # malformed URL would look the same from the outside.
+    transport = _soccer_transport(_soccer_leaders_body(1), {})
+    client = EspnClient(str(tmp_path), transport=transport)
+    assert client.get_player_stats(99999, 2025) == []
+    assert transport.calls == []
+
+
+# --- caching, which is what makes 500 requests a league viable ---
+
+
+def test_a_second_fetch_of_the_same_team_and_season_makes_no_request(tmp_path):
+    transport = _recorded_transport()
+    client = EspnClient(str(tmp_path), transport=transport)
+    first = client.get_player_stats(364, 2025, league_code="eng.1")
+    calls_after_first = list(transport.calls)
+    second = client.get_player_stats(364, 2025, league_code="eng.1")
+
+    assert [s.player_id for s in second] == [s.player_id for s in first]
+    assert transport.calls == calls_after_first
+
+
+def test_two_seasons_get_two_sets_of_documents(tmp_path):
+    # The season is in every key in this client, and these two answers differ, so
+    # a key that dropped it would serve the 2024 record for the 2025 question and
+    # report it as a success for 2025.
+    transport = _soccer_transport(
+        _soccer_leaders_body(1),
+        {1: _athlete_stats_body(appearances=30.0, totalGoals=24.0)},
+    )
+    client = EspnClient(str(tmp_path), transport=transport)
+    client.get_player_stats(364, 2025, league_code="eng.1")
+    calls_2025 = list(transport.calls)
+    client.get_player_stats(364, 2024, league_code="eng.1")
+
+    assert calls_2025 == [SOCCER_LEADERS_URL, _soccer_stats_url(1, season=2025)]
+    assert transport.calls[len(calls_2025) :] == [
+        SOCCER_LEADERS_URL.replace("/seasons/2025/", "/seasons/2024/"),
+        _soccer_stats_url(1, season=2024),
+    ]
+
+
+def test_the_cached_documents_name_the_league_the_team_and_the_season_on_disk(tmp_path):
+    transport = _soccer_transport(
+        _soccer_leaders_body(7),
+        {7: _athlete_stats_body(appearances=30.0)},
+    )
+    client = EspnClient(str(tmp_path), transport=transport)
+    client.get_player_stats(364, 2025, league_code="eng.1")
+
+    assert (tmp_path / "espn_soccer_leaders_eng.1_364_2025.json").exists() is True
+    assert (tmp_path / "espn_soccer_stats_eng.1_364_2025_7.json").exists() is True
+
+
+def test_one_athlete_already_cached_is_not_requested_again(tmp_path):
+    # Per athlete, not per team: a league fetch is ~500 requests and one that dies
+    # partway must not throw away the work of the teams that finished.
+    transport = _soccer_transport(
+        _soccer_leaders_body(1, 2),
+        {
+            1: _athlete_stats_body(appearances=30.0, totalGoals=24.0),
+            2: _athlete_stats_body(appearances=12.0, totalGoals=1.0),
+        },
+    )
+    client = EspnClient(str(tmp_path), transport=transport)
+    client._soccer_athlete_stats(364, "eng.1", 2025, 1)
+    calls_before = list(transport.calls)
+    stats = client.get_player_stats(364, 2025, league_code="eng.1")
+
+    assert calls_before == [_soccer_stats_url(1)]
+    assert [s.goals for s in stats] == [24, 1]
+    assert transport.calls == calls_before + [SOCCER_LEADERS_URL, _soccer_stats_url(2)]
+
+
+# --- resolving the league code from what `get_teams` cached ---
+
+
+def test_a_squad_asked_for_without_a_league_code_resolves_it_from_the_cached_teams(tmp_path):
+    # `WE2002Patcher.fetch` calls `get_teams` and then `get_squad`, and only the
+    # first is told the league. This lookup is what carries the code across, and
+    # it was reading `espn_teams_{id}` — a key nothing has written since the
+    # season joined it — so it always answered `None`, and `get_squad` returned an
+    # empty list without issuing a request or raising anything.
+    def transport(url, headers, timeout):
+        transport.calls.append(url)
+        if url.endswith("/teams"):
+            return _nhl_teams_body(("LIV", "Liverpool"), ("MUN", "Manchester United"))
+        return _soccer_roster("Alpha One", "Alpha Two")
+
+    transport.calls = []
+    client = EspnClient(str(tmp_path), transport=transport)
+    client.get_teams(2001, 2025)
+    squad = client.get_squad(2, season=2025)
+
+    assert [p.name for p in squad] == ["Alpha One", "Alpha Two"]
+    assert transport.calls == [
+        "https://site.api.espn.com/apis/site/v2/sports/soccer/eng.1/teams",
+        "https://site.api.espn.com/apis/site/v2/sports/soccer/eng.1/teams/2/roster",
+    ]
+
+
+def test_the_teams_cached_for_one_season_do_not_resolve_another_seasons_squad(tmp_path):
+    # The season is in the teams key for the same reason it is in every other
+    # key, and a lookup that ignored it would answer a 2024 question from a 2025
+    # cache — and resolve a team that changed competition to the wrong league.
+    def transport(url, headers, timeout):
+        transport.calls.append(url)
+        return _nhl_teams_body(("LIV", "Liverpool"))
+
+    transport.calls = []
+    client = EspnClient(str(tmp_path), transport=transport)
+    client.get_teams(2001, 2025)
+    assert client.get_squad(1, season=2024) == []
+    assert transport.calls == ["https://site.api.espn.com/apis/site/v2/sports/soccer/eng.1/teams"]
+
+
+# --- the two soccer signatures against API-Football's ---
+
+
+@pytest.mark.parametrize("method", ["get_squad", "get_player_stats"])
+def test_a_soccer_method_is_a_positional_superset_of_api_footballs(method):
+    # `WE2002Patcher.fetch` has one call site per method for both providers and
+    # passes the season positionally. When `get_squad`'s second parameter was
+    # `league_code`, the season landed in it, `"2024"` matched no league, and
+    # every squad came back empty with nothing raised anywhere.
+    #
+    # Fixing the call site would have fixed that one line. Holding the ESPN
+    # signature to API-Football's as a prefix makes the mistake unrepresentable,
+    # and this is the assertion that keeps it true after `api_football` is
+    # deleted and there is nothing left to compare against by hand.
+    espn_params = list(inspect.signature(getattr(EspnClient, method)).parameters)
+    football_params = list(inspect.signature(getattr(ApiFootballClient, method)).parameters)
+    assert espn_params[: len(football_params)] == football_params
+    assert espn_params[len(football_params) :] == ["league_code"]

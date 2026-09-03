@@ -76,6 +76,14 @@ def _drive(build, calls, cache_dir):
     return sorted(path.name for path in cache_dir.iterdir())
 
 
+# How many files the ESPN table writes beyond one per method. `get_player_stats`
+# is the only method in any of the three clients whose cache is one-to-many: ESPN
+# publishes no bulk soccer endpoint, so it caches the team's leaders document and
+# then one statistics document per athlete named in it. The `OMNIBUS` body's
+# `categories` name a single athlete, so it writes two files rather than one.
+ESPN_EXTRA_FILES = 1
+
+
 def _espn(cache_dir):
     return EspnClient(cache_dir, transport=_transport)
 
@@ -119,7 +127,7 @@ def test_every_espn_key_is_namespaced_to_espn(espn_files):
 def test_the_espn_table_wrote_a_file_for_every_method_it_names(espn_files):
     # Without this the assertion above holds vacuously for an empty directory,
     # which is what a client that quietly stopped caching would produce.
-    assert len(espn_files) == len(ESPN_CALLS)
+    assert len(espn_files) == len(ESPN_CALLS) + ESPN_EXTRA_FILES
 
 
 def test_every_nhl_key_is_namespaced_to_nhl_api(nhl_files):
@@ -179,4 +187,4 @@ def test_all_three_clients_share_one_directory_without_overwriting_each_other(tm
     for build, calls in CLIENTS:
         written = _drive(build, calls, shared)
 
-    assert len(written) == len(ESPN_CALLS) + len(NHL_CALLS) + len(AF_CALLS)
+    assert len(written) == (len(ESPN_CALLS) + ESPN_EXTRA_FILES + len(NHL_CALLS) + len(AF_CALLS))
