@@ -16,14 +16,14 @@ an `EspnClient`, 3 an `NhlApiClient`, two of them both — and not one of the 49
 names this fixture. 40 come in through that file's `patcher` fixture, which
 builds a real client before overwriting `p.api` with a fake, and the other 9
 build a patcher of their own; the constructor-time exposure is identical either
-way. Of the 62 tests in `tests/games/nhl94_snes/test_patcher.py`, 57 add the
-same exposure — 55 an `EspnClient`, 2 an `NhlApiClient`, none of them both — and
+way. Of the 63 tests in `tests/games/nhl94_snes/test_patcher.py`, 58 add the
+same exposure — 56 an `EspnClient`, 2 an `NhlApiClient`, none of them both — and
 of the 76 tests in `tests/games/we2002/test_patcher.py`, 57 add it through
-`EspnClient`. Across the whole suite 212 items reach a client built with
-`transport=None`. Autouse covers 1132 of the 1140 tests a default run executes;
-the remaining 8 opt out explicitly. The suite collects 1145 — `addopts`
+`EspnClient`. Across the whole suite 213 items reach a client built with
+`transport=None`. Autouse covers 1133 of the 1141 tests a default run executes;
+the remaining 8 opt out explicitly. The suite collects 1146 — `addopts`
 deselects `tests/test_packaging.py`'s 5, which are covered too on the run that
-selects them — so 1137 of 1145 counted that way.
+selects them — so 1138 of 1146 counted that way.
 
 Every number in the paragraph above moves when anyone adds a test; this is the
 sixth commit that has had to re-derive them. Re-derive rather than adjust:

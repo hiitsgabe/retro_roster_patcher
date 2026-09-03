@@ -321,6 +321,33 @@ def test_a_team_block_whose_first_record_is_unreadable_is_not_claimed(patcher, t
     assert patcher.analyze_rom(broken).is_valid is False
 
 
+def test_patch_still_runs_on_an_image_analyze_declines_to_claim(patcher, tmp_path):
+    """The asymmetry is deliberate, so it is pinned rather than left to drift.
+
+    `analyze_rom` applies the structural check and `patch` does not. Every bound
+    in that check is derived from this package's own reader and writer and none
+    of it has ever been run against a real dump, because no real ROM may enter
+    this repository. A false positive would cost the user every unrelated ROM
+    they own; a false negative costs only auto-detection, and `--game
+    nhl94-snes` still patches. Making `patch` repeat the check would trade the
+    cheap failure for the expensive one.
+    """
+    rom = fixture.build_nhl94_snes_rom()
+    # Slot 13's header word is one byte short of what the line table needs, so
+    # the structural check refuses the image -- while every pointer still reads
+    # and slot 1 is untouched.
+    rom[fixture.team_base(13)] = 74
+    odd = tmp_path / "odd.sfc"
+    odd.write_bytes(bytes(rom))
+    out = tmp_path / "out.sfc"
+    assert patcher.analyze_rom(odd).is_valid is False
+    mapped = MappedRosters(game_id="nhl94-snes", teams={BOS_SLOT: _team_record(BOS_SLOT, 10)})
+    result = patcher.patch(rom_path=odd, output_path=out, rosters=mapped)
+    assert result.teams_patched == 1
+    names, _ = _read_back(out, BOS_SLOT)
+    assert names == [f"Written {i:02d}" for i in range(10)]
+
+
 def test_an_image_whose_teams_all_share_one_block_is_not_claimed(patcher, tmp_path):
     """Constant filler otherwise passes every per-block test 28 times over."""
     rom = fixture.build_nhl94_snes_rom()
