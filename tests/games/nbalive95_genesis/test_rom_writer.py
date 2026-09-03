@@ -219,6 +219,60 @@ def test_a_record_with_no_terminator_before_the_end_is_measured_to_the_end(rom, 
     assert writer._original_record_size(start) == 200
 
 
+def _repoint(rom, team, assignments):
+    """Rewrite some of one team's twelve pointers, and return the ROM."""
+    data = bytearray(rom.read_bytes())
+    table = fixture.TEAM_ROSTER_ADDRESSES[team]
+    for slot, offset in assignments.items():
+        struct.pack_into(">I", data, table + slot * 4, offset)
+    rom.write_bytes(bytes(data))
+    return rom
+
+
+def test_a_gap_too_small_for_a_name_is_floored_at_four(rom, out):
+    """`max(4, max_name)`, which the synthetic layout's own gaps never reach.
+
+    Two records 70 bytes apart leave one byte for a name, and the floor lifts
+    that to four -- which is not enough to encode one, so `_encode_name_variable`
+    falls back to a single letter and two nulls.
+    """
+    base = fixture.player_offset(5, 0)
+    _repoint(rom, 5, {0: base, 1: base + fixture.FIXED_SIZE + 1})
+    writer = _loaded(rom, out)
+    assert writer._record_limits[(5, 0)] == 4
+
+
+def test_a_gap_of_exactly_the_floor_is_not_lifted(rom, out):
+    """The other side of the floor: 73 bytes leaves four, and four is kept."""
+    base = fixture.player_offset(5, 0)
+    _repoint(rom, 5, {0: base, 1: base + fixture.FIXED_SIZE + 4})
+    writer = _loaded(rom, out)
+    assert writer._record_limits[(5, 0)] == 4
+
+
+def test_a_gap_one_byte_above_the_floor_is_reported_as_five(rom, out):
+    """Guards the two above from passing on a table that answers 4 for anything."""
+    base = fixture.player_offset(5, 0)
+    _repoint(rom, 5, {0: base, 1: base + fixture.FIXED_SIZE + 5})
+    writer = _loaded(rom, out)
+    assert writer._record_limits[(5, 0)] == 5
+
+
+def test_budgets_are_measured_in_address_order_and_not_in_slot_order(rom, out):
+    """`ptrs.sort()`, which the synthetic layout's ascending pointers hide.
+
+    Swapping two of a team's pointers leaves the records where they are and
+    changes which slot each addresses, so the budget that belonged to slot 0
+    must follow the record and land on slot 1. Without the sort the gap for the
+    first pair is computed backwards and comes out negative.
+    """
+    _repoint(rom, 6, {0: fixture.player_offset(6, 1), 1: fixture.player_offset(6, 0)})
+    writer = _loaded(rom, out)
+    assert fixture.name_budget(6, 0) != fixture.name_budget(6, 1)
+    assert writer._record_limits[(6, 1)] == fixture.name_budget(6, 0)
+    assert writer._record_limits[(6, 0)] == fixture.name_budget(6, 1)
+
+
 def test_a_slot_whose_pointer_is_zero_gets_no_budget_entry(rom, out):
     data = bytearray(rom.read_bytes())
     table = fixture.TEAM_ROSTER_ADDRESSES[6]

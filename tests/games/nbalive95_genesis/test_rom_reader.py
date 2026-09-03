@@ -270,6 +270,12 @@ def test_non_printable_bytes_are_dropped_from_a_decoded_name(rom):
     assert _loaded(rom)._decode_name(b"JO\x01RD\xffAN\x00M\x02IKE\x00") == ("JORDAN", "MIKE")
 
 
+def test_the_printable_range_stops_below_delete(rom):
+    """0x7E is the last byte kept and 0x7F is not, on both halves of the name."""
+    assert _loaded(rom)._decode_name(b"JO\x7fRDAN\x00MI\x7fKE\x00") == ("JORDAN", "MIKE")
+    assert _loaded(rom)._decode_name(b"JO~RDAN\x00MI~KE\x00") == ("JO~RDAN", "MI~KE")
+
+
 def test_surrounding_spaces_are_stripped_from_a_decoded_name(rom):
     assert _loaded(rom)._decode_name(b"  JORDAN \x00 MIKE \x00") == ("JORDAN", "MIKE")
 
