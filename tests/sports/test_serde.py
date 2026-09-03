@@ -1,4 +1,5 @@
 import json
+from dataclasses import replace
 
 import pytest
 
@@ -97,6 +98,49 @@ def test_player_stats_keys_come_back_as_ints():
     # is `"18"` but `str(18.0)` is `"18.0"`, so a key of the wrong numeric type
     # rewrites the key text of the rosters file that `fetch` hands to `patch`.
     assert '"player_stats": {"18": ' in json.dumps(league_data_to_dict(restored))
+
+
+def _with_absences(*names: str) -> LeagueData:
+    return LeagueData(
+        league=League(id=39, name="Premier League"),
+        teams=[
+            TeamRoster(
+                team=Team(id=33, name="Manchester United"),
+                player_stats={18: replace(stats(18), unsupplied=names)},
+            )
+        ],
+    )
+
+
+def test_which_stats_a_provider_never_measured_survives_the_json_round_trip():
+    # `fetch` and `patch` are separate processes with this file between them, so a
+    # provider's absences have to reach the mapper through JSON or the mapper is
+    # back to reading a filler zero as a measurement. The round trip is through
+    # real `json.dumps`, which is also the proof the field is not a `set`: it
+    # raises on one.
+    original = _with_absences("duels_total", "duels_won")
+    restored = round_trip(original)
+    assert restored.teams[0].player_stats[18].unsupplied == ("duels_total", "duels_won")
+    assert restored == original
+
+
+def test_the_absences_come_back_as_a_tuple_and_not_the_json_array():
+    # `("duels_total",) == ["duels_total"]` is `False`, so without the conversion
+    # the whole-object equality above fails -- but every consumer asks `name in
+    # unsupplied`, which both shapes answer identically, so nothing else would
+    # notice. The declared type is what has to be asserted.
+    restored = round_trip(_with_absences("duels_total"))
+    assert type(restored.teams[0].player_stats[18].unsupplied) is tuple
+
+
+def test_a_file_written_before_the_field_existed_reads_as_fully_measured():
+    # Every rosters file on disk today came from API-Football, which measures all
+    # twenty stats. Absent has to mean "nothing is missing" or those files would
+    # load as players about whom nothing is known.
+    raw = league_data_to_dict(sample())
+    del raw["teams"][0]["player_stats"][18]["unsupplied"]
+    restored = league_data_from_dict(raw)
+    assert restored.teams[0].player_stats[18].unsupplied == ()
 
 
 def test_the_extra_blob_passes_through_untouched():

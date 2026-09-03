@@ -36,7 +36,20 @@ class Player:
 
 @dataclass
 class PlayerStats:
-    """Detailed per-season stats from API-Football."""
+    """Detailed per-season stats for one player, from whichever provider had them.
+
+    Every count below is declared `int` or `float` and is never `None`, so a
+    consumer can do arithmetic on it without a guard. That leaves nowhere to say
+    "this provider does not measure this", and a provider that does not measure
+    something has to write `0` -- which reads as a *measurement* of zero and
+    ranks the player at the bottom of the league for it. The two are opposite
+    facts: a player who genuinely won no duels should rate low, and a player
+    whose provider never reported duels should not be rated on duels at all.
+
+    `unsupplied` is where that distinction lives. It names the fields on this
+    object that carry a filler value rather than a measurement, so a consumer can
+    tell the difference without knowing which provider it is reading.
+    """
 
     player_id: int
     appearances: int
@@ -58,8 +71,32 @@ class PlayerStats:
     fouls_drawn: int
     cards_yellow: int
     cards_red: int
-    rating: float | None  # API-Football average rating
+    rating: float | None  # Provider's own average match rating, if it publishes one
     lineups: int = 0  # Times in starting XI
+    # Names of the fields above whose value is filler, because the provider that
+    # built this object does not report that statistic at all.
+    #
+    # Empty by default, which is the only default that can be right: it means
+    # "everything here was measured", and every producer and every rosters file
+    # written before this field existed meant exactly that. Naming the *absences*
+    # rather than the presences is what keeps that true -- a `supplied` set would
+    # need a default enumerating all twenty fields, and an older file, which
+    # names none of them, would deserialise as a player about whom nothing is
+    # known.
+    #
+    # A `tuple` and not a `set` or `frozenset` because this crosses `serde`:
+    # `json.dumps` has no representation for a set and raises on one, where a
+    # tuple round-trips through a JSON array. `__post_init__` converts the list
+    # that comes back, so a round-tripped `PlayerStats` compares equal to the one
+    # that was written.
+    unsupplied: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        # `serde` rebuilds this from JSON, where the tuple has become a list.
+        # Without this the round-trip is unequal in a way that no field-by-field
+        # reader would notice: `("duels_total",) != ["duels_total"]`, but both
+        # answer the `in` test every consumer actually runs.
+        self.unsupplied = tuple(self.unsupplied)
 
 
 @dataclass
