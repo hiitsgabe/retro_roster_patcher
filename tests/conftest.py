@@ -4,7 +4,7 @@ The network-leak sentinel and the fixture that arms it live at the root of the
 suite rather than under `tests/sports/`, because the claim they enforce — that
 no test in this repository opens a socket — is not specific to the sports client
 tests. `tests/games/` constructs live `EspnClient` and `NhlApiClient` objects
-through `NHL94GenesisPatcher.__init__` and a live `ApiFootballClient` through
+through `NHL94GenesisPatcher.__init__`, and a live `EspnClient` through
 `WE2002Patcher.__init__`, and conftest scoping means a fixture one directory
 down is invisible to it.
 
@@ -16,24 +16,25 @@ an `EspnClient`, 3 an `NhlApiClient`, two of them both — and not one of the 49
 names this fixture. 40 come in through that file's `patcher` fixture, which
 builds a real client before overwriting `p.api` with a fake, and the other 9
 build a patcher of their own; the constructor-time exposure is identical either
-way. `tests/games/we2002/test_patcher.py` adds 57 more the same way through
-`ApiFootballClient`. Autouse covers 851 of the 859 tests a default run executes;
-the remaining 8 opt out explicitly. The suite collects 864 — `addopts` deselects
-`tests/test_packaging.py`'s 5, which are covered too on the run that selects
-them — so 856 of 864 counted that way.
+way. Of the 76 tests in `tests/games/we2002/test_patcher.py`, 57 add the same
+exposure through `EspnClient` — until round F that count was identical and the
+client was `ApiFootballClient`. Autouse covers 909 of the 917 tests a default
+run executes; the remaining 8 opt out explicitly. The suite collects 922 —
+`addopts` deselects `tests/test_packaging.py`'s 5, which are covered too on the
+run that selects them — so 914 of 922 counted that way.
 
 Every number in the paragraph above moves when anyone adds a test; this is the
-fourth commit that has had to re-derive them. Re-derive rather than adjust:
+fifth commit that has had to re-derive them. Re-derive rather than adjust:
 `pytest --collect-only -q` prints the selected/collected pair, `pytest -m allow_default_transport
 --collect-only -q` prints the opt-out count, and the per-file figures come from a
-throwaway `-p` plugin that wraps the three client `__init__`s and records which
-items reach them with `transport=None`. Source-grepping gets the answer wrong in
-both directions: two tests build two patchers each, and three items pass a
-transport of their own — two parameters of one parametrized test, plus one that
-builds two clients. Bind the wrapped call against `inspect.signature` rather than
-reading a fixed positional index, too: `transport` is the fourth parameter of
-`EspnClient.__init__` and `NhlApiClient.__init__` and the fifth of
-`ApiFootballClient.__init__`.
+throwaway `-p` plugin that wraps both client `__init__`s and records which items
+reach them with `transport=None`. Source-grepping gets the answer wrong in both
+directions: two tests build two clients each, and seven items under
+`tests/games/` pass a transport of their own, one of which also builds two.
+Bind the wrapped call against `inspect.signature` rather than reading a fixed
+positional index, too — `transport` is the fourth parameter of both
+`EspnClient.__init__` and `NhlApiClient.__init__` today, but it is the binding
+and not the index that keeps the count honest if a third client disagrees.
 
 Disarming a negative safety net is silent — every other test stays green while
 the claim it enforces quietly stops holding. `tests/test_network_guard.py` is
