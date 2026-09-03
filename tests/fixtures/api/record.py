@@ -33,6 +33,24 @@ SOURCES = {
     # The season the client defaults to, so this is the URL `get_hockey_squad("BOS")`
     # really builds — the fixture and the pinned URL in test_nhl.py agree.
     "nhl_roster.json": "https://api-web.nhle.com/v1/roster/BOS/20252026",
+    # Soccer, from the same core API the hockey/baseball/basketball leaders calls
+    # use. Liverpool (364) in eng.1, season pinned for the reason above. These three
+    # are what let WE2002 fetch a squad and its per-player stats without an API key.
+    "espn_soccer_roster.json": (
+        "https://site.api.espn.com/apis/site/v2/sports/soccer/eng.1/teams/364/roster"
+    ),
+    # Enumerates the athletes with stats this season; each entry links its own
+    # statistics document, which is the next fixture.
+    "espn_soccer_leaders.json": (
+        "https://sports.core.api.espn.com/v2/sports/soccer/leagues/eng.1"
+        "/seasons/2025/types/1/teams/364/leaders"
+    ),
+    # One athlete's full season statistics: 96 fields across defensive, general,
+    # goalKeeping and offensive. This is the document that replaces API-Football.
+    "espn_soccer_athlete_stats.json": (
+        "https://sports.core.api.espn.com/v2/sports/soccer/leagues/eng.1"
+        "/seasons/2025/types/1/teams/364/athletes/304901/statistics"
+    ),
 }
 
 
