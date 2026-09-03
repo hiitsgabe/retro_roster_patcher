@@ -149,7 +149,7 @@ def test_analyze_builds_every_registered_patcher_to_sweep_one_rom(
     monkeypatch.setattr(commands, "build_patcher", spy)
     code, evts = run(["analyze", "--rom", str(rom), "--json", *cache], capsys)
     assert code == 0
-    assert visited == ["nhl94-genesis", "we2002"]
+    assert visited == ["nhl94-genesis", "nhl94-snes", "we2002"]
     assert [e["event"] for e in evts] == ["result"]
 
 
