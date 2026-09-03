@@ -46,11 +46,19 @@ _ONE_LEAGUE = json.dumps(
 
 
 def _fetch_argv(cache_dir, season=1990):
+    # `--provider` is explicit because every failure below is API-Football's own
+    # — a free-plan season and an exhausted daily quota are shapes only it
+    # returns — and WE2002's default provider is now the keyless ESPN one, which
+    # has neither a plan nor a quota. Without the flag these tests would drive a
+    # client that cannot produce the condition they are named after and would
+    # still exit 1, on a different error.
     return [
         "--json",
         "fetch",
         "--game",
         "we2002",
+        "--provider",
+        "api-football",
         "--api-key",
         "not-a-real-key",
         "--season",

@@ -24,6 +24,7 @@ real one is otherwise invisible to the tests in this file.
 """
 
 import inspect
+import json
 import os
 from pathlib import Path
 
@@ -47,6 +48,7 @@ from retro_roster_patcher.sports.api_football import (
     DailyLimitError,
     RateLimitError,
 )
+from retro_roster_patcher.sports.espn import EspnClient
 from retro_roster_patcher.sports.models import (
     League,
     LeagueData,
@@ -277,8 +279,13 @@ def test_the_patcher_is_registered_with_its_capabilities():
     assert cls.platform == "psx"
     assert cls.sport == "soccer"
     assert cls.requires_slot_mapping is True
-    assert cls.requires_api_key is True
-    assert cls.providers == ("api-football",)
+    # False, and per-provider rather than per-patcher: the default provider is
+    # keyless, so a UI reading this flag must not prompt for a credential. It is
+    # `check_api_key` that refuses a keyless `api-football`, below.
+    assert cls.requires_api_key is False
+    # Order is load-bearing: `Patcher.__init__` takes `providers[0]` as the
+    # default, so ESPN being first is what makes WE2002 work without a key.
+    assert cls.providers == ("espn", "api-football")
 
 
 def test_the_fake_api_matches_the_real_client_signatures():
@@ -342,6 +349,7 @@ def test_the_client_is_given_the_cache_directory_the_key_and_the_transport(tmp_p
     seen = []
     p = WE2002Patcher(
         cache_dir=tmp_path / "cache",
+        provider="api-football",
         api_key="test-key",
         on_status=seen.append,
         transport=transport,
@@ -354,21 +362,52 @@ def test_the_client_is_given_the_cache_directory_the_key_and_the_transport(tmp_p
     assert p.api.api_key == "test-key"
 
 
+def test_the_default_provider_builds_the_keyless_espn_client(tmp_path):
+    # The same three wirings for the other branch. `EspnClient` takes its cache
+    # directory and status callback positionally and has no `api_key` at all,
+    # which is the whole point of the round.
+    def transport(url, headers, timeout):
+        raise AssertionError("no test may reach the network")
+
+    seen = []
+    p = WE2002Patcher(cache_dir=tmp_path / "cache", on_status=seen.append, transport=transport)
+
+    assert p.provider == "espn"
+    assert type(p.api) is EspnClient
+    assert p.api.cache_dir == str(tmp_path / "cache")
+    assert p.api._transport is transport
+    assert p.api.on_status == seen.append
+
+
 def test_a_patcher_built_without_a_key_gives_the_client_an_empty_one(tmp_path):
     # `ApiFootballClient` types `api_key` as `str`, so `None` cannot be passed
     # through. `check_api_key` is what refuses the missing key, at the top of
     # `fetch`; the client never sees a request before that.
-    p = WE2002Patcher(cache_dir=tmp_path / "cache")
+    p = WE2002Patcher(cache_dir=tmp_path / "cache", provider="api-football")
 
     assert p.api_key is None
     assert p.api.api_key == ""
 
 
-def test_an_api_key_is_mandatory_at_fetch_time(tmp_path):
+def test_an_api_key_is_mandatory_at_fetch_time_for_api_football(tmp_path):
     # Construction stays free of credentials so `analyze` can inspect a ROM.
-    p = WE2002Patcher(cache_dir=tmp_path / "cache")
+    p = WE2002Patcher(cache_dir=tmp_path / "cache", provider="api-football")
     with pytest.raises(CapabilityError, match="api_key"):
         p.fetch(season=2024, league_id=39)
+
+
+def test_the_default_provider_needs_no_api_key_at_fetch_time(tmp_path):
+    # The claim the round is for. `requires_api_key` is `False` on the class, so
+    # the base guard passes anything; this pins that the override does not refuse
+    # the keyless case it was added to allow. It gets as far as the league
+    # lookup, which is one step past `check_api_key`.
+    p = WE2002Patcher(cache_dir=tmp_path / "cache")
+    p.api = FakeApi()
+
+    data = p.fetch(season=2024, league_id=2001)
+
+    assert p.api_key is None
+    assert [tr.team.id for tr in data.teams] == [100, 101, 102, 103]
 
 
 def test_fetch_needs_a_league_id(patcher):
@@ -555,6 +594,232 @@ def test_a_league_with_no_teams_raises_api_error(tmp_path):
     p.api = FakeApi(team_count=0)
     with pytest.raises(ApiError, match="no teams"):
         p.fetch(season=2024, league_id=39)
+
+
+# ── fetch and map through a real ESPN client ─────────────────────────────
+#
+# Every test above swaps in `FakeApi`, which is a stand-in for
+# `ApiFootballClient`. That leaves the ESPN branch — the default one — driven by
+# nothing, and it is the branch where the argument order, the league-code
+# resolution and the unmeasured-stat declaration all have to line up at once. So
+# this section drives a real `EspnClient` over a fake transport, from `fetch`
+# through `map_rosters` to the attributes that reach the ROM.
+
+# One team of five, spread across positions and ages so that the three attributes
+# ESPN cannot measure have something to be derived from. Their statistics
+# documents differ in every field, so an attribute that came out constant is a
+# broken mapper and not a flat fixture.
+_ESPN_SQUAD = [
+    (11, "Alisson Becker", "Goalkeeper", 32),
+    (12, "Virgil Dijk", "Defender", 28),
+    (13, "Ryan Gravenberch", "Midfielder", 22),
+    (14, "Dominik Szoboszlai", "Midfielder", 31),
+    (15, "Mohamed Salah", "Forward", 26),
+]
+
+_ESPN_DOCUMENTS = {
+    11: {"appearances": 30.0, "minutes": 2700.0, "starts": 30.0, "totalGoals": 0.0},
+    12: {"appearances": 28.0, "minutes": 2500.0, "starts": 28.0, "totalGoals": 3.0},
+    13: {"appearances": 24.0, "minutes": 1600.0, "starts": 18.0, "totalGoals": 1.0},
+    14: {"appearances": 20.0, "minutes": 1200.0, "starts": 12.0, "totalGoals": 6.0},
+    15: {"appearances": 32.0, "minutes": 2800.0, "starts": 32.0, "totalGoals": 27.0},
+}
+
+
+def _espn_transport():
+    """Serve the four soccer documents `fetch` asks ESPN for, by URL."""
+
+    def transport(url, headers, timeout):
+        transport.calls.append(url)
+        if url.endswith("/eng.1/teams"):
+            return json.dumps(
+                {
+                    "sports": [
+                        {
+                            "leagues": [
+                                {
+                                    "teams": [
+                                        {
+                                            "team": {
+                                                "id": 364,
+                                                "displayName": "Liverpool",
+                                                "abbreviation": "LIV",
+                                            }
+                                        }
+                                    ]
+                                }
+                            ]
+                        }
+                    ]
+                }
+            ).encode()
+        if url.endswith("/roster"):
+            return json.dumps(
+                {
+                    "athletes": [
+                        {
+                            "id": pid,
+                            "displayName": name,
+                            "position": {"name": position},
+                            "age": age,
+                            "jersey": str(pid),
+                        }
+                        for pid, name, position, age in _ESPN_SQUAD
+                    ]
+                }
+            ).encode()
+        if url.endswith("/leaders"):
+            return json.dumps(
+                {
+                    "categories": [
+                        {
+                            "abbreviation": "G",
+                            "leaders": [
+                                {
+                                    "athlete": {
+                                        "$ref": "http://sports.core.api.espn.com/v2/sports"
+                                        f"/soccer/leagues/eng.1/seasons/2025/athletes/{pid}"
+                                        "?lang=en&region=us"
+                                    },
+                                    "value": 1.0,
+                                }
+                                for pid, _, _, _ in _ESPN_SQUAD
+                            ],
+                        }
+                    ]
+                }
+            ).encode()
+        athlete_id = int(url.split("/athletes/")[1].split("/")[0])
+        stats = _ESPN_DOCUMENTS[athlete_id]
+        return json.dumps(
+            {
+                "splits": {
+                    "categories": [
+                        {
+                            "name": "general",
+                            "stats": [
+                                {"name": "appearances", "value": stats["appearances"]},
+                                {"name": "minutes", "value": stats["minutes"]},
+                                {"name": "starts", "value": stats["starts"]},
+                                {"name": "passPct", "value": 0.8},
+                            ],
+                        },
+                        {
+                            "name": "offensive",
+                            "stats": [{"name": "totalGoals", "value": stats["totalGoals"]}],
+                        },
+                    ]
+                }
+            }
+        ).encode()
+
+    transport.calls = []
+    return transport
+
+
+def _espn_patcher(tmp_path):
+    return WE2002Patcher(cache_dir=tmp_path / "cache", transport=_espn_transport())
+
+
+def test_fetch_over_espn_returns_a_squad_and_its_statistics(tmp_path):
+    p = _espn_patcher(tmp_path)
+
+    data = p.fetch(season=2025, league_id=2001)
+
+    assert data.league.id == 2001
+    assert data.league.name == "Premier League"
+    assert [tr.team.id for tr in data.teams] == [364]
+    assert [p.name for p in data.teams[0].players] == [name for _, name, _, _ in _ESPN_SQUAD]
+    assert sorted(data.teams[0].player_stats) == [11, 12, 13, 14, 15]
+    assert [tr.error for tr in data.teams] == [""]
+
+
+def test_fetch_over_espn_asks_for_the_squad_before_the_statistics(tmp_path):
+    # The whole request sequence, in order: the league list is local to
+    # `ESPN_LEAGUES` and costs nothing, then teams, then the roster, then the
+    # leaders document, then one statistics document per athlete.
+    #
+    # `get_squad` is handed no league code — `fetch` has one call site for both
+    # providers and cannot pass one — so the roster URL carrying `eng.1` is what
+    # shows `_find_league_code_for_team` resolved it from the team list cached by
+    # the request before. That lookup read a key nothing writes and answered
+    # `None`, which made this URL never be requested at all.
+    p = _espn_patcher(tmp_path)
+
+    p.fetch(season=2025, league_id=2001)
+
+    assert p.api._transport.calls == [
+        "https://site.api.espn.com/apis/site/v2/sports/soccer/eng.1/teams",
+        "https://site.api.espn.com/apis/site/v2/sports/soccer/eng.1/teams/364/roster",
+        "https://sports.core.api.espn.com/v2/sports/soccer/leagues/eng.1"
+        "/seasons/2025/types/1/teams/364/leaders",
+    ] + [
+        "https://sports.core.api.espn.com/v2/sports/soccer/leagues/eng.1"
+        f"/seasons/2025/types/1/teams/364/athletes/{pid}/statistics"
+        for pid, _, _, _ in _ESPN_SQUAD
+    ]
+
+
+def test_every_espn_record_says_which_stats_were_not_measured(tmp_path):
+    p = _espn_patcher(tmp_path)
+    data = p.fetch(season=2025, league_id=2001)
+    stats = data.teams[0].player_stats
+    assert stats[15].unsupplied == (
+        "duels_total",
+        "duels_won",
+        "dribbles_attempts",
+        "dribbles_success",
+    )
+    assert stats[15].goals == 27
+    assert stats[15].passes_accuracy == 80.0
+
+
+def test_a_squad_fetched_from_espn_is_not_uniformly_clumsy_after_mapping(tmp_path):
+    # The round, end to end. Every one of these five records carries a filler
+    # zero for duels and dribbles; without the declaration on them all three
+    # attributes percentile to 1 for the entire league, and the ratings that are
+    # supplied stay correct and hide it.
+    #
+    # Concrete values rather than a spread, because a spread alone would also be
+    # produced by rating the players on the wrong thing.
+    p = _espn_patcher(tmp_path)
+    data = p.fetch(season=2025, league_id=2001)
+
+    mapped = p.map_rosters(data, [SlotMapping(slot_index=0, team_id=364, team_name="Liverpool")])
+    by_name = {rec.last_name: rec.attributes for rec in mapped.teams[0].players}
+
+    # Eight characters is the ROM's whole budget for a surname, hence the cuts.
+    assert sorted(by_name) == ["A. Becke", "D. Szobo", "M. Salah", "R. Grave", "V. Dijk"]
+    # Goalkeeper 32, defender 28, midfielders 22 and 31, forward 26.
+    assert by_name["A. Becke"].body_balance == 6
+    assert by_name["V. Dijk"].body_balance == 7
+    assert by_name["R. Grave"].body_balance == 5
+    assert by_name["D. Szobo"].body_balance == 5
+    assert by_name["M. Salah"].body_balance == 6
+    assert by_name["A. Becke"].dribble == 3
+    assert by_name["V. Dijk"].dribble == 3
+    assert by_name["R. Grave"].dribble == 7
+    assert by_name["D. Szobo"].dribble == 6
+    assert by_name["M. Salah"].dribble == 7
+    # And the attribute that was never broken still tracks the goals scored: 27
+    # against 0, 1, 3 and 6, so four of five below him — the 80th percentile,
+    # rating 7, and the +1 `_apply_position_adjustments` gives a forward.
+    assert by_name["M. Salah"].offensive == 8
+    assert by_name["A. Becke"].offensive == 1
+
+
+def test_the_three_estimated_attributes_take_more_than_one_value_across_the_squad(tmp_path):
+    # The measurement the round is judged by, on the real client rather than on a
+    # hand-built `PlayerStats`. One distinct value is the bug; these are the
+    # counts the estimators produce for this squad.
+    p = _espn_patcher(tmp_path)
+    data = p.fetch(season=2025, league_id=2001)
+    mapped = p.map_rosters(data, [SlotMapping(slot_index=0, team_id=364, team_name="Liverpool")])
+    attrs = [rec.attributes for rec in mapped.teams[0].players]
+
+    assert len({a.body_balance for a in attrs}) == 3
+    assert len({a.dribble for a in attrs}) == 3
+    assert len({a.technique for a in attrs}) == 4
 
 
 # ── default_slot_mapping ─────────────────────────────────────────────────
