@@ -7,7 +7,7 @@ References:
   - https://cml-a.com/content/2020/11/23/names-and-stats-in-nhl-94/
   - https://forum.nhl94.com/index.php?/topic/13150-snes-nhl94-rom-mapping-project/
 
-ROM layout (LoROM, ~634 KB):
+ROM layout (LoROM, 8 Mbit = 1 048 576 bytes):
   - Pointer table at ROM $9CA5E7 -> file offset 0xE25E7 (headerless)
   - 28 teams, 4 bytes per pointer (only low 2 bytes used; bank $9C hardcoded)
   - Each team: [2-byte header size][header...][player records...][terminator][strings]
@@ -37,8 +37,18 @@ BANK = 0x9C
 # SMC copier header
 SMC_HEADER_SIZE = 512
 
-# Expected ROM sizes
-ROM_SIZE_NO_HEADER = 649728  # 0x9EC00 - standard NHL94 SNES dump
+# Expected ROM sizes.
+#
+# DEFECT, carried over verbatim: neither number is this game's size. NHL '94
+# (SNES) is an 8 Mbit LoROM, so a headerless dump is 1 048 576 bytes and a
+# headered one 1 049 088. These two are 397 KB short, which matters because
+# `validate` bounds the size only from below: a file of 649 728 bytes passes it
+# and then has no bank $9C at all, so `POINTER_TABLE_FILE_OFFSET` is past its
+# end and every pointer read answers None. The constants are left alone -- the
+# rest of this module is a faithful copy and correcting one number here would
+# silently change which files `validate` accepts -- and `patcher.py` refuses
+# such a file in `_pointer_table_fits` instead.
+ROM_SIZE_NO_HEADER = 649728  # 0x9EC00
 ROM_SIZE_WITH_HEADER = 650240  # 0x9EE00 - with 512-byte SMC header
 
 # Stats bytes per player (jersey + 7 attribute bytes)
