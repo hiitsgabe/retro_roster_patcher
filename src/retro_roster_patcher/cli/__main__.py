@@ -21,7 +21,6 @@ points in `core/errors.py` type the `OSError`s the filesystem raises.
 from __future__ import annotations
 
 import argparse
-import os
 import sys
 
 from ..core.errors import RetroRosterError
@@ -88,11 +87,6 @@ def build_parser() -> argparse.ArgumentParser:
         sub.add_argument("--game", required=True, help="patcher id, as shown by `list`")
         sub.add_argument(
             "--provider", default="", help="data provider, when the game offers more than one"
-        )
-        sub.add_argument(
-            "--api-key",
-            default=os.environ.get("RETRO_ROSTER_API_KEY", ""),
-            help="provider API key; defaults to $RETRO_ROSTER_API_KEY",
         )
         sub.add_argument("--league-id", type=int, default=None, help="provider league id")
         sub.add_argument(

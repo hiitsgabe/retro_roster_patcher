@@ -142,12 +142,11 @@ class HumanRenderer:
                 p["platform"],
                 p["sport"],
                 "yes" if p["requires_slot_mapping"] else "no",
-                "yes" if p["requires_api_key"] else "no",
                 ",".join(p["providers"]),
             ]
             for p in payload["patchers"]
         ]
-        header = ["GAME", "PLATFORM", "SPORT", "SLOT-MAP", "API-KEY", "PROVIDERS"]
+        header = ["GAME", "PLATFORM", "SPORT", "SLOT-MAP", "PROVIDERS"]
         widths = [max(len(r[i]) for r in [header, *rows]) for i in range(len(header))]
         for row in [header, *rows]:
             # `strict` catches a row longer than the header; a short one never

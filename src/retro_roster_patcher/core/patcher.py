@@ -33,7 +33,7 @@ from .models import (
 class Patcher(ABC):
     """Base class for game patchers.
 
-    The six capability attributes below are placeholders overwritten by
+    The five capability attributes below are placeholders overwritten by
     `@register`. They are declared here so type checkers and IDEs see them.
     """
 
@@ -41,14 +41,12 @@ class Patcher(ABC):
     platform: str = ""
     sport: str = ""
     requires_slot_mapping: bool = False
-    requires_api_key: bool = False
     providers: tuple[str, ...] = ()
 
     def __init__(
         self,
         cache_dir: Path | str,
         *,
-        api_key: str | None = None,
         provider: str | None = None,
         on_status: StatusFn | None = None,
         on_partial: PartialFn | None = None,
@@ -58,6 +56,23 @@ class Patcher(ABC):
         `cache_dir` accepts a string as well as a `Path` and is normalised to a
         `Path`, because callers across the JSON boundary — the NDJSON IPC surface
         and the CLI — can only hand over strings.
+
+        There is no `api_key` parameter. There was one until round F, when the
+        last provider that wanted a credential was deleted; it is removed rather
+        than accepted and ignored, because a parameter that silently does
+        nothing lets a caller believe a credential is in use. Passing one now
+        raises `TypeError` at the call site, which is where the mistaken belief
+        is.
+
+        Construction stays free of network I/O so `retro-roster analyze` can
+        instantiate every registered patcher purely to inspect a ROM — an
+        operation that never reaches a provider. It is not free of side effects:
+        every sports client creates its cache directory from its own constructor
+        through `errors.ensure_cache_dir`, and the patchers build their client
+        eagerly. So constructing a patcher can raise `StorageError` — on a
+        read-only `$HOME`, which is the Batocera and Android default — and that
+        is the one failure that happens before any method of this interface is
+        called.
         """
         if provider is not None and provider not in self.providers:
             supported = ", ".join(self.providers) or "none"
@@ -65,7 +80,6 @@ class Patcher(ABC):
                 f"{self._subject()} does not support provider {provider!r}. Supported: {supported}"
             )
         self.cache_dir = Path(cache_dir)
-        self.api_key = api_key
         self.provider = provider or (self.providers[0] if self.providers else None)
         self.on_status = on_status
         self.on_partial = on_partial
@@ -96,23 +110,6 @@ class Patcher(ABC):
         """
         if self.on_partial is not None:
             self.on_partial(data)
-
-    def check_api_key(self) -> None:
-        """Enforce the declared api-key capability.
-
-        Subclasses call this at the top of `fetch`, not in `__init__`. Construction
-        stays free of network I/O and of credentials so `retro-roster analyze`
-        can instantiate every registered patcher purely to inspect a ROM — an
-        operation that never reaches a provider. It is not free of side effects:
-        every sports client creates its cache directory from its own constructor
-        through `errors.ensure_cache_dir`, and the patchers build their client
-        eagerly. So constructing a patcher can raise `StorageError` — on a
-        read-only `$HOME`, which is the Batocera and Android default — and that
-        is the one failure that happens before any method of this interface is
-        called.
-        """
-        if self.requires_api_key and not self.api_key:
-            raise CapabilityError(f"{self._subject()} requires an api_key")
 
     def check_slot_mapping(self, slot_mapping: list[SlotMapping] | None) -> None:
         """Enforce the declared slot-mapping capability.

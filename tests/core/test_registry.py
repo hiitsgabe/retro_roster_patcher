@@ -31,7 +31,6 @@ def test_register_stamps_capabilities_onto_the_class():
         platform="genesis",
         sport="hockey",
         requires_slot_mapping=False,
-        requires_api_key=False,
         providers=("espn", "nhl"),
     )
     class Dummy:
@@ -41,7 +40,6 @@ def test_register_stamps_capabilities_onto_the_class():
     assert Dummy.platform == "genesis"
     assert Dummy.sport == "hockey"
     assert Dummy.requires_slot_mapping is False
-    assert Dummy.requires_api_key is False
     assert Dummy.providers == ("espn", "nhl")
 
 
@@ -51,7 +49,6 @@ def test_capability_defaults_are_the_conservative_ones():
         pass
 
     assert Dummy.requires_slot_mapping is False
-    assert Dummy.requires_api_key is False
     assert Dummy.providers == ()
 
 
@@ -117,7 +114,6 @@ def test_list_patchers_is_sorted_and_describes_each_game():
         platform="genesis",
         sport="hockey",
         requires_slot_mapping=False,
-        requires_api_key=False,
         providers=("espn",),
     )
     assert infos[1].requires_slot_mapping is True
@@ -129,7 +125,6 @@ def test_patcher_info_serialises_for_the_json_protocol():
         platform="genesis",
         sport="hockey",
         requires_slot_mapping=True,
-        requires_api_key=False,
         providers=("espn", "nhl"),
     )
 
@@ -138,7 +133,6 @@ def test_patcher_info_serialises_for_the_json_protocol():
         "platform": "genesis",
         "sport": "hockey",
         "requires_slot_mapping": True,
-        "requires_api_key": False,
         "providers": ["espn", "nhl"],
     }
 

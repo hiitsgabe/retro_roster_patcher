@@ -261,7 +261,6 @@ def test_human_renders_the_patcher_list_as_a_table():
                     "platform": "genesis",
                     "sport": "hockey",
                     "requires_slot_mapping": False,
-                    "requires_api_key": False,
                     "providers": ["espn", "nhl"],
                 },
                 {
@@ -269,16 +268,15 @@ def test_human_renders_the_patcher_list_as_a_table():
                     "platform": "playstation",
                     "sport": "soccer",
                     "requires_slot_mapping": True,
-                    "requires_api_key": True,
-                    "providers": ["api-football"],
+                    "providers": ["espn"],
                 },
             ],
         }
     )
     assert out.getvalue() == (
-        "GAME                PLATFORM     SPORT   SLOT-MAP  API-KEY  PROVIDERS\n"
-        "nhl94-genesis       genesis      hockey  no        no       espn,nhl\n"
-        "we2002-playstation  playstation  soccer  yes       yes      api-football\n"
+        "GAME                PLATFORM     SPORT   SLOT-MAP  PROVIDERS\n"
+        "nhl94-genesis       genesis      hockey  no        espn,nhl\n"
+        "we2002-playstation  playstation  soccer  yes       espn\n"
     )
 
 

@@ -187,7 +187,7 @@ def _roster(team_id, *, players=None, player_stats=None, **team_kwargs):
 
 
 def _make_patcher(tmp_path, **kwargs):
-    p = WE2002Patcher(cache_dir=tmp_path / "cache", api_key="test-key", **kwargs)
+    p = WE2002Patcher(cache_dir=tmp_path / "cache", **kwargs)
     p.api = FakeApi()
     return p
 
@@ -533,7 +533,7 @@ def test_fetch_publishes_the_team_list_before_the_squads(tmp_path):
         events.append(("partial", len(data.teams)))
         published.append(data)
 
-    p = WE2002Patcher(cache_dir=tmp_path / "cache", api_key="k", on_partial=_on_partial)
+    p = WE2002Patcher(cache_dir=tmp_path / "cache", on_partial=_on_partial)
     p.api = FakeApi(team_count=2, calls=events)
 
     p.fetch(season=2024, league_id=39)
@@ -1502,7 +1502,6 @@ def test_a_community_file_that_is_not_ppf2_is_reported_and_the_patch_continues(
     status = []
     p = WE2002Patcher(
         cache_dir=tmp_path / "cache",
-        api_key="k",
         on_status=status.append,
         assets_dir=tmp_path / "assets",
     )
@@ -1532,7 +1531,7 @@ def test_a_community_file_that_is_not_ppf2_is_reported_and_the_patch_continues(
 
 def test_the_assets_directory_is_forwarded_to_the_translation(tmp_path, monkeypatch):
     seen = []
-    p = WE2002Patcher(cache_dir=tmp_path / "cache", api_key="k", assets_dir=tmp_path / "assets")
+    p = WE2002Patcher(cache_dir=tmp_path / "cache", assets_dir=tmp_path / "assets")
     p.api = FakeApi()
     monkeypatch.setattr(patcher_module, "RomWriter", _fake_writer_class([]))
     _silence_translation(monkeypatch)

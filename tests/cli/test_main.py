@@ -42,7 +42,6 @@ def test_list_json_exposes_the_capability_flags_a_ui_needs(capsys):
     _, evts = run(["list", "--json"], capsys)
     by_id = {p["game_id"]: p for p in evts[0]["patchers"]}
     assert by_id["we2002"]["requires_slot_mapping"] is True
-    assert by_id["we2002"]["requires_api_key"] is False
     assert by_id["we2002"]["providers"] == ["espn"]
     assert by_id["nhl94-genesis"]["requires_slot_mapping"] is False
 
@@ -64,8 +63,8 @@ def test_list_without_json_prints_a_table(capsys):
     # exceeds 8 or sport exceeds 6 characters re-pads the header *and* this row,
     # and both lines below have to be updated with it. Pinning two lines rather
     # than the whole blob narrows that coupling; it does not remove it.
-    assert lines[0] == "GAME           PLATFORM  SPORT   SLOT-MAP  API-KEY  PROVIDERS"
-    assert "nhl94-genesis  genesis   hockey  no        no       espn,nhl" in lines
+    assert lines[0] == "GAME           PLATFORM  SPORT   SLOT-MAP  PROVIDERS"
+    assert "nhl94-genesis  genesis   hockey  no        espn,nhl" in lines
 
 
 # -- analyze ----------------------------------------------------------------
@@ -117,16 +116,22 @@ def test_analyze_with_an_explicit_game_reports_that_game(tmp_path, cache, capsys
     assert [m["game_id"] for m in evts[-1]["matches"]] == ["nhl94-genesis"]
 
 
-def test_analyze_sweeps_without_an_api_key_even_though_we2002_requires_one(
+def test_analyze_builds_every_registered_patcher_to_sweep_one_rom(
     tmp_path, cache, capsys, monkeypatch
 ):
-    # This is why the api-key guard lives in `fetch` and not `__init__` (Task 7).
+    # Construction has to stay cheap and demand nothing but a cache directory,
+    # because `analyze` builds every registered patcher just to ask each one
+    # whether it recognises the file. It is why no capability guard runs in
+    # `__init__`. Until round F this test was named for the api key it managed
+    # without; there is no key to manage without now, and the property it was
+    # really pinning — every patcher gets built — is unchanged.
+    #
     # The spy is what makes the name true. `code == 0` and a single `result` are
     # satisfied identically by a sweep that stops after `nhl94-genesis` and never
     # constructs WE2002 at all: measured, WE2002 answers `is_valid=False` on every
     # ROM this file hands it, so `cmd_analyze`'s `is_valid` filter drops it from
     # `matches` either way and it leaves no trace in the payload. `visited` is the
-    # only thing that pins it as built, with no `--api-key` on the argv below.
+    # only thing that pins it as built.
     #
     # The whole event sequence, not just the last event: `build_patcher` hands
     # `renderer.status` and `renderer.partial` to every patcher it builds, and
@@ -312,12 +317,6 @@ def test_build_patcher_wires_the_renderer_partial_callback(tmp_path):
     patcher = build_patcher("we2002", _args(tmp_path), renderer)
     patcher.partial({"teams": []})
     assert out.getvalue() == '{"event":"partial","data":{"teams":[]}}\n'
-
-
-def test_an_empty_api_key_reaches_the_patcher_as_none(tmp_path):
-    renderer = JsonRenderer(out=io.StringIO())
-    patcher = build_patcher("we2002", _args(tmp_path, api_key=""), renderer)
-    assert patcher.api_key is None
 
 
 def test_an_empty_provider_leaves_the_patcher_default_alone(tmp_path):
