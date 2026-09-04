@@ -8,6 +8,15 @@ ROM or ISO may enter this repository, so every fixture is fabricated in-test and
 a format that could only be exercised through a game's reader could not be
 exercised at all.
 
+**`iso9660` is the one exception, and it is a narrow one.** Its functions take a
+`BinaryIO` rather than `bytes`, because a PS2 or PSP disc image is 500 MB to
+1.5 GB and handing one over as a `bytes` object is not possible on the handhelds
+this library targets. Nothing in it opens, closes, stats or names a file, so the
+property the rule was actually protecting survives intact: a test hands it an
+`io.BytesIO` over a fabricated image and never touches a filesystem. A `Path`
+parameter is what would have broken it, and that is the version this package
+does not have.
+
 Nothing here is exported from the package root. The two consumers this library
 was extracted for are a pygame launcher and a Flutter app over embedded
 CPython, and neither of them parses an EA archive; they call `analyze`, `fetch`

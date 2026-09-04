@@ -9,14 +9,9 @@ That game reads Mode 2 / 2352 images, where each sector carries a 12-byte sync
 pattern, a 4-byte header, an 8-byte subheader and a trailing EDC/ECC block; the
 two share the word "sector" and no arithmetic.
 
-**The ISO 9660 helpers below travel with this game on purpose.** `nhl05-ps2`
-holds a byte-identical `_find_dir_entry` and `_find_dir_entry_abs_offset`, and
-the plan moves them to `formats/iso9660.py` as that migration's first commit,
-with two real call sites to shape the signature. Extracting them now would mean
-inventing an interface from one caller -- and `formats/` states that everything
-in it is pure bytes in, bytes out with no filesystem, which an ISO reader cannot
-honour while a PSP image is 500 MB to 1.5 GB and cannot be handed over as
-`bytes`. So they stay here, duplicated, until the second consumer exists.
+The ISO 9660 walk itself is `formats/iso9660.py`, shared with `games/nhl05_ps2`
+since that migration extracted it. What stays here is the part that is about
+this game: which path `db.viv` sits at, and what to do when it is not there.
 
 Nothing in this module reads a compressed disc image. See
 `patcher.NHL07PSPPatcher.analyze_rom` for what a `.cso` or `.zso` gets, and why.
@@ -25,9 +20,9 @@ Nothing in this module reads a compressed disc image. See
 from __future__ import annotations
 
 import os
-import struct
 from typing import BinaryIO
 
+from ...formats import iso9660
 from ...formats.ea_tdb import TDBFile, bigf_extract, refpack_decompress
 from .models import (
     NHL07_TEAM_INDEX,
@@ -39,9 +34,9 @@ from .models import (
     NHL07TeamSlot,
 )
 
-# ISO 9660 Mode 1 constants.
-ISO_SECTOR_SIZE = 2048
-ISO_PVD_OFFSET = 16 * ISO_SECTOR_SIZE  # the Primary Volume Descriptor, sector 16
+# Re-exported so this package's callers do not each have to know that a Mode 1
+# sector is 2048 bytes; `rom_writer` and `patcher` both seek by it.
+ISO_SECTOR_SIZE = iso9660.SECTOR_SIZE
 
 # Where `db.viv` sits inside the image. The three walks below all derive their
 # path from this one constant; the source declared it and then spelled the
@@ -221,6 +216,20 @@ class NHL07PSPRomReader:
 
     # -- ISO 9660 -----------------------------------------------------------
 
+    def _db_directory(self, f: BinaryIO) -> iso9660.Extent | None:
+        """The `DB` directory's extent, from the PVD down, or None.
+
+        One helper for what the source wrote out three times, in
+        `_extract_db_viv`, `find_db_viv_location` and
+        `find_db_viv_dir_entry_offset`. `games/nhl05_ps2` walks one directory
+        where this walks three, and that difference -- a `Sequence[str]` -- is
+        the whole of what `iso9660.walk` had to parameterise.
+        """
+        root = iso9660.read_root(f)
+        if root is None:
+            return None
+        return iso9660.walk(f, root, DB_VIV_DIRS)
+
     def _extract_db_viv(self) -> bytes | None:
         """Walk the directory tree and read `DB.VIV`, or None if it is not there.
 
@@ -230,225 +239,16 @@ class NHL07PSPRomReader:
         patcher turns into `is_valid=False`.
         """
         with open(self.iso_path, "rb") as f:
-            db_dir = self._find_db_directory(f)
+            db_dir = self._db_directory(f)
             if db_dir is None:
                 return None
-            dir_lba, dir_size = db_dir
 
-            result = self._find_dir_entry(f, dir_lba, dir_size, DB_VIV_NAME)
-            if result is None:
-                return None
-            file_lba, file_size, is_dir = result
-            if is_dir:
+            entry = iso9660.find_entry(f, db_dir, DB_VIV_NAME)
+            if entry is None or entry.is_dir:
                 return None
 
-            f.seek(file_lba * ISO_SECTOR_SIZE)
-            return f.read(file_size)
-
-    def _find_db_directory(self, f: BinaryIO) -> tuple[int, int] | None:
-        """(lba, size) of the `DB` directory, from the PVD down, or None.
-
-        The root directory record is a 34-byte record at offset 156 of the PVD;
-        its extent and length are the little-endian words at +2 and +10, the
-        same layout every other directory record uses.
-
-        One helper for what the source wrote out three times, in
-        `_extract_db_viv`, `find_db_viv_location` and
-        `find_db_viv_dir_entry_offset`. `nhl05-ps2` walks a different path
-        depth, which is the whole of the difference between the two, so this is
-        the shape the eventual `formats/iso9660.py` has to parameterise.
-        """
-        f.seek(ISO_PVD_OFFSET)
-        pvd = f.read(ISO_SECTOR_SIZE)
-        if len(pvd) < ISO_SECTOR_SIZE or pvd[0] != 1:
-            return None
-
-        root_rec = pvd[156 : 156 + 34]
-        current_lba = struct.unpack_from("<I", root_rec, 2)[0]
-        current_size = struct.unpack_from("<I", root_rec, 10)[0]
-
-        for part in DB_VIV_DIRS:
-            result = self._find_dir_entry(f, current_lba, current_size, part)
-            if result is None:
-                return None
-            current_lba, current_size, is_dir = result
-            if not is_dir:
-                return None
-        return current_lba, current_size
-
-    def _find_dir_entry(
-        self, f: BinaryIO, dir_lba: int, dir_size: int, name: str
-    ) -> tuple[int, int, bool] | None:
-        """Find one named entry in a directory extent: (lba, size, is_directory).
-
-        A record of length zero is padding to the end of the sector, so the scan
-        jumps to the next sector boundary rather than stopping -- a directory
-        spanning several sectors would otherwise stop at the first one.
-
-        Names carry ISO 9660's `;1` version suffix and are compared
-        case-insensitively with it removed, because the same disc is authored
-        `DB.VIV;1` in one image and `db.viv;1` in another.
-        """
-        f.seek(dir_lba * ISO_SECTOR_SIZE)
-        dir_data = f.read(dir_size)
-        pos = 0
-        name_upper = name.upper()
-
-        while pos < len(dir_data):
-            rec_len = dir_data[pos]
-            if rec_len == 0:
-                next_sector = ((pos // ISO_SECTOR_SIZE) + 1) * ISO_SECTOR_SIZE
-                if next_sector >= len(dir_data):
-                    break
-                pos = next_sector
-                continue
-
-            if pos + rec_len > len(dir_data):
-                break
-            # IMPROVEMENT over the source, which tested `pos + rec_len` and then
-            # indexed `dir_data[pos + 32]` regardless. A record claiming a
-            # length under 33 in the last bytes of the extent passes that test
-            # and raises `IndexError` here -- swallowed upstream by a blanket
-            # `except Exception`, which is how it stayed invisible. 33 is the
-            # fixed part of a directory record plus its name-length byte.
-            #
-            # The exact constant is not load-bearing and mutation testing says
-            # so: 34 gives the same answers. A record is at least 34 bytes --
-            # 33 plus a one-byte name, padded to an even length -- so an extent
-            # never leaves exactly 33, and if one did, the `name_len` test two
-            # lines down would refuse it anyway. What matters is that the index
-            # is bounded at all.
-            if pos + 33 > len(dir_data):
-                break
-
-            name_len = dir_data[pos + 32]
-            if name_len > 0 and pos + 33 + name_len <= len(dir_data):
-                entry_name = dir_data[pos + 33 : pos + 33 + name_len].decode(
-                    "ascii", errors="replace"
-                )
-                entry_name_clean = entry_name.split(";")[0].upper()
-
-                if entry_name_clean == name_upper:
-                    entry_lba = struct.unpack_from("<I", dir_data, pos + 2)[0]
-                    entry_size = struct.unpack_from("<I", dir_data, pos + 10)[0]
-                    is_dir = bool(dir_data[pos + 25] & 0x02)
-                    return entry_lba, entry_size, is_dir
-
-            pos += rec_len
-
-        return None
-
-    def _find_dir_entry_abs_offset(
-        self, f: BinaryIO, dir_lba: int, dir_size: int, name: str
-    ) -> int:
-        """Absolute ISO byte offset of a directory record, or 0 if not found.
-
-        Needed because the record's two size fields have to be rewritten when
-        the rebuilt `db.viv` is a different length: little-endian at +10,
-        big-endian at +14. Zero is "not found" and is safe as a sentinel: a
-        directory record can never be at offset 0 of an image, since the first
-        16 sectors are the system area.
-
-        The scan is `_find_dir_entry`'s, and the duplication is the source's.
-        Deduplicating them means returning the offset alongside the parsed
-        fields, which is the sort of signature decision `nhl05-ps2` is meant to
-        make with two call sites in front of it.
-        """
-        f.seek(dir_lba * ISO_SECTOR_SIZE)
-        dir_data = f.read(dir_size)
-        pos = 0
-        name_upper = name.upper()
-
-        while pos < len(dir_data):
-            rec_len = dir_data[pos]
-            if rec_len == 0:
-                next_sector = ((pos // ISO_SECTOR_SIZE) + 1) * ISO_SECTOR_SIZE
-                if next_sector >= len(dir_data):
-                    break
-                pos = next_sector
-                continue
-            if pos + rec_len > len(dir_data):
-                break
-            if pos + 33 > len(dir_data):
-                break
-
-            name_len = dir_data[pos + 32]
-            if name_len > 0 and pos + 33 + name_len <= len(dir_data):
-                entry_name = dir_data[pos + 33 : pos + 33 + name_len].decode(
-                    "ascii", errors="replace"
-                )
-                entry_name_clean = entry_name.split(";")[0].upper()
-                if entry_name_clean == name_upper:
-                    return dir_lba * ISO_SECTOR_SIZE + pos
-
-            pos += rec_len
-
-        return 0
-
-    def _find_entry_with_gap(
-        self, f: BinaryIO, dir_lba: int, dir_size: int, name: str
-    ) -> tuple[int, int, int]:
-        """(lba, size, next_lba) for one file, where `next_lba` starts the next.
-
-        "Next" is by position on the disc, not by directory order, which is why
-        the entries are sorted by LBA first. `next_lba` is 0 when this file is
-        the last one in its own directory -- which does NOT mean it is last on
-        the disc, only that this directory holds nothing after it. The caller
-        falls back to the file's own sector-aligned length in that case, which
-        is a budget of exactly what it already occupies.
-
-        `name_len > 1` rather than `> 0`, unlike `_find_dir_entry`: the `.` and
-        `..` entries have a one-byte name and both point at directories, and
-        sorting them in would make `.` -- which points at this very directory --
-        look like the file preceding everything.
-
-        Measured by mutation: relaxing it to `> 0` changes no answer here, and
-        cannot, because `.` and `..` name this directory and its parent and both
-        sit at lower addresses than anything the directory holds. It is kept as
-        a statement of what the two entries are, not as a live guard.
-
-        `next_lba > db_lba` below is equivalent to `>=` for the same kind of
-        reason: two directory entries cannot share an extent, and the only other
-        value `next_lba` takes is 0.
-        """
-        f.seek(dir_lba * ISO_SECTOR_SIZE)
-        dir_data = f.read(dir_size)
-        pos = 0
-        name_upper = name.upper()
-
-        all_entries: list[tuple[str, int, int]] = []
-        while pos < len(dir_data):
-            rec_len = dir_data[pos]
-            if rec_len == 0:
-                next_sector = ((pos // ISO_SECTOR_SIZE) + 1) * ISO_SECTOR_SIZE
-                if next_sector >= len(dir_data):
-                    break
-                pos = next_sector
-                continue
-            if pos + rec_len > len(dir_data):
-                break
-            if pos + 33 > len(dir_data):
-                break
-            name_len = dir_data[pos + 32]
-            if name_len > 1 and pos + 33 + name_len <= len(dir_data):
-                entry_name = dir_data[pos + 33 : pos + 33 + name_len].decode(
-                    "ascii", errors="replace"
-                )
-                entry_name_clean = entry_name.split(";")[0].upper()
-                entry_lba = struct.unpack_from("<I", dir_data, pos + 2)[0]
-                entry_size = struct.unpack_from("<I", dir_data, pos + 10)[0]
-                all_entries.append((entry_name_clean, entry_lba, entry_size))
-            pos += rec_len
-
-        all_entries.sort(key=lambda entry: entry[1])
-        for i, (entry_name_clean, entry_lba, entry_size) in enumerate(all_entries):
-            if entry_name_clean == name_upper:
-                next_lba = 0
-                if i + 1 < len(all_entries):
-                    next_lba = all_entries[i + 1][1]
-                return entry_lba, entry_size, next_lba
-
-        return 0, 0, 0
+            f.seek(entry.extent.offset)
+            return f.read(entry.extent.size)
 
     def find_db_viv_location(self) -> tuple[int, int, int]:
         """(lba, size, max_size) for `db.viv`, or (0, 0, 0) if it is not found.
@@ -458,14 +258,20 @@ class NHL07PSPRomReader:
         file, times 2048. With no next file in the same directory the budget is
         the archive's own sector-aligned length, so a rebuild may grow only into
         the padding of its own last sector.
+
+        `next_lba > lba` is equivalent to `>=` here: two directory entries
+        cannot share an extent, and the only other value `next_lba` takes is 0.
         """
         with open(self.iso_path, "rb") as f:
-            db_dir = self._find_db_directory(f)
+            db_dir = self._db_directory(f)
             if db_dir is None:
                 return 0, 0, 0
-            dir_lba, dir_size = db_dir
 
-            db_lba, db_size, next_lba = self._find_entry_with_gap(f, dir_lba, dir_size, DB_VIV_NAME)
+            found = iso9660.find_entry_with_next_lba(f, db_dir, DB_VIV_NAME)
+            if found is None:
+                return 0, 0, 0
+            entry, next_lba = found
+            db_lba, db_size = entry.extent.lba, entry.extent.size
             if db_lba == 0:
                 return 0, 0, 0
 
@@ -479,14 +285,16 @@ class NHL07PSPRomReader:
         """Absolute ISO offset of `DB.VIV`'s directory record, or 0.
 
         The writer needs it to correct the record's two length fields when the
-        rebuilt archive is shorter than the original.
+        rebuilt archive is shorter than the original. Zero is "not found" and is
+        safe as a sentinel: a directory record can never be at offset 0 of an
+        image, since the first 16 sectors are the system area.
         """
         with open(self.iso_path, "rb") as f:
-            db_dir = self._find_db_directory(f)
+            db_dir = self._db_directory(f)
             if db_dir is None:
                 return 0
-            dir_lba, dir_size = db_dir
-            return self._find_dir_entry_abs_offset(f, dir_lba, dir_size, DB_VIV_NAME)
+            entry = iso9660.find_entry(f, db_dir, DB_VIV_NAME)
+            return 0 if entry is None else entry.record_offset
 
     # -- team slots ---------------------------------------------------------
 
