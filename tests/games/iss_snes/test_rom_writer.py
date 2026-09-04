@@ -466,6 +466,29 @@ def test_the_minimum_is_the_flag_tile_write_and_nothing_higher():
     assert MIN_PATCHABLE_SIZE == fixture.SIZE_ARITHMETIC_MINIMUM
 
 
+def test_the_bound_is_at_least_the_end_of_every_region_the_writer_touches():
+    """Each region end computed from the fixture's own transcribed offsets. A
+    term dropped from the `max` that was not already dominated fails here."""
+    ends = [
+        fixture.OFS_PLAYER_NAMES + TOTAL_TEAMS * PLAYERS_PER_TEAM * 8,
+        fixture.OFS_PLAYER_DATA + TOTAL_TEAMS * PLAYERS_PER_TEAM * 6,
+        fixture.OFS_KIT1_RANGE1 + 19 * fixture.OUTFIELD_KIT_STRIDE,
+        fixture.OFS_KIT2_RANGE2 + 8 * fixture.OUTFIELD_KIT_STRIDE,
+        fixture.OFS_GK_RANGE2 + 8 * fixture.GK_KIT_STRIDE,
+        fixture.OFS_FLAG_COLORS_RANGE2 + 8 * fixture.FLAG_COLORS_STEP + 8,
+        fixture.OFS_PREDOMINANT_COLOR + TOTAL_TEAMS,
+        fixture.OFS_NAME_TILES_PTRS + TOTAL_TEAMS * 2,
+        fixture.OFS_FLAG_TILE_PTRS + TOTAL_TEAMS * 4,
+        fixture.NAME_TILES_DISPLACED_END,
+        fixture.OFS_DESC_PTRS + TOTAL_TEAMS * 2,
+        fixture.OFS_TEAM_NAME_TEXT_PTRS + TOTAL_TEAMS * 2,
+        fixture.MAX_NAME_TEXT_ADDR,
+        max(fixture.DISPLACEMENT_PATCH_POINTS) + 1,
+        fixture.OFS_FLAG_TILE_NEW + 204,
+    ]
+    assert MIN_PATCHABLE_SIZE == max(ends)
+
+
 def test_the_displaced_name_tile_region_holds_2432_bytes():
     assert NAME_TILES_CAPACITY == fixture.NAME_TILES_CAPACITY
     assert NAME_TILES_CAPACITY == 0x18000 - 0x17680
@@ -584,6 +607,30 @@ def test_the_shooting_index_replaces_only_the_low_three_bits(rom, out):
     original = fixture.player_data_record(0, 0)[1]
     assert _record(out, 0, 0)[1] == (original & 0xF8) | 7
     assert original & 0xF8 == 0xC8
+
+
+def test_the_shooting_write_preserves_low_bits_that_were_already_set(rom, out):
+    """The record at (0, 0) has a low nibble of 0, so it cannot tell `& 0xF8`
+    from `& 0xFF`. The eighth record of team 0 has all three low bits set, and a
+    shooting value of 1 encodes to index 0, so the mask is the only thing that
+    can clear them."""
+    original = fixture.player_data_record(0, 7)[1]
+    assert original & 0x07 == 0x07
+    writer = ISSRomWriter(str(rom), str(out))
+    writer.write_player_data(0, [_player(i, shooting=1) for i in range(8)])
+    writer.finalize()
+    assert _record(out, 0, 7)[1] == original & 0xF8
+
+
+def test_the_technique_write_preserves_low_bits_that_were_already_set(rom, out):
+    """The same hole in byte 2. (0, 5) has a low nibble of 0b000 in byte 1 but
+    byte 2 there is 0xA8; (0, 4) is 0xAF, which has all three set."""
+    original = fixture.player_data_record(0, 4)[2]
+    assert original & 0x07 == 0x07
+    writer = ISSRomWriter(str(rom), str(out))
+    writer.write_player_data(0, [_player(i, technique=1) for i in range(5)])
+    writer.finalize()
+    assert _record(out, 0, 4)[2] == original & 0xF8
 
 
 def test_the_technique_index_replaces_only_the_low_three_bits(rom, out):
@@ -1133,6 +1180,34 @@ def test_a_pointer_outside_bank_two_is_skipped_rather_than_seeking_backwards(tmp
     writer.finalize()
     assert _read(out, fixture.desc_text_start(7), fixture.DESC_TEXT_LENGTH) == fixture.desc_text(7)
     assert _read(out, fixture.desc_text_start(8), 15) == fixture.centred_description("Chelsea")[:15]
+
+
+def test_a_pointer_one_bank_low_does_not_overwrite_the_predominant_colour_table(tmp_path, out):
+    """The consequence the bank guard actually prevents.
+
+    `0x10000 + (snes_addr - 0x8000)` reduces to `0x8000 + snes_addr`, so it is
+    never negative -- it lands one bank low. This fixture plants a well-formed
+    description block at 0x8DA0, whose text would start at 0x8DB4, which is
+    inside the 27-byte predominant-colour table at 0x8DB2.
+    """
+    rom = fixture.write_iss_rom(tmp_path / "low.sfc", desc_pointer_one_bank_low=True)
+    before = rom.read_bytes()
+    writer = ISSRomWriter(str(rom), str(out))
+    writer.write_team_descriptions({7: "Arsenal"})
+    writer.finalize()
+    table = slice(fixture.OFS_PREDOMINANT_COLOR, fixture.OFS_PREDOMINANT_COLOR + TOTAL_TEAMS)
+    assert out.read_bytes()[table] == before[table]
+
+
+def test_the_low_bank_block_is_well_formed_enough_to_be_written_to(tmp_path, out):
+    """Without this the test above passes against any writer that failed to find
+    a description start there for some unrelated reason."""
+    rom = fixture.write_iss_rom(tmp_path / "low.sfc", desc_pointer_one_bank_low=True)
+    planted = rom.read_bytes()[
+        fixture.LOW_BANK_DESC_OFFSET : fixture.LOW_BANK_DESC_OFFSET + len(fixture.DESC_HEADER)
+    ]
+    assert planted == fixture.DESC_HEADER
+    assert fixture.LOW_BANK_DESC_OFFSET + len(fixture.DESC_HEADER) > fixture.OFS_PREDOMINANT_COLOR
 
 
 def test_a_name_with_no_ascii_at_all_pads_the_block_with_spaces(rom, out):

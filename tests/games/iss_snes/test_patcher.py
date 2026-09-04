@@ -565,10 +565,14 @@ def test_the_alternate_colour_becomes_the_away_shirt_and_socks(patcher):
 
 
 def test_every_team_gets_the_same_goalkeeper_kit(patcher):
+    """A green shirt and black shorts, written out rather than compared against
+    the constant this is meant to pin. No provider publishes a goalkeeper kit,
+    so this is the same for all 27 slots."""
     data = _league(patcher)
     mapping = [SlotMapping(slot_index=i, team_id=i + 1) for i in range(4)]
     mapped = patcher.map_rosters(data, mapping)
-    assert {record.kit_gk for record in mapped.teams.values()} == {GK_KIT}
+    assert {record.kit_gk for record in mapped.teams.values()} == {((0, 128, 0), (0, 0, 0))}
+    assert GK_KIT == ((0, 128, 0), (0, 0, 0))
 
 
 def test_the_flag_colours_are_the_primary_and_the_alternate(patcher):
@@ -721,6 +725,18 @@ def test_a_patch_run_writes_the_flag_and_predominant_colour_for_a_coloured_team(
     rosters = _mapped((0, 15), colours=[(255, 0, 0), (0, 0, 255)])
     patcher.patch(rom_path=rom, output_path=out, rosters=rosters)
     assert out.read_bytes()[fixture.OFS_PREDOMINANT_COLOR] == 2
+
+
+def test_the_second_flag_colour_reaches_the_palette_as_the_alternate(patcher, rom, out):
+    """Both entries, not just the first: `patch` hands the writer a pair, and a
+    pair built from the primary twice would still fill the table."""
+    rosters = _mapped((0, 15), colours=[(255, 0, 0), (0, 0, 255)])
+    patcher.patch(rom_path=rom, output_path=out, rosters=rosters)
+    # Germany is position 0 of the first flag-colour range.
+    start = fixture.OFS_FLAG_COLORS_RANGE1
+    palette = out.read_bytes()[start : start + 4]
+    assert palette[0:2] == (0x001F).to_bytes(2, "little")
+    assert palette[2:4] == (0x7C00).to_bytes(2, "little")
 
 
 def test_a_team_with_no_flag_colours_leaves_the_predominant_byte_alone(patcher, rom, out):

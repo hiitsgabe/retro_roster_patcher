@@ -208,8 +208,9 @@ class ISSRomReader:
             blob that is too. `write_name_tiles` reads exactly that.
           * the description table holds SNES bank-$02 addresses.
             `write_team_descriptions` maps one to `0x10000 + (addr - 0x8000)`,
-            which is an address before the bank for anything under $8000 and a
-            negative one under $6000.
+            which reduces to `0x8000 + addr` -- so anything under $8000 lands
+            one bank low, in the range that holds this game's predominant-colour
+            byte table and two of its pointer tables.
 
         27 entries in each of two tables must have a high byte at or above 0x80,
         which a file of random bytes clears with probability 2**-54. That is what
