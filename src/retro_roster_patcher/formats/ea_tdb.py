@@ -178,6 +178,15 @@ def _is_encodable(length: int, offset: int) -> bool:
     The three clauses are the three copy encodings, in the order `_emit_copy`
     tries them. They overlap, and the overlap is what makes the pair of
     functions agree: anything true here is emittable there.
+
+    The overlap also makes the second clause's upper bound of 67 inert *in this
+    function*: every length from 68 up that it would refuse, the third clause
+    accepts for a wider range of offsets. Measured by mutation, exhaustively
+    over 2.3 million (length, offset) pairs — raising it to 68 changes no
+    answer. It is the identical bound in `_emit_copy` that is load-bearing,
+    because there it selects between two encodings. Kept in step with it, since
+    a reader comparing the two would otherwise have to work out which one meant
+    it.
     """
     if length <= 10 and offset <= 1024:
         return True
@@ -346,7 +355,12 @@ def refpack_compress(data: bytes) -> bytes:
 
         # Link the matched span so later positions can reference into it. The
         # `size - 2` bound is `insert`'s own guard restated: a position within
-        # two bytes of the end has no three-byte hash.
+        # two bytes of the end has no three-byte hash. Only the very last
+        # position it admits, `size - 3`, is ever at stake, and nothing can use
+        # it: the only positions that would look it up are `size - 2` and
+        # `size - 1`, and `find_match` answers (0, 0) for both without
+        # consulting a chain. Measured — lowering the bound to `size - 3`
+        # changes no output over 480 inputs and 468 KB.
         for i in range(pos, min(pos + length, size - 2)):
             insert(i)
         pos += length

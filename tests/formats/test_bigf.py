@@ -292,6 +292,17 @@ def test_replace_inplace_leaves_the_directory_size_at_the_original_allocation():
     assert bigf_parse(bytes(archive))[0].size == 300
 
 
+def test_replace_inplace_zero_fills_a_single_leftover_byte():
+    # One byte short of the allocation is the boundary the padding branch turns
+    # on at, and mutation testing found it unguarded: `if remaining > 1` passes
+    # every other test in this file and leaves one stale byte behind.
+    archive = bytearray(ARCHIVE)
+    entry = bigf_parse(ARCHIVE)[0]
+    assert bigf_replace_inplace(archive, "nhl2007.tdb", b"\x77" * 299) is True
+    assert archive[entry.offset + 299] == 0
+    assert archive[entry.offset + 298] == 0x77
+
+
 def test_replace_inplace_fills_the_allocation_exactly_without_padding():
     archive = bytearray(ARCHIVE)
     entry = bigf_parse(ARCHIVE)[0]
@@ -382,6 +393,12 @@ def test_build_writes_an_empty_file_for_a_name_it_has_no_content_for():
     built = bigf_build(entries, {"a.tdb": b"kept"})
     assert bigf_extract(built, "b.tdb") == b""
     assert bigf_extract(built, "a.tdb") == b"kept"
+    # The directory size and the bytes written come from two separate `.get()`
+    # calls on the same dictionary, so they can disagree without `bigf_extract`
+    # noticing: a default of one byte rather than none makes the archive a byte
+    # longer than its last entry claims and shifts every later file.
+    last = bigf_parse(built)[-1]
+    assert len(built) == last.offset + last.size
 
 
 def test_build_writes_the_file_count_and_header_size_big_endian():
