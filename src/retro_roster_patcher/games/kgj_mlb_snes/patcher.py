@@ -311,6 +311,10 @@ class KGJMLBPatcher(Patcher):
         teams: dict[int, KGJTeamRecord] = {}
         for roster in data.teams:
             slot = self.mapper.get_team_slot(roster.team.code)
+            # `0 <=` and not just `< TEAM_COUNT`: no value in `MODERN_MLB_TO_KGJ`
+            # is negative today, so this half of the bound is a guard and not a
+            # filter, and `tests/games/kgj_mlb_snes/test_patcher.py` reaches it
+            # with a stub mapper rather than leaving it unexercised.
             if slot is None or not 0 <= slot < TEAM_COUNT:
                 continue
             leaders = roster.extra.get("leaders") or {}
