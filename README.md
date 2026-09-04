@@ -21,6 +21,7 @@ you already own — so a 1994 cartridge lines up with a 2025 season.
 
 | Game | `--game` | Platform | Sport | Providers |
 | --- | --- | --- | --- | --- |
+| International Superstar Soccer (SNES) | `iss-snes` | `snes` | `soccer` | `espn` |
 | Ken Griffey Jr. Presents MLB (SNES) | `kgj-mlb-snes` | `snes` | `baseball` | `espn` |
 | NBA Live 95 (Genesis) | `nbalive95-genesis` | `genesis` | `basketball` | `espn` |
 | NHL 94 (Genesis) | `nhl94-genesis` | `genesis` | `hockey` | `espn`, `nhl` |
@@ -87,6 +88,7 @@ exactly one of `--season` and `--rosters`; both, or neither, is a usage error.
 
 | Game | Requires |
 | --- | --- |
+| `iss-snes` | `--league-id` for `fetch` and for `patch --season` — there is no default league. `--slot-map` for every `patch`: the ROM's 27 slots are national teams and the data is a club league, so there is nothing to match them by. An 8 Mbit (1 048 576-byte) SNES dump, headerless or with the 512-byte copier header. Two different checks, on purpose: `patch` refuses only a file too short to hold the 296 140 bytes this patcher writes, because that one provably cannot be patched, while `analyze` additionally reports `is_valid: false` unless the file clears the 1 MB floor and all 27 entries of each of three pointer tables — selection-screen names, in-game name tiles and team descriptions — dereference to something the writer could use. That second check is a guess about content, so it never blocks a `patch` the user asked for by name. Neither has been run against a real cartridge. |
 | `kgj-mlb-snes` | No `--league-id`, and it *refuses* `--slot-map`: it matches each team by its abbreviation. A 2 097 152-byte SNES dump, headerless or with the 512-byte copier header — exactly those two sizes and nothing between, the strictest size test of any game here. That number is the ported reader's own and has never been checked against a real cartridge, so if the game is not a 16 Mbit ROM it refuses every genuine dump. The team tables are located by searching the image for a 14-byte marker rather than at a fixed offset, which is what makes the header need no arithmetic. `analyze` reports `is_valid: false` when that marker is missing, and also when it matches within 25 280 bytes of the end of the file, because the 28 team blocks would then run off the end and every write would be silently dropped. |
 | `nbalive95-genesis` | No `--league-id`, and it *refuses* `--slot-map`: it matches each team by its abbreviation. A 2 MB (2 097 152-byte) Genesis dump. `analyze` reports `is_valid: false` unless all 360 player pointers resolve, which rules out every file shorter than 2 064 604 bytes — the ported reader's own 1 572 864-byte floor accepts those and then silently patches nothing for the last twelve teams. |
 | `nhl94-genesis` | No `--league-id`. It *refuses* `--slot-map`: it matches each team by its three-letter code. |
