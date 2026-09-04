@@ -38,7 +38,16 @@ from .models import (
     KGJTeamSlot,
 )
 
-# Expected ROM size (2 MB = 16 Mbit, headerless)
+# Expected ROM size (2 MB = 16 Mbit, headerless).
+#
+# `validate` tests this for EQUALITY, not as a floor, so it is the strictest
+# size check of any game in this library and a single byte either side is
+# refused. That strictness is what makes it half the signature check -- and it
+# is also what makes the number load-bearing in a way a floor would not be:
+# nothing in this repository has ever been run against a real dump, so if the
+# cartridge turns out not to be 16 Mbit, every genuine image is refused. It is
+# carried over from upstream unchanged; the arithmetic that CAN be checked here
+# is `TEAM_DATA_SPAN` below, which is derived rather than transcribed.
 ROM_SIZE_EXPECTED = 2097152
 # SMC header size
 SMC_HEADER_SIZE = 512
