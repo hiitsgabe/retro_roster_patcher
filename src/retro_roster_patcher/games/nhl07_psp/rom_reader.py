@@ -311,6 +311,13 @@ class NHL07PSPRomReader:
             # and raises `IndexError` here -- swallowed upstream by a blanket
             # `except Exception`, which is how it stayed invisible. 33 is the
             # fixed part of a directory record plus its name-length byte.
+            #
+            # The exact constant is not load-bearing and mutation testing says
+            # so: 34 gives the same answers. A record is at least 34 bytes --
+            # 33 plus a one-byte name, padded to an even length -- so an extent
+            # never leaves exactly 33, and if one did, the `name_len` test two
+            # lines down would refuse it anyway. What matters is that the index
+            # is bounded at all.
             if pos + 33 > len(dir_data):
                 break
 
@@ -394,6 +401,15 @@ class NHL07PSPRomReader:
         `..` entries have a one-byte name and both point at directories, and
         sorting them in would make `.` -- which points at this very directory --
         look like the file preceding everything.
+
+        Measured by mutation: relaxing it to `> 0` changes no answer here, and
+        cannot, because `.` and `..` name this directory and its parent and both
+        sit at lower addresses than anything the directory holds. It is kept as
+        a statement of what the two entries are, not as a live guard.
+
+        `next_lba > db_lba` below is equivalent to `>=` for the same kind of
+        reason: two directory entries cannot share an extent, and the only other
+        value `next_lba` takes is 0.
         """
         f.seek(dir_lba * ISO_SECTOR_SIZE)
         dir_data = f.read(dir_size)

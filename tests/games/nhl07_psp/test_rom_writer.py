@@ -910,3 +910,40 @@ def test_the_rebuilt_archive_is_flushed_to_disk(tmp_path):
         assert os.read(fd, 4) == b"BIGF"
     finally:
         os.close(fd)
+
+
+# -- holes mutation testing found ------------------------------------------
+
+
+def test_the_copy_progress_span_ends_at_thirty_per_cent():
+    # Kills `PROGRESS_COPY_END = 0.3` -> 0.35. The progress tests above compare
+    # against the constant, which is the constant checked against itself: they
+    # hold for any value it takes.
+    assert PROGRESS_COPY_END == 0.3
+
+
+def test_the_record_writing_span_ends_at_sixty_per_cent():
+    # Kills `PROGRESS_RECORDS_END = 0.6` -> 0.55.
+    assert PROGRESS_RECORDS_END == 0.6
+
+
+def test_a_shorter_archive_zero_fills_bytes_that_were_not_already_zero(tmp_path):
+    # Kills `remaining = db_orig_size - len(new_viv_bytes)` -> 0. The earlier
+    # version of this test shortened the archive by 4 096 bytes, which lands
+    # entirely inside the fixture's 8 192 bytes of trailing member slack -- so
+    # the region was already zero and "it zero-filled" was true of a writer that
+    # wrote nothing. Zero over zero, exactly.
+    #
+    # 10 000 reaches past the slack into the last member's RefPack stream.
+    from pathlib import Path
+
+    writer = prepared(tmp_path)
+    original = bytes(writer.db_viv)
+    dropped = original[len(original) - 10_000 :]
+    assert dropped.count(0) < len(dropped)
+
+    writer._db_viv = original[:-10_000]
+    writer.rebuild_and_write({})
+    image = Path(writer.output_path).read_bytes()
+    start = fixture.DB_VIV_SECTOR * ISO_SECTOR_SIZE + len(original) - 10_000
+    assert image[start : start + 10_000] == b"\x00" * 10_000

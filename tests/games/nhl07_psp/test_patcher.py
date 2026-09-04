@@ -1534,3 +1534,223 @@ def test_the_same_patch_succeeds_with_the_replacement_left_alone(tmp_path):
         rosters=patcher.map_rosters(league()),
     )
     assert result.players_patched == fixture.TEAM_COUNT * 22
+
+
+# -- holes mutation testing found ------------------------------------------
+
+
+class StubMapper:
+    """A mapper that answers one fixed slot, whatever it is asked.
+
+    `MODERN_NHL_TO_NHL07` holds no out-of-range value, so the range guards in
+    `map_rosters` and `_write_all_teams` are guards and not filters: nothing a
+    real provider returns can reach them. The precedent is
+    `kgj_mlb_snes/test_patcher.py`, which reaches its equivalent the same way --
+    an unexercised guard is one nobody notices deleting.
+    """
+
+    def __init__(self, slot, inner):
+        self.slot = slot
+        self._inner = inner
+
+    def get_team_slot(self, code):
+        return self.slot
+
+    def select_roster(self, players, stats=None, max_players=25):
+        return self._inner.select_roster(players, stats, max_players)
+
+    def map_player(self, player, code, stats=None):
+        return self._inner.map_player(player, code, stats)
+
+    def generate_team_line_flags(self, players):
+        return self._inner.generate_team_line_flags(players)
+
+
+def test_a_slot_above_the_range_is_dropped_by_the_mapper(tmp_path):
+    # Kills `if slot is None or not 0 <= slot < SLOT_COUNT:` -> `if slot is None:`.
+    patcher = build(tmp_path)
+    patcher.mapper = StubMapper(SLOT_COUNT, patcher.mapper)
+    assert patcher.map_rosters(league()).teams == {}
+
+
+def test_a_negative_slot_is_dropped_by_the_mapper(tmp_path):
+    patcher = build(tmp_path)
+    patcher.mapper = StubMapper(-1, patcher.mapper)
+    assert patcher.map_rosters(league()).teams == {}
+
+
+def test_the_last_slot_in_range_is_kept_by_the_mapper(tmp_path):
+    # The control. Without it, "out of range is dropped" is satisfied by a
+    # mapper that drops everything.
+    patcher = build(tmp_path)
+    patcher.mapper = StubMapper(SLOT_COUNT - 1, patcher.mapper)
+    assert sorted(patcher.map_rosters(league()).teams) == [SLOT_COUNT - 1]
+
+
+def test_an_out_of_range_slot_reaching_patch_is_dropped_before_the_team_name(tmp_path):
+    # Kills `if 0 <= slot < SLOT_COUNT and players` -> `if players`. Without the
+    # progress callback the mutant is invisible: a slot of 99 matches no ROST
+    # row, so it writes nothing either way. With one, `NHL07_TEAM_NAMES[99]`
+    # raises `IndexError` -- an exception outside this library's hierarchy,
+    # escaping `patch`.
+    source = iso(tmp_path)
+    patcher = build(tmp_path)
+    mapped = patcher.map_rosters(league())
+    rosters = MappedRosters(game_id="nhl07-psp", teams={99: mapped.teams[0]})
+    result = patcher.patch(
+        rom_path=source,
+        output_path=tmp_path / "out.iso",
+        rosters=rosters,
+        on_progress=lambda pct, msg: None,
+    )
+    assert result.teams_patched == 0
+
+
+def test_the_live_record_range_is_shorter_than_the_allocation_when_the_count_is(tmp_path):
+    # Kills `range(min(num_records, capacity))` -> `range(capacity)`. The
+    # fixture ships `num_records == capacity` for every table, so the two bounds
+    # coincide until one is moved.
+    reader = NHL07PSPRomReader(str(iso(tmp_path)))
+    reader.load()
+    rost = reader.get_tdb(TDB_MASTER).get_table("ROST")
+    rost.num_records = 12
+    assert list(_live_records(rost)) == list(range(12))
+
+
+def test_a_row_past_the_live_count_is_not_patched(tmp_path):
+    # The same bound, end to end: with only the first team's rows live, the
+    # other three teams have no rows at all.
+    source = iso(tmp_path)
+    patcher = build(tmp_path)
+    mapped = patcher.map_rosters(league())
+    out = tmp_path / "out.iso"
+
+    original = NHL07PSPRomReader.get_tdb
+
+    def shorten(self, filename):
+        tdb = original(self, filename)
+        if tdb is not None and tdb.get_table("ROST") is not None:
+            tdb.get_table("ROST").num_records = fixture.ROWS_PER_TEAM
+        return tdb
+
+    NHL07PSPRomReader.get_tdb = shorten
+    try:
+        result = patcher.patch(rom_path=source, output_path=out, rosters=mapped)
+    finally:
+        NHL07PSPRomReader.get_tdb = original
+    assert result.teams_patched == 1
+
+
+def test_line_flags_are_generated_for_the_players_that_got_a_row(tmp_path):
+    # Kills `generate_team_line_flags([p for p, _ in pairs])` ->
+    # `generate_team_line_flags(players)`. The two lists agree whenever every
+    # player is placed, and they agree even when the *last* skater is dropped,
+    # because `zip` truncates the tail. They differ when a GOALIE is dropped:
+    # `players` still has him at index 1, so index 1 gets `G2__`, while `pairs`
+    # has the first skater there and he should get `L1C_`.
+    #
+    # Team 0's second goalie row is broken, so it has one goalie row and two
+    # goalies. The first skater then takes what would have been the backup
+    # goalie's position in the paired list.
+    source = iso(tmp_path)
+    patcher = build(tmp_path)
+    mapped = patcher.map_rosters(league())
+    out = tmp_path / "out.iso"
+
+    original = NHL07PSPRomReader.get_tdb
+
+    def break_backup_goalie(self, filename):
+        tdb = original(self, filename)
+        if tdb is not None and tdb.get_table("ROST") is not None:
+            tdb.get_table("ROST").write_record(fixture.rost_position(0, 1), {"INDX": 65535})
+        return tdb
+
+    NHL07PSPRomReader.get_tdb = break_backup_goalie
+    try:
+        patcher.patch(rom_path=source, output_path=out, rosters=mapped)
+    finally:
+        NHL07PSPRomReader.get_tdb = original
+
+    # Row 2 is team 0's first skater row and the second entry in the paired
+    # list. Generated from the pairs it is the first-line centre, and also the
+    # first power-play forward; generated from `players` it would be the backup
+    # goalie, and would carry `G2__` and nothing else.
+    row = rost_of(out)[fixture.rost_position(0, 2)]
+    assert [f for f in fixture.LINE_FLAG_NAMES if row[f] == 1] == ["L1C_", "H1__"]
+
+
+def test_no_roster_row_of_that_team_carries_the_backup_goalie_flag(tmp_path):
+    # The other half: with only one goalie row, `G2__` is assigned to nobody.
+    source = iso(tmp_path)
+    patcher = build(tmp_path)
+    mapped = patcher.map_rosters(league())
+    out = tmp_path / "out.iso"
+
+    original = NHL07PSPRomReader.get_tdb
+
+    def break_backup_goalie(self, filename):
+        tdb = original(self, filename)
+        if tdb is not None and tdb.get_table("ROST") is not None:
+            tdb.get_table("ROST").write_record(fixture.rost_position(0, 1), {"INDX": 65535})
+        return tdb
+
+    NHL07PSPRomReader.get_tdb = break_backup_goalie
+    try:
+        patcher.patch(rom_path=source, output_path=out, rosters=mapped)
+    finally:
+        NHL07PSPRomReader.get_tdb = original
+
+    rows = rost_of(out)
+    written = [rows[fixture.rost_position(0, r)] for r in range(2, fixture.ROWS_PER_TEAM) if r != 1]
+    assert [r for r in written if r["G2__"] == 1] == []
+
+
+def test_a_mirror_row_past_the_mirrors_allocation_is_skipped(tmp_path):
+    # Kills `index < self.roster_rost.capacity` -> `<=`. The two TDBs have the
+    # same capacity on the fixture disc, so no index ever reaches the boundary;
+    # a mirror one record short puts one there. `TDBTable.write_record` raises
+    # `IndexError` past the allocation, which is why this guard exists at all
+    # and why the bio writes need none -- they test it themselves.
+    source = iso(tmp_path)
+    patcher = build(tmp_path)
+    mapped = patcher.map_rosters(league())
+    out = tmp_path / "out.iso"
+
+    original = NHL07PSPRomReader.get_tdb
+    shrunk = fixture.rost_position(0, 1)
+
+    def shrink_mirror(self, filename):
+        tdb = original(self, filename)
+        if filename == TDB_ROSTER and tdb is not None:
+            tdb.get_table("ROST").capacity = shrunk
+        return tdb
+
+    NHL07PSPRomReader.get_tdb = shrink_mirror
+    try:
+        result = patcher.patch(rom_path=source, output_path=out, rosters=mapped)
+    finally:
+        NHL07PSPRomReader.get_tdb = original
+    assert result.players_patched == fixture.TEAM_COUNT * 22
+
+
+def test_the_master_still_receives_the_row_the_mirror_could_not_take(tmp_path):
+    source = iso(tmp_path)
+    patcher = build(tmp_path)
+    mapped = patcher.map_rosters(league())
+    out = tmp_path / "out.iso"
+
+    original = NHL07PSPRomReader.get_tdb
+    shrunk = fixture.rost_position(0, 1)
+
+    def shrink_mirror(self, filename):
+        tdb = original(self, filename)
+        if filename == TDB_ROSTER and tdb is not None:
+            tdb.get_table("ROST").capacity = shrunk
+        return tdb
+
+    NHL07PSPRomReader.get_tdb = shrink_mirror
+    try:
+        patcher.patch(rom_path=source, output_path=out, rosters=mapped)
+    finally:
+        NHL07PSPRomReader.get_tdb = original
+    assert rost_of(out)[shrunk]["CAPT"] == 1

@@ -21,6 +21,7 @@ import pytest
 
 from retro_roster_patcher.formats.ea_tdb import EaTdbError
 from retro_roster_patcher.games.nhl07_psp.models import (
+    NHL07_TEAM_INDEX,
     NHL07_TEAM_NAMES,
     TDB_BIOATT,
     TDB_MASTER,
@@ -91,11 +92,10 @@ def test_loading_a_file_one_byte_under_the_floor_answers_false(tmp_path):
     assert reader.load() is False
 
 
-def test_loading_a_file_of_exactly_the_floor_gets_past_the_size_check(tmp_path):
-    # It still fails, because a block of zeros has no PVD -- but it fails for
-    # that reason and not for its size, which is what makes the floor a `<` and
-    # not a `<=`. The two are told apart by the size: `_iso_size` is recorded
-    # before the walk and stays 0 when the size check refuses.
+def test_loading_a_file_of_exactly_the_floor_still_answers_false(tmp_path):
+    # Because a block of zeros has no PVD. That it fails for *that* reason and
+    # not for its size is what the two probe tests at the end of this file
+    # establish; this one only pins the answer.
     path = tmp_path / "floor.iso"
     path.write_bytes(b"\x00" * MIN_ISO_SIZE)
     reader = NHL07PSPRomReader(str(path))
@@ -522,3 +522,164 @@ def test_the_archive_is_found_when_its_directory_record_is_reached_normally(tmp_
     # The control for the test above: the same image, unmodified, does find it.
     # Without this the previous test passes for a fixture that never worked.
     assert NHL07PSPRomReader(str(make_iso(tmp_path))).load() is True
+
+
+# -- holes mutation testing found ------------------------------------------
+#
+# Each of these kills a mutant that survived the first pass. The comment on
+# each says which mutation, because a test whose reason is only "coverage" is
+# the first one a later reader deletes.
+
+
+def test_a_file_of_exactly_the_floor_is_not_refused_for_its_size(tmp_path):
+    # Kills `self._iso_size < MIN_ISO_SIZE` -> `<=`. Both comparisons answer
+    # False for a 40 960-byte block of zeros -- one because of the size and one
+    # because there is no PVD -- so the direction of the test is only visible in
+    # whether the walk was attempted at all.
+    path = tmp_path / "floor.iso"
+    path.write_bytes(b"\x00" * MIN_ISO_SIZE)
+    reader = NHL07PSPRomReader(str(path))
+    reached: list[int] = []
+    reader._extract_db_viv = lambda: reached.append(1)  # type: ignore[method-assign]
+    reader.load()
+    assert reached == [1]
+
+
+def test_a_file_one_byte_under_the_floor_never_reaches_the_walk(tmp_path):
+    path = tmp_path / "under.iso"
+    path.write_bytes(b"\x00" * (MIN_ISO_SIZE - 1))
+    reader = NHL07PSPRomReader(str(path))
+    reached: list[int] = []
+    reader._extract_db_viv = lambda: reached.append(1)  # type: ignore[method-assign]
+    reader.load()
+    assert reached == []
+
+
+def test_a_compressed_bio_member_that_is_not_a_tdb_fails_the_deep_check(tmp_path):
+    # Kills `return refpack_decompress(raw)[:4] == TDB_MAGIC` -> `return True`.
+    # The member is a genuine RefPack stream, so the branch is taken; what it
+    # decompresses to is not a TDB.
+    from retro_roster_patcher.formats.ea_tdb import refpack_compress
+
+    payload = refpack_compress(b"THIS IS NOT A TDB, NOT EVEN A LITTLE BIT." * 8)
+    reader = loaded(tmp_path, fixture.DiscSpec(bioatt_payload=payload))
+    assert reader.validate(deep=True) is False
+
+
+def test_a_compressed_bio_member_that_is_a_tdb_passes_the_deep_check(tmp_path):
+    # The control: the same construction with a real TDB inside passes, so the
+    # test above is failing on the magic and not on the hand-built member.
+    from retro_roster_patcher.formats.ea_tdb import refpack_compress
+
+    payload = refpack_compress(fixture.build_bioatt_tdb())
+    reader = loaded(tmp_path, fixture.DiscSpec(bioatt_payload=payload))
+    assert reader.validate(deep=True) is True
+
+
+def test_an_uncompressed_bio_member_that_is_not_a_tdb_fails_the_deep_check(tmp_path):
+    # Kills `return raw[:4] == TDB_MAGIC` -> `return True`, the branch for a
+    # member stored without RefPack.
+    reader = loaded(tmp_path, fixture.DiscSpec(bioatt_payload=b"PLAINDATA" * 40))
+    assert reader.validate(deep=True) is False
+
+
+def test_an_uncompressed_bio_member_that_is_a_tdb_passes_the_deep_check(tmp_path):
+    reader = loaded(tmp_path, fixture.DiscSpec(bioatt_payload=fixture.build_bioatt_tdb()))
+    assert reader.validate(deep=True) is True
+
+
+def test_an_entry_outside_the_declared_root_extent_is_not_found(tmp_path):
+    # Kills the two mutations that read a directory's length from the wrong
+    # place -- the big-endian copy at +14, or a different offset entirely.
+    # `PSP_GAME` is written at offset 68 of the root sector and the PVD declares
+    # the extent as 68 bytes, so a reader that honours the declared length
+    # cannot see it and a reader that over-reads can.
+    reader = NHL07PSPRomReader(str(make_iso(tmp_path, fixture.DiscSpec(root_dir_size=68))))
+    assert reader.load() is False
+
+
+def test_the_same_image_loads_when_the_root_extent_covers_the_entry(tmp_path):
+    # The control. 2048 is what the default spec declares and what the entry
+    # needs; 68 above is one record short of it.
+    reader = NHL07PSPRomReader(str(make_iso(tmp_path, fixture.DiscSpec(root_dir_size=2048))))
+    assert reader.load() is True
+
+
+def test_the_last_record_of_a_directory_that_ends_flush_is_still_read(tmp_path):
+    # Kills `if pos + rec_len > len(dir_data)` -> `>=`. With the `DB` directory
+    # declared as exactly its four records, `ZZPAD.BIN` ends on the last byte of
+    # the extent; a scan that breaks on `>=` loses it, and losing it collapses
+    # the rebuild budget to the archive's own sector-aligned length.
+    reader = loaded(tmp_path, fixture.DiscSpec(db_dir_exact_size=True))
+    _, db_size, max_size = reader.find_db_viv_location()
+    sectors = -(-db_size // ISO_SECTOR_SIZE) + fixture.GAP_SECTORS
+    assert max_size == sectors * ISO_SECTOR_SIZE
+
+
+def test_a_flush_directory_still_finds_the_archive(tmp_path):
+    # The control for the test above: without this, "the budget is right" could
+    # be satisfied by an image whose archive was never located.
+    assert loaded(tmp_path, fixture.DiscSpec(db_dir_exact_size=True)).validate() is True
+
+
+def test_a_stea_slot_takes_its_index_from_the_record_and_not_its_position(tmp_path):
+    # Kills `idx = raw_index if isinstance(raw_index, int) else i` -> `idx = i`.
+    # The fixture ships `INDX == position` for every STEA record, which is
+    # exactly the zero-over-zero shape: the two answers coincide until one
+    # record is made to disagree.
+    reader = loaded(tmp_path)
+    reader.get_tdb(TDB_MASTER).get_table("STEA").write_record(4, {"INDX": 27})
+    assert reader._read_team_slots()[4].index == 27
+
+
+def test_that_slots_abbreviation_follows_the_index_it_read(tmp_path):
+    reader = loaded(tmp_path)
+    reader.get_tdb(TDB_MASTER).get_table("STEA").write_record(4, {"INDX": 27})
+    assert reader._read_team_slots()[4].abbreviation == NHL07_TEAM_INDEX[27]
+
+
+def test_a_live_count_over_a_short_allocation_is_bounded_by_the_allocation(tmp_path):
+    # Kills `min(num_records, capacity, len(NHL07_TEAM_NAMES))` -> dropping
+    # `capacity`. The earlier version of this test used the fixture's own
+    # 32-record STEA, and 32 is also `len(NHL07_TEAM_NAMES)`, so the third bound
+    # hid the second. A capacity of 10 separates them.
+    reader = loaded(tmp_path)
+    stea = reader.get_tdb(TDB_MASTER).get_table("STEA")
+    stea.capacity = 10
+    stea.num_records = 500
+    assert len(reader._read_team_slots()) == 10
+
+
+def test_the_all_star_slots_have_their_own_abbreviations(tmp_path):
+    # Kills `30: "EAS"` -> `"WES"`. The abbreviation assertion above covers
+    # slots 0-4 only, and the two All-Star entries are the ones a copy-paste
+    # would collapse.
+    info = loaded(tmp_path).get_info(deep=True)
+    assert [info.team_slots[30].abbreviation, info.team_slots[31].abbreviation] == ["EAS", "WES"]
+
+
+def test_the_nhl_club_count_is_thirty(tmp_path):
+    # Kills `TEAM_COUNT = 30` -> 29. The shallow-path test asserted
+    # `len(slots) == TEAM_COUNT`, which is the constant checked against itself.
+    assert TEAM_COUNT == 30
+
+
+def test_the_archive_is_found_when_it_is_the_flush_final_record(tmp_path):
+    # Kills `if pos + rec_len > len(dir_data)` -> `>=` in `_find_dir_entry`.
+    # The flush-extent test above goes through `_find_entry_with_gap`, whose
+    # final record is the padding file; here `DB.VIV` itself is listed last and
+    # ends on the extent's last byte, so a scan that stops one record early
+    # cannot find the archive at all.
+    reader = NHL07PSPRomReader(
+        str(make_iso(tmp_path, fixture.DiscSpec(db_dir_exact_size=True, db_viv_last=True)))
+    )
+    assert reader.load() is True
+
+
+def test_reordering_the_directory_does_not_change_the_rebuild_budget(tmp_path):
+    # `_find_entry_with_gap` sorts by logical block address, not by the order
+    # the directory lists its entries, so listing the archive last must not
+    # change what follows it on the disc.
+    reordered = loaded(tmp_path, fixture.DiscSpec(db_viv_last=True), name="a.iso")
+    normal = loaded(tmp_path, fixture.DiscSpec(), name="b.iso")
+    assert reordered.find_db_viv_location() == normal.find_db_viv_location()
