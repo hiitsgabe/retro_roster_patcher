@@ -68,10 +68,10 @@ NHL05_TEAM_INDEX = {
 }
 
 # Modern NHL abbreviation -> STEA INDX, for matching a fetched roster to a slot.
-# Both providers' spellings are here, which is why this maps 38 codes onto 32
+# Both providers' spellings are here, which is why this maps 39 codes onto 32
 # slots: ESPN says `LA`, `NJ`, `SJ` and `TB` where the NHL API says `LAK`,
 # `NJD`, `SJS` and `TBL`. Six further codes are relocations or expansions that
-# reuse an ancestor's slot. **Collapsing 38 keys onto 32 values means two
+# reuse an ancestor's slot. **Collapsing 39 keys onto 32 values means two
 # fetched teams can name one slot**, which `NHL05PS2Patcher.map_rosters` has to
 # guard; the comment there says what goes wrong without it.
 #

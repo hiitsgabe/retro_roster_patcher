@@ -520,7 +520,7 @@ class NHL05PS2Patcher(Patcher):
                 for player in selected
             ]
 
-            # DELIBERATE DIVERGENCE. `MODERN_NHL_TO_NHL05` collapses 38 codes
+            # DELIBERATE DIVERGENCE. `MODERN_NHL_TO_NHL05` collapses 39 codes
             # onto 32 slots -- `LA`/`LAK`, `NJ`/`NJD`, `SJ`/`SJS`, `TB`/`TBL`,
             # `PHX`/`ARI`/`UTA` and `ATL`/`WPG` -- so two entries in
             # `data.teams` can name one slot. The source assigned
