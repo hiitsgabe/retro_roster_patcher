@@ -716,3 +716,115 @@ def test_every_public_helper_takes_a_file_object_and_never_a_path(name):
     # is why this compares text rather than a type object.
     first = list(inspect.signature(getattr(iso9660, name)).parameters)[0]
     assert getattr(iso9660, name).__annotations__[first] == "BinaryIO"
+
+
+# ──────────────────────────────────────────────────────────────
+# The name bound
+# ──────────────────────────────────────────────────────────────
+#
+# `name_end <= len(extent_bytes)` is reachable only through a record whose
+# declared length is SHORTER than its own name implies -- otherwise
+# `pos + rec_len > len(extent_bytes)` has already broken the scan, since
+# `rec_len` is `33 + name_len` rounded up. So these build one: `ZZPAD.BIN;1`
+# occupies 44 bytes and byte 0 of it says 36.
+
+ZZPAD_RECORD_LENGTH = 44  # 33 + len("ZZPAD.BIN;1"), already even
+ZZPAD_LIED_LENGTH = 36
+
+
+def _lying_dir2() -> tuple[bytes, int, int]:
+    """(extent, declared length, offset of the lying record) for DIR2.
+
+    The declared length stops between the lying record's end-by-its-own-count
+    and the end of its name, which is the only window where the name bound and
+    the record-length bound disagree.
+    """
+    records = [
+        fx.dir_record(b"TARGET.BIN;1", TARGET_LBA, TARGET_SIZE, is_dir=False),
+        fx.dir_record(
+            b"ZZPAD.BIN;1", ZZPAD_LBA, ZZPAD_SIZE, is_dir=False, rec_len=ZZPAD_LIED_LENGTH
+        ),
+    ]
+    extent = fx.directory_extent(DIR2_LBA, DIR1_LBA, records)
+    offset = fx.used_length(records) - ZZPAD_RECORD_LENGTH
+    return extent, offset + ZZPAD_LIED_LENGTH, offset
+
+
+def _lying_image() -> bytes:
+    extent, declared, _ = _lying_dir2()
+    image = bytearray(build(dir2_declared=declared))
+    image[DIR2_LBA * fx.SECTOR_SIZE : DIR2_LBA * fx.SECTOR_SIZE + len(extent)] = extent
+    return bytes(image)
+
+
+def test_the_lying_record_is_inside_the_extent_by_its_own_declared_length():
+    # Without this the test below would be about `pos + rec_len > len` instead,
+    # which is a different bound with its own tests.
+    _, declared, offset = _lying_dir2()
+    assert offset + ZZPAD_LIED_LENGTH == declared
+
+
+def test_the_lying_records_name_runs_past_the_extent():
+    # And this is the window: the name ends eight bytes past the declared end.
+    _, declared, offset = _lying_dir2()
+    assert offset + iso9660.RECORD_HEADER_LENGTH + len(b"ZZPAD.BIN;1") - declared == 8
+
+
+def test_a_record_whose_name_runs_past_the_extent_is_not_matched():
+    # Without `name_end <= len(extent_bytes)` the slice simply returns fewer
+    # bytes and the record is admitted under a **truncated name** -- the LBA and
+    # length at +2 and +10 are inside the extent either way, so nothing else
+    # gives it away.
+    f = handle(_lying_image())
+    directory = iso9660.walk(f, iso9660.Extent(ROOT_LBA, fx.SECTOR_SIZE), ["DIR1", "DIR2"])
+    assert directory is not None
+    assert iso9660.find_entry(f, directory, "ZZPAD.BIN") is None
+
+
+def test_it_is_not_matched_under_its_truncated_name_either():
+    # The name the mutant would have built: three characters of it survive the
+    # cut. This is the assertion the whole construction exists for.
+    f = handle(_lying_image())
+    directory = iso9660.walk(f, iso9660.Extent(ROOT_LBA, fx.SECTOR_SIZE), ["DIR1", "DIR2"])
+    assert directory is not None
+    assert iso9660.find_entry(f, directory, "ZZP") is None
+
+
+def test_the_record_before_the_lying_one_is_still_matched():
+    # The scan reaches the lying record at all, so the two tests above are about
+    # that record and not about the scan having stopped earlier.
+    f = handle(_lying_image())
+    directory = iso9660.walk(f, iso9660.Extent(ROOT_LBA, fx.SECTOR_SIZE), ["DIR1", "DIR2"])
+    assert directory is not None
+    entry = iso9660.find_entry(f, directory, "TARGET.BIN")
+    assert entry is not None
+    assert entry.extent.lba == TARGET_LBA
+
+
+def test_the_neighbour_scan_drops_the_lying_record_too():
+    # It shares `_records`, so `TARGET.BIN` becomes the last entry in its
+    # directory and reports no next file.
+    f = handle(_lying_image())
+    directory = iso9660.walk(f, iso9660.Extent(ROOT_LBA, fx.SECTOR_SIZE), ["DIR1", "DIR2"])
+    assert directory is not None
+    found = iso9660.find_entry_with_next_lba(f, directory, "TARGET.BIN")
+    assert found is not None
+    assert found[1] == 0
+
+
+def test_the_neighbour_scan_excludes_the_parent_record_as_well():
+    # Kills `min_name_length=2` -> `1` at the call site. `..` has a one-byte
+    # name and points at DIR1 at LBA 18, below both files, so admitting it would
+    # make it the entry preceding `TARGET.BIN` -- and `TARGET.BIN` would stop
+    # being what precedes `ZZPAD.BIN`. Asking for `..` by name is the direct
+    # statement: it is not an entry this scan reports.
+    f, directory = _dir2(build())
+    assert iso9660.find_entry_with_next_lba(f, directory, "\x01") is None
+
+
+def test_the_parent_record_is_there_for_the_other_scan_to_find():
+    # So the previous test cannot pass because the fixture wrote no `..`.
+    f, directory = _dir2(build())
+    entry = iso9660.find_entry(f, directory, "\x01")
+    assert entry is not None
+    assert entry.extent.lba == DIR1_LBA

@@ -700,6 +700,10 @@ class DiscSpec:
     `db_is_file`
         author `DB` as a file rather than a directory, so `iso9660.walk` must
         refuse to descend into it.
+    `db_viv_is_dir`
+        author `DB.VIV` as a directory rather than a file, which
+        `_extract_db_viv` must refuse rather than read the archive's bytes as
+        directory records.
     `pad_to`
         inflate the image to at least this many bytes with `truncate`, which
         costs a sparse hole and not real storage.
@@ -726,6 +730,7 @@ class DiscSpec:
     pvd_type: int = 1
     db_dir_name: str = "DB"
     db_is_file: bool = False
+    db_viv_is_dir: bool = False
     pad_to: int = 0
     master_payload: bytes | None = None
     db_dir_exact_size: bool = False
@@ -788,7 +793,7 @@ def build_iso(spec: DiscSpec | None = None) -> bytes:
     if declared is None:
         declared = len(viv)
 
-    db_records = [iso.dir_record(b"DB.VIV;1", DB_VIV_SECTOR, declared, is_dir=False)]
+    db_records = [iso.dir_record(b"DB.VIV;1", DB_VIV_SECTOR, declared, is_dir=spec.db_viv_is_dir)]
     if not spec.no_pad_file:
         db_records.append(
             iso.dir_record(
@@ -841,6 +846,45 @@ def build_iso(spec: DiscSpec | None = None) -> bytes:
     if spec.pad_to > len(image):
         image += b"\x00" * (spec.pad_to - len(image))
     return image
+
+
+# Sector assignments for `DiscSpec.tiny`: the same tree with nothing after the
+# archive, so the image ends where `DB.VIV` does.
+TINY_TOTAL_SECTORS = 20
+
+
+def build_tiny_iso() -> bytes:
+    """A well-formed image under `rom_reader.MIN_ISO_SIZE`, and nothing else wrong.
+
+    16 sectors of system area, a PVD, a root directory, a `DB` directory and a
+    one-sector `DB.VIV` that is not an archive -- 20 sectors, 40 960 bytes, one
+    byte over which is the floor. The floor is `>=`, so this image is refused
+    at exactly its own length. Every walk in the reader succeeds on it, so a
+    reader without the floor answers True to `load`.
+
+    `DB.VIV`'s contents are deliberately not a BIGF: this image exists to show
+    which check refuses it, and the floor is meant to fire before anything reads
+    the archive at all.
+    """
+    root_sector = 17
+    db_sector = 18
+    viv_sector = 18 + 1
+    db_records = [iso.dir_record(b"DB.VIV;1", viv_sector, 512, is_dir=False)]
+    return iso.build_image(
+        {
+            ISO_PVD_SECTOR: iso.pvd(
+                TINY_TOTAL_SECTORS, root_sector, ISO_SECTOR_SIZE, volume_id=b"NHL05_TINY"
+            ),
+            root_sector: iso.directory_extent(
+                root_sector,
+                root_sector,
+                [iso.dir_record(b"DB", db_sector, ISO_SECTOR_SIZE, is_dir=True)],
+            ),
+            db_sector: iso.directory_extent(db_sector, root_sector, db_records),
+            viv_sector: b"NOT-AN-ARCHIVE" * 32,
+        },
+        TINY_TOTAL_SECTORS,
+    )
 
 
 def write_iso(path, spec: DiscSpec | None = None) -> int:  # type: ignore[no-untyped-def]

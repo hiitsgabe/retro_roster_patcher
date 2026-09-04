@@ -1224,3 +1224,47 @@ def test_patching_a_sparse_multi_megabyte_image_works(tmp_path):
 def test_a_padded_image_still_patches_every_team(tmp_path):
     result, _ = patched(tmp_path, spec=fixture.DiscSpec(pad_to=9 * 1024 * 1024))
     assert result.teams_patched == 4
+
+
+def test_an_all_star_slot_is_not_even_named_in_the_progress_messages(tmp_path):
+    # The `_write_all_teams` bound is `PATCHABLE_SLOT_COUNT`, not the 32 slots
+    # the game has names for, and the two are only distinguishable here: the
+    # fixture disc has no ROST rows for slot 30, so a patcher bounded by 32
+    # would report the same `teams_patched` while announcing "Writing East
+    # All-Star" to the user.
+    source = iso(tmp_path)
+    patcher = build(tmp_path, FakeApi())
+    mapped = patcher.map_rosters(league())
+    mapped.teams[30] = [NHL05PlayerRecord(first_name="Ghost")]
+    seen: list[str] = []
+    patcher.patch(
+        rom_path=source,
+        output_path=tmp_path / "o.iso",
+        rosters=mapped,
+        on_progress=lambda _f, m: seen.append(m),
+    )
+    assert [m for m in seen if "All-Star" in m] == []
+
+
+def test_the_four_real_teams_are_named_in_the_progress_messages(tmp_path):
+    # So the previous test cannot pass because no team was announced at all.
+    source = iso(tmp_path)
+    patcher = build(tmp_path, FakeApi())
+    mapped = patcher.map_rosters(league())
+    mapped.teams[30] = [NHL05PlayerRecord(first_name="Ghost")]
+    seen: list[str] = []
+    patcher.patch(
+        rom_path=source,
+        output_path=tmp_path / "o.iso",
+        rosters=mapped,
+        on_progress=lambda _f, m: seen.append(m),
+    )
+    named = [NHL05_TEAM_NAMES[s] for s in DISC_SLOTS if any(NHL05_TEAM_NAMES[s] in m for m in seen)]
+    assert named == [NHL05_TEAM_NAMES[s] for s in DISC_SLOTS]
+
+
+def test_the_all_star_slot_does_have_a_display_name(tmp_path):
+    # The other half of the bound: slot 30 is inside `NAMED_SLOT_COUNT`, so a
+    # patcher that used that bound would find a name to print rather than
+    # raising -- which is why the failure is silent and needs pinning.
+    assert NHL05_TEAM_NAMES[30] == "East All-Star"
