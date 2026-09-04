@@ -151,6 +151,7 @@ def test_analyze_builds_every_registered_patcher_to_sweep_one_rom(
     code, evts = run(["analyze", "--rom", str(rom), "--json", *cache], capsys)
     assert code == 0
     assert visited == [
+        "iss-snes",
         "kgj-mlb-snes",
         "nbalive95-genesis",
         "nhl94-genesis",
