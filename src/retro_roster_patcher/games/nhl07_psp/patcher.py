@@ -724,12 +724,19 @@ class NHL07PSPPatcher(Patcher):
     ) -> dict[str, TDBFile]:
         """Map each modified TDB to the name the archive itself uses for it.
 
-        `bigf_replace_inplace` selects its target case-insensitively and this is
-        not why the spelling is read back -- `bigf_replace`, which does check
-        membership case-sensitively after folding case to select, is the trap
-        that made both NHL patchers do this. Keeping it means the returned
-        mapping is also what a reader of the progress messages sees, and those
-        should say what is on the disc.
+        **This is not load-bearing, and the migration plan says it is.** The
+        plan records `bigf_replace`'s case bug -- it folds case to select the
+        member and then checks membership case-sensitively -- and states that
+        both NHL patchers work around it by reading the archive's own spelling
+        first. Measured: this game never calls `bigf_replace`. It calls
+        `bigf_replace_inplace`, which selects case-insensitively and needs no
+        workaround, and the source imported `bigf_replace` without ever using
+        it. Mutation testing agrees: replacing the fold below with a
+        case-sensitive comparison changes no test and no output byte.
+
+        Kept anyway, and only for this: the keys of the returned mapping are
+        what `rebuild_and_write` puts in its progress messages, and a message
+        about `db.viv` should name the file as the disc spells it.
         """
         entries = bigf_parse(writer.db_viv or b"")
         names = {TDB_MASTER: TDB_MASTER, TDB_BIOATT: TDB_BIOATT, TDB_ROSTER: TDB_ROSTER}

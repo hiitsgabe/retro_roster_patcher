@@ -600,6 +600,21 @@ class DiscSpec:
     `pad_to`
         inflate the image to at least this many bytes with `truncate`, which
         costs a sparse hole and not real storage.
+    `bioatt_payload`
+        raw bytes for the `nhlbioatt.tdb` member, used verbatim with no
+        compression and no slack. For the two cases where the archive holds a
+        member of that name which is not a TDB.
+    `root_dir_size`
+        what the PVD declares the root directory's length to be, independently
+        of how much was written there. Shorter than the truth is the case where
+        an entry lies outside the declared extent and must not be found.
+    `db_dir_exact_size`
+        declare the `DB` directory's length as exactly its records rather than a
+        whole sector, so its last record ends flush with the end of the extent.
+    `db_viv_last`
+        list `DB.VIV` after the padding file in the `DB` directory. With
+        `db_dir_exact_size` it becomes the flush-final record, which is the one
+        a scan breaking on `pos + rec_len >= len` rather than `>` loses.
     """
 
     height: int = DEFAULT_DISC_HEIGHT
@@ -611,6 +626,10 @@ class DiscSpec:
     pvd_type: int = 1
     db_dir_name: str = "DB"
     pad_to: int = 0
+    bioatt_payload: bytes | None = None
+    root_dir_size: int | None = None
+    db_dir_exact_size: bool = False
+    db_viv_last: bool = False
 
 
 def build_db_viv(spec: DiscSpec | None = None) -> bytes:
@@ -625,12 +644,15 @@ def build_db_viv(spec: DiscSpec | None = None) -> bytes:
 
     spec = spec or DiscSpec()
     members: list[tuple[str, bytes]] = []
-    for name, payload in (
-        (spec.master_name, build_master_tdb(spec.height)),
-        (spec.bioatt_name, build_bioatt_tdb(spec.height)),
-        (spec.roster_name, build_roster_tdb()),
+    for name, payload, verbatim in (
+        (spec.master_name, build_master_tdb(spec.height), None),
+        (spec.bioatt_name, build_bioatt_tdb(spec.height), spec.bioatt_payload),
+        (spec.roster_name, build_roster_tdb(), None),
     ):
         if name is None:
+            continue
+        if verbatim is not None:
+            members.append((name, verbatim))
             continue
         members.append((name, refpack_compress(payload) + b"\x00" * MEMBER_SLACK))
 
@@ -681,7 +703,9 @@ def _dir_record(name: bytes, lba: int, size: int, *, is_dir: bool) -> bytes:
     return bytes(record)
 
 
-def _directory_sector(self_lba: int, parent_lba: int, entries: list[bytes]) -> bytes:
+def _directory_sector(
+    self_lba: int, parent_lba: int, entries: list[bytes], *, exact: bool = False
+) -> tuple[bytes, int]:
     """A one-sector directory extent: `.`, `..`, then the given records.
 
     `.` and `..` carry the one-byte names 0x00 and 0x01 that ISO 9660 reserves
@@ -689,17 +713,19 @@ def _directory_sector(self_lba: int, parent_lba: int, entries: list[bytes]) -> b
     matches, and `_find_entry_with_gap` skips them on `name_len > 1`, so both
     behaviours are exercised by every walk over this sector.
     """
+    declared = ISO_SECTOR_SIZE
     out = bytearray()
-    out += _dir_record(b"\x00", self_lba, ISO_SECTOR_SIZE, is_dir=True)
-    out += _dir_record(b"\x01", parent_lba, ISO_SECTOR_SIZE, is_dir=True)
+    out += _dir_record(b"\x00", self_lba, declared, is_dir=True)
+    out += _dir_record(b"\x01", parent_lba, declared, is_dir=True)
     for entry in entries:
         out += entry
     if len(out) > ISO_SECTOR_SIZE:
         raise AssertionError(f"directory is {len(out)} bytes, over one sector")
-    return bytes(out) + b"\x00" * (ISO_SECTOR_SIZE - len(out))
+    used = len(out)
+    return bytes(out) + b"\x00" * (ISO_SECTOR_SIZE - used), (used if exact else ISO_SECTOR_SIZE)
 
 
-def _pvd(total_sectors: int, pvd_type: int) -> bytes:
+def _pvd(total_sectors: int, pvd_type: int, root_size: int = ISO_SECTOR_SIZE) -> bytes:
     """The Primary Volume Descriptor, with the root directory record at 156."""
     pvd = bytearray(ISO_SECTOR_SIZE)
     pvd[0] = pvd_type
@@ -715,7 +741,7 @@ def _pvd(total_sectors: int, pvd_type: int) -> bytes:
     struct.pack_into(">H", pvd, 126, 1)
     struct.pack_into("<H", pvd, 128, ISO_SECTOR_SIZE)
     struct.pack_into(">H", pvd, 130, ISO_SECTOR_SIZE)
-    root = _dir_record(b"\x00", ROOT_DIR_SECTOR, ISO_SECTOR_SIZE, is_dir=True)
+    root = _dir_record(b"\x00", ROOT_DIR_SECTOR, root_size, is_dir=True)
     pvd[156 : 156 + len(root)] = root
     return bytes(pvd)
 
@@ -746,22 +772,43 @@ def build_iso(spec: DiscSpec | None = None) -> bytes:
     def put(lba: int, data: bytes) -> None:
         image[lba * ISO_SECTOR_SIZE : lba * ISO_SECTOR_SIZE + len(data)] = data
 
-    put(ISO_PVD_SECTOR, _pvd(total_sectors, spec.pvd_type))
-    put(
-        ROOT_DIR_SECTOR,
-        _directory_sector(
-            ROOT_DIR_SECTOR,
-            ROOT_DIR_SECTOR,
-            [_dir_record(b"PSP_GAME", PSP_GAME_SECTOR, ISO_SECTOR_SIZE, is_dir=True)],
+    # Built before the two directories that name it, because
+    # `db_dir_exact_size` needs the length its records actually occupy -- an
+    # extent that ends flush with its final record, which is the case a scan
+    # breaking on `pos + rec_len >= len` rather than `>` loses.
+    db_records = [
+        _dir_record(b"DB.VIV;1", DB_VIV_SECTOR, declared, is_dir=False),
+        _dir_record(
+            f"{PAD_FILE_NAME};1".encode("ascii"),
+            pad_lba,
+            len(PAD_FILE_BYTES),
+            is_dir=False,
         ),
+    ]
+    if spec.db_viv_last:
+        db_records.reverse()
+    db_dir_sector, db_dir_used = _directory_sector(
+        DB_DIR_SECTOR,
+        USRDIR_SECTOR,
+        db_records,
+        exact=spec.db_dir_exact_size,
     )
+
+    root_sector, root_used = _directory_sector(
+        ROOT_DIR_SECTOR,
+        ROOT_DIR_SECTOR,
+        [_dir_record(b"PSP_GAME", PSP_GAME_SECTOR, ISO_SECTOR_SIZE, is_dir=True)],
+    )
+    root_size = spec.root_dir_size if spec.root_dir_size is not None else root_used
+    put(ISO_PVD_SECTOR, _pvd(total_sectors, spec.pvd_type, root_size))
+    put(ROOT_DIR_SECTOR, root_sector)
     put(
         PSP_GAME_SECTOR,
         _directory_sector(
             PSP_GAME_SECTOR,
             ROOT_DIR_SECTOR,
             [_dir_record(b"USRDIR", USRDIR_SECTOR, ISO_SECTOR_SIZE, is_dir=True)],
-        ),
+        )[0],
     )
     put(
         USRDIR_SECTOR,
@@ -772,28 +819,13 @@ def build_iso(spec: DiscSpec | None = None) -> bytes:
                 _dir_record(
                     spec.db_dir_name.encode("ascii"),
                     DB_DIR_SECTOR,
-                    ISO_SECTOR_SIZE,
+                    db_dir_used,
                     is_dir=True,
                 )
             ],
-        ),
+        )[0],
     )
-    put(
-        DB_DIR_SECTOR,
-        _directory_sector(
-            DB_DIR_SECTOR,
-            USRDIR_SECTOR,
-            [
-                _dir_record(b"DB.VIV;1", DB_VIV_SECTOR, declared, is_dir=False),
-                _dir_record(
-                    f"{PAD_FILE_NAME};1".encode("ascii"),
-                    pad_lba,
-                    len(PAD_FILE_BYTES),
-                    is_dir=False,
-                ),
-            ],
-        ),
-    )
+    put(DB_DIR_SECTOR, db_dir_sector)
     put(DB_VIV_SECTOR, viv)
     put(pad_lba, PAD_FILE_BYTES)
 

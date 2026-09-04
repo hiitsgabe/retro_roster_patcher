@@ -817,3 +817,110 @@ def test_one_flag_dict_is_produced_per_player():
 def test_two_players_never_share_one_flag_dict():
     result = MAPPER.generate_team_line_flags(records("C", "C"))
     assert result[0] is not result[1]
+
+
+# -- holes mutation testing found ------------------------------------------
+
+
+def test_the_selected_roster_is_two_goalies_then_fourteen_forwards_then_defence():
+    # Kills `forwards[:FORWARDS_PER_TEAM]` -> `[:13]` and
+    # `defensemen[:DEFENCEMEN_PER_TEAM]` -> `[:6]`. Counting positions across
+    # the whole 25 does not see either: the leftover fill puts the dropped
+    # player straight back. The block *boundaries* are what move.
+    selected = MAPPER.select_roster(FULL, LEADERS)
+    assert [p.position for p in selected[2:16]] == ["C", "LW", "RW"] * 4 + ["C", "LW"]
+
+
+def test_the_defence_block_starts_at_the_seventeenth_slot():
+    selected = MAPPER.select_roster(FULL, LEADERS)
+    assert [p.position for p in selected[16:23]] == ["D"] * 7
+
+
+def test_the_four_forward_lines_are_built_before_the_spare_forwards():
+    # Kills `for i in range(FORWARD_LINES)` -> `range(3)` inside `select_roster`.
+    # Three lines still yield fourteen forwards -- the fourth line's three come
+    # back through `extras` -- but in a different order, and the order is what
+    # `generate_team_line_flags` and `patch` both read afterwards.
+    selected = MAPPER.select_roster(FULL, LEADERS)
+    ranked = {
+        code: sorted(
+            [p for p in FULL if p.position == code],
+            key=lambda p: LEADERS[str(p.id)]["PTS"],
+            reverse=True,
+        )
+        for code in ("C", "LW", "RW")
+    }
+    expected = [ranked[code][line].id for line in range(4) for code in ("C", "LW", "RW")]
+    assert [p.id for p in selected[2:14]] == expected
+
+
+def test_the_penalty_kill_takes_line_two_and_not_line_one():
+    # Kills `pk_candidates = fwd_line_indices[3:6]` -> `[2:6]`. The earlier test
+    # asserted only that S1 through S5 were assigned to somebody, which holds
+    # for any five players.
+    result = MAPPER.generate_team_line_flags(records(*(["C", "LW", "RW"] * 4 + ["D"] * 6)))
+    assert [i for i in range(18) if "S1__" in flags_set(result, i)] == [3]
+
+
+def test_the_penalty_kill_ends_with_the_second_defence_pair():
+    result = MAPPER.generate_team_line_flags(records(*(["C", "LW", "RW"] * 4 + ["D"] * 6)))
+    assert [i for i in range(18) if "S5__" in flags_set(result, i)] == [15]
+
+
+def test_the_power_play_starts_with_the_first_line_centre():
+    result = MAPPER.generate_team_line_flags(records(*(["C", "LW", "RW"] * 4 + ["D"] * 6)))
+    assert [i for i in range(18) if "H1__" in flags_set(result, i)] == [0]
+
+
+def test_get_team_slot_folds_the_case_of_the_abbreviation():
+    # Kills `MODERN_NHL_TO_NHL07.get(team_abbrev.upper())` -> no `.upper()`.
+    # The lowercase test above goes through `map_player`, which folds case in a
+    # different expression.
+    assert MAPPER.get_team_slot("edm") == MODERN_NHL_TO_NHL07["EDM"]
+
+
+def test_the_selection_size_is_twenty_five_players():
+    # Kills `MAX_PLAYERS = 25` -> 24; the cap test above compares the count
+    # against the constant, which is the constant checked against itself.
+    assert MAX_PLAYERS == 25
+
+
+#: A squad whose fourth-ranked centre outranks every remaining winger, and
+#: whose fifth and sixth centres outrank them too. That is what separates
+#: "build four lines, then fill from what is left" from "build three lines,
+#: then fill from what is left": with three lines the fill takes C4 and C5,
+#: with four it takes the fourth-ranked winger of each side first.
+_TAILORED_POINTS = {
+    "C": [90, 80, 70, 60, 59, 58],
+    "LW": [89, 79, 69, 57, 56, 55],
+    "RW": [88, 78, 68, 54, 53, 52],
+}
+
+
+def _tailored_squad():
+    players, leaders = [], {}
+    pid = 0
+    for code, points in _TAILORED_POINTS.items():
+        for value in points:
+            pid += 1
+            players.append(player(pid=pid, name=f"F{pid} L{pid}", position=code))
+            leaders[str(pid)] = {"PTS": value}
+    return players, leaders
+
+
+def test_the_fourth_forward_line_is_built_before_any_spare_forward():
+    # Kills `for i in range(FORWARD_LINES)` -> `range(3)` inside
+    # `select_roster`. Three lines still yield fourteen forwards, so no count
+    # sees it; the order does. Slots 11-13 are line four under the real code and
+    # the three highest-scoring leftovers under the mutant, and the points above
+    # are chosen so those two answers differ.
+    players, leaders = _tailored_squad()
+    selected = MAPPER.select_roster(players, leaders, max_players=25)
+    assert [leaders[str(p.id)]["PTS"] for p in selected[9:12]] == [60, 57, 54]
+
+
+def test_the_three_highest_leftovers_would_be_three_centres():
+    # Pins the test above as discriminating: if the leftovers happened to be
+    # line four, the mutant would produce the same list and the assertion would
+    # hold for both.
+    assert sorted(_TAILORED_POINTS["C"][3:], reverse=True)[:3] == [60, 59, 58]
