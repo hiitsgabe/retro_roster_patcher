@@ -214,6 +214,13 @@ DESC_TEXT_LENGTH = 60
 DESC_TERMINATOR = 0xFF
 DESC_LINE_WIDTH = 15
 
+#: A description block planted one bank below where the table belongs, close
+#: enough to 0x8DB2 that an unguarded write lands on the predominant-colour
+#: table. `write_team_descriptions` computes `0x8000 + snes_addr`, so this
+#: pointer names file offset 0x8DA0 and the text starts twenty bytes later.
+LOW_BANK_DESC_SNES_POINTER = 0x0DA0
+LOW_BANK_DESC_OFFSET = 0x8000 + LOW_BANK_DESC_SNES_POINTER
+
 
 def encode_char(ch: str) -> int:
     """The ISS font encoding, stated as a rule rather than copied as a table.
@@ -502,6 +509,7 @@ def build_iss_rom(
     break_name_text_bias: bool = False,
     break_name_tile_bounds: bool = False,
     break_desc_bank: bool = False,
+    desc_pointer_one_bank_low: bool = False,
 ) -> bytearray:
     """Return an image the reader accepts and the writer can fill.
 
@@ -521,6 +529,14 @@ def build_iss_rom(
 
     The three `break_*` flags each corrupt exactly one of the conditions
     `signature_ok` tests, so a test can pin which one it is answering to.
+
+    `desc_pointer_one_bank_low` is the sharper version of `break_desc_bank`:
+    it points slot 7's description at a *well-formed* block planted at 0x8DA0,
+    one bank below where the table belongs, so that a writer without the
+    bank guard finds its 0xFD, computes a description start of 0x8DB4 and
+    writes sixty bytes of team name over the predominant-colour table at
+    0x8DB2. `break_desc_bank` alone does not reach that: the filler holds no
+    0xFD, so an unguarded write finds no start and gives up quietly.
     """
     body = _filler(size)
 
@@ -584,6 +600,9 @@ def build_iss_rom(
     if break_desc_bank:
         # A pointer below $8000 is not a bank-$02 address at all.
         put(OFS_DESC_PTRS + 7 * 2, struct.pack("<H", 0x4000))
+    if desc_pointer_one_bank_low:
+        put(OFS_DESC_PTRS + 7 * 2, struct.pack("<H", LOW_BANK_DESC_SNES_POINTER))
+        put(LOW_BANK_DESC_OFFSET, desc_block(7))
 
     if with_header:
         return _filler(SMC_HEADER_SIZE) + body

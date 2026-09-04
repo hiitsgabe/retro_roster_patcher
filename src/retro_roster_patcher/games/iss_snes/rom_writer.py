@@ -181,9 +181,10 @@ _DISPLACEMENT_PATCH_POINTS = [
 _OFS_DESC_PTRS = 0x38000  # 2 bytes per team, 27 entries, TEAM_ENUM_ORDER
 _DESC_LINE_WIDTH = 15  # Characters per line in the description text box
 #: Bank $02 of a LoROM image starts here and the SNES half of the pointer starts
-#: at $8000, so `rom_addr = _DESC_BANK_BASE + (snes_addr - _DESC_BANK_SNES_BASE)`.
-#: A pointer below $8000 makes that arithmetic answer an address before the bank
-#: -- and, for a small enough value, a negative one, which `_seek` cannot take.
+#: at $8000, so `rom_addr = _DESC_BANK_BASE + (snes_addr - _DESC_BANK_SNES_BASE)`,
+#: which reduces to `0x8000 + snes_addr`. A pointer below $8000 therefore lands
+#: one bank low, in 0x8000..0xFFFF, where three of this module's own pointer
+#: tables live.
 _DESC_BANK_BASE = 0x10000
 _DESC_BANK_SNES_BASE = 0x8000
 
@@ -737,7 +738,12 @@ def _min_patchable_size() -> int:
     `analyze_rom`, where the 1 MB floor guards only the latter.
 
     Every term is a `max` over this module's own constants rather than a
-    transcribed total, so moving any offset moves this with it. Reads are not
+    transcribed total, so moving any offset moves this with it. The list is
+    therefore deliberately over-complete: one term dominates all the others
+    today, so deleting any of the rest changes nothing and no test can tell.
+    Mutation testing confirms that -- three dropped terms survive, and they are
+    the only survivors in this package -- and it is the price of a bound that
+    follows an offset when one of them moves. Reads are not
     included: `write_name_tiles` dereferences the ROM's own pointers into
     0x40000..0x4FFFF and a short read there answers fewer bytes rather than
     corrupting anything, and `rom_reader.signature_ok` is what rejects it.
@@ -1248,11 +1254,16 @@ class ISSRomWriter:
             snes_addr = raw[0] | (raw[1] << 8)
             # LoROM bank $02: ROM offset = 0x10000 + (snes_addr - 0x8000)
             #
-            # DELIBERATE DIVERGENCE: the bank test is new. A pointer below
-            # $8000 is not a bank-$02 pointer, and upstream computed an offset
-            # from it anyway -- below 0x8000 that offset is negative and
-            # `_seek` raises `OSError`. Skipping the slot leaves its 1994
-            # description in place, which is what an unpatched team gets.
+            # DELIBERATE DIVERGENCE: the bank test is new. The arithmetic
+            # above reduces to `0x8000 + snes_addr`, so a pointer below $8000
+            # -- which is not a bank-$02 pointer at all -- addresses
+            # 0x8000..0xFFFF, one bank low. That range is not empty: it holds
+            # the predominant-colour table at 0x8DB2, the name-tile pointer
+            # table at 0x93CD and the flag-tile pointer table at 0x941A. If a
+            # 0xFD turns up in the 25 bytes read there, upstream wrote 60 bytes
+            # of description text over whichever of them followed. Skipping the
+            # slot leaves its 1994 description in place, which is what an
+            # unpatched team gets.
             if snes_addr < _DESC_BANK_SNES_BASE:
                 continue
             rom_addr = _DESC_BANK_BASE + (snes_addr - _DESC_BANK_SNES_BASE)
