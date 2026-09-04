@@ -154,6 +154,7 @@ def test_analyze_builds_every_registered_patcher_to_sweep_one_rom(
         "iss-snes",
         "kgj-mlb-snes",
         "nbalive95-genesis",
+        "nhl07-psp",
         "nhl94-genesis",
         "nhl94-snes",
         "we2002",
