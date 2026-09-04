@@ -643,3 +643,51 @@ def test_the_discs_bios_survive_a_read_back_unchanged(tmp_path):
     )
     position = fixture.spbt_position(2, 9)
     assert records[position] == fixture.disc_bio_values(2, 9)
+
+
+# -- the size floor, and what it is a floor on ------------------------------
+
+
+def test_the_smallest_well_formed_image_is_exactly_the_floor():
+    # The floor is not slack. This game's tree is a PVD at 16, a root at 17, a
+    # `DB` directory at 18 and `DB.VIV` at 19, so 20 sectors is the tightest
+    # value that admits every real image. NHL 07's tree needs 22 and carries the
+    # same constant, where it *is* slack.
+    assert len(fixture.build_tiny_iso()) == MIN_ISO_SIZE
+
+
+def test_the_smallest_well_formed_image_loads(tmp_path):
+    # Which is what says the floor accepts everything it should.
+    path = tmp_path / "tiny.iso"
+    path.write_bytes(fixture.build_tiny_iso())
+    assert NHL05PS2RomReader(str(path)).load() is True
+
+
+def test_one_byte_below_the_floor_is_refused_before_anything_is_read(tmp_path):
+    # Kills `if self._iso_size < MIN_ISO_SIZE` -> `if False`. Without the floor
+    # the walk still succeeds -- the PVD, both directories and `DB.VIV`'s record
+    # are all inside the truncation -- and `f.read` returns a short archive,
+    # silently, which is exactly what the floor exists to stop.
+    path = tmp_path / "short.iso"
+    path.write_bytes(fixture.build_tiny_iso()[: MIN_ISO_SIZE - 1])
+    assert NHL05PS2RomReader(str(path)).load() is False
+
+
+def test_the_directory_record_of_a_truncated_tiny_image_is_still_intact(tmp_path):
+    # The other half of the previous claim: the truncation removes one byte of
+    # `DB.VIV`, not any part of the tree, so nothing but the floor refuses it.
+    image = fixture.build_tiny_iso()[: MIN_ISO_SIZE - 1]
+    assert image[fixture.DB_DIR_SECTOR * ISO_SECTOR_SIZE] == 34
+
+
+def test_an_archive_authored_as_a_directory_is_refused(tmp_path):
+    # `DB.VIV` with the directory flag set. A reader that ignored it would hand
+    # the archive's own bytes to `bigf_parse` as though they were records.
+    spec = fixture.DiscSpec(db_viv_is_dir=True)
+    assert NHL05PS2RomReader(str(make_iso(tmp_path, spec))).load() is False
+
+
+def test_the_same_image_with_the_flag_clear_loads(tmp_path):
+    # Guards the previous test against passing for some other reason: one bit
+    # of one byte is the whole difference.
+    assert NHL05PS2RomReader(str(make_iso(tmp_path))).load() is True

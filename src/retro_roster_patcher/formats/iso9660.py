@@ -184,6 +184,12 @@ def _records(extent_bytes: bytes, base_offset: int, *, min_name_length: int) -> 
         rec_len = extent_bytes[pos]
         if rec_len == 0:
             next_sector = ((pos // SECTOR_SIZE) + 1) * SECTOR_SIZE
+            # `>=` and not `>`, and mutation testing says the two are the same
+            # function: at `next_sector == len(extent_bytes)` the `>` form
+            # assigns `pos = len(extent_bytes)` and the loop condition then
+            # fails on the next iteration, so both leave. Kept as `>=` because
+            # it says "there is no next sector" at the point the question is
+            # asked rather than one statement later.
             if next_sector >= len(extent_bytes):
                 break
             pos = next_sector
