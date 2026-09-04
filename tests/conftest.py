@@ -24,13 +24,13 @@ the 100 in `tests/games/nbalive95_genesis/test_patcher.py`, 81 add it through
 of the 76 in `tests/games/we2002/test_patcher.py`, 57 do; and of the 103 in
 `tests/games/iss_snes/test_patcher.py`, 92 do.
 Across the whole suite 487 items reach a client built with `transport=None`.
-Autouse covers 2404 of the 2412 tests a default run executes; the remaining 8
-opt out explicitly. The suite collects 2417 — `addopts` deselects
-`tests/test_packaging.py`'s 5, which are covered too on the run that selects
-them — so 2409 of 2417 counted that way.
+Autouse covers 2755 of the 2763 tests a default run executes; the remaining 8
+opt out explicitly. The suite collects 2769 — `addopts` deselects
+`tests/test_packaging.py`'s 6, which are covered too on the run that selects
+them — so 2761 of 2769 counted that way.
 
 Every number in the paragraph above moves when anyone adds a test; this is the
-ninth commit that has had to re-derive them. Re-derive rather than adjust:
+tenth commit that has had to re-derive them. Re-derive rather than adjust:
 `pytest --collect-only -q` prints the selected/collected pair, `pytest -m allow_default_transport
 --collect-only -q` prints the opt-out count, and the per-file figures come from a
 throwaway `-p` plugin that wraps both client `__init__`s and records which items
