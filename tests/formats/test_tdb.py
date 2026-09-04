@@ -353,6 +353,16 @@ def test_a_string_field_stops_at_its_first_nul():
     assert table.read_record(3)["FNME"] == "T1R3"
 
 
+def test_a_string_field_whose_first_byte_is_nul_reads_as_empty():
+    # The boundary in `raw.find(b"\\x00")`: a field that begins with a NUL gives
+    # index 0, and `>= 0` rather than `> 0` is what turns that into an empty
+    # string instead of twelve bytes of NUL. Mutation testing found the
+    # distinction unguarded.
+    table = TDBFile.parse(_build("single")).tables["SPBT"]
+    table.write_record(0, {"FNME": ""})
+    assert table.read_record(0)["FNME"] == ""
+
+
 def test_a_string_field_that_fills_its_width_has_no_nul_to_stop_at():
     spec = TableSpec(
         name="STRS",
@@ -479,6 +489,19 @@ def test_a_string_longer_than_its_field_is_truncated():
     table = TDBFile.parse(_build("single")).tables["SPBT"]
     table.write_record(0, {"FNME": "A" * 40})
     assert table.read_record(0)["FNME"] == "A" * 12
+
+
+def test_an_over_long_string_does_not_run_into_the_records_that_follow():
+    # Reading the field back is not enough, and mutation testing showed it:
+    # dropping the `[:byte_len]` truncation still reads back twelve characters,
+    # because the field is twelve bytes wide however many were written. What it
+    # changes is everything after — 40 bytes from offset 0 of record 0 reach
+    # into records 1 and 2 and silently rewrite two other players.
+    table = TDBFile.parse(_build("single")).tables["SPBT"]
+    table.write_record(0, {"FNME": "A" * 40})
+    assert table.read_record(1) == player_values(1, 1)
+    assert table.read_record(2) == player_values(1, 2)
+    assert table.read_record(0)["INDX"] == player_values(1, 0)["INDX"]
 
 
 def test_a_string_shorter_than_its_field_is_nul_padded_over_what_was_there():

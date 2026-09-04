@@ -7,10 +7,19 @@ picks a worse encoding than the game's tools do — and the output of
 `refpack_compress` is what the console loads, so "decompresses correctly" is
 necessary and not sufficient. `REFERENCE_COMPRESSED` closes that: it is the
 exact output of the compressor inside `console_utilities` that this module was
-ported from, captured over the thirteen inputs in `vector_inputs.py`, so a port
+ported from, captured over the fifteen inputs in `vector_inputs.py`, so a port
 that re-derived a different-but-valid encoding fails here rather than shipping.
 
 Nothing in this file imports `console_utilities`. The references are literals.
+
+Mutation-tested: 97 mutations of `formats/ea_tdb.py`, 95 killed by this
+directory. The two survivors are equivalent mutants and both are argued at the
+line they mutate — `_is_encodable`'s second upper bound, which the third clause
+subsumes, and the `size - 2` insertion bound, whose last position no
+`find_match` can reach. Two of the fifteen inputs in `vector_inputs.py`
+(`low_alphabet` and `hash_chain`) exist only because mutation found the
+encoder's two search parameters — the lazy-match rule and the chain-depth limit
+— unobservable without them.
 """
 
 import random
@@ -59,10 +68,31 @@ REFERENCE_COMPRESSED = {
     ),
     # 4 bytes in, 11 out; commands ['end0', 'literal']
     "four_bytes": bytes.fromhex("10fb000004e07778797afc"),
+    # 405 bytes in, 408 out; commands ['copy2', 'end0', 'literal']
+    "hash_chain": bytes.fromhex(
+        "10fb000195fb51525354555657585940d0f340d1e340d2d340d3c340d4b340d5a340d69340d78340d87340d9"
+        "6340da5340db4340dc3340dd2340de1340df0341d07341d16341d25341d34341d43341d52341d61341d70341"
+        "d8f341d9e341dad341dbc341dcb341dda341de9341df8342c0f342c1e342fbc2d342c3c342c4b342c5a342c6"
+        "9342c78342c87342c96342ca5342cb4342cc3342cd2342ce1342cf0343c07343c16343c25343c34343c43343"
+        "c52343c61343c70343c8f343c9e343cad343cbc343ccb343cda343ce9343cf8344f0f344f1e344f2d344f3c3"
+        "44f4b344f5a344f69344f7fb8344f87344f96344fa5344fb4344fc3344fd2344fe1344ff0345f07345f16345"
+        "f25345f34345f43345f52345f61345f70345f8f345f9e345fad345fbc345fcb345fda345fe9345ff8346e0f3"
+        "46e1e346e2d346e3c346e4b346e5a346e69346e78346e87346e96346ea5346eb4346ec33ee46ed2346ee1346"
+        "ef0347e07347e16347e25347e34347e43347e52347e61347e70347e8f347e9e347ead347ebc347ecb347eda3"
+        "47ee9347ef834890f3388bfc"
+    ),
     # 28 bytes in, 26 out; commands ['copy2', 'end1', 'literal']
     "lazy": bytes.fromhex("10fb00001ce05758595a050451e05253545502005651180cfd58"),
     # 1200 bytes in, 15 out; commands ['copy4', 'end0']
     "long_run": bytes.fromhex("10fb0004b0cd0000ffc3c00000a6fc"),
+    # 400 bytes in, 189 out; commands ['copy2', 'end0', 'literal']
+    "low_alphabet": bytes.fromhex(
+        "10fb000190e002010102020201000b04010000090202e001020200070c0202010005012101010400000c0029"
+        "041d040d0d2b0208100c0d080f0d0f020100010009083d0930010023046d08450003102d083e0006047c081d"
+        "0949010030089a157f0108231184020c9f141f08060412041d08740cb908870d2200041e0033109b0cc60c9e"
+        "04470cfe043008ca08ba0d1202084f0cf924290d5a01086f08680c1508f5001515140208ff08502422047b08"
+        "ff08f0103014fc084f11b401fc"
+    ),
     # 60 bytes in, 30 out; commands ['copy3', 'end0', 'literal']
     "medium_repeat": bytes.fromhex("10fb00003ce4303132333435363738394142434445464748494aa40013fc"),
     # 1 bytes in, 7 out; commands ['end1']
@@ -121,12 +151,12 @@ def _decode_commands(stream: bytes) -> list[str]:
 # ──────────────────────────────────────────────────────────────
 
 
-def test_the_reference_corpus_holds_thirteen_cases():
+def test_the_reference_corpus_holds_fifteen_cases():
     # A parametrised suite over an empty or shrunken dict passes by collecting
     # nothing. This is the assertion that makes the count deliberate: every test
     # below that says `@pytest.mark.parametrize(..., VECTOR_INPUTS)` runs
-    # thirteen times or this fails first.
-    assert len(VECTOR_INPUTS) == 13
+    # fifteen times or this fails first.
+    assert len(VECTOR_INPUTS) == 15
 
 
 def test_every_input_has_a_reference_and_no_reference_is_orphaned():
@@ -152,8 +182,8 @@ def test_the_corpus_holds_both_a_case_that_shrinks_and_one_that_grows():
     # command; one of nothing but runs would never exercise the literal path.
     shrank = [k for k, v in REFERENCE_COMPRESSED.items() if len(v) < len(VECTOR_INPUTS[k])]
     grew = [k for k, v in REFERENCE_COMPRESSED.items() if len(v) > len(VECTOR_INPUTS[k])]
-    assert len(shrank) == 6
-    assert len(grew) == 7
+    assert len(shrank) == 7
+    assert len(grew) == 8
 
 
 # ──────────────────────────────────────────────────────────────
@@ -300,6 +330,12 @@ _COPY_GRID = [
     (10, 1024),
     (10, 16384),
     (10, 131072),
+    # `offset - 1` here is 0x8000 and 0x10000: bit 15 set with bit 16 clear, and
+    # the other way about. Every other 4-byte pair below has both bits equal, so
+    # without these two the encoder could put either bit in the command's one
+    # high-offset slot and no test would tell.
+    (10, 32769),
+    (10, 65537),
     (11, 1024),
     (67, 16384),
     (68, 16384),
@@ -338,7 +374,7 @@ def test_the_copy_grid_covers_both_answers():
     # of the two tests below collect nothing meaningful.
     encodable = [pair for pair in _COPY_GRID if _is_encodable(*pair)]
     refused = [pair for pair in _COPY_GRID if not _is_encodable(*pair)]
-    assert len(encodable) == 14
+    assert len(encodable) == 16
     assert len(refused) == 4
     assert refused == [(3, 1025), (4, 16385), (5, 131073), (1029, 1)]
 

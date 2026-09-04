@@ -24,6 +24,36 @@ import random
 # an explicit seed is reproducible across CPython versions for `randrange`.
 _rng = random.Random(20260904)
 
+
+def _hash_chain_input() -> bytes:
+    """A repeat the compressor finds only because its hash spreads three bytes.
+
+    `refpack_compress` buckets a position by `(b0 << 8) ^ (b1 << 4) ^ b2` and
+    walks at most 128 entries of a bucket's chain looking for the longest match.
+    This builds a file where 129 *different* three-byte groups would share a
+    bucket if the first shift were 7 instead of 8, so under that one-character
+    change the chain overflows and the only real match in the file is never
+    reached.
+
+    Built rather than written out because it has to be derived from the hash:
+    a literal would be a magic blob that nobody could check or regenerate.
+    """
+    block = bytes((0x51, 0x52, 0x53))
+    target = ((0x51 << 7) ^ (0x52 << 4) ^ 0x53) & 0xFFFF
+    groups = []
+    for b0 in range(1, 256):
+        for b1 in range(1, 256):
+            b2 = target ^ ((b0 << 7) & 0xFFFF) ^ ((b1 << 4) & 0xFFFF)
+            if 1 <= b2 <= 255 and (b0, b1, b2) != (0x51, 0x52, 0x53):
+                groups.append(bytes((b0, b1, b2)))
+            if len(groups) == 129:
+                break
+        if len(groups) == 129:
+            break
+    payload = block + b"TUVWXY"
+    return payload + b"".join(groups) + payload
+
+
 VECTOR_INPUTS: dict[str, bytes] = {
     # Nothing at all: a header and a bare end marker, six bytes.
     "empty": b"",
@@ -58,4 +88,20 @@ VECTOR_INPUTS: dict[str, bytes] = {
     # A 4-byte match at one position with a 9-byte match one byte later, which is
     # what makes the lazy-match branch take a different path from the greedy one.
     "lazy": b"WXYZ" + b"QWXYZRSTUV" + b"QQQQ" + b"WXYZRSTUVX",
+    # Three distinct byte values over 400 bytes. Every hash bucket holds dozens
+    # of positions and almost every position has several candidate matches of
+    # nearly equal length, which is what makes the encoder's two search
+    # parameters observable: mutation testing showed that relaxing the lazy
+    # rule from `next_length > length + 1` to `> length`, or cutting the chain
+    # depth from 128 to 4, changes no output in any other vector here and
+    # changes this one.
+    "low_alphabet": bytes(_rng.randrange(3) for _ in range(400)),
+    # A nine-byte block, then 129 three-byte groups chosen so that the mutant
+    # hash `(b0 << 7) ^ (b1 << 4) ^ b2` maps every one of them onto the same
+    # bucket as the block's first three bytes, then the block again. Under the
+    # real hash the chain for that bucket holds one entry and the repeat is
+    # found; under the mutant it holds 130 and the chain-depth limit of 128
+    # discards the only real one. Nothing else in this corpus can see the
+    # difference — 129 is the smallest count that does.
+    "hash_chain": _hash_chain_input(),
 }
