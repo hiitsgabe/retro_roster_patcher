@@ -217,15 +217,16 @@ class ISSRomReader:
 
         It reads the whole image, once. `analyze` runs it per registered patcher
         against one file, so the cost is a few megabytes of I/O per probe.
+
+        `OSError` is deliberately NOT caught. A revoked read bit or a yanked
+        mount is not "this is a different game", and `Patcher.analyze_rom`
+        promises `RomError` for exactly that case while promising
+        `is_valid=False` for the other; swallowing it here collapses the two.
+        `ISSPatcher.analyze_rom` wraps this in `errors.as_rom_error`, which is
+        how the WE2002 reader's callers do it too.
         """
-        try:
-            with open(self.rom_path, "rb") as handle:
-                data = handle.read()
-        except OSError:
-            # `analyze_rom` converts a missing or unreadable file into `RomError`
-            # before it gets here; answering False keeps this method total for
-            # any other caller.
-            return False
+        with open(self.rom_path, "rb") as handle:
+            data = handle.read()
 
         size = len(data)
         base = self._header_offset_for_size(size)

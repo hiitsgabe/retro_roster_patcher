@@ -498,6 +498,7 @@ def build_iss_rom(
     name_text_entries: int = NAME_TEXT_ENTRIES,
     name_tile_base: int = NAME_TILE_BASE,
     name_tile_blob_size: int = NAME_TILE_BLOB_SIZE,
+    name_tile_declared_size: int | None = None,
     break_name_text_bias: bool = False,
     break_name_tile_bounds: bool = False,
     break_desc_bank: bool = False,
@@ -515,6 +516,8 @@ def build_iss_rom(
 
     `name_tile_blob_size` scales the 27 compressed blobs. `write_name_tiles`
     refuses a total above `NAME_TILES_CAPACITY`, which 91 bytes apiece exceeds.
+    `name_tile_declared_size` rewrites the *first* blob's length word without
+    moving anything, so it disagrees with the bytes behind it.
 
     The three `break_*` flags each corrupt exactly one of the conditions
     `signature_ok` tests, so a test can pin which one it is answering to.
@@ -564,8 +567,15 @@ def build_iss_rom(
         put(addr, blob)
         addr += len(blob)
     if break_name_tile_bounds:
-        # A blob whose declared length runs past the end of the image.
-        put(name_tile_base, bytes([0xFF, 0xFF]))
+        # A blob shorter than the two-byte length word every Konami stream
+        # begins with, which no valid stream can be.
+        put(name_tile_base, bytes([0x01, 0x00]))
+    if name_tile_declared_size is not None:
+        # A length word that disagrees with the bytes actually there. On an
+        # image near `SIZE_ARITHMETIC_MINIMUM` a large enough one runs off the
+        # end, which a 1 MB image cannot reach: a P48000 pointer tops out at
+        # 0x4FFFF and a 16-bit length cannot carry it past 0x5FFFE.
+        put(name_tile_base, bytes([name_tile_declared_size & 0xFF, name_tile_declared_size >> 8]))
 
     # -- descriptions: pointer table then blocks
     for team in range(TOTAL_TEAMS):
