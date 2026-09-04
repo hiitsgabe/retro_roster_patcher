@@ -17,6 +17,7 @@ the silent-green failure mode the provenance test exists to prevent.
 import json
 import subprocess
 import sys
+import textwrap
 from pathlib import Path
 
 import pytest
@@ -147,3 +148,41 @@ def test_the_cli_package_runs_as_a_module():
     # the launcher must see the same games.
     expected = {info.game_id for info in retro_roster_patcher.list_patchers()}
     assert _game_ids(proc.stdout) == expected
+
+
+def test_the_formats_package_ships_and_works(tmp_path):
+    # `formats/` is the first subpackage under `retro_roster_patcher` that
+    # nothing else reaches. `packages.find` discovers it automatically, so this
+    # is not guarding a hand-maintained list — it is guarding the gap between now
+    # and Phase 4. Until a game imports it, nothing else in this file would
+    # notice it missing from a wheel: the registry test only walks `games/`, and
+    # the root package does not import `formats` at all.
+    #
+    # A round trip rather than a bare import, because a `formats/` directory that
+    # shipped its `__init__.py` and not `ea_tdb.py` would satisfy an import of
+    # the package and fail every consumer. Like the rest of this file, it passes
+    # against `src/` too; `test_the_import_resolved_to_an_installed_package` is
+    # what makes it evidence about the built distribution.
+    #
+    # In a subprocess and from `tmp_path`: this file's siblings under
+    # `tests/formats/` import the module directly, so an in-process check would
+    # pass on test ordering, and `-c` puts the child's cwd on its `sys.path`.
+    source = textwrap.dedent(
+        """
+        from retro_roster_patcher.formats import ea_tdb
+
+        print(ea_tdb.refpack_decompress(ea_tdb.refpack_compress(b"AAAABBBBAAAA")))
+        print(ea_tdb.tdb_crc(b"123456789"))
+        """
+    )
+    proc = subprocess.run(
+        [sys.executable, "-c", source],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert proc.returncode == 0, proc.stderr
+    # The CRC is the published CRC-32/MPEG-2 check value, so a `formats` that
+    # imported and then answered wrongly fails here too.
+    assert proc.stdout.splitlines() == ["b'AAAABBBBAAAA'", "58124007"]
