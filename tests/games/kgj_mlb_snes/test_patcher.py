@@ -47,6 +47,7 @@ from retro_roster_patcher.games.kgj_mlb_snes.patcher import (
     _team_data_fits,
 )
 from retro_roster_patcher.games.kgj_mlb_snes.rom_reader import TEAM_DATA_SPAN, KGJRomReader
+from retro_roster_patcher.games.kgj_mlb_snes.stat_mapper import KGJStatMapper
 from retro_roster_patcher.sports.espn import EspnClient
 from retro_roster_patcher.sports.models import League, LeagueData, Player, Team, TeamRoster
 from tests.fixtures import synthetic_kgj_rom as fixture
@@ -929,3 +930,57 @@ def test_the_pipeline_survives_a_json_round_trip_of_the_league_data(patcher, rom
     mapped = patcher.map_rosters(reloaded)
     result = patcher.patch(rom_path=rom, output_path=out, rosters=mapped)
     assert result.players_patched == 50
+
+
+# -- holes mutation testing found --------------------------------------------
+
+
+class _StubMapper:
+    """A mapper that answers one fixed slot, whatever team it is handed.
+
+    `MODERN_MLB_TO_KGJ` holds no negative and no out-of-range value, so the two
+    ends of `map_rosters`' bound cannot be reached through the real mapper. They
+    are still a guard worth having -- `LeagueData` can arrive from a file -- and
+    this is how a test reaches them.
+    """
+
+    def __init__(self, slot):
+        self._slot = slot
+        self.real = KGJStatMapper()
+
+    def get_team_slot(self, code):
+        return self._slot
+
+    def select_roster(self, players, stats=None):
+        return self.real.select_roster(players, stats)
+
+    def is_pitcher(self, player):
+        return self.real.is_pitcher(player)
+
+    def map_batter(self, player, stats=None):
+        return self.real.map_batter(player, stats)
+
+    def map_pitcher(self, player, stats=None, is_starter=True):
+        return self.real.map_pitcher(player, stats, is_starter=is_starter)
+
+
+def test_map_rosters_drops_a_negative_slot(patcher):
+    patcher.mapper = _StubMapper(-1)
+    assert patcher.map_rosters(_league_data(("SEA", 25))).teams == {}
+
+
+def test_map_rosters_drops_a_slot_past_the_league(patcher):
+    patcher.mapper = _StubMapper(TEAM_COUNT)
+    assert patcher.map_rosters(_league_data(("SEA", 25))).teams == {}
+
+
+def test_map_rosters_keeps_the_last_slot_in_the_league(patcher):
+    # The upper bound is exclusive, so slot 27 is in and 28 is out. Without this
+    # the previous test also passes against `slot > TEAM_COUNT`.
+    patcher.mapper = _StubMapper(TEAM_COUNT - 1)
+    assert list(patcher.map_rosters(_league_data(("SEA", 25))).teams) == [TEAM_COUNT - 1]
+
+
+def test_map_rosters_keeps_slot_zero(patcher):
+    patcher.mapper = _StubMapper(0)
+    assert list(patcher.map_rosters(_league_data(("SEA", 25))).teams) == [0]

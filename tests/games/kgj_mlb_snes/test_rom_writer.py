@@ -21,6 +21,7 @@ import pytest
 
 from retro_roster_patcher.games.kgj_mlb_snes.models import (
     HAND_LEFT,
+    HAND_RIGHT,
     HAND_SWITCH,
     PLAYERS_PER_TEAM,
     ROSTER_TYPE_BATTER,
@@ -697,3 +698,71 @@ def test_finalize_does_not_recompute_the_checksum(writer, tmp_path):
     before = _checksum_words(writer.data)
     writer.finalize()
     assert _checksum_words(bytearray((tmp_path / "out.sfc").read_bytes())) == before
+
+
+# -- the constants that reach bytes ------------------------------------------
+#
+# Every assertion above that mentions `HAND_SWITCH` or `ROSTER_TYPE_STARTER`
+# names the same constant the code under test does, so it holds however that
+# constant is renumbered. Mutation testing found exactly that: changing
+# `HAND_SWITCH` to 0x21 and `ROSTER_TYPE_STARTER` to 0x20 both survived the
+# whole suite. These pin the literal values, and the two below them pin the
+# bytes that reach the image against the fixture's own transcription.
+
+
+def test_a_right_handed_batter_is_stored_as_zero():
+    assert HAND_RIGHT == 0x00
+
+
+def test_a_left_handed_batter_is_stored_as_0x11():
+    assert HAND_LEFT == 0x11
+
+
+def test_a_switch_hitter_is_stored_as_0x20():
+    assert HAND_SWITCH == 0x20
+
+
+def test_the_three_batting_stances_are_distinct():
+    assert len({HAND_RIGHT, HAND_LEFT, HAND_SWITCH}) == 3
+
+
+def test_the_three_stance_bytes_are_the_ones_the_fixture_transcribed():
+    assert (HAND_RIGHT, HAND_LEFT, HAND_SWITCH) == fixture.BAT_HANDS
+
+
+def test_a_batter_is_stored_with_roster_type_0x30():
+    assert ROSTER_TYPE_BATTER == 0x30
+
+
+def test_a_starting_pitcher_is_stored_with_roster_type_0x10():
+    assert ROSTER_TYPE_STARTER == 0x10
+
+
+def test_a_relief_pitcher_is_stored_with_roster_type_0x00():
+    assert ROSTER_TYPE_RELIEVER == 0x00
+
+
+def test_the_three_roster_types_are_distinct():
+    assert len({ROSTER_TYPE_BATTER, ROSTER_TYPE_STARTER, ROSTER_TYPE_RELIEVER}) == 3
+
+
+def test_a_switch_hitters_stance_byte_reaches_the_image_as_0x20(writer):
+    # Against the literal, not against `HAND_SWITCH`, so a renumbered constant
+    # fails here instead of moving the assertion with it.
+    writer.write_player(4, 6, _batter(bat_hand=HAND_SWITCH))
+    assert writer.data[_offset(4, 6) + 0x0D] == 0x20
+
+
+@pytest.mark.parametrize(
+    "roster_type,nibble",
+    [
+        (ROSTER_TYPE_BATTER, fixture.ROSTER_TYPE_BATTER),
+        (ROSTER_TYPE_STARTER, fixture.ROSTER_TYPE_STARTER),
+        (ROSTER_TYPE_RELIEVER, fixture.ROSTER_TYPE_RELIEVER),
+    ],
+)
+def test_a_roster_types_high_nibble_is_the_one_the_reader_decodes(writer, roster_type, nibble):
+    # `fixture.ROSTER_TYPE_*` are 3, 1 and 0, transcribed from what
+    # `KGJRomReader.read_player` documents rather than imported from `models`.
+    writer.write_player(4, 17, _pitcher(roster_type=roster_type))
+    assert writer.data[_offset(4, 17) + 0x19] >> 4 == nibble
