@@ -151,12 +151,12 @@ def test_the_cli_package_runs_as_a_module():
 
 
 def test_the_formats_package_ships_and_works(tmp_path):
-    # `formats/` is the first subpackage under `retro_roster_patcher` that
-    # nothing else reaches. `packages.find` discovers it automatically, so this
-    # is not guarding a hand-maintained list — it is guarding the gap between now
-    # and Phase 4. Until a game imports it, nothing else in this file would
-    # notice it missing from a wheel: the registry test only walks `games/`, and
-    # the root package does not import `formats` at all.
+    # `formats/` is a subpackage under `retro_roster_patcher` that the root
+    # package does not import. `packages.find` discovers it automatically, so
+    # this is not guarding a hand-maintained list — it is guarding a gap the rest
+    # of this file cannot see: the registry test only walks `games/`, and a game
+    # importing `formats.ea_tdb` from a wheel that shipped `formats/__init__.py`
+    # and nothing else fails at import time, in the field.
     #
     # A round trip rather than a bare import, because a `formats/` directory that
     # shipped its `__init__.py` and not `ea_tdb.py` would satisfy an import of
@@ -164,15 +164,28 @@ def test_the_formats_package_ships_and_works(tmp_path):
     # against `src/` too; `test_the_import_resolved_to_an_installed_package` is
     # what makes it evidence about the built distribution.
     #
+    # **Both modules, and every module `formats/` grows must be added here.**
+    # `iso9660.py` is a single file with no package of its own, which is exactly
+    # the shape that goes missing from a distribution without anything noticing.
+    #
     # In a subprocess and from `tmp_path`: this file's siblings under
-    # `tests/formats/` import the module directly, so an in-process check would
+    # `tests/formats/` import the modules directly, so an in-process check would
     # pass on test ordering, and `-c` puts the child's cwd on its `sys.path`.
     source = textwrap.dedent(
         """
-        from retro_roster_patcher.formats import ea_tdb
+        import io
+
+        from retro_roster_patcher.formats import ea_tdb, iso9660
 
         print(ea_tdb.refpack_decompress(ea_tdb.refpack_compress(b"AAAABBBBAAAA")))
         print(ea_tdb.tdb_crc(b"123456789"))
+
+        # A PVD naming a root directory at sector 20, and nothing else. Enough
+        # to prove `iso9660` parses rather than merely imports.
+        image = bytearray(17 * iso9660.SECTOR_SIZE)
+        image[iso9660.PVD_OFFSET] = 1
+        image[iso9660.PVD_OFFSET + 158] = 20
+        print(iso9660.read_root(io.BytesIO(bytes(image))))
         """
     )
     proc = subprocess.run(
@@ -185,4 +198,8 @@ def test_the_formats_package_ships_and_works(tmp_path):
     assert proc.returncode == 0, proc.stderr
     # The CRC is the published CRC-32/MPEG-2 check value, so a `formats` that
     # imported and then answered wrongly fails here too.
-    assert proc.stdout.splitlines() == ["b'AAAABBBBAAAA'", "58124007"]
+    assert proc.stdout.splitlines() == [
+        "b'AAAABBBBAAAA'",
+        "58124007",
+        "Extent(lba=20, size=0)",
+    ]
