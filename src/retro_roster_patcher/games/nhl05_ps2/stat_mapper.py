@@ -23,10 +23,10 @@ check a change against; the audit that accompanies this migration asserts
 value-identical output against the source over 4 000 mapped players, 600 roster
 selections and 800 line-flag assignments.
 
-Two exceptions, both labelled where they live: `_save_percentage`, and the
-defence-pair spelling in `generate_team_line_flags`. The audit still holds for
-the first -- every input it ran on reports `SV%` as a fraction, which
-`_save_percentage` leaves alone.
+There is no exception. The two that used to be here -- normalising a `SV%`
+reported as a percentage, and a defence-pair spelling of `L{pair}{side}` -- have
+both been taken back out; `_map_goalie_stats` and `generate_team_line_flags`
+carry the arguments and the labels.
 """
 
 from __future__ import annotations
@@ -256,46 +256,6 @@ def _stat(stats: dict, *names: str, default: float = 0.0) -> float:
     return default
 
 
-#: The largest `SV%` that can be a fraction. A goalie cannot stop more shots
-#: than he faces, so anything above this is a percentage and not a rate.
-SAVE_PCT_FRACTION_MAX = 1.0
-
-#: What a percentage has to be divided by to become the fraction the scaling
-#: windows are written in.
-SAVE_PCT_PER_CENT = 100.0
-
-
-def _save_percentage(stats: dict) -> float:
-    """`SV%` as a fraction, whichever convention the provider reported it in.
-
-    DELIBERATE DIVERGENCE, and the identical one `games/nhl07_psp` carries --
-    this module is that one with the type names substituted, so a guard in one
-    and not the other would be a game-shaped trap. The source read `SV%` as a
-    bare float against a window of 0.880 to 0.930, so a line reporting `91.2`
-    instead of `0.912` saturated `_scale` and gave the goalie 63 for all eight
-    of the ratings save percentage drives. Every goalie came out identical and
-    maximal and nothing reported it.
-
-    Reachable: `cli` `patch --rosters` reads a whole `LeagueData` out of a JSON
-    file the operator supplies, `extra["leaders"]` included, and human-facing
-    sources of hockey statistics overwhelmingly print `91.2`.
-
-    A unit conversion and not a guess -- a save percentage expressed as a
-    fraction cannot exceed 1.0, because a goalie cannot save more shots than he
-    faces. `1.0` itself stays a fraction, a perfect game.
-
-    BYTE-IDENTITY: unchanged for any provider reporting fractions, which is
-    every input in this repository. `games/nhl07_psp/stat_mapper.py` carries the
-    long form of the argument, including why `select_roster`'s goalie sort key
-    goes through this too: within one convention it moves nothing, across two it
-    decides which goalie starts.
-    """
-    svp = _stat(stats, "SV%")
-    if svp > SAVE_PCT_FRACTION_MAX:
-        return svp / SAVE_PCT_PER_CENT
-    return svp
-
-
 def _defaults_for(position: str) -> NHL05SkaterAttributes:
     """A fresh copy of one position's defaults.
 
@@ -449,13 +409,23 @@ class NHL05StatMapper:
         """Derive 17 goalie ratings from a season line.
 
         `SV%` scales over 0.880 to 0.930, which is the whole practical range of
-        NHL save percentages, and it drives eight of the seventeen. `GAA` is
+        NHL save percentages, and it drives ten of the seventeen. `GAA` is
         inverted -- 3.5 minus the average, over a 1.5 window -- so a lower
         average is a higher rating. Wins add a flat bonus of up to 10, capped at
         40 wins.
 
-        The `SV%` window is a fraction. A provider reporting a percentage used
-        to saturate all eight at 63; `_save_percentage` now converts.
+        UPSTREAM BEHAVIOUR, KNOWN WRONG, PRESERVED DELIBERATELY -- `SV%` is read
+        as a bare float against a window written as a fraction, so a line
+        reporting `91.2` rather than `0.912` saturates `_scale` and takes the
+        ceiling on **ten** of these seventeen, not eight: the eight the window
+        obviously drives, plus `intensity` and `potential`, which are
+        `save_rating` minus five plus the win bonus and `save_rating` plus the
+        win bonus. Nor are they all 63 -- three have a constant subtracted, so a
+        saturated goalie reads 63/61/60. `games/nhl07_psp/stat_mapper.py` carries
+        the long form, including why `select_roster`'s goalie key reads it the
+        same bare way. The identical revert in both games, because this module is
+        that one with the type names substituted and a guard in one and not the
+        other would be a game-shaped trap.
 
         INHERITED DEFECT, PRESERVED DELIBERATELY: `toughness`, `fighting` and
         `passing` are constants, written from no stat at all and equal to
@@ -465,7 +435,7 @@ class NHL05StatMapper:
         toughness input to fix it from, and inventing a derivation would be new
         behaviour dressed as a bug fix.
         """
-        svp = _save_percentage(stats)
+        svp = _stat(stats, "SV%")
         gaa = _stat(stats, "GAA", default=3.0)
         wins = _stat(stats, "W", "Wins")
 
@@ -522,10 +492,13 @@ class NHL05StatMapper:
             if p.position == "G":
                 # Scaled by 1000 only so goalies sort against each other on a
                 # number of the same magnitude as a points total; nothing reads
-                # the value itself. Through `_save_percentage` rather than
-                # `_stat` so the module reads one field one way; no ordering can
-                # change, since dividing by 100 is monotonic.
-                return _save_percentage(ps) * 1000
+                # the value itself.
+                #
+                # UPSTREAM BEHAVIOUR, KNOWN WRONG, PRESERVED DELIBERATELY -- the
+                # bare `SV%` again, so a roster file mixing the two conventions
+                # sorts a `91.2` goalie above a `0.930` one and starts the worse
+                # of the two. See `_map_goalie_stats`.
+                return _stat(ps, "SV%") * 1000
             return _stat(ps, "PTS")
 
         def by_position(code: str) -> list[Player]:
