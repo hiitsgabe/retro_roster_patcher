@@ -216,6 +216,12 @@ class WE2002Patcher(Patcher):
             on_progress(1.0, "Complete")
         return LeagueData(league=league, teams=rosters)
 
+    def suggest_squad_order(self, team_roster):
+        ordered = self.mapper._select_best_22(
+            team_roster.players, team_roster.player_stats
+        )
+        return self._append_unused(ordered, team_roster.players)
+
     def map_rosters(
         self,
         data: LeagueData,

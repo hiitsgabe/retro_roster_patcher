@@ -162,6 +162,13 @@ class NHL94GenesisPatcher(Patcher):
 
     # -- map ----------------------------------------------------------------
 
+    def suggest_squad_order(self, team_roster):
+        leaders = team_roster.extra.get("leaders") or {}
+        ordered = self.mapper.select_roster(
+            team_roster.players, leaders, max_players=MAX_PLAYERS_PER_SLOT
+        )
+        return self._append_unused(ordered, team_roster.players)
+
     def map_rosters(
         self,
         data: LeagueData,
