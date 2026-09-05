@@ -518,29 +518,58 @@ class NHL94SNESPatcher(Patcher):
                     f"Corrupt team block at slot {slot} in {rom_path}: "
                     f"the roster region runs past the end of the image"
                 ) from exc
-            if written <= 0:
-                # -1 is the writer's error return and 0 means the region it
-                # found was too small for even one record. Either way nothing
-                # reached the image, so nothing is counted and the header --
-                # whose line table would index players that do not exist -- is
-                # not written either.
+            if written < 0:
+                # -1 is the writer's error return: no region was found at all,
+                # so not one byte of this slot was touched and there is nothing
+                # for a header to describe. Upstream skipped the header here too
+                # -- its `write_team_roster` returned False for exactly these
+                # cases and its caller tested that return.
                 continue
-            # The counts off the record and not off the ROM -- the line
+            # `written == 0` reaches here, and that is upstream's behaviour
+            # restored. It means the region existed but was too small for even
+            # one record, and upstream's writer answered True for that, so
+            # upstream wrote byte 17 and the 56-byte line table anyway. Writing
+            # them is a change to the image -- 49 bytes per slot -- so it is
+            # upstream's bytes that go in.
+            #
+            # UPSTREAM BEHAVIOUR, KNOWN WRONG, PRESERVED DELIBERATELY: a line
+            # table over a region that holds no records names records that do
+            # not exist, and the game reads whatever the zero-fill left there as
+            # a player. That is a crash risk. It is preserved because writing
+            # nothing is a byte sequence no released build of this patcher ever
+            # produced, and nothing here has been validated against a real dump.
+            #
+            # What does NOT come back is upstream's *counts*. `header_counts`
+            # stays: see its docstring, and the note below.
+            #
+            # The counts come off the record and not off the ROM -- the line
             # assignments index forwards from 2 and defensemen from
             # `2 + num_forwards`, so a header written from a different triple
             # than the one that shaped this list labels real players with the
-            # wrong role -- and then clamped to what actually reached the image.
+            # wrong role -- and are then clamped to what actually reached the
+            # image.
             #
-            # DELIBERATE DIVERGENCE, the second half of it: upstream wrote the
-            # requested triple whatever happened downstream, so a roster the
-            # writer truncated, or one a provider returned short, produced a
-            # line table naming records that were never written. See
-            # `rom_writer.header_counts`, which is where the arithmetic and its
-            # two remaining edges are argued.
+            # DELIBERATE DIVERGENCE, and the one place this file still differs
+            # from upstream's bytes: upstream wrote the requested triple
+            # whatever happened downstream, so a roster the writer truncated, or
+            # one a provider returned short, produced a line table naming
+            # records that were never written. Kept by explicit decision. It is
+            # a different question from the one above and the two must not be
+            # conflated: `header_counts` decides WHAT counts go in the header,
+            # this branch decides WHETHER a header is written at all. Together
+            # they mean the header is always written, as upstream did, but with
+            # truthful counts -- `(0, 0)` when nothing fit, rather than
+            # upstream's requested `(14, 7)` pointing at nothing.
             written_forwards, written_defencemen = header_counts(
                 written, team.num_forwards, team.num_defensemen
             )
             writer.write_team_header(slot, written_forwards, written_defencemen)
+            if written == 0:
+                # No record reached the image, so this slot's roster was not
+                # patched and no player was. `PatchResult` defines both counters
+                # as what reached the ROM; that definition is a reporting
+                # contract, not a byte, and it stays.
+                continue
             teams_patched += 1
             # `written`, not `len(team.players)`. `write_team_roster` stops as
             # soon as the next record would not fit and drops the rest;

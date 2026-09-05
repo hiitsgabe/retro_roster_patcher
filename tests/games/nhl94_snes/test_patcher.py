@@ -624,14 +624,40 @@ def test_players_patched_counts_records_that_reached_the_image(patcher, rom, tmp
     assert len(mapped.teams[BOS_SLOT].players) == 23
 
 
-def test_a_slot_whose_region_takes_nothing_is_neither_written_nor_counted(patcher, tmp_path):
-    """The header is skipped too: its line table would index absent players."""
+def test_a_slot_whose_region_takes_nothing_still_gets_its_header_written(patcher, tmp_path):
+    """PINS UPSTREAM FIDELITY DELIBERATELY, and it is known to be wrong.
+
+    Upstream's `write_team_roster` returned True for a region too small to hold
+    one record -- only `not self.data`, an out-of-range index and a zero-size
+    region made it return False -- so upstream wrote byte 17 and the 56-byte
+    line table for that slot anyway. A line table over a region that holds no
+    records names records that do not exist and the game reads the zero-fill as
+    a player. It is written all the same: skipping it is 49 bytes per slot that
+    no released build of this patcher ever produced, and nothing here has been
+    validated against a real dump.
+
+    What does *not* come back is upstream's counts. `rom_writer.header_counts`
+    still clamps, so the header claims (0, 0) rather than the requested (14, 7).
+    The two are different questions and must not be conflated: the clamp decides
+    WHAT counts go in, this test is about WHETHER a header is written at all.
+    """
     empty = fixture.write_nhl94_snes_rom(tmp_path / "empty.sfc", players_per_team=0)
     out = tmp_path / "out.sfc"
     mapped = MappedRosters(game_id="nhl94-snes", teams={BOS_SLOT: _team_record(BOS_SLOT, 10)})
     result = patcher.patch(rom_path=empty, output_path=out, rosters=mapped)
+    # No record reached the image, so neither counter moves: `PatchResult`
+    # defines both as what reached the ROM, and that reporting contract stays.
     assert result.teams_patched == 0
     assert result.players_patched == 0
+
+    base = fixture.team_base(BOS_SLOT)
+    header = slice(base + fixture.PLAYER_COUNT_OFFSET, base + fixture.TEAM_HEADER_SIZE)
+    before = empty.read_bytes()
+    after = out.read_bytes()
+    # The header was written: these bytes are not the ones the input carried.
+    assert after[header] != before[header]
+    # And it claims nobody, which is the truthful half of the combination.
+    assert after[base + fixture.PLAYER_COUNT_OFFSET] == 0x00
 
 
 def test_an_empty_roster_never_reaches_the_writer(patcher, rom, tmp_path):
