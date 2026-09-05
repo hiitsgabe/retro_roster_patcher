@@ -661,6 +661,21 @@ def test_a_pitcher_with_statistics_runs_at_thirty():
     assert MAPPER.map_pitcher(player(position="SP"), {"K": 100}).speed == 30
 
 
+def test_a_pitcher_without_statistics_runs_at_thirty_five():
+    # Five points quicker than one the provider had statistics for, which is
+    # the source's and is preserved rather than harmonised.
+    assert MAPPER.map_pitcher(player(position="SP")).speed == 35
+
+
+def test_a_pitcher_without_statistics_fields_at_forty():
+    assert MAPPER.map_pitcher(player(position="SP")).fielding == 40
+
+
+def test_a_pitcher_with_statistics_fields_at_forty_as_well():
+    # The one rating the two branches agree on.
+    assert MAPPER.map_pitcher(player(position="SP"), {"K": 100}).fielding == 40
+
+
 def test_a_starters_stamina_comes_off_his_quality_starts():
     # Twenty quality starts on the 5-to-25 range, which is 74 -- above the
     # floor of 40, so this is the scale rather than the clamp.
