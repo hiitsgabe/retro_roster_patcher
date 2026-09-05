@@ -16,7 +16,11 @@ copy-paste port writes the wrong bytes. They are argued where they live:
     (`patcher.py`).
   * `STL` and `SJ` swap slots 24 and 25 (`models.py`).
   * The ROST table has **64** line-assignment flags where NHL 07 has 30, and
-    they are not a superset: `33LD`/`33RD` are absent (`rom_writer.py`).
+    they are not a superset: `33LD`/`33RD` are absent, and the defence pairs are
+    `L1LD`..`L3RD` rather than NHL 07's `31LD`..`33RD` (`rom_writer.py`,
+    `stat_mapper.py`). This is the one place the port is not byte-identical to
+    the source; the source's copy-pasted `3n` spelling put the first two pairs
+    on the five-on-three units and dropped the third.
 
 Teams map to ROM slots automatically by abbreviation, so no manual slot mapping
 step. Two providers, ESPN for the current season and the NHL API back to 1993.

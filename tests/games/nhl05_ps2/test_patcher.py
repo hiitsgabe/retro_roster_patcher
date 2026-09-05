@@ -1003,34 +1003,52 @@ def test_a_skater_row_carries_its_line_and_its_special_teams_unit(tmp_path):
     assert [f for f in fixture.LINE_FLAG_NAMES if row[f] == 1] == ["L1C_", "H1__"]
 
 
-def test_the_third_defence_pair_is_never_assigned(tmp_path):
-    # THE INHERITED DEFECT, at the layer where it becomes visible on the disc.
-    # The mapper emits `33LD`/`33RD` for the fifth and sixth defenceman;
-    # neither is in this game's ROST, so no row ends up carrying a third pair.
-    # `L3LD`/`L3RD` exist and stay zero.
+def test_the_third_defence_pair_reaches_the_disc(tmp_path):
+    # THE DELIBERATE DIVERGENCE, at the layer where it becomes visible on the
+    # disc. Under the source's `33LD`/`33RD` these two bits came back zero on
+    # every row of every team, because NHL 2005's ROST has no `33` anything.
     _, out = patched(tmp_path)
     rows = rost_of(out)
-    third = [
-        r
+    third = sorted(
+        f
         for r in range(fixture.ROWS_PER_TEAM)
-        if rows[fixture.rost_position(0, r)]["L3LD"] == 1
-        or rows[fixture.rost_position(0, r)]["L3RD"] == 1
-    ]
-    assert third == []
+        for f in ("L3LD", "L3RD")
+        if rows[fixture.rost_position(0, r)][f] == 1
+    )
+    assert third == ["L3LD", "L3RD"]
 
 
-def test_the_first_two_defence_pairs_are_assigned(tmp_path):
-    # The other half: four of the mapper's six defence flags do land, so the
-    # previous test is about the third pair and not about defencemen at large.
+def test_all_three_defence_pairs_reach_the_disc(tmp_path):
+    # And the other two pairs came with it rather than moving off, so the test
+    # above is about the third pair and not about defencemen at large.
     _, out = patched(tmp_path)
     rows = rost_of(out)
     assigned = sorted(
         f
         for r in range(fixture.ROWS_PER_TEAM)
-        for f in ("31LD", "31RD", "32LD", "32RD")
+        for f in ("L1LD", "L1RD", "L2LD", "L2RD", "L3LD", "L3RD")
         if rows[fixture.rost_position(0, r)][f] == 1
     )
-    assert assigned == ["31LD", "31RD", "32LD", "32RD"]
+    assert assigned == ["L1LD", "L1RD", "L2LD", "L2RD", "L3LD", "L3RD"]
+
+
+def test_the_five_on_three_defence_slots_come_back_empty(tmp_path):
+    """Where the source put the first two pairs, now cleared on every row.
+
+    The bit that would fail if `stat_mapper.generate_team_line_flags` were
+    reverted to `3{pair}{side}`: `roster_values` writes all sixty-four flags on
+    every patched row, so these are written zeros and not merely untouched
+    bytes, and the fixture ships each row with a flag already set.
+    """
+    _, out = patched(tmp_path)
+    rows = rost_of(out)
+    set_flags = [
+        f
+        for r in range(fixture.ROWS_PER_TEAM)
+        for f in fixture.SOURCE_DEFENCE_FLAGS
+        if rows[fixture.rost_position(0, r)][f] == 1
+    ]
+    assert set_flags == []
 
 
 def test_the_unreachable_flags_are_all_zero(tmp_path):
