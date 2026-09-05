@@ -59,29 +59,28 @@ from .rom_reader import ISO_SECTOR_SIZE, NHL05PS2RomReader
 # and two.
 #
 # `33LD` and `33RD` are absent because NHL 2005's ROST has no third five-on-three
-# unit. That is not a hole in this list; it was a hole in the *mapper*, and it is
-# now fixed there. See the DELIBERATE DIVERGENCE note on
-# `stat_mapper.generate_team_line_flags`: the source emitted `3nLD`/`3nRD` for
-# the three defence pairs, which is NHL 07's spelling, so pairs one and two were
-# written to the five-on-three units, pair three was dropped by the `flag in
-# LINE_FLAGS` filter in `roster_values`, and `L1LD` through `L3RD` -- this game's
-# actual even-strength pairs -- stayed zero on every patched player. Six flags,
-# not two. The mapper now emits `L{pair}LD`/`L{pair}RD`.
+# unit. That is not a hole in this list, and it is what makes the mapper's
+# UPSTREAM BEHAVIOUR, KNOWN WRONG, PRESERVED DELIBERATELY note bite:
+# `stat_mapper.generate_team_line_flags` emits `3nLD`/`3nRD` for the three
+# defence pairs, which is NHL 07's spelling, so pairs one and two are written to
+# the five-on-three units, pair three is dropped by the `flag in LINE_FLAGS`
+# filter in `roster_values`, and `L1LD` through `L3RD` -- this game's actual
+# even-strength pairs -- stay zero on every patched player. Six flags, not two.
 #
-# The evidence for that reading is this list's own shape, and it needs no disc.
-# Group the flags by prefix and read off which positions each prefix carries:
-# `3n` is `{C_, LD, RD}`, three skaters; `4n` and `Kn` are four; `Ln` is all
-# five. `31C_` exists, and a defence pair has no centre. NHL 07's list groups the
-# other way -- its `3n` family is `{LD, RD}` and it has no `L*LD` at all -- which
-# is why the same mapper code was right there and wrong here.
+# The evidence that the mapper is wrong is this list's own shape, and it needs no
+# disc. Group the flags by prefix and read off which positions each prefix
+# carries: `3n` is `{C_, LD, RD}`, three skaters; `4n` and `Kn` are four; `Ln` is
+# all five. `31C_` exists, and a defence pair has no centre. NHL 07's list groups
+# the other way -- its `3n` family is `{LD, RD}` and it has no `L*LD` at all --
+# which is why the same mapper code is right there and wrong here.
 # `games/nhl07_psp/rom_writer.py` carries the other half of the argument and
 # `tests/games/nhl05_ps2/test_rom_writer.py` states both halves as assertions.
 #
-# Still unchecked against a retail disc, and one artefact would settle it
-# outright: a dump of NHL 2005's ROST field-name array. None may enter this
-# repository. What is not in doubt is that the previous behaviour was wrong
-# under *every* reading of `3n`: whatever a `3` unit is, it is not the same
-# situation as the `L` unit the same function puts that pair's forwards on.
+# Evidence, not proof. One artefact would settle it outright -- a dump of NHL
+# 2005's ROST field-name array -- and none may enter this repository. Until one
+# does the mapper keeps the source's spelling, because writing a bit the source
+# did not write is a hardware risk and a plausible reading of a field name is not
+# worth taking it for.
 LINE_FLAGS = [
     "31LD",
     "41LD",

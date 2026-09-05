@@ -59,10 +59,11 @@ FORWARDS_PER_TEAM = 14
 DEFENCEMEN_PER_TEAM = 7
 FORWARD_LINES = 4
 
-# Three pairs, and on this game all three now reach the disc: NHL 2005's ROST
-# names `L1LD`/`L1RD` through `L3LD`/`L3RD`, which is exactly three. The source
-# emitted `3nLD`/`3nRD` and lost the third to `rom_writer.roster_values`; see the
-# DELIBERATE DIVERGENCE note on `generate_team_line_flags`.
+# Three pairs, of which only two reach the disc: `generate_team_line_flags`
+# emits `3nLD`/`3nRD`, and this game's ROST has `31` and `32` but no `33`, so
+# `rom_writer.roster_values` drops the third pair on the floor. NHL 2005's ROST
+# names `L1LD`/`L1RD` through `L3LD`/`L3RD` and none of those is ever set. See
+# the label on `generate_team_line_flags` for why that stands.
 DEFENCE_PAIRS = 3
 
 SPECIAL_TEAMS_UNIT = 5
@@ -569,31 +570,31 @@ class NHL05StatMapper:
         `rom_writer.roster_values` turns into all sixty-four flags zeroed -- a
         dressed scratch, not a player left on whatever line the disc had him on.
 
-        DELIBERATE DIVERGENCE -- **this no longer emits NHL 07's defence-pair
-        spelling.** The source emitted `3{pair}{side}`, `31LD` through `33RD`,
-        because this whole module is a copy of NHL 07's with the type names
-        substituted, and on NHL 07 `3n` really is defence pair *n*. On NHL 2005
-        it is not, and the result was a three-way loss on every patched player:
+        UPSTREAM BEHAVIOUR, KNOWN WRONG, PRESERVED DELIBERATELY -- the defence
+        pairs are emitted as `3{pair}{side}`, `31LD` through `33RD`, which is
+        **NHL 07's spelling and not this game's**. This whole module is a copy of
+        NHL 07's with the type names substituted, and on NHL 07 `3n` really is
+        defence pair *n*. On NHL 2005 it is not, and every patched player loses
+        three ways:
 
-          * pairs one and two were written to `31LD`/`31RD` and `32LD`/`32RD`,
-            which on this game are the two **five-on-three** units;
-          * pair three was written to `33LD`/`33RD`, which this game's ROST does
-            not have at all, so `rom_writer.roster_values` dropped it;
+          * pairs one and two go to `31LD`/`31RD` and `32LD`/`32RD`, which on
+            this game are the two **five-on-three** units, so a defenceman is
+            marked for a situation he was not picked for;
+          * pair three goes to `33LD`/`33RD`, which this game's ROST does not
+            have at all, so `rom_writer.roster_values` drops it;
           * `L1LD` through `L3RD`, the pairs the game actually ices at even
-            strength, were zeroed and never set -- so a patched team had no
-            even-strength defence pairing whatsoever.
+            strength, are zeroed by the `for flag in LINE_FLAGS` loop and never
+            set -- so **a patched team has no even-strength defence pairing
+            whatsoever**.
 
-        Now `L{pair}{side}`, which is the same `L` family this function already
-        puts the pair's *forwards* on two blocks above. That internal
-        inconsistency is the argument on its own: whatever `3n` denotes, it is
-        not the situation `L{line}C_` denotes, and a line's centre and its
-        defencemen cannot be on two different ones. `rom_writer.LINE_FLAGS`
-        carries the flag-shape evidence -- `31C_` exists and a pair has no
-        centre -- and says what would settle it outright.
-
-        This is the one path where the port is no longer byte-identical to the
-        source: six line-assignment bits per ROST row, on any team with
-        defencemen. Nothing else in the record moves.
+        The fix is one character, `L` for `3`, and it was in this file. It is out
+        again. The premise is sound -- `rom_writer.LINE_FLAGS` shows `31C_`
+        exists on this game and a defence pair has no centre, and NHL 07's list
+        has no `L*LD` at all -- but sound is not the same as verified, and only a
+        field-name dump from a retail DVD would settle which flag the game reads.
+        None may enter this repository. Until one does, the port writes the bits
+        the source wrote: six line-assignment bits per ROST row, on any team with
+        defencemen, and nothing else in the record moves.
         """
         result: list[dict[str, int]] = [{} for _ in players]
 
@@ -631,11 +632,12 @@ class NHL05StatMapper:
         for di, (idx, _) in enumerate(defense[: DEFENCE_PAIRS * 2]):
             pair = di // 2 + 1
             side = "LD" if di % 2 == 0 else "RD"
-            # DELIBERATE DIVERGENCE: `L`, not `3`. The source's `3{pair}{side}`
-            # is NHL 07's spelling and puts this game's first two pairs on the
-            # five-on-three units while its even-strength pairs stay zero. The
-            # docstring above carries the evidence.
-            result[idx][f"L{pair}{side}"] = 1
+            # UPSTREAM BEHAVIOUR, KNOWN WRONG, PRESERVED DELIBERATELY: `3`, not
+            # `L`. This is NHL 07's spelling; it puts this game's first two pairs
+            # on the five-on-three units, drops the third, and leaves the
+            # even-strength pairs zero. The docstring above carries the evidence
+            # and why it is not enough to act on.
+            result[idx][f"3{pair}{side}"] = 1
             d_line_indices.append(idx)
 
         # Three forwards and two defencemen, and `fwd_line_indices` holds them

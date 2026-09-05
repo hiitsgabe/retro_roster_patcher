@@ -1003,10 +1003,15 @@ def test_a_skater_row_carries_its_line_and_its_special_teams_unit(tmp_path):
     assert [f for f in fixture.LINE_FLAG_NAMES if row[f] == 1] == ["L1C_", "H1__"]
 
 
-def test_the_third_defence_pair_reaches_the_disc(tmp_path):
-    # THE DELIBERATE DIVERGENCE, at the layer where it becomes visible on the
-    # disc. Under the source's `33LD`/`33RD` these two bits came back zero on
-    # every row of every team, because NHL 2005's ROST has no `33` anything.
+def test_the_third_defence_pair_never_reaches_the_disc(tmp_path):
+    """PINS UPSTREAM FIDELITY DELIBERATELY, where it becomes visible on the disc.
+
+    `generate_team_line_flags` emits `33LD`/`33RD` for the third pair and NHL
+    2005's ROST has no `33` anything, so `roster_values` drops the key and the
+    two bits the game does name come back zero on every row of every team. Do
+    not "fix" the spelling: only a field-name dump from a retail disc could
+    settle which flag the game reads, and none may enter this repository.
+    """
     _, out = patched(tmp_path)
     rows = rost_of(out)
     third = sorted(
@@ -1015,40 +1020,40 @@ def test_the_third_defence_pair_reaches_the_disc(tmp_path):
         for f in ("L3LD", "L3RD")
         if rows[fixture.rost_position(0, r)][f] == 1
     )
-    assert third == ["L3LD", "L3RD"]
+    assert third == []
 
 
-def test_all_three_defence_pairs_reach_the_disc(tmp_path):
-    # And the other two pairs came with it rather than moving off, so the test
-    # above is about the third pair and not about defencemen at large.
+def test_no_even_strength_defence_pair_reaches_the_disc(tmp_path):
+    # And neither do the first two, so the test above is about defencemen at
+    # large and not about the third pair alone. `roster_values` writes all
+    # sixty-four flags on every patched row, so these are written zeros and not
+    # merely untouched bytes.
     _, out = patched(tmp_path)
     rows = rost_of(out)
     assigned = sorted(
         f
         for r in range(fixture.ROWS_PER_TEAM)
-        for f in ("L1LD", "L1RD", "L2LD", "L2RD", "L3LD", "L3RD")
+        for f in fixture.EVEN_STRENGTH_DEFENCE_FLAGS
         if rows[fixture.rost_position(0, r)][f] == 1
     )
-    assert assigned == ["L1LD", "L1RD", "L2LD", "L2RD", "L3LD", "L3RD"]
+    assert assigned == []
 
 
-def test_the_five_on_three_defence_slots_come_back_empty(tmp_path):
-    """Where the source put the first two pairs, now cleared on every row.
+def test_the_five_on_three_defence_slots_carry_the_first_two_pairs(tmp_path):
+    """PINS UPSTREAM FIDELITY DELIBERATELY: where the pairs actually land.
 
-    The bit that would fail if `stat_mapper.generate_team_line_flags` were
-    reverted to `3{pair}{side}`: `roster_values` writes all sixty-four flags on
-    every patched row, so these are written zeros and not merely untouched
-    bytes, and the fixture ships each row with a flag already set.
+    Pins the two tests above -- without this one, "no even-strength pair was
+    set" would also be satisfied by a patch that assigned no defenceman at all.
     """
     _, out = patched(tmp_path)
     rows = rost_of(out)
-    set_flags = [
+    set_flags = sorted(
         f
         for r in range(fixture.ROWS_PER_TEAM)
-        for f in fixture.SOURCE_DEFENCE_FLAGS
+        for f in ("31LD", "31RD", "32LD", "32RD")
         if rows[fixture.rost_position(0, r)][f] == 1
-    ]
-    assert set_flags == []
+    )
+    assert set_flags == ["31LD", "31RD", "32LD", "32RD"]
 
 
 def test_the_unreachable_flags_are_all_zero(tmp_path):

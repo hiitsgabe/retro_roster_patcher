@@ -106,14 +106,14 @@ def test_no_line_flag_is_listed_twice():
 
 def test_the_nhl07_third_pair_flags_are_absent():
     # There is no third five-on-three unit, so these two names do not exist
-    # here. The source's mapper emitted them for the fifth and sixth defenceman
-    # and `roster_values` dropped both, which is how the third pair was lost.
+    # here. The mapper emits them for the fifth and sixth defenceman anyway and
+    # `roster_values` drops both, which is how the third pair is lost.
     assert [f for f in LINE_FLAGS if f in ("33LD", "33RD")] == []
 
 
 def test_the_even_strength_third_pair_flags_are_present():
-    # The other half, and where the third pair goes now: this game does have a
-    # third defence pair and it is spelled `L3LD`/`L3RD`.
+    # The other half: this game does have a third defence pair, spelled
+    # `L3LD`/`L3RD`, and nothing in the package ever sets it.
     assert [f for f in LINE_FLAGS if f in ("L3LD", "L3RD")] == ["L3LD", "L3RD"]
 
 
@@ -135,7 +135,8 @@ def test_the_three_family_carries_a_centre():
     pair; `tests/games/nhl07_psp/test_rom_writer.py` states that half. So
     `31LD` is a defenceman on the five-on-three unit *here* and defence pair one
     *there*, and one `stat_mapper.generate_team_line_flags` cannot be right for
-    both.
+    both -- but the shared one is what upstream shipped and what this port keeps,
+    because a plausible reading of a field name is not a disc dump.
     """
     assert sorted({flag[2:] for flag in LINE_FLAGS if flag[0] == "3"}) == ["C_", "LD", "RD"]
 
@@ -154,7 +155,8 @@ def test_the_four_family_carries_four_skaters():
 
 def test_the_even_strength_family_carries_five_skaters():
     # And `L` is the full five, which is what makes `L1LD`..`L3RD` the
-    # even-strength defence pairs rather than another special-teams unit.
+    # even-strength defence pairs rather than another special-teams unit -- the
+    # ones no patched player is ever assigned to.
     assert sorted({flag[2:] for flag in LINE_FLAGS if flag[0] == "L"}) == [
         "C_",
         "LD",
@@ -582,25 +584,27 @@ def test_roster_values_leaves_the_other_flags_zero():
 
 
 def test_roster_values_drops_a_flag_the_game_does_not_have():
-    # This is where the source's third defence pair was lost. The filter is
-    # unchanged; the mapper no longer feeds it a name the game does not have.
+    # This is where the third defence pair is lost. The filter is right; it is
+    # `stat_mapper.generate_team_line_flags` that feeds it a name the game does
+    # not have, and that is upstream's behaviour, preserved deliberately.
     assert "33LD" not in NHL05PS2RomWriter.roster_values(1, 0, 1, {"33LD": 1})
 
 
-def test_all_six_flags_the_mapper_now_emits_for_defence_survive_the_filter():
-    # One call, all three pairs. The source's six were `31LD`..`33RD` and two of
-    # those six fell out here; these six do not, which is the whole point of the
-    # divergence in `stat_mapper.generate_team_line_flags`.
-    flags = {"L1LD": 1, "L1RD": 1, "L2LD": 1, "L2RD": 1, "L3LD": 1, "L3RD": 1}
+def test_only_four_of_the_six_defence_flags_the_mapper_emits_survive_the_filter():
+    # PINS UPSTREAM FIDELITY DELIBERATELY. One call, all three pairs as the
+    # mapper spells them. `33LD`/`33RD` fall out here and the third pair is
+    # gone; the four that survive are five-on-three slots, not pairs.
+    flags = {"31LD": 1, "31RD": 1, "32LD": 1, "32RD": 1, "33LD": 1, "33RD": 1}
     values = NHL05PS2RomWriter.roster_values(1, 0, 1, flags)
-    assert [f for f in flags if values.get(f) == 1] == [
-        "L1LD",
-        "L1RD",
-        "L2LD",
-        "L2RD",
-        "L3LD",
-        "L3RD",
-    ]
+    assert [f for f in flags if values.get(f) == 1] == ["31LD", "31RD", "32LD", "32RD"]
+
+
+def test_the_even_strength_pairs_stay_zero_when_the_mapper_emits_the_numbered_ones():
+    # The other half of the same call: `roster_values` zeroes all sixty-four
+    # flags first, so the pairs the game actually ices are written zeros.
+    flags = {"31LD": 1, "31RD": 1, "32LD": 1, "32RD": 1, "33LD": 1, "33RD": 1}
+    values = NHL05PS2RomWriter.roster_values(1, 0, 1, flags)
+    assert [f for f in ("L1LD", "L1RD", "L2LD", "L2RD", "L3LD", "L3RD") if values[f] != 0] == []
 
 
 # -- rebuild_and_write -----------------------------------------------------

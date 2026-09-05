@@ -29,6 +29,7 @@ from retro_roster_patcher.games.nhl05_ps2.models import (
     NHL05_TEAM_INDEX,
     NHL05PlayerRecord,
 )
+from retro_roster_patcher.games.nhl05_ps2.rom_writer import LINE_FLAGS
 from retro_roster_patcher.games.nhl05_ps2.stat_mapper import (
     ATTR_MAX,
     ATTR_MIN,
@@ -793,43 +794,49 @@ def test_a_winger_is_never_moved_to_centre():
     assert [f for d in flags for f in d if f.endswith("C_")] == []
 
 
-def test_the_first_defence_pair_is_the_first_even_strength_pair():
-    # DELIBERATE DIVERGENCE, at the layer that produces it. The source emitted
-    # `31LD`/`31RD` here -- NHL 07's spelling, copied into a game whose `3n`
-    # family is a five-on-three unit. `L1LD`/`L1RD` is the `L` family, the same
-    # one this function already puts line one's forwards on.
+def test_the_first_defence_pair_goes_to_the_first_five_on_three_unit():
+    # PINS UPSTREAM FIDELITY DELIBERATELY, at the layer that produces it, and
+    # this is the bug: `31LD`/`31RD` is NHL 07's spelling, copied into a game
+    # whose `3n` family is a five-on-three unit. Do not "fix" it to `L1LD` --
+    # only a field-name dump from a retail disc could settle which flag the game
+    # reads, and none may enter this repository.
     flags = MAPPER.generate_team_line_flags(records({"D": 2}))
-    assert [flags[0].get("L1LD"), flags[1].get("L1RD")] == [1, 1]
+    assert [flags[0].get("31LD"), flags[1].get("31RD")] == [1, 1]
 
 
-def test_the_second_defence_pair_follows():
+def test_the_second_defence_pair_goes_to_the_second():
     flags = MAPPER.generate_team_line_flags(records({"D": 4}))
-    assert [flags[2].get("L2LD"), flags[3].get("L2RD")] == [1, 1]
+    assert [flags[2].get("32LD"), flags[3].get("32RD")] == [1, 1]
 
 
-def test_the_third_defence_pair_is_emitted_under_a_name_the_game_has():
-    # The pair the source lost. It emitted `33LD`/`33RD`, which NHL 2005's ROST
-    # does not name, so `rom_writer.roster_values` dropped the key and no team
-    # ever iced a third pair. `L3LD`/`L3RD` the game does have.
+def test_the_third_defence_pair_is_emitted_under_a_name_the_game_lacks():
+    # PINS UPSTREAM FIDELITY DELIBERATELY. `33LD`/`33RD` is not in NHL 2005's
+    # ROST, so `rom_writer.roster_values` drops the key and no patched team ever
+    # ices a third pair. That is upstream's behaviour and it stands.
     flags = MAPPER.generate_team_line_flags(records({"D": 6}))
-    assert [flags[4].get("L3LD"), flags[5].get("L3RD")] == [1, 1]
+    assert [flags[4].get("33LD"), flags[5].get("33RD")] == [1, 1]
 
 
-def test_no_defence_flag_uses_the_sources_numbered_spelling():
-    # The assertion that fails if a port audit "restores" `3{pair}{side}`.
-    # Stated over every dict the call returns rather than over the two indices
-    # the tests above name, so a half-reverted loop fails here too.
+def test_the_third_pairs_flag_is_not_one_this_game_has():
+    # Pins the test above: the reason it matters is that the writer drops it.
+    assert [f for f in LINE_FLAGS if f in ("33LD", "33RD")] == []
+
+
+def test_no_defence_flag_uses_the_even_strength_spelling():
+    # The even-strength pairs this game does name stay zero on every patched
+    # player, because nothing emits them. Stated over every dict the call
+    # returns rather than over the indices the tests above name.
     flags = MAPPER.generate_team_line_flags(records({"D": 6}))
-    assert [f for d in flags for f in d if f[0] == "3"] == []
+    assert [f for d in flags for f in d if f in ("L1LD", "L1RD", "L2LD", "L2RD")] == []
 
 
-def test_a_defence_pair_carries_the_same_prefix_as_its_lines_centre():
-    # The reason this divergence is safe without a real disc: a line's centre
-    # and its defencemen have to name the same situation, and this one function
-    # picks the prefix for both. `L1C_` and `L1LD` agree; `L1C_` and `31LD` did
-    # not, whatever `3n` turns out to denote.
+def test_a_defence_pair_carries_a_different_prefix_from_its_lines_centre():
+    # PINS UPSTREAM FIDELITY DELIBERATELY, and the clearest statement of what is
+    # wrong: this one function names line one's centre `L1C_` and line one's
+    # defencemen `31LD`, so a player and his own pairing are marked for two
+    # different situations. Whatever `3n` denotes it is not what `L1` denotes.
     flags = MAPPER.generate_team_line_flags(records({"C": 1, "D": 1}))
-    assert sorted({f[:2] for d in flags for f in d if not f.endswith("__")}) == ["L1"]
+    assert sorted({f[:2] for d in flags for f in d if not f.endswith("__")}) == ["31", "L1"]
 
 
 def test_three_defence_pairs_are_generated():
