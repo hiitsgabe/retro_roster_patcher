@@ -29,10 +29,10 @@ of the 76 in `tests/games/we2002/test_patcher.py`, 57 do; of the 103 in
 `tests/games/nhl05_ps2/test_patcher.py`, 111 do — 109 an `EspnClient`, 2 an
 `NhlApiClient`, none of them both.
 Across the whole suite 729 items reach a client built with `transport=None`.
-Autouse covers 3776 of the 3784 tests a default run executes; the remaining 8
-opt out explicitly. The suite collects 3790 — `addopts` deselects
+Autouse covers 4455 of the 4463 tests a default run executes; the remaining 8
+opt out explicitly. The suite collects 4469 — `addopts` deselects
 `tests/test_packaging.py`'s 6, which are covered too on the run that selects
-them — so 3782 of 3790 counted that way.
+them — so 4461 of 4469 counted that way.
 
 Every number in the paragraph above moves when anyone adds a test; this is the
 twelfth commit that has had to re-derive them. Re-derive rather than adjust:
