@@ -318,30 +318,46 @@ def _speed_to_rom(value: int) -> int:
       if (b % 0x20 == 0) return b / 0x20 + 1;
       return ((int) b + 1) / 0x20 + 8;
 
-    We need the inverse. Values 1-7 -> multiples of 0x20 (0x00, 0x20, ..., 0xC0).
-    Values 8-16 -> non-multiples: approximate as (value - 8) * 0x20 + some offset.
-    Simplified: clamp to 0x00-0xE0 range in 0x20 steps.
+    We need the inverse. Values 1-8 -> multiples of 0x20 (0x00, 0x20, ..., 0xE0).
+    Values 9-16 -> non-multiples: (value - 8) * 0x20 - 1.
 
-    INHERITED DEFECT, ported unchanged. The comment above is upstream's and says
-    what it is: an approximation. It is exact for 1-7, and for 8-16 it is not an
-    inverse at all -- `(value - 8) * 0x20 - 1` is a multiple of 0x20 minus one,
-    so the decoder's first branch does not fire and its second answers
-    `((v-8)*0x20 - 1 + 1) / 0x20 + 8 = v`, which round-trips for 9-16 but sends
-    8 to `max(0, -1) = 0`, and 0 is a multiple of 0x20 and decodes to 1. So the
-    single value 8 -- the scale's midpoint and `ISSPlayerAttributes.speed`'s
-    default -- reads back as the minimum. Fixing it changes what reaches the
-    cartridge and cannot be verified from inside this repository, so it is
-    reported rather than corrected.
+    DELIBERATE DIVERGENCE: the low branch runs to 8 where upstream stopped it at
+    7, which is a one-value repair of an off-by-one and not a new formula.
+
+    Upstream's own comment -- kept above, with `1..7` corrected to `1..8` --
+    says the mapping is `1->0x00 ... 8->0xE0`, and its code did not do that:
+    `clamped <= 7` sent 8 down the *other* branch, where `(8 - 8) * 0x20 - 1` is
+    -1 and `max(0, -1)` is 0. Zero is a multiple of 0x20, so the decoder's first
+    branch fires and answers 1. The scale's midpoint, and
+    `ISSPlayerAttributes.speed`'s own default, therefore reached the cartridge
+    as the slowest speed in the game -- and the default is what every player the
+    provider measured nothing for gets.
+
+    The repair is read straight off the decoder quoted above, not guessed. Its
+    first branch is a bijection `b = (v - 1) * 0x20` over exactly `v` in 1..8,
+    because 0xE0 is the largest multiple of 0x20 a byte holds; 8 is the last
+    value it covers rather than the first it does not. So the boundary belongs
+    at 8, the second branch handles 9-16 alone, and every value 1-16 now
+    round-trips.
+
+    `max(0, ...)` and `& 0xFF` are gone with it: for `clamped` in 9..16 the
+    expression runs from 31 to 255 and neither guard could ever fire. They were
+    load-bearing only for the value that no longer reaches the line.
+
+    Still an approximation in one respect, and it is not this one. Nothing in
+    this repository can confirm that `SkillData.java` describes the byte this
+    game actually reads; what the port can be held to is that its encoder is the
+    inverse of the decoder it quotes, and it now is.
     """
     clamped = max(1, min(16, value))
-    # Simple linear mapping: value 1->0x00, 8->0xE0, 16->0xE0
+    # Simple linear mapping: value 1->0x00, 8->0xE0
     # Based on the decoder, multiples of 0x20 decode to b/0x20+1
-    # So value V -> (V-1)*0x20 for V in 1..7
-    if clamped <= 7:
+    # So value V -> (V-1)*0x20 for V in 1..8
+    if clamped <= 8:
         return (clamped - 1) * 0x20
-    # For 8-16, use non-multiples: ((V-8)*0x20) + some offset
+    # For 9-16, use non-multiples: ((V-8)*0x20) + some offset
     # decoder: ((b+1)/0x20) + 8 = V -> b = (V-8)*0x20 - 1
-    return max(0, (clamped - 8) * 0x20 - 1) & 0xFF
+    return (clamped - 8) * 0x20 - 1
 
 
 def _char_top_tile(c: str) -> int | None:

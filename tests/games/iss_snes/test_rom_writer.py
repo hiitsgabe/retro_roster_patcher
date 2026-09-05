@@ -211,8 +211,11 @@ def test_a_shooting_value_below_the_scale_saturates():
     assert _shooting_to_rom(-5) == 0
 
 
-@pytest.mark.parametrize("value", [1, 2, 3, 4, 5, 6, 7])
+@pytest.mark.parametrize("value", [1, 2, 3, 4, 5, 6, 7, 8])
 def test_the_low_half_of_the_speed_scale_encodes_to_multiples_of_0x20(value):
+    """To 8, not to 7. 0xE0 is the largest multiple of 0x20 a byte holds, so the
+    decoder's exact branch covers exactly 1-8 and upstream stopped it one short.
+    """
     assert _speed_to_rom(value) == (value - 1) * 0x20
 
 
@@ -223,18 +226,54 @@ def _decode_speed(byte):
     return (byte + 1) // 0x20 + 8
 
 
-@pytest.mark.parametrize("value", [1, 2, 3, 4, 5, 6, 7, 9, 10, 11, 12, 13, 14, 15, 16])
-def test_every_speed_but_one_round_trips_through_the_games_own_decoder(value):
+@pytest.mark.parametrize("value", [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16])
+def test_every_speed_round_trips_through_the_games_own_decoder(value):
+    """DELIBERATE DIVERGENCE: 8 is in this list, and used to be the exception."""
     assert _decode_speed(_speed_to_rom(value)) == value
 
 
-def test_speed_eight_does_not_round_trip():
-    """INHERITED DEFECT, reported and not fixed. `(8 - 8) * 0x20 - 1` is -1,
-    which `max(0, ...)` turns into 0, and 0 is a multiple of 0x20 and decodes to
-    1. Eight is the midpoint of the scale and `ISSPlayerAttributes.speed`'s own
-    default, so an unrated player is written as the slowest in the game."""
-    assert _speed_to_rom(8) == 0
-    assert _decode_speed(_speed_to_rom(8)) == 1
+def test_the_scales_midpoint_encodes_to_the_last_multiple_of_0x20():
+    """`(8 - 8) * 0x20 - 1` was -1, `max(0, -1)` was 0, and 0 decodes to 1: the
+    midpoint of the scale, and `ISSPlayerAttributes.speed`'s own default, was
+    written as the slowest speed in the game. 0xE0, not 0x00, and not merely
+    "something that decodes to 8" -- 31 bytes do."""
+    assert _speed_to_rom(8) == 0xE0
+    assert _decode_speed(0x00) == 1
+
+
+def test_the_default_speed_no_provider_measured_is_the_one_that_used_to_break():
+    """Why the single broken value was the expensive one."""
+    assert ISSPlayerAttributes().speed == 8
+
+
+def test_the_two_speed_branches_meet_without_a_gap_or_an_overlap():
+    """Sixteen values, sixteen distinct bytes, and the join is 8 -> 9."""
+    encoded = [_speed_to_rom(value) for value in range(1, 17)]
+    assert encoded == [
+        0x00,
+        0x20,
+        0x40,
+        0x60,
+        0x80,
+        0xA0,
+        0xC0,
+        0xE0,
+        31,
+        63,
+        95,
+        127,
+        159,
+        191,
+        223,
+        255,
+    ]
+    assert len(set(encoded)) == 16
+
+
+@pytest.mark.parametrize("value", list(range(1, 17)))
+def test_every_encoded_speed_fits_in_the_byte_it_is_written_to(value):
+    """`& 0xFF` was removed with the `max(0, ...)`; neither could ever fire."""
+    assert 0 <= _speed_to_rom(value) <= 0xFF
 
 
 def test_speed_is_clamped_at_both_ends():
