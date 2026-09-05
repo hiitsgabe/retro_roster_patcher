@@ -255,6 +255,13 @@ class NHL94SNESPatcher(Patcher):
 
     # -- map ----------------------------------------------------------------
 
+    def suggest_squad_order(self, team_roster):
+        leaders = team_roster.extra.get("leaders") or {}
+        # Default line counts (2 G / 14 F / 7 D) — a display order, not the
+        # per-slot header the patch resolves from the ROM.
+        ordered = self.mapper.select_roster(team_roster.players, leaders)
+        return self._append_unused(ordered, team_roster.players)
+
     def map_rosters(
         self,
         data: LeagueData,

@@ -17,7 +17,7 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any
 
-from ..sports.models import LeagueData
+from ..sports.models import LeagueData, Player, TeamRoster
 from .errors import CapabilityError
 from .models import (
     MappedRosters,
@@ -102,6 +102,27 @@ class Patcher(ABC):
             raise CapabilityError(
                 f"{self._subject()} does not use slot mappings; it maps teams automatically"
             )
+
+    def suggest_squad_order(self, team_roster: TeamRoster) -> list[Player]:
+        """Return this team's players in the order this game would field them.
+
+        A UI editor shows the squad in this order — starters first (by the
+        game's own position template), then bench, then any extras the ROM will
+        not store. It reuses the same selection each game already applies in
+        `map_rosters`, then appends whatever that selection dropped, so the list
+        is a reordering of the full squad and loses no player.
+
+        The default returns the players untouched; games with a roster model
+        override it. Purely advisory: `map_rosters` still runs the authoritative
+        selection at patch time.
+        """
+        return list(team_roster.players)
+
+    @staticmethod
+    def _append_unused(ordered: list[Player], everyone: list[Player]) -> list[Player]:
+        """`ordered` followed by every player it left out, original order kept."""
+        used = {id(p) for p in ordered}
+        return ordered + [p for p in everyone if id(p) not in used]
 
     @abstractmethod
     def analyze_rom(self, rom_path: Path) -> RomInfo:

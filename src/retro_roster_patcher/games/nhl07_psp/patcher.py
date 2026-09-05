@@ -421,6 +421,13 @@ class NHL07PSPPatcher(Patcher):
             teams=rosters,
         )
 
+    def suggest_squad_order(self, team_roster):
+        leaders = team_roster.extra.get("leaders") or {}
+        ordered = self.mapper.select_roster(
+            team_roster.players, leaders, max_players=MAX_PLAYERS
+        )
+        return self._append_unused(ordered, team_roster.players)
+
     def map_rosters(
         self,
         data: LeagueData,
