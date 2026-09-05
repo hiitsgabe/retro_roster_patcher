@@ -12,12 +12,24 @@ an attribute whose statistic the player's provider does not measure. A filler
 zero is not a measurement of zero: percentiled against a league it lands on the
 floor, so a provider-wide absence rates every player in the game at the minimum
 for that attribute while the attributes that are supplied stay correct and make
-a spot check look fine. `PlayerStats.unsupplied` is what tells the two apart, and
-every test below that touches it is written so that collapsing the attribute to a
-constant fails it.
+a spot check look fine. `PlayerStats.unsupplied` is what tells the two apart --
+and this mapper does not read it.
+
+That is upstream's behaviour, it is wrong, and it is preserved deliberately.
+ESPN is this game's only provider and it measures neither duels nor dribbles, so
+`body_balance`, `technique` and `dribble` are the floor rating for every player
+in every patched ISO. A `CATEGORY_INPUTS` table and three position-and-age
+estimators fixed exactly that and have been removed: they wrote bytes no
+released build of this patcher ever produced, nothing in this repository has
+been validated against a real disc, and fidelity to the original beats
+correctness of the data. Measured, the gating moved 1 251 bytes across 32 Master
+League slots and made 150 of 150 synthetic leagues differ from upstream.
+
+The tests below therefore pin the collapse, and each one that does says so in
+its own docstring. Do not "fix" them.
 """
 
-from dataclasses import fields, replace
+from dataclasses import replace
 
 import pytest
 
@@ -254,22 +266,12 @@ SQUAD = [
 ]
 
 
-# What each of the three attributes rates to for `SQUAD`, in `SQUAD` order, once
-# the records say their zeros are filler. Named once because three tests assert
-# against them and a fourth asserts how many distinct values they hold.
-ESTIMATED = {
-    "body_balance": [6, 7, 5, 4, 5, 6, 5],
-    "dribble": [4, 3, 2, 7, 6, 7, 5],
-    "technique": [3, 4, 5, 6, 8, 6, 7],
-}
-
-
 def _squad_stats(unsupplied=()):
     """One `PlayerStats` per player in `SQUAD`, all identical but for the id.
 
-    Identical on purpose: every difference the tests below observe in
-    `body_balance`, `technique` or `dribble` therefore comes from the player's
-    position and age and from nothing else.
+    Identical on purpose: with every raw value tied, the percentile below any
+    of them is zero, so anything the tests below observe in `body_balance`,
+    `technique` or `dribble` is the floor rating and nothing else.
     """
     return {p.id: replace(_BASE_STATS, player_id=p.id, unsupplied=unsupplied) for p in SQUAD}
 
@@ -281,104 +283,66 @@ def _rate_squad(mapper, attribute, unsupplied=()):
     return [getattr(mapper.map_player(p, all_stats[p.id], percentiles), attribute) for p in SQUAD]
 
 
-# --- the table that connects a category to the fields it reads ---
+# --- what a declared absence does, which is nothing ---
 
 
-def test_every_category_the_mapper_percentiles_declares_its_inputs(mapper):
-    # The categories are built inside `_compute_percentiles`, so this runs the
-    # real thing rather than restating the list. A category present there and
-    # absent from `CATEGORY_INPUTS` raises `KeyError` on the live patch path; one
-    # present here and absent there is a rule that can never fire.
-    computed = mapper._compute_percentiles(_squad_stats())
-    assert set(computed) == set(StatMapper.CATEGORY_INPUTS)
+def test_a_provider_that_measures_no_duels_puts_the_whole_squad_on_the_floor(mapper):
+    """PINS UPSTREAM FIDELITY DELIBERATELY, and it is known to be wrong.
 
+    Every record carries `0` for duels and dribbles, every raw value therefore
+    ties at zero, nobody is below anybody, and the percentile is 0 for all seven
+    -- the minimum rating, for every player in the league. `technique` reads 2
+    rather than 1 for the two midfielders only because
+    `_apply_position_adjustments` hands them a +1 afterwards.
 
-def test_every_declared_input_is_a_field_that_exists_on_player_stats():
-    # A misspelt input name can never be found in `unsupplied`, so the category
-    # goes on being rated from filler and the bug looks fixed.
-    declared = {f.name for f in fields(PlayerStats)}
-    named = {name for inputs in StatMapper.CATEGORY_INPUTS.values() for name in inputs}
-    assert (named - declared) == set()
-
-
-def test_the_three_categories_ESPN_cannot_supply_are_exactly_the_estimated_ones():
-    # The claim the rest of this file rests on: these three categories, and only
-    # these three, read a field ESPN does not measure.
-    orphaned = {
-        category
-        for category, inputs in StatMapper.CATEGORY_INPUTS.items()
-        if set(inputs) & set(ABSENT_FROM_ESPN)
-    }
-    assert orphaned == {"body_balance", "technique", "dribble"}
-
-
-# --- an undeclared absence collapses the squad, a declared one does not ---
-
-
-def test_an_undeclared_absence_puts_the_whole_squad_on_the_floor(mapper):
-    # The bug, reproduced. Every record carries `0` for duels and dribbles and
-    # says nothing about it, so every raw value ties at zero, nobody is below
-    # anybody, and the percentile is 0 for all seven — the minimum rating, for
-    # every player in the league. `technique` reads 2 rather than 1 only because
-    # `_apply_position_adjustments` hands midfielders a +1 afterwards.
+    ESPN is this game's only provider and it measures none of these fields, so
+    this is what every patched ISO gets: three of fifteen attributes constant
+    across the whole game. The mapper knows better -- `PlayerStats.unsupplied`
+    names those four fields as filler -- and does not act on it, because acting
+    on it writes bytes no released build of this patcher ever produced and
+    nothing here has been validated against a real disc.
+    """
     assert _rate_squad(mapper, "body_balance") == [1, 1, 1, 1, 1, 1, 1]
     assert _rate_squad(mapper, "dribble") == [1, 1, 1, 1, 1, 1, 1]
     assert _rate_squad(mapper, "technique") == [1, 1, 1, 2, 2, 1, 1]
 
 
-def test_a_declared_absence_rates_the_squad_from_position_and_age(mapper):
-    # The fix. Same seven records, same zeros, one difference: they say the zeros
-    # are filler. Concrete values, not a range: `_estimate_body_balance` bases
-    # goalkeepers and defenders at 6 and everyone else at 5, adds one for the
-    # 25-30 peak and takes one off under 21 and over 33.
-    assert _rate_squad(mapper, "body_balance", ABSENT_FROM_ESPN) == ESTIMATED["body_balance"]
-    # `_estimate_dribble`: 3 for goalkeepers and defenders, 6 for the rest, plus
-    # one under 27 and minus one over 32.
-    assert _rate_squad(mapper, "dribble", ABSENT_FROM_ESPN) == ESTIMATED["dribble"]
-    # `_estimate_technique`: 4 and 6, minus one under 23 and plus one from 31,
-    # and then the midfielders' +1 from `_apply_position_adjustments` on top.
-    assert _rate_squad(mapper, "technique", ABSENT_FROM_ESPN) == ESTIMATED["technique"]
+@pytest.mark.parametrize("attribute", ["body_balance", "dribble", "technique"])
+def test_declaring_the_absence_changes_no_rating(mapper, attribute):
+    # The same seven records, the same zeros, one difference: they now say the
+    # zeros are filler. It makes no difference to a single byte, which is the
+    # whole content of the revert. A position-and-age estimator behind
+    # `unsupplied` used to make all three of these spread out.
+    assert _rate_squad(mapper, attribute, ABSENT_FROM_ESPN) == _rate_squad(mapper, attribute)
 
 
-@pytest.mark.parametrize(
-    ("attribute", "absent_field"),
-    [
-        ("body_balance", "duels_won"),
-        ("body_balance", "duels_total"),
-        ("technique", "dribbles_success"),
-        ("technique", "dribbles_attempts"),
-        ("dribble", "dribbles_success"),
-    ],
-)
-def test_one_absent_input_is_enough_to_stop_a_category_being_rated(mapper, attribute, absent_field):
-    # Every entry in `CATEGORY_INPUTS` has to be load-bearing on its own, and no
-    # test that declares all four ESPN absences at once can show that: with all
-    # four named, dropping any one name from the table changes nothing.
-    #
-    # It is not hypothetical which half goes missing. `body_balance` is
-    # `duels_won / max(duels_total, 1)`, so a provider that reports duels won and
-    # not duels contested gives that ratio a filler denominator of 1 and turns a
-    # count into a percentage a hundred times too large — a rating that is
-    # confidently wrong rather than merely floored.
-    assert _rate_squad(mapper, attribute, (absent_field,)) == ESTIMATED[attribute]
+@pytest.mark.parametrize("absent_field", list(ABSENT_FROM_ESPN))
+def test_declaring_one_field_absent_changes_no_rating_either(mapper, absent_field):
+    # One name at a time, because a test that declares all four at once cannot
+    # show that no single one of them is consulted.
+    assert _rate_squad(mapper, "body_balance", (absent_field,)) == [1, 1, 1, 1, 1, 1, 1]
 
 
-def test_the_declared_absence_is_what_produces_the_spread(mapper):
-    # The distinct-value counts, asserted rather than implied. A test that only
-    # checked the ratings were in 1..9 would pass on the floored squad above,
-    # which is the failure mode this whole file is written against.
-    assert len(set(_rate_squad(mapper, "body_balance"))) == 1
-    assert len(set(_rate_squad(mapper, "body_balance", ABSENT_FROM_ESPN))) == 4
-    assert len(set(_rate_squad(mapper, "dribble"))) == 1
-    assert len(set(_rate_squad(mapper, "dribble", ABSENT_FROM_ESPN))) == 6
-    assert len(set(_rate_squad(mapper, "technique"))) == 2
-    assert len(set(_rate_squad(mapper, "technique", ABSENT_FROM_ESPN))) == 6
+def test_the_three_collapsed_attributes_are_exactly_the_ones_espn_cannot_supply(mapper):
+    # The cost, named. Of the ten percentiled categories these three read a field
+    # ESPN does not measure, and they are the three that come out constant; the
+    # other seven vary, so the collapse is invisible in a spot check of a patched
+    # ISO. Recorded here so the size of the defect is written down somewhere.
+    collapsed = {
+        attribute
+        for attribute in ("body_balance", "dribble", "technique", "offensive", "defensive")
+        if len(set(_rate_squad(mapper, attribute, ABSENT_FROM_ESPN))) == 1
+    }
+    assert collapsed == {"body_balance", "dribble"}
+    # `technique` is not in the set only because of the midfielders' +1; it is
+    # still two values across seven players, and both come from a floored
+    # percentile rather than from anything measured.
+    assert len(set(_rate_squad(mapper, "technique", ABSENT_FROM_ESPN))) == 2
 
 
-def test_the_attributes_that_were_never_broken_are_untouched_by_the_fix(mapper):
-    # `offensive` and `defensive` read only fields ESPN does supply, and were
-    # already correct — which is why the collapse went unnoticed. Declaring the
-    # duel and dribble absences must not disturb them. All seven records are
+def test_the_attributes_espn_does_supply_are_unaffected_by_the_declaration(mapper):
+    # `offensive` and `defensive` read only fields ESPN does supply, so nothing
+    # about `unsupplied` could reach them either way. All seven records are
     # identical, so every player ties and percentiles to the floor; what varies
     # is `_apply_position_adjustments`, which gives the goalkeeper +2 defensive
     # and the two defenders +1.
@@ -387,16 +351,15 @@ def test_the_attributes_that_were_never_broken_are_untouched_by_the_fix(mapper):
     assert _rate_squad(mapper, "defensive", ABSENT_FROM_ESPN) == [3, 2, 2, 1, 1, 1, 1]
 
 
-# --- a real zero is still a real zero ---
+# --- a measured zero, and the unmeasured one it is indistinguishable from ---
 
 
-def test_a_player_who_genuinely_won_no_duels_still_rates_at_the_floor(mapper):
-    # The other half of the distinction. The fix must not launder a measured zero
-    # into a comfortable position-based guess: this player was in 310 duels and
-    # won none of them, his provider measured that, and he is the worst in the
-    # league at it. Ten records rather than three, because the percentile is
-    # `below / n` and the best of three is only the 67th — too near the middle of
-    # the table to be a contrast worth asserting.
+def test_a_player_who_genuinely_won_no_duels_rates_at_the_floor(mapper):
+    # The half that was never wrong: this player was in 310 duels and won none of
+    # them, his provider measured that, and he is the worst in the league at it.
+    # Ten records rather than three, because the percentile is `below / n` and
+    # the best of three is only the 67th -- too near the middle of the table to
+    # be a contrast worth asserting.
     measured = {
         pid: replace(_BASE_STATS, player_id=pid, duels_total=310, duels_won=(pid - 1) * 30)
         for pid in range(1, 11)
@@ -408,66 +371,61 @@ def test_a_player_who_genuinely_won_no_duels_still_rates_at_the_floor(mapper):
     winner = mapper.map_player(SQUAD[2], measured[10], percentiles)
     assert loser.body_balance == 1
     assert winner.body_balance == 8
-    # And the estimator was not consulted for either of them: it would have said
-    # 6 for this goalkeeper and 5 for this defender, which is neither answer.
-    assert mapper._estimate_body_balance(SQUAD[0]) == 6
-    assert mapper._estimate_body_balance(SQUAD[2]) == 5
 
 
-def test_an_unmeasured_player_is_left_out_of_the_ranking_and_not_ranked_last(mapper):
-    # Exclusion, not a zero: a record that does not measure duels must not appear
-    # in the duel ranking at all, or it is a non-answer competing with answers —
-    # and in a league where only some records lack the stat it drags every
-    # measured player's percentile up by sitting below them.
+def test_an_unmeasured_player_is_ranked_below_every_measured_one(mapper):
+    """PINS UPSTREAM FIDELITY DELIBERATELY, and it is known to be wrong.
+
+    Player 3's provider did not measure duels, and he is ranked on the filler
+    zero anyway: bottom of the table, indistinguishable from the player above
+    who was measured and won none. He also counts towards `n`, so in this
+    mixed-provider league the two measured players are percentiled against a
+    population of three rather than two and the better of them reads 66.7%
+    instead of 50%. Leaving him out was tried and is reverted -- excluding him
+    changes the ratings of players who *were* measured, which is a change to the
+    bytes for every one of them.
+    """
     mixed = {
         1: replace(_BASE_STATS, player_id=1, duels_total=310, duels_won=100),
         2: replace(_BASE_STATS, player_id=2, duels_total=310, duels_won=200),
         3: replace(_BASE_STATS, player_id=3, unsupplied=ABSENT_FROM_ESPN),
     }
     percentiles = mapper._compute_percentiles(mixed)
-    assert sorted(percentiles["body_balance"]) == [1, 2]
-    # Two ranked players, so the better of them is above one of two: 50%, not the
-    # 66.7% that a third body in the population would have given him.
-    assert percentiles["body_balance"] == {1: 0.0, 2: 50.0}
-    # And the categories he does measure keep him in.
-    assert sorted(percentiles["offensive"]) == [1, 2, 3]
+    assert sorted(percentiles["body_balance"]) == [1, 2, 3]
+    assert percentiles["body_balance"] == {1: 33.33333333333333, 2: 66.66666666666666, 3: 0.0}
 
 
-# --- the estimators themselves ---
+# --- the estimators that remain ---
 
 
-# Attribute, its estimator, and an age that sits in none of that estimator's
-# adjustment bands — 23 is neither under 21 nor 25-to-30, 25 is neither under 23
-# nor over 30, 29 is neither under 27 nor over 32. No single age is neutral for
-# all three, which is itself the point: each carries its own age curve.
-_NEUTRAL_AGES = [
-    ("body_balance", "_estimate_body_balance", 23),
-    ("technique", "_estimate_technique", 25),
-    ("dribble", "_estimate_dribble", 29),
-]
+@pytest.mark.parametrize(
+    ("estimator", "expected"),
+    [
+        # Goalkeeper, Defender, Midfielder, Attacker, in that order.
+        ("_estimate_jump", [7, 6, 5, 5]),
+        ("_estimate_heading", [5, 6, 5, 5]),
+        ("_estimate_curve", [3, 3, 5, 5]),
+    ],
+)
+def test_the_surviving_estimators_keep_their_position_tables(mapper, estimator, expected):
+    # Five attributes have no statistic behind them at all in either tree --
+    # speed, acceleration, jump power, heading and curve -- and are estimated
+    # from position and age. Those five are upstream's own and are untouched;
+    # the three that estimated `body_balance`, `technique` and `dribble` were
+    # this port's and are gone.
+    positions = ["Goalkeeper", "Defender", "Midfielder", "Attacker"]
+    rated = [
+        getattr(mapper, estimator)(Player(id=1, name="X", position=p, age=26)) for p in positions
+    ]
+    assert rated == expected
 
 
-@pytest.mark.parametrize("position", ["Goalkeeper", "Defender", "Midfielder", "Attacker"])
-@pytest.mark.parametrize(("attribute", "estimator", "age"), _NEUTRAL_AGES)
-def test_an_estimator_agrees_with_the_no_stats_fallback_where_age_says_nothing(
-    mapper, position, attribute, estimator, age
-):
-    # Two paths lead to "this was not measured": no record at all, which
-    # `_fallback_attributes` answers, and a record whose provider does not
-    # measure this, which the estimators answer. They must not disagree about the
-    # same player for no reason, so each estimator's position base is the number
-    # `FALLBACK_ATTRS` already used.
-    player = Player(id=1, name="X", position=position, age=age)
-    assert getattr(mapper, estimator)(player) == StatMapper.FALLBACK_ATTRS[position][attribute]
-
-
-def test_the_technique_estimator_reproduces_the_fallback_age_rule_exactly(mapper):
-    # `_fallback_attributes` already adjusts `technique` for age; the estimator
-    # must not invent a second, different curve for the same attribute. Every
-    # band, including the two the fallback treats alike.
-    for age in (18, 22, 23, 24, 30, 31, 33, 34, 39):
-        player = Player(id=1, name="X", position="Attacker", age=age)
-        assert mapper._estimate_technique(player) == mapper._fallback_attributes(player).technique
+def test_the_speed_estimator_carries_its_age_curve(mapper):
+    # Concrete numbers, because a range would pass on a constant. Attacker base
+    # 6, plus one under 25 and minus one over 32.
+    assert mapper._estimate_speed(Player(id=1, name="X", position="Attacker", age=22)) == 7
+    assert mapper._estimate_speed(Player(id=2, name="Y", position="Attacker", age=28)) == 6
+    assert mapper._estimate_speed(Player(id=3, name="Z", position="Attacker", age=35)) == 5
 
 
 def test_an_unknown_position_still_gets_a_rating_from_every_estimator(mapper):
@@ -475,26 +433,16 @@ def test_an_unknown_position_still_gets_a_rating_from_every_estimator(mapper):
     # `map_player` is public and a caller can hand over anything. The `.get`
     # defaults are what keep that a number rather than a `KeyError`.
     player = Player(id=1, name="X", position="Sweeper", age=24)
-    assert mapper._estimate_body_balance(player) == 5
-    assert mapper._estimate_technique(player) == 5
-    assert mapper._estimate_dribble(player) == 6
+    assert mapper._estimate_speed(player) == 6
+    assert mapper._estimate_jump(player) == 5
+    assert mapper._estimate_heading(player) == 5
+    assert mapper._estimate_curve(player) == 4
 
 
-def test_an_estimate_is_clamped_into_the_roms_one_to_nine_scale(mapper):
-    # The ROM stores a nibble-scale value and `_apply_position_adjustments`
-    # clamps afterwards, but an estimator that returned 0 for a teenage
-    # goalkeeper would be a bug in the estimator, not something to be papered
-    # over downstream.
-    teenager = Player(id=1, name="X", position="Midfielder", age=17)
-    assert mapper._estimate_body_balance(teenager) == 4
-    veteran = Player(id=2, name="Y", position="Goalkeeper", age=40)
-    assert mapper._estimate_dribble(veteran) == 2
-
-
-def test_a_player_with_no_stats_at_all_still_takes_the_untouched_fallback(mapper):
-    # The estimators are reached from `_rate`, which only runs for a player who
-    # has a record. A player with none takes `_fallback_attributes`, which is
-    # ported code the estimators deliberately leave alone.
+def test_a_player_with_no_stats_at_all_takes_the_fallback_attributes(mapper):
+    # A player with no record at all is the one case that never reaches a
+    # percentile: `map_player` returns `_fallback_attributes` outright, which is
+    # ported code and carries its own position table.
     attrs = mapper.map_player(SQUAD[3], None, {})
     assert attrs.body_balance == 5
     assert attrs.dribble == 6
@@ -504,15 +452,18 @@ def test_a_player_with_no_stats_at_all_still_takes_the_untouched_fallback(mapper
 # --- through the mapper's own entry point ---
 
 
-def test_a_whole_squad_mapped_with_absent_duel_data_is_not_uniformly_clumsy(mapper):
-    # `map_team_with_league_context` is what `map_rosters` calls, and it is where
-    # the collapse actually reached the ROM. Asserting the multiset of ratings
-    # rather than a per-player list, because `_select_best_22` reorders.
+def test_a_whole_squad_mapped_with_absent_duel_data_is_uniformly_clumsy(mapper):
+    """PINS UPSTREAM FIDELITY DELIBERATELY, and it is known to be wrong.
+
+    `map_team_with_league_context` is what `map_rosters` calls, so this is the
+    shape that reaches the ISO. Asserting the multiset rather than a per-player
+    list, because `_select_best_22` reorders.
+    """
     all_stats = _squad_stats(ABSENT_FROM_ESPN)
     roster = TeamRoster(
         team=Team(id=100, name="Utd", code="UTD"), players=SQUAD, player_stats=all_stats
     )
     record = mapper.map_team_with_league_context(roster, [roster])
-    assert sorted(p.attributes.body_balance for p in record.players) == [4, 5, 5, 5, 6, 6, 7]
-    assert sorted(p.attributes.dribble for p in record.players) == [2, 3, 4, 5, 6, 7, 7]
-    assert sorted(p.attributes.technique for p in record.players) == [3, 4, 5, 6, 6, 7, 8]
+    assert sorted(p.attributes.body_balance for p in record.players) == [1, 1, 1, 1, 1, 1, 1]
+    assert sorted(p.attributes.dribble for p in record.players) == [1, 1, 1, 1, 1, 1, 1]
+    assert sorted(p.attributes.technique for p in record.players) == [1, 1, 1, 1, 1, 2, 2]

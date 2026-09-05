@@ -94,10 +94,15 @@ _CODE_TO_LEAGUE = {item["code"]: item for item in ESPN_LEAGUES}
 # `_parse_athlete_stats`; the document carries 96 fields and none of them counts
 # duels contested, duels won, dribbles attempted or dribbles completed.
 #
-# This is what every record built here declares in `PlayerStats.unsupplied`, and
-# it is the difference between an attribute derived from position and age and an
-# attribute that percentiles a filler zero to the floor of the whole league. See
-# `games/we2002/stat_mapper.py`'s `CATEGORY_INPUTS`.
+# This is what every record built here declares in `PlayerStats.unsupplied`.
+#
+# Declaring it is all this client does; whether a consumer acts on it is the
+# consumer's decision, and the two soccer consumers decide differently.
+# `games/iss_snes/stat_mapper.py` gates on it, and it costs nothing there --
+# the audit measured its optional inputs and this tuple to be disjoint.
+# `games/we2002/stat_mapper.py` deliberately ignores it, and says why: acting on
+# it changes bytes away from what the original patcher wrote, and three
+# permanently floored attributes are the price of that fidelity.
 SOCCER_UNSUPPLIED_STATS = (
     "duels_total",
     "duels_won",

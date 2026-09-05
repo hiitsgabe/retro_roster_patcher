@@ -892,15 +892,18 @@ def test_the_declared_absences_are_exactly_the_fields_left_at_zero(tmp_path):
     assert stats.dribbles_success == 0
 
 
-def test_the_client_and_the_mapper_agree_on_which_categories_are_orphaned():
-    # The two constants are declared in different packages and neither imports
-    # the other. This is what keeps them describing the same three attributes.
-    orphaned = {
-        category
-        for category, inputs in StatMapper.CATEGORY_INPUTS.items()
-        if set(inputs) & set(espn.SOCCER_UNSUPPLIED_STATS)
-    }
-    assert orphaned == {"body_balance", "technique", "dribble"}
+def test_the_mapper_this_constant_describes_does_not_read_it():
+    # `StatMapper` had a `CATEGORY_INPUTS` table naming the `PlayerStats` fields
+    # each rating category reads, and gated on the intersection of that table
+    # with this constant. It was removed to restore the original patcher's
+    # bytes, and this pins the removal so the cross-package claim above cannot
+    # rot into a reference to something that is gone.
+    #
+    # The consequence is in `tests/games/we2002/test_stat_mapper.py`:
+    # `body_balance`, `technique` and `dribble` percentile a filler zero to the
+    # floor for every player in the league. That is upstream's behaviour, it is
+    # wrong, and it is preserved deliberately.
+    assert hasattr(StatMapper, "CATEGORY_INPUTS") is False
 
 
 # --- the records differ where the documents differ ---
