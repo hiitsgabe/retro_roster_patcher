@@ -4,6 +4,9 @@ on:
   push:
     tags:
       - "v*"
+  # The TestPyPI dry run. Manual only: a dry run that fired on every tag would
+  # race the real publish and burn the version on TestPyPI either way.
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -23,8 +26,10 @@ jobs:
 
       # The tag and the packaged version must agree. Publishing v0.2.0 from a
       # tree still declaring 0.1.0 uploads a file no tag points at, and PyPI
-      # will not let that filename be replaced.
+      # will not let that filename be replaced. Skipped on workflow_dispatch,
+      # where there is no tag to compare against.
       - name: Check the tag matches the declared version
+        if: github.event_name == 'push'
         run: |
           tag="${GITHUB_REF_NAME#v}"
           declared=$(python -c "import tomllib,pathlib;print(tomllib.loads(pathlib.Path('pyproject.toml').read_text())['project']['version'])")
@@ -44,13 +49,30 @@ jobs:
           name: dist
           path: dist/
 
-  publish:
+  publish-testpypi:
     needs: build
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
-    environment: pypi
+    environment: testpypi
     permissions:
       # Mints the short-lived OIDC token a Trusted Publisher exchanges for an
       # upload token. No API token is stored in this repository.
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+
+  publish:
+    needs: build
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
       id-token: write
     steps:
       - uses: actions/download-artifact@v4
