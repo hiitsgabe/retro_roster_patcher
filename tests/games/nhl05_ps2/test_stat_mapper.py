@@ -43,7 +43,6 @@ from retro_roster_patcher.games.nhl05_ps2.stat_mapper import (
     NHL05StatMapper,
     _clamp,
     _defaults_for,
-    _save_percentage,
     _scale,
     _stat,
 )
@@ -481,11 +480,19 @@ def test_a_save_percentage_at_the_bottom_bottoms_out():
     assert goalie(**{"SV%": 0.880}).rebound_ctrl == 0
 
 
-def test_a_percentage_reported_as_a_whole_number_no_longer_saturates():
-    # THE DIVERGENCE. This used to assert 63: `91.2` and `0.999` were
-    # indistinguishable to the scale and every goalie came out maximal.
-    # `_save_percentage` converts, and `0.912` is 40 of 63.
-    assert goalie(**{"SV%": 91.2}).rebound_ctrl == 40
+def test_a_percentage_reported_as_a_whole_number_saturates():
+    # PINS UPSTREAM FIDELITY DELIBERATELY, and this is the bug: `91.2` and
+    # `0.999` are indistinguishable to the scale and every goalie in such a file
+    # comes out maximal. A conversion used to sit here; do not put it back. A
+    # rating byte the source did not write is a hardware risk, and no disc has
+    # ever checked this port's output.
+    assert goalie(**{"SV%": 91.2}).rebound_ctrl == 63
+
+
+def test_a_fraction_still_lands_in_the_middle_of_the_window():
+    # Pins the test above: the fraction reading is untouched, so "saturates" is
+    # not satisfied by a scale that saturates on everything.
+    assert goalie(**{"SV%": 0.912}).rebound_ctrl == 40
 
 
 def test_shot_recovery_is_three_below_the_save_rating():
@@ -512,29 +519,16 @@ def test_four_wins_is_one_point_of_bonus():
     assert goalie(W=4).endurance == 36
 
 
-def test_a_save_percentage_below_one_is_read_as_a_fraction():
-    assert _save_percentage({"SV%": 0.912}) == 0.912
+def test_an_absent_save_percentage_reads_as_zero():
+    assert _stat({}, "SV%") == 0.0
 
 
-def test_a_save_percentage_above_one_is_read_as_a_percentage():
-    assert _save_percentage({"SV%": 91.2}) == 0.912
-
-
-def test_a_perfect_game_reads_as_one_under_either_convention():
-    assert [_save_percentage({"SV%": 1.0}), _save_percentage({"SV%": 100.0})] == [1.0, 1.0]
-
-
-def test_an_absent_save_percentage_is_still_zero():
-    assert _save_percentage({}) == 0.0
-
-
-def test_a_percentage_save_line_would_have_saturated_the_scale():
-    # The behaviour being diverged from, in the module's own `_scale`.
+def test_a_percentage_save_line_saturates_the_scale():
+    # The arithmetic behind the ratings below, in the module's own `_scale`.
     assert _scale(91.2, 0.880, 0.930) == 63
 
 
-def test_a_percentage_save_line_now_lands_where_the_fraction_does():
-    # 0.912 is 64% of the way up a 0.880-0.930 window, so 40 of 63.
+def test_a_percentage_save_line_maxes_the_five_ratings_that_take_it_raw():
     attrs = goalie(**{"SV%": 91.2})
     assert [
         attrs.rebound_ctrl,
@@ -542,19 +536,60 @@ def test_a_percentage_save_line_now_lands_where_the_fraction_does():
         attrs.five_hole,
         attrs.glove_high,
         attrs.glove_low,
-    ] == [40, 40, 40, 40, 40]
+    ] == [63, 63, 63, 63, 63]
 
 
-def test_the_two_conventions_produce_the_same_goalie():
-    assert goalie(**{"SV%": 91.2}) == goalie(**{"SV%": 0.912})
+def test_the_offset_save_ratings_saturate_at_their_own_offsets():
+    # The other five of the **ten** ratings `SV%` drives. Not all 63: three have
+    # a constant subtracted, which is why the divergence note that said "63 for
+    # all eight" was wrong twice over.
+    attrs = goalie(**{"SV%": 91.2})
+    assert [
+        attrs.shot_recovery,
+        attrs.stick_high,
+        attrs.stick_low,
+        attrs.intensity,
+        attrs.potential,
+    ] == [60, 61, 61, 58, 63]
 
 
-def test_a_file_that_mixes_the_two_conventions_still_starts_the_better_goalie():
-    # Why `select_roster`'s goalie key goes through `_save_percentage`: within
-    # one convention the two keys agree, across two they do not. `91.2` scores
-    # 91 200 against `0.930`'s 930 through `_stat`.
+def test_exactly_ten_goalie_ratings_move_with_the_save_percentage():
+    # Derived by moving `SV%` and nothing else, so it cannot be satisfied by
+    # naming the ratings.
+    low = goalie(**{"SV%": 0.880})
+    high = goalie(**{"SV%": 0.930})
+    moved = sorted(k for k, v in vars(low).items() if v != getattr(high, k))
+    assert moved == [
+        "agility",
+        "five_hole",
+        "glove_high",
+        "glove_low",
+        "intensity",
+        "potential",
+        "rebound_ctrl",
+        "shot_recovery",
+        "stick_high",
+        "stick_low",
+    ]
+
+
+def test_the_two_conventions_produce_different_goalies():
+    assert goalie(**{"SV%": 91.2}) != goalie(**{"SV%": 0.912})
+
+
+def test_a_file_that_mixes_the_two_conventions_starts_the_worse_goalie():
+    # PINS UPSTREAM FIDELITY DELIBERATELY. `select_roster`'s goalie key reads
+    # `SV%` raw as well, so `91.2` scores 91 200 against `0.930`'s 930 and the
+    # worse of the two is put in net.
     goalies = [player(id=1, position="G"), player(id=2, position="G")]
     stats = {"1": {"SV%": 91.2}, "2": {"SV%": 0.930}}
+    assert [p.id for p in MAPPER.select_roster(goalies, stats)] == [1, 2]
+
+
+def test_within_one_convention_the_better_goalie_still_starts():
+    # Which is why nothing caught the line above.
+    goalies = [player(id=1, position="G"), player(id=2, position="G")]
+    stats = {"1": {"SV%": 0.880}, "2": {"SV%": 0.930}}
     assert [p.id for p in MAPPER.select_roster(goalies, stats)] == [2, 1]
 
 
