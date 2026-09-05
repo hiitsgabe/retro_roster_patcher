@@ -96,7 +96,11 @@ def test_the_game_has_sixty_four_line_flags():
 
 
 def test_no_line_flag_is_listed_twice():
-    # The NHL 07 source listed `31LD` twice; this game's list does not repeat.
+    # CORRECTION: this comment used to say the NHL 07 source listed `31LD`
+    # twice. It does not. That source's list is thirty names, all thirty
+    # distinct, and `games/nhl07_psp/rom_writer.py` carries the same thirty in
+    # the same order. Nothing about this game's list depends on that, but a
+    # false claim about the source is exactly what a port audit acts on.
     assert len(set(LINE_FLAGS)) == 64
 
 
@@ -121,6 +125,44 @@ def test_the_flag_list_names_five_situations_for_each_position():
     assert sorted(left_defence) == sorted(
         ["31LD", "41LD", "K1LD", "L1LD", "P1LD", "32LD", "42LD", "K2LD", "L2LD", "P2LD", "L3LD"]
     )
+
+
+def test_the_three_family_carries_a_centre():
+    """`31C_` and `32C_` exist, and a defence pair has no centre.
+
+    This is the fact that tells the two games' `3n` prefixes apart without a
+    real disc. Here the `3` family is `{C_, LD, RD}` -- three skaters, a
+    five-on-three unit. On NHL 07 it is `{LD, RD}` and nothing else, which is a
+    pair; `tests/games/nhl07_psp/test_rom_writer.py` states that half. So
+    `31LD` is a defenceman on the five-on-three unit *here* and defence pair one
+    *there*, and one `stat_mapper.generate_team_line_flags` cannot be right for
+    both.
+    """
+    assert sorted({flag[2:] for flag in LINE_FLAGS if flag[0] == "3"}) == ["C_", "LD", "RD"]
+
+
+def test_the_three_family_has_two_units_not_three():
+    # Two five-on-three units, which is why there is no `33` anything -- not
+    # just no `33LD`. A third *pair* would have had one.
+    assert sorted({flag[:2] for flag in LINE_FLAGS if flag[0] == "3"}) == ["31", "32"]
+
+
+def test_the_four_family_carries_four_skaters():
+    # The rest of the ladder, so the reading above is a system and not one
+    # convenient group: `4n` is four-on-four, four skaters, no right wing.
+    assert sorted({flag[2:] for flag in LINE_FLAGS if flag[0] == "4"}) == ["C_", "LD", "LW", "RD"]
+
+
+def test_the_even_strength_family_carries_five_skaters():
+    # And `L` is the full five, which is what makes `L1LD`..`L3RD` the
+    # even-strength defence pairs rather than another special-teams unit.
+    assert sorted({flag[2:] for flag in LINE_FLAGS if flag[0] == "L"}) == [
+        "C_",
+        "LD",
+        "LW",
+        "RD",
+        "RW",
+    ]
 
 
 def test_the_game_has_two_flags_the_mapper_never_emits():

@@ -161,6 +161,74 @@ def test_the_defence_pairs_are_numbered_not_lettered():
     ]
 
 
+def test_the_list_is_the_sources_thirty_names_in_the_sources_order():
+    """Transcribed from `nhl07_psp_patcher/rom_writer.py`, not from the port.
+
+    The one assertion here that fails if a future port audit "restores" an
+    `L1LD` to this game. There is nothing to restore: the source's list is these
+    thirty and no others, and `L1LD` appears exactly once in the whole source
+    tree, in a *different* game's writer. Written out in full rather than
+    derived, because every derivation above this line is satisfied by more than
+    one list and a reordering would pass all of them.
+    """
+    assert LINE_FLAGS == [
+        "L1C_",
+        "L2C_",
+        "L3C_",
+        "L4C_",
+        "L1LW",
+        "L2LW",
+        "L3LW",
+        "L4LW",
+        "L1RW",
+        "L2RW",
+        "L3RW",
+        "L4RW",
+        "31LD",
+        "32LD",
+        "33LD",
+        "31RD",
+        "32RD",
+        "33RD",
+        "G1__",
+        "G2__",
+        "H1__",
+        "H2__",
+        "H3__",
+        "H4__",
+        "H5__",
+        "S1__",
+        "S2__",
+        "S3__",
+        "S4__",
+        "S5__",
+    ]
+
+
+def test_no_flag_uses_nhl05s_lettered_defence_spelling():
+    assert [f for f in LINE_FLAGS if f in ("L1LD", "L2LD", "L3LD", "L1RD", "L2RD", "L3RD")] == []
+
+
+def test_every_numbered_flag_is_a_defence_slot():
+    """The evidence that `3n` is a defence *pair* on this game and not a unit.
+
+    Group the list by prefix and read off which position suffixes each prefix
+    carries. Here the numbered family carries `LD` and `RD` and nothing else --
+    a pair. NHL 05's numbered family carries `31C_` as well, which is what makes
+    it a three-skater strength unit there; see
+    `tests/games/nhl05_ps2/test_rom_writer.py`. Same prefix, two games, two
+    meanings, which is why one mapper cannot serve both.
+    """
+    assert sorted({flag[2:] for flag in LINE_FLAGS if flag[0].isdigit()}) == ["LD", "RD"]
+
+
+def test_there_are_three_numbered_groups_and_no_more():
+    # Three pairs, because a dressed NHL side ices three. If `3n` were a
+    # strength unit there would be no even-strength defence flag in this list at
+    # all and the game could not pair a defenceman.
+    assert sorted({flag[:2] for flag in LINE_FLAGS if flag[0].isdigit()}) == ["31", "32", "33"]
+
+
 def test_the_progress_spans_are_ordered():
     assert PROGRESS_COPY_END < PROGRESS_RECORDS_END
 
