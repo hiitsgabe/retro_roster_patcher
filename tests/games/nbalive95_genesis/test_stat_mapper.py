@@ -389,8 +389,45 @@ def test_a_missing_jersey_number_becomes_zero(mapper):
 
 
 def test_a_mapped_record_carries_no_season_stats_of_its_own(mapper):
-    """INHERITED DEFECT, pinned: 17 zeros, which the writer puts over the ROM's."""
+    """PRESERVED, pinned: 17 zeros, which the writer puts over the ROM's.
+
+    Zero is the null season line and this port writes it deliberately; the
+    docstring on `map_player` sets out the three options and why. Repairing it
+    needs a provider that publishes season *totals*, so a change here would
+    show up as this test failing.
+    """
     assert mapper.map_player(_player(), {"PTS": 30.0}).season_stats == [0] * 17
+
+
+def test_no_espn_leaders_key_reaches_the_season_stat_block(mapper):
+    """Every category `_map_stats_to_ratings` documents, supplied at once.
+
+    Not vacuous: the same line moves all sixteen ratings off the position
+    defaults, so the mapper really is reading it -- and still puts none of it in
+    the 17 fields the ROM keeps a season line in.
+    """
+    line = {
+        "PTS": 28.4,
+        "REB": 9.1,
+        "AST": 7.2,
+        "STL": 1.9,
+        "BLK": 1.4,
+        "FG%": 52.1,
+        "3P%": 39.4,
+        "FT%": 88.0,
+        "ORPG": 2.2,
+        "DRPG": 6.9,
+        "3PM": 3.1,
+        "MPG": 36.5,
+        "PER": 27.3,
+        "TO": 3.0,
+        "PFPG": 2.1,
+    }
+    record = mapper.map_player(_player(position="SF"), line)
+    assert record.season_stats == [0] * 17
+    defaults = POSITION_DEFAULTS[POSITION_SF]
+    moved = [i for i, value in enumerate(record.ratings) if value != defaults[i]]
+    assert moved == list(range(16))
 
 
 def test_a_mapped_record_carries_no_appearance_at_all(mapper):

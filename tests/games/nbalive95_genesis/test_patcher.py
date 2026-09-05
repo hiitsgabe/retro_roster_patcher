@@ -764,6 +764,24 @@ def test_a_patched_team_keeps_the_twelve_different_faces_the_cartridge_shipped_w
     ]
 
 
+def test_a_patched_team_loses_the_season_line_the_cartridge_shipped_with(patcher, rom, out):
+    """PRESERVED, end to end, on the bytes right beside the two above.
+
+    Zero is the null season line and writing it is this port's deliberate
+    answer -- `stat_mapper.map_player` sets out the three options. The
+    unpatched team in the same image keeps its 1994 numbers, so this is a
+    property of being patched and not of the fixture.
+    """
+    patcher.patch(rom_path=rom, output_path=out, rosters=_mapped((CHI_SLOT, 12)))
+    patched = _read_back(out, CHI_SLOT)
+    assert [player["season_stats"] for player in patched] == [[0] * 17] * 12
+    untouched = _read_back(out, BOS_SLOT)
+    assert [player["season_stats"] for player in untouched] == [
+        fixture.player_season_stats(BOS_SLOT, slot) for slot in range(12)
+    ]
+    assert fixture.player_season_stats(CHI_SLOT, 0) != [0] * 17
+
+
 def test_an_unpatched_slot_keeps_the_roster_the_cartridge_shipped_with(patcher, rom, out):
     patcher.patch(rom_path=rom, output_path=out, rosters=_mapped((CHI_SLOT, 12)))
     roster = _read_back(out, BOS_SLOT)
