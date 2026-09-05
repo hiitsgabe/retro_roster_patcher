@@ -3,10 +3,9 @@
 Offset constants sourced from:
   https://github.com/thyddralisk/WE2002-editor-2.0 (edDlg.cpp)
 
-Team NAME reading is omitted for now because WE2002 stores names as variable-
-length strings (lengths tracked in a parallel array).  Instead, read_team_slots()
-returns 32 placeholder slot entries that let the UI and patcher work correctly
-without the actual in-ROM names.
+In-ROM team names are variable-length strings whose byte lengths live in a
+parallel array (lun_nomi1[]), so they are not read; `read_team_slots` returns
+placeholder slot entries instead.
 """
 
 import os
@@ -61,7 +60,6 @@ class RomReader:
         """Return True if the file looks like a WE2002 PS1 BIN image."""
         if self._size < _MIN_VALID_SIZE:
             return False
-        # Accept the known exact size or any large BIN that might be a valid dump
         return True
 
     def read_teams(self) -> list[WETeamRecord]:
@@ -75,11 +73,8 @@ class RomReader:
     def read_team_slots(self) -> list[WETeamSlot]:
         """Return 32 generic Master League slot entries.
 
-        The actual in-ROM team names are stored as variable-length strings whose
-        per-entry byte lengths are tracked in a parallel C array (lun_nomi1[]).
-        Reading them correctly requires parsing that length table first, which is
-        not yet implemented.  Generic numbered labels are used instead so the
-        slot-mapping UI works without misleading the user with invented names.
+        Labels are numbered, not read from the ROM: the real names need the
+        lun_nomi1[] length table parsed first.
         """
         return [
             WETeamSlot(
@@ -148,7 +143,6 @@ class RomReader:
         return b""
 
     def get_rom_info(self) -> RomInfo:
-        """Return RomInfo for this ROM."""
         valid = self.validate_rom()
         slots = self.read_team_slots() if valid else []
         palettes = self.read_slot_palettes() if valid else []

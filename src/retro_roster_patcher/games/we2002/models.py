@@ -2,7 +2,6 @@
 
 from dataclasses import dataclass, field
 
-# Re-export shared sports models so existing imports keep working
 from ...sports.models import (  # noqa: F401
     League,
     LeagueData,
@@ -36,10 +35,8 @@ class WEPlayerAttributes:
 
 @dataclass
 class WEPlayerRecord:
-    """Complete player record ready to write to ROM."""
-
-    last_name: str  # Truncated to max ROM length
-    first_name: str  # Truncated to max ROM length
+    last_name: str
+    first_name: str
     position: int  # 0=GK, 1=DF, 2=MF, 3=FW
     shirt_number: int
     attributes: WEPlayerAttributes = field(default_factory=WEPlayerAttributes)
@@ -47,8 +44,6 @@ class WEPlayerRecord:
 
 @dataclass
 class WETeamRecord:
-    """Complete team record ready to write to ROM."""
-
     name: str
     short_name: str
     kit_home: tuple[int, int, int] = (255, 255, 255)  # RGB
@@ -63,8 +58,6 @@ class WETeamRecord:
 
 @dataclass
 class WETeamSlot:
-    """Represents an existing team slot in the ROM."""
-
     index: int
     current_name: str
     league_group: str  # "League A", "League B", etc.
@@ -72,8 +65,6 @@ class WETeamSlot:
 
 @dataclass
 class SlotMapping:
-    """Maps a real team to a WE2002 ROM slot."""
-
     real_team: Team
     slot_index: int
     slot_name: str
@@ -82,8 +73,6 @@ class SlotMapping:
 
 @dataclass
 class SlotPalette:
-    """Jersey palette extracted from a ROM slot."""
-
     slot_type: str  # "national" or "ml"
     slot_index: int  # 0-62 for national, 0-31 for ML
     primary: tuple[int, int, int] = (0, 0, 0)  # RGB
@@ -93,8 +82,6 @@ class SlotPalette:
 
 @dataclass
 class RomInfo:
-    """Information about a loaded WE2002 ROM."""
-
     path: str
     size: int
     version: str  # Detected WE2002 variant

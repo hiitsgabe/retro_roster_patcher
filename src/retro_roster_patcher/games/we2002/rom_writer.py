@@ -36,9 +36,7 @@ def _sync(f):
     os.fsync(f.fileno())
 
 
-# ---------------------------------------------------------------------------
-# Absolute byte offsets in the Mode2/2352 BIN (from WE2002-editor-2.0 source)
-# ---------------------------------------------------------------------------
+# Absolute byte offsets in the Mode2/2352 BIN (from WE2002-editor-2.0 source).
 
 # Master League player NAME sections (10 bytes per player)
 _OFS_NOMI_GML = 2_006_288  # ML player names, section 1: players 0–203
@@ -115,9 +113,7 @@ _OFS_ANT_MAGLIE1 = 2_669_544  # Continuation after sector boundary (team 30)
 _OFS_NOMI_SQK = 2_002_316  # Kanji names start (ML reverse, then nationals reverse)
 _OFS_NOMI_SQK1 = 2_003_928  # Sector boundary continuation (national i=58 split)
 
-# ---------------------------------------------------------------------------
-# Sector boundary crossing points (from C++ switch-case indices)
-# ---------------------------------------------------------------------------
+# Sector boundary crossing points (from C++ switch-case indices).
 
 _NOME_LAST_GML = 203
 _NOME_LAST_GML2 = 407
@@ -152,10 +148,6 @@ _NAT_CARAT_STRADDLES = {
     1409: (8, 4, _OFS_CARAT_G9),
 }
 
-# ---------------------------------------------------------------------------
-# ROM constants
-# ---------------------------------------------------------------------------
-
 _SQUADRE_ML = 32
 _SQUADRE_NAZ = 63  # National + allstar teams
 _GIOCATORI_NC = 462
@@ -164,10 +156,6 @@ _NOME_SIZE = 10
 _CARAT_SIZE = 12
 
 _POS_MAP = {0: 0, 1: 1, 2: 3, 3: 6}
-
-# ---------------------------------------------------------------------------
-# 3D jersey TEX file constants (CD filesystem)
-# ---------------------------------------------------------------------------
 
 _TEX_BASE_LBA = 8400  # LBA of TEX_00.BIN on CD
 _TEX_LBA_STRIDE = 20  # Each TEX allocated 20 sectors
@@ -178,11 +166,9 @@ _TEX_MAX_BYTES = 20 * 2048  # 40960 bytes max per TEX slot
 _BIN_DIR_LBA = 2925
 _BIN_DIR_SIZE = 12288
 
-# Known home shirt colors from the 2D maglia palette (entry 2, BGR555→RGB888).
-# TEX 0-62 = national/allstar, TEX 63-94 = Master League.
-# Dominant shirt color = most frequent RGB among maglia entries 2-7.
-# Known home jersey colors for each TEX slot (real-world 2001-02 kits).
-# National teams use real kit colors; ML teams use the real club counterpart.
+# Home shirt colour per TEX slot, taken from the 2D maglia palette (entry 2,
+# BGR555→RGB888): the most frequent RGB among maglia entries 2-7.
+# TEX 0-62 = national/allstar (real 2001-02 kits), TEX 63-94 = Master League.
 _TEX_JERSEY_COLORS = {
     # --- National teams (0-53) ---
     0: (0, 128, 48),  # Ireland — green
@@ -286,16 +272,10 @@ _TEX_JERSEY_COLORS = {
     94: (16, 57, 140),  # Patagonia (≈Basel) — dark blue
 }
 
-# ---------------------------------------------------------------------------
-# Hardcoded name length tables from WE2002-editor-2.0 (edDlg.cpp lines 639-709)
-#
-# 95 entries each: indices 0-62 = national/allstar, indices 63-94 = 32 ML teams.
-# The C++ writes ML teams in reverse: squad_ml[31-i] uses lun_nomiN[94-i].
-# For our slot_index (0-31), the array index is: 63 + slot_index.
-# But ROM write order is reversed: slot_index maps to lun_nomi index 94-rom_i
-# where rom_i = 31-slot_index.  So: lun_index = 94 - (31 - slot_index) = 63 + slot_index.
-# ---------------------------------------------------------------------------
-
+# Name length tables from WE2002-editor-2.0 (edDlg.cpp lines 639-709).
+# 95 entries each: 0-62 = national/allstar, 63-94 = the 32 ML teams.
+# ML teams are written in reverse (squad_ml[31-i] uses lun_nomiN[94-i]), so for
+# slot_index 0-31 the table index is 63 + slot_index.
 _LUN_NOMI1 = [
     8,
     12,
@@ -1087,11 +1067,6 @@ def _ml_name_budget(slot_index: int, lun_table: list) -> int:
     return lun_table[63 + slot_index]
 
 
-# ---------------------------------------------------------------------------
-# Encoding helpers
-# ---------------------------------------------------------------------------
-
-
 def _we_val(attr: int) -> int:
     """Map 1-9 WE attribute to 0-7 ROM storage value (offset-12 scheme)."""
     return min(7, max(0, attr - 1))
@@ -1379,11 +1354,6 @@ def _build_flag_data(team: "WETeamRecord") -> tuple[int, bytes]:
     return style, color_data
 
 
-# ---------------------------------------------------------------------------
-# Sector-boundary-aware offset calculation
-# ---------------------------------------------------------------------------
-
-
 def _nome_chunks(player_idx: int) -> list[tuple[int, int]]:
     """Return [(file_offset, byte_count)] to write the 10-byte player name."""
     if player_idx <= _NOME_LAST_GML:
@@ -1421,10 +1391,6 @@ def _carat_chunks(player_idx: int) -> list[tuple[int, int]]:
     off = _OFS_CARAT_GML2 + 8 + (player_idx - (_CARAT_STRADDLE2 + 1)) * _CARAT_SIZE
     return [(off, _CARAT_SIZE)]
 
-
-# ---------------------------------------------------------------------------
-# National player sector-boundary-aware offset calculation
-# ---------------------------------------------------------------------------
 
 # Contiguous sections for national player names.  Each tuple is
 # (first_nat_idx_inclusive, first_nat_idx_exclusive, base_offset).
@@ -1516,11 +1482,6 @@ def _nat_slot_player_range(nat_index: int) -> tuple[int, int]:
     return nat_index * _PLAYERS_PER_NAT, _PLAYERS_PER_NAT
 
 
-# ---------------------------------------------------------------------------
-# Team-to-player index mapping
-# ---------------------------------------------------------------------------
-
-
 def _slot_player_range(slot_index: int) -> tuple[int, int]:
     """Return (first_global_player_index, player_count) for a ML slot.
 
@@ -1547,15 +1508,10 @@ def _write_chunks(f, data: bytes, chunks: list[tuple[int, int]]) -> None:
         pos += size
 
 
-# ---------------------------------------------------------------------------
-# Team name offset calculation
-#
-# The C++ writes names sequentially: 32 ML teams (reversed) then 63 national.
-# We only patch ML teams.  For a given name variant offset base, the ML team
-# at slot_index is written at:
+# Names are written sequentially: 32 ML teams (reversed) then 63 national. The
+# ML team at slot_index lands at:
 #   base + sum(lun_nomiN[94 - j] for j in range(rom_position))
-# where rom_position = the team's write index (0 = squad_ml[31], 31 = squad_ml[0]).
-# ---------------------------------------------------------------------------
+# where rom_position is the write index (0 = squad_ml[31], 31 = squad_ml[0]).
 
 
 def _ml_name_offset(base_offset: int, slot_index: int, lun_table: list) -> int:
@@ -1572,14 +1528,9 @@ def _ml_name_offset(base_offset: int, slot_index: int, lun_table: list) -> int:
     return off
 
 
-# ---------------------------------------------------------------------------
-# National team name offset calculation
-#
-# The C++ writes team names sequentially: 32 ML teams (reversed) then 63 national.
-# For nationals, the array index is simply nat_index (0-62).
-# The offset is: base + sum of all 32 ML budgets + sum of nat budgets 0..nat_index-1.
-# Sector boundaries within national ranges must be handled per variant.
-# ---------------------------------------------------------------------------
+# For nationals the table index is just nat_index (0-62), and the offset is
+# base + all 32 ML budgets + nat budgets 0..nat_index-1. Sector boundaries
+# within the national range are handled per variant.
 
 
 def _nat_name_offset(base_offset: int, nat_index: int, lun_table: list) -> int:
@@ -1644,11 +1595,6 @@ def _nat_ab_offset(base_offset: int, nat_index: int) -> int:
     return base_offset + 32 * 4 + nat_index * 4
 
 
-# ---------------------------------------------------------------------------
-# National force bar offset calculation
-# ---------------------------------------------------------------------------
-
-
 def _nat_bar_offset(nat_index: int) -> list[tuple[int, int]]:
     """Return [(offset, nbytes)] chunks for a national team's 5 force bar bytes.
 
@@ -1680,12 +1626,8 @@ def _nat_jersey_offset(nat_index: int) -> int:
         return _OFS_ANT_MAGLIE1 + (nat_index - 30) * 64
 
 
-# ---------------------------------------------------------------------------
-# National flag color offset computation
-#
-# The C++ OnWriteCD() writes national colors (i=0..55) then ML colors.
-# We trace the file pointer to compute each national team's color offset.
-# ---------------------------------------------------------------------------
+# OnWriteCD() writes national colors (i=0..55) then ML colors; each national
+# team's color offset comes from tracing that file pointer.
 
 
 def _compute_nat_color_offsets() -> dict:
@@ -1724,38 +1666,24 @@ def _compute_nat_color_offsets() -> dict:
 _NAT_COLOR_OFFSETS = _compute_nat_color_offsets()
 
 
-# ---------------------------------------------------------------------------
-# Flag color write order
-#
-# The C++ OnWriteCD() writes ML flag colors in this exact non-sequential order,
-# with relative seeks interspersed.  We replicate the absolute offsets by
-# tracking file position as the C++ code does.
-#
-# The ML color region starts after the national one, so the position it begins
-# at has to be derived by replaying the national writes first;
-# `_compute_ml_color_offsets` does both in a single pass.
-# ---------------------------------------------------------------------------
+# ML flag colors are written in a non-sequential order with relative seeks
+# interspersed, and the ML region starts after the national one, so the absolute
+# offsets have to be derived by replaying both write sequences in one pass.
 
 
 def _compute_ml_color_offsets() -> dict:
-    """Compute {ml_index: (offset, size)} for 30 of the 32 ML teams' color data.
+    """Compute {ml_index: [(offset, nbytes)]} for 30 of the 32 ML teams.
 
-    ml[5] and ml[22] have no known offset and are absent from the result — the
-    upstream C++ write sequence traced below never writes them. See the comment
-    at the end of this function and `_write_flag_impl` for what that costs.
-
-    For teams that straddle a sector boundary (ml[26]), returns two entries
-    that must be written separately.
-
-    Returns dict mapping ml_index to list of (offset, nbytes) chunks.
+    ml[5] and ml[22] have no known offset and are absent from the result.
+    ml[26] straddles a sector boundary and comes back as two chunks.
     """
-    # Trace the C++ file pointer through OnWriteCD lines 5989-6055.
+    # Trace the file pointer through OnWriteCD lines 5989-6055.
     pos = _OFS_BANDIERE_COLORE
 
-    # --- National teams (i=0..55) ---
+    # National teams (i=0..55)
     for i in range(56):
         if i == 13:
-            # Write 26 bytes, then seek to COLORE1, write 6 bytes
+            # 26 bytes, then seek to COLORE1 for 6 more
             pos += 26
             pos = _OFS_BANDIERE_COLORE1 + 6  # after writing the 6-byte tail
         elif i in (36, 39, 47):
@@ -1765,8 +1693,6 @@ def _compute_ml_color_offsets() -> dict:
             pos += 32  # then write 32
         else:
             pos += 32
-
-    # Now pos is after all national color writes.
 
     result = {}
 
@@ -1862,36 +1788,19 @@ def _compute_ml_color_offsets() -> dict:
         result[idx] = [(pos, 32)]
         pos += 32
 
-    # TWO slots are missing from the C++ write sequence, not one: ml[5] and
-    # ml[22]. Neither is reached by any of the writes traced above, so `result`
-    # holds 30 of the 32. They may share a slot with one of the national teams
-    # or sit at a position that has not been found.
-    #
-    # Leave both unpatched. Guessing an offset here writes 32 colour bytes into
-    # an unidentified ISO structure, which is a worse outcome than an unpatched
-    # flag palette. `_write_flag_impl` still writes the FORMA style byte for
-    # them, so those two clubs get a new geometric pattern drawn over the
-    # original Japanese palette, and `patcher.py` counts them in
-    # `teams_patched`. That is the accepted cost.
-    #
-    # This is inherited from the upstream write sequence, not a porting error:
-    # `_compute_ml_color_offsets` is byte-identical to the version it was
-    # ported from, and so was the one-slot claim this comment replaces.
+    # ml[5] and ml[22] are never reached by the write sequence above, so
+    # `result` holds 30 of the 32. Leave both out: a guessed offset writes 32
+    # colour bytes into an unidentified ISO structure, which is worse than an
+    # unpatched palette.
 
     return result
 
 
-# Pre-compute once at import time
 _ML_COLOR_OFFSETS = _compute_ml_color_offsets()
 
-# ---------------------------------------------------------------------------
-# Force bar offset calculation
-#
-# Force bars: 5 bytes per team.  National teams (0-62) first at OFS_BAR,
-# with a sector boundary at national team index 3 (seeks to OFS_BAR1 after
-# writing bar_attacco, before bar_difesa).  Then ML teams (0-31) sequentially.
-# ML bars follow directly after the last national team bar.
-# ---------------------------------------------------------------------------
+# Force bars are 5 bytes per team: nationals (0-62) first at OFS_BAR with a
+# sector boundary at national index 3 (seeks to OFS_BAR1 after bar_attacco,
+# before bar_difesa), then ML teams (0-31) directly after the last national.
 
 
 def _compute_ml_bar_offset() -> int:
@@ -1911,10 +1820,6 @@ def _compute_ml_bar_offset() -> int:
 
 
 _ML_BAR_OFFSET = _compute_ml_bar_offset()
-
-# ---------------------------------------------------------------------------
-# 3D jersey TEX file helpers (CD sector I/O with EDC)
-# ---------------------------------------------------------------------------
 
 
 def _edc_compute(data: bytes) -> int:
@@ -1936,12 +1841,10 @@ def _edc_compute(data: bytes) -> int:
 
 
 def _build_tex_dir_map(rom_data: bytes) -> tuple[dict, dict]:
-    """Scan ISO9660 BIN directory to find TEX file entries.
+    """Scan the ISO9660 BIN directory for `TEX_nn.BIN;1` entries.
 
-    Returns:
-        (sizes, dir_offsets) where:
-        - sizes: dict of TEX index → file size in bytes
-        - dir_offsets: dict of TEX index → absolute ROM byte offset of directory record
+    Returns (sizes, dir_offsets), both keyed by TEX index: file size in bytes
+    and the absolute ROM byte offset of the directory record.
     """
     dir_data = bytearray()
     sectors = (_BIN_DIR_SIZE + 2047) // 2048
@@ -2037,7 +1940,6 @@ def _write_cd_file_with_edc_to_handle(f, lba: int, file_data: bytes):
         sector_off = current_lba * 2352
         user_off = sector_off + 24
         chunk = min(len(file_data) - offset, 2048)
-        # Write user data
         f.seek(user_off)
         f.write(file_data[offset : offset + chunk])
         # Read back sector bytes 16..2071 for EDC calculation
@@ -2066,10 +1968,7 @@ def _update_iso_dir_size_in_handle(f, dir_record_offset: int, new_size: int):
 
 
 def _build_tex_dir_map_from_dir(dir_data: bytearray) -> tuple[dict, dict]:
-    """Parse pre-read directory data to find TEX file entries.
-
-    Same logic as _build_tex_dir_map but works with already-read dir_data.
-    """
+    """`_build_tex_dir_map` against already-read directory data."""
     sizes = {}
     dir_offsets = {}
     pos = 0
@@ -2102,8 +2001,7 @@ def _find_best_tex_match(target_rgb: tuple[int, int, int]) -> int | None:
     best_idx = None
     best_dist = float("inf")
     for idx, color in _TEX_JERSEY_COLORS.items():
-        # strict=False keeps the ported behaviour: a caller passing a target of a
-        # different length than the table's 3-channel colors still gets a distance
+        # strict=False: a target of a different length still yields a distance
         # over the shared prefix rather than a ValueError.
         dist = sum((a - b) ** 2 for a, b in zip(target_rgb, color, strict=False))
         if dist < best_dist:
@@ -2111,10 +2009,6 @@ def _find_best_tex_match(target_rgb: tuple[int, int, int]) -> int | None:
             best_idx = idx
     return best_idx
 
-
-# ---------------------------------------------------------------------------
-# Public writer class
-# ---------------------------------------------------------------------------
 
 _DUMMY_NAME = b"PLAYER\x00\x00\x00\x00"
 _DUMMY_CARAT = bytes(12)
@@ -2130,7 +2024,6 @@ class RomWriter:
         self._in_place = os.path.abspath(rom_path) == os.path.abspath(output_path)
         if not self._in_place and os.path.exists(rom_path):
             shutil.copy2(rom_path, output_path)
-            # Sync the new file to disk before patching begins
             fd = os.open(output_path, os.O_RDONLY)
             try:
                 os.fsync(fd)
@@ -2152,14 +2045,12 @@ class RomWriter:
     ) -> int:
         """Write team names, abbreviations, force bars, players, and flag.
 
-        Consolidates all writes into a single file open to minimize I/O
-        on slow storage (SD cards on handhelds).
+        Keep every write inside one file open: the target is slow storage (SD
+        cards on handhelds).
 
         Returns the number of supplied player records that reached the ROM: 0
-        when there is no output file, when the slot is outside 0..31, or when no
-        `players=` list was handed over, and otherwise the slot's capacity
-        bounded by the list length. See `_write_players_impl` for why this
-        return value diverges deliberately from upstream.
+        with no output file, a slot outside 0..31 or no `players=` list, and
+        otherwise the slot's capacity bounded by the list length.
         """
         if not os.path.exists(self.output_path):
             return 0
@@ -2174,11 +2065,9 @@ class RomWriter:
             self._write_force_bars(f, slot_index, team)
             self._write_jersey_colors(f, slot_index, team)
 
-            # Write players in same file handle
             if players is not None:
                 written = self._write_players_impl(f, slot_index, players)
 
-            # Write flag in same file handle
             if include_flag:
                 self._write_flag_impl(f, slot_index, team)
             _sync(f)
@@ -2191,40 +2080,34 @@ class RomWriter:
     def _write_team_names(self, f, slot_index: int, team: WETeamRecord):
         """Write all 6 name variants + lowercase for an ML team slot.
 
-        The ROM has 6 name variants (nomi[0..5]) and a lowercase name (nome_m).
-        Each has its own offset base and length table.  We write the team name
-        to all of them — uppercase for variants 1-6, mixed case for lowercase.
+        The ROM has 6 name variants (nomi[0..5]) and a lowercase name (nome_m),
+        each with its own offset base and length table. All get the team name:
+        uppercase for variants 1-6, mixed case for the lowercase one.
         """
         name = team.name
 
-        # Name variant 1 — uses lun_nomi1, offset base OFS_NOMI_SQ1
-        # Special case: SQ1 has a sector boundary at national team i==40
-        # (OFS_NOMI_SQ1A), but that's in the national section (after ML).
-        # ML teams are written first (indices 0-31), so no boundary for ML.
+        # SQ1's sector boundary at OFS_NOMI_SQ1A is at national team 40, past
+        # the 32 ML teams, so ML never crosses it.
         budget = _ml_name_budget(slot_index, _LUN_NOMI1)
         offset = _ml_name_offset(_OFS_NOMI_SQ1, slot_index, _LUN_NOMI1)
         f.seek(offset)
         f.write(_encode_team_name(name, budget, uppercase=True))
 
-        # Name variant 2
         budget = _ml_name_budget(slot_index, _LUN_NOMI2)
         offset = _ml_name_offset(_OFS_NOMI_SQ2, slot_index, _LUN_NOMI2)
         f.seek(offset)
         f.write(_encode_team_name(name, budget, uppercase=True))
 
-        # Name variant 3
         budget = _ml_name_budget(slot_index, _LUN_NOMI3)
         offset = _ml_name_offset(_OFS_NOMI_SQ3, slot_index, _LUN_NOMI3)
         f.seek(offset)
         f.write(_encode_team_name(name, budget, uppercase=True))
 
-        # Name variant 4
         budget = _ml_name_budget(slot_index, _LUN_NOMI4)
         offset = _ml_name_offset(_OFS_NOMI_SQ4, slot_index, _LUN_NOMI4)
         f.seek(offset)
         f.write(_encode_team_name(name, budget, uppercase=True))
 
-        # Name variant 5
         budget = _ml_name_budget(slot_index, _LUN_NOMI5)
         offset = _ml_name_offset(_OFS_NOMI_SQ5, slot_index, _LUN_NOMI5)
         f.seek(offset)
@@ -2283,17 +2166,14 @@ class RomWriter:
         # Abbreviations are written: 32 ML (reversed) then 63 national, sequential.
         rom_i = 31 - slot_index
 
-        # AB1
         off = _OFS_NOMI_SQ_AB1 + rom_i * 4
         f.seek(off)
         f.write(abbrev)
 
-        # AB2
         off = _OFS_NOMI_SQ_AB2 + rom_i * 4
         f.seek(off)
         f.write(abbrev)
 
-        # AB3
         off = _OFS_NOMI_SQ_AB3 + rom_i * 4
         f.seek(off)
         f.write(abbrev)
@@ -2305,7 +2185,6 @@ class RomWriter:
         (squad_ml[0] first, not reversed).  Each team = 5 bytes:
         attack, defense, power, speed, technique.
         """
-        # Compute overall team ratings from roster
         att, defe, power, speed, tech = self._compute_force_bars(team)
 
         off = _ML_BAR_OFFSET + slot_index * 5
@@ -2317,7 +2196,6 @@ class RomWriter:
         if not team.players:
             return (4, 4, 4, 4, 4)
 
-        # Average across all players for each bar category
         n = len(team.players)
         tot_att = sum(p.attributes.offensive for p in team.players)
         tot_def = sum(p.attributes.defensive for p in team.players)
@@ -2370,13 +2248,7 @@ class RomWriter:
 
         Returns the number of supplied records that reached the ROM. The loop is
         bounded by the slot's fixed capacity (14 or 15, see `_slot_player_range`)
-        and `players[count:]` is dropped, so a caller that reports
-        `len(players)` reports players it never wrote.
-
-        The return value is a DELIBERATE DIVERGENCE from the upstream C++/Python
-        writer, which returned nothing: `PatchResult.players_patched` is this
-        project's own contract and needs a truthful number. Not a port bug — it
-        writes exactly the same bytes upstream did. Do not "restore" it.
+        and `players[count:]` is dropped, so never report `len(players)`.
         """
         first_idx, count = _slot_player_range(slot_index)
         for i in range(count):
@@ -2393,11 +2265,7 @@ class RomWriter:
         return min(len(players), count)
 
     def write_players(self, slot_index: int, players: list[WEPlayerRecord]) -> int:
-        """Write player names + characteristics for a team slot.
-
-        Returns the number of supplied records written, or 0 if there is no
-        output file to write them to.
-        """
+        """Returns the number of records written, or 0 if there is no output file."""
         if not os.path.exists(self.output_path):
             return 0
         with open(self.output_path, "r+b") as f:
@@ -2406,14 +2274,12 @@ class RomWriter:
         return written
 
     def _write_flag_impl(self, f, slot_index, team):
-        """Write team flag data (uses existing file handle).
+        """Write team flag data.
 
-        The style byte goes to all 32 ML slots; the 32-byte palette goes to 30
-        of them. `_ML_COLOR_OFFSETS` has no entry for ml[5] or ml[22] — the
-        upstream write sequence never wrote those two and no offset for them is
-        known — so those slots take a new geometric pattern over the original
-        Japanese palette. Inherited from upstream, and left that way on purpose:
-        a guessed offset writes colour bytes into an unidentified structure.
+        The style byte goes to all 32 ML slots; the 32-byte palette to 30 of
+        them. `_ML_COLOR_OFFSETS` has no entry for ml[5] or ml[22] — no offset
+        is known — so those two take a new pattern over the original Japanese
+        palette. Do not guess an offset for them.
         """
         if slot_index < 0 or slot_index >= _SQUADRE_ML:
             return
@@ -2433,20 +2299,12 @@ class RomWriter:
             _write_chunks(f, color_data, chunks)
 
     def write_flag(self, slot_index: int, team: WETeamRecord):
-        """Write team flag (style byte, and 16 colors for 30 of the 32 slots).
-
-        ml[5] and ml[22] get the style byte and no palette; see
-        `_write_flag_impl`.
-        """
+        """Write team flag (style byte, and 16 colors for 30 of the 32 slots)."""
         if not os.path.exists(self.output_path):
             return
         with open(self.output_path, "r+b") as f:
             self._write_flag_impl(f, slot_index, team)
             _sync(f)
-
-    # ------------------------------------------------------------------
-    # National team writers
-    # ------------------------------------------------------------------
 
     def write_nat_team(
         self,
@@ -2455,10 +2313,7 @@ class RomWriter:
         players: list[WEPlayerRecord] | None = None,
         include_flag: bool = True,
     ):
-        """Write national team names, abbreviations, force bars, players, and flag.
-
-        Consolidates all writes into a single file open.
-        """
+        """Write national team names, abbreviations, force bars, players, and flag."""
         if not os.path.exists(self.output_path):
             return
         if nat_index < 0 or nat_index >= _SQUADRE_NAZ:
@@ -2482,7 +2337,6 @@ class RomWriter:
         self._pending_tex_patches.append((nat_index, team.kit_home))
 
     def _write_nat_team_names(self, f, nat_index: int, team: WETeamRecord):
-        """Write all name variants for a national team slot."""
         name = team.name
 
         # Name variant 1 (SQ1) — sector boundary at national team 40
@@ -2539,7 +2393,6 @@ class RomWriter:
         _write_chunks(f, encoded, chunks)
 
     def _write_nat_abbreviations(self, f, nat_index: int, team: WETeamRecord):
-        """Write 3 abbreviation variants for a national team slot."""
         code = team.short_name or team.name[:3]
         abbrev = _encode_abbreviation(code)
 
@@ -2551,20 +2404,13 @@ class RomWriter:
         f.write(abbrev)
 
     def _write_nat_force_bars(self, f, nat_index: int, team: WETeamRecord):
-        """Write 5 force bar bytes for a national team slot."""
         att, defe, power, speed, tech = self._compute_force_bars(team)
         bar_data = bytes([att, defe, power, speed, tech])
         chunks = _nat_bar_offset(nat_index)
         _write_chunks(f, bar_data, chunks)
 
     def _write_nat_jersey_colors(self, f, nat_index: int, team: WETeamRecord):
-        """Write jersey preview palette (maglia1 + maglia2) for a national team slot.
-
-        The maglia controls the 2D menu preview and 3D shorts only.
-        The 3D shirt body is controlled by TEX files (patched separately
-        via patch_3d_jersey).  Indices 0-1 reserved, 2-9 = shirt preview,
-        10-15 = shorts.
-        """
+        """Write jersey preview palette (maglia1 + maglia2), as `_write_jersey_colors`."""
         if team.jersey_data and len(team.jersey_data) == 64:
             off = _nat_jersey_offset(nat_index)
             f.seek(off)
@@ -2586,7 +2432,6 @@ class RomWriter:
         f.write(maglia2)
 
     def _write_nat_players_impl(self, f, nat_index, players):
-        """Write national player names + characteristics (uses existing file handle)."""
         first_nat_idx, count = _nat_slot_player_range(nat_index)
         for i in range(count):
             nat_player_idx = first_nat_idx + i
@@ -2601,7 +2446,6 @@ class RomWriter:
             _write_chunks(f, carat_bytes, _nat_carat_chunks(nat_player_idx))
 
     def write_nat_players(self, nat_index: int, players: list[WEPlayerRecord]):
-        """Write player names + characteristics for a national team slot."""
         if not os.path.exists(self.output_path):
             return
         if nat_index < 0 or nat_index >= _SQUADRE_NAZ:
@@ -2611,7 +2455,6 @@ class RomWriter:
             _sync(f)
 
     def _write_nat_flag_impl(self, f, nat_index, team):
-        """Write national flag data (uses existing file handle)."""
         if nat_index < 0 or nat_index >= _SQUADRE_NAZ:
             return
         style, color_data = _build_flag_data(team)
@@ -2630,22 +2473,17 @@ class RomWriter:
             _write_chunks(f, color_data, chunks)
 
     def write_nat_flag(self, nat_index: int, team: WETeamRecord):
-        """Write flag (style byte + 16 colors) for a national team slot."""
         if not os.path.exists(self.output_path):
             return
         with open(self.output_path, "r+b") as f:
             self._write_nat_flag_impl(f, nat_index, team)
             _sync(f)
 
-    # ------------------------------------------------------------------
-    # 3D jersey patching (TEX files on CD)
-    # ------------------------------------------------------------------
-
     def _ensure_tex_cache(self):
         """Cache original TEX file data on first use for 3D jersey patching.
 
-        Uses targeted file seeks instead of loading the entire ROM into memory,
-        so it works on devices with limited RAM (e.g. RG35xxSP with ~256MB).
+        Seek to the sectors needed; never load the 700 MB image into memory,
+        which handhelds (RG35xxSP, ~256 MB) cannot afford.
         """
         if self._tex_cache is not None:
             return
@@ -2654,7 +2492,6 @@ class RomWriter:
             return
 
         with open(self.output_path, "rb") as f:
-            # Read only the directory sectors needed for TEX file lookup
             dir_data = bytearray()
             sectors = (_BIN_DIR_SIZE + 2047) // 2048
             for s in range(sectors):
@@ -2665,7 +2502,6 @@ class RomWriter:
             self._tex_sizes = tex_sizes
             self._tex_dir_offsets = tex_dir_offsets
 
-            # Cache each TEX file by reading only its sectors
             tex_cache = {}
             for idx in range(_TEX_COUNT):
                 size = tex_sizes.get(idx)
@@ -2678,13 +2514,9 @@ class RomWriter:
     def patch_3d_jersey(self, tex_index: int, target_rgb: tuple[int, int, int]):
         """Patch a team's 3D jersey by copying the best color-matched TEX file.
 
-        Uses the static _TEX_JERSEY_COLORS map (from 2D maglia data) to find
-        the source TEX whose known jersey color is closest to target_rgb.
-        Copies the entire TEX file and updates the ISO9660 directory size.
-
-        Args:
-            tex_index: TEX file index (0-62 national, 63-94 ML).
-            target_rgb: Desired jersey color as (R, G, B).
+        `_TEX_JERSEY_COLORS` picks the source TEX whose known jersey colour is
+        closest to `target_rgb`; the whole file is copied and the ISO9660
+        directory size updated. `tex_index` is 0-62 national, 63-94 ML.
         """
         if not os.path.exists(self.output_path):
             return
@@ -2696,13 +2528,8 @@ class RomWriter:
         if tex_index not in self._tex_sizes:
             return
 
-        # Upstream appended a line to a hard-coded "/tmp/tex_debug.log" here, on
-        # every call, whether or not it went on to patch anything. Removed: it
-        # wrote outside the caller's control to a shared world-writable path, it
-        # grew without bound, and it made the method raise outright on a platform
-        # with no /tmp — which includes Android, where the Flutter consumer runs.
-        # Nothing downstream reads it, and it never touched the image, so the
-        # bytes this method produces are unchanged.
+        # Never log to a hard-coded /tmp path here: the Android consumer has no
+        # /tmp and the method would raise instead of patching.
         best_idx = _find_best_tex_match(target_rgb)
         if best_idx is None or best_idx == tex_index:
             return
@@ -2717,7 +2544,7 @@ class RomWriter:
         src_data = self._tex_cache[best_idx]
         src_size = len(src_data)
 
-        # Write source TEX data into target slot sectors (pad to fill sectors)
+        # Pad to a whole number of sectors.
         sectors_needed = (src_size + 2047) // 2048
         padded = bytearray(src_data) + bytearray(sectors_needed * 2048 - src_size)
         _write_cd_file_with_edc(rom, dst_lba, bytes(padded))
@@ -2733,9 +2560,8 @@ class RomWriter:
     def flush_tex_patches(self):
         """Apply all queued 3D jersey TEX patches using targeted file seeks.
 
-        Instead of loading the entire ROM into memory, each TEX patch is
-        written directly to the file at the correct sector offsets. This
-        works on devices with limited RAM (e.g. RG35xxSP).
+        Write each patch straight to its sector offsets; never load the whole
+        image into memory.
         """
         if not self._pending_tex_patches or not os.path.exists(self.output_path):
             return
@@ -2758,12 +2584,12 @@ class RomWriter:
                 src_size = len(src_data)
                 dst_lba = _TEX_BASE_LBA + tex_index * _TEX_LBA_STRIDE
 
-                # Write TEX data to target sectors with EDC recalculation
                 sectors_needed = (src_size + 2047) // 2048
                 padded = bytearray(src_data) + bytearray(sectors_needed * 2048 - src_size)
                 _write_cd_file_with_edc_to_handle(f, dst_lba, bytes(padded))
 
-                # Update ISO9660 directory entry size
+                # Update the ISO9660 directory entry so the game reads the
+                # right file size.
                 if tex_index in self._tex_dir_offsets:
                     _update_iso_dir_size_in_handle(f, self._tex_dir_offsets[tex_index], src_size)
             _sync(f)
@@ -2778,15 +2604,8 @@ class RomWriter:
           2. Binary diff: original vs patched at every written offset
           3. Read-back: re-read what we wrote and confirm it matches intent
 
-        The report is written to an error.log file next to the output ROM.
-
-        Args:
-            original_path: Path to the unmodified source ROM.
-            slot_mapping: List of SlotMapping used during patching.
-            we_teams: Dict mapping slot_index → WETeamRecord that was written.
-
-        Returns:
-            Multi-line human-readable verification report string.
+        Returns the report and also writes it to an error.log next to the
+        output ROM.
         """
         if not os.path.exists(original_path) or not os.path.exists(self.output_path):
             return "ERROR: Cannot verify — original or patched file missing."
@@ -2806,7 +2625,6 @@ class RomWriter:
             lines.append("  *** SIZE MISMATCH — copy may have failed ***")
         lines.append("")
 
-        # --- Phase 1: ROM format check ---
         lines.append("--- PHASE 1: ROM FORMAT CHECK ---")
         with open(original_path, "rb") as f:
             sync = f.read(12)
@@ -2823,7 +2641,6 @@ class RomWriter:
             sector1_ok = sync2 == b"\x00\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\x00"
             lines.append(f"Sector 1 sync: {sync2.hex()} ({'OK' if sector1_ok else 'MISMATCH'})")
 
-            # Probe known data offsets for sanity
             f.seek(_OFS_NOMI_SQ_AB1)
             sample = f.read(32)
             has_ascii = any(0x20 <= b <= 0x7E for b in sample)
@@ -2841,7 +2658,6 @@ class RomWriter:
             )
         lines.append("")
 
-        # --- Phase 2: Binary diff original vs patched ---
         lines.append("--- PHASE 2: ORIGINAL vs PATCHED DIFF ---")
         total_changed = 0
         total_checked = 0
@@ -2889,7 +2705,6 @@ class RomWriter:
             lines.append(f"  Diff totals: {total_changed}/{total_checked} regions changed")
         lines.append("")
 
-        # --- Phase 3: Read-back verification on output file ---
         lines.append("--- PHASE 3: OUTPUT READ-BACK CHECK ---")
         readback_ok = 0
         readback_fail = 0
@@ -2905,7 +2720,6 @@ class RomWriter:
                     mapping.real_team.name if hasattr(mapping, "real_team") else f"slot {si}"
                 )
 
-                # Verify abbreviation matches what we intended to write
                 code = we_team.short_name or we_team.name[:3]
                 expected_ab = _encode_abbreviation(code)
                 rom_i = 31 - si
@@ -2920,7 +2734,6 @@ class RomWriter:
                         f"  FAIL slot {si} AB1: expected {expected_ab!r} got {actual_ab!r}"
                     )
 
-                # Verify name variant 1
                 budget = _ml_name_budget(si, _LUN_NOMI1)
                 expected_name = _encode_team_name(we_team.name, budget, uppercase=True)
                 n1_off = _ml_name_offset(_OFS_NOMI_SQ1, si, _LUN_NOMI1)
@@ -2934,7 +2747,6 @@ class RomWriter:
                         f"  FAIL slot {si} Name1: expected {expected_name!r} got {actual_name!r}"
                     )
 
-                # Verify first player name
                 if we_team.players:
                     expected_pn = _encode_player_name(we_team.players[0].last_name)
                     first_idx, _ = _slot_player_range(si)
@@ -2957,7 +2769,6 @@ class RomWriter:
             lines.append(f"  {readback_fail} FAILED, {readback_ok} passed")
         lines.append("")
 
-        # --- Summary ---
         lines.append("--- SUMMARY ---")
         lines.append(f"ROM format: {'Mode2/2352 OK' if is_mode2 else 'WRONG FORMAT'}")
         if total_changed == -1:
@@ -2976,7 +2787,6 @@ class RomWriter:
 
         report = "\n".join(lines)
 
-        # Write to error.log next to the output ROM
         log_path = os.path.join(os.path.dirname(self.output_path), "error.log")
         try:
             with open(log_path, "w") as f:
@@ -2992,27 +2802,21 @@ class RomWriter:
         rom_i = 31 - slot_index
         checks = []
 
-        # Abbreviation AB1
         checks.append(("AB1", _OFS_NOMI_SQ_AB1 + rom_i * 4, 4))
 
-        # Name variant 1
         n1_off = _ml_name_offset(_OFS_NOMI_SQ1, slot_index, _LUN_NOMI1)
         n1_budget = _ml_name_budget(slot_index, _LUN_NOMI1)
         checks.append(("Name1", n1_off, n1_budget))
 
-        # First player name
         first_idx, _ = _slot_player_range(slot_index)
         pn_chunks = _nome_chunks(first_idx)
         checks.append(("Player0", pn_chunks[0][0], pn_chunks[0][1]))
 
-        # First player characteristics
         pc_chunks = _carat_chunks(first_idx)
         checks.append(("Carat0", pc_chunks[0][0], pc_chunks[0][1]))
 
-        # Force bar
         checks.append(("ForceBar", _ML_BAR_OFFSET + slot_index * 5, 5))
 
-        # Flag style
         checks.append(("FlagStyle", _OFS_BANDIERE_FORMA1 + _SQUADRE_NAZ + slot_index, 1))
 
         return checks

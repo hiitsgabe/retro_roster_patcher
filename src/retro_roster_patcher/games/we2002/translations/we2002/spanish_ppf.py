@@ -1,25 +1,15 @@
 """Built-in Spanish translation PPF for WE2002 (SLPM-87056).
 
-Generates a PPF1 patch that writes Spanish team names to the Kanji
-(2-byte encoded) name section of the ROM.  The original game stores
-Japanese katakana names at OFS_NOMI_SQK; this patch replaces them
-with the Spanish equivalents using the game's own 2-byte encoding.
+Generates a PPF1 patch that rewrites the game's own 2-byte encoded team name
+section at OFS_NOMI_SQK for all 95 teams (63 national/allstar + 32 Master
+League). The ROM writer later overwrites the 32 ML names with API team names.
 
-The PPF covers all 95 teams (63 national/allstar + 32 Master League).
-When the patcher runs, ML kanji names are then overwritten again by
-the ROM writer with actual team names from the API.
-
-Team names and encoding sourced from WE2002-editor-2.0 (edDlg.cpp).
-Note: accented characters (ñ, é, á, etc.) are not supported by the
-game's 2-byte encoding and are replaced with unaccented equivalents.
+The 2-byte encoding has no accented characters, so n, e and a replace their
+accented forms.
 """
 
 import os
 import struct
-
-# ---------------------------------------------------------------------------
-# ROM offsets for the Kanji team name section
-# ---------------------------------------------------------------------------
 
 _OFS_NOMI_SQK = 2_002_316  # Kanji names start (ML reverse, then nationals reverse)
 _OFS_NOMI_SQK1 = 2_003_928  # Sector boundary continuation (national i=58 split)
@@ -227,10 +217,10 @@ _TEAM_NAMES = [
 
 
 def _ascii_to_kanji(text: str, char_budget: int) -> bytes:
-    """Convert ASCII text to WE2002 2-byte encoding.
+    """Convert ASCII to the WE2002 2-byte encoding.
 
-    Matches the asciitokanji() function from edDlg.cpp.
-    char_budget is lun_nomik[idx]; output is char_budget * 2 bytes.
+    `char_budget` is lun_nomik[idx]; the result is always char_budget * 2 bytes
+    and the last character position is reserved for the null terminator.
     """
     buf = bytearray(char_budget * 2)
     max_chars = char_budget - 1  # last position is null terminator
@@ -256,7 +246,6 @@ def _ascii_to_kanji(text: str, char_budget: int) -> bytes:
             buf[i * 2] = 0x82
             buf[i * 2 + 1] = 0x80
 
-    # Null terminator at end
     term = min(len(text), max_chars)
     buf[term * 2] = 0x00
     buf[term * 2 + 1] = 0x00
@@ -265,7 +254,8 @@ def _ascii_to_kanji(text: str, char_budget: int) -> bytes:
 
 
 def _titlecase_name(name: str, max_chars: int) -> str:
-    """Convert name to titlecase and truncate."""
+    """First character uppercase, rest lowercase, truncated to
+    lun_nomik[idx] - 1 characters."""
     if not name:
         return ""
     result = name[0].upper() + name[1:].lower() if len(name) > 1 else name.upper()
@@ -273,11 +263,10 @@ def _titlecase_name(name: str, max_chars: int) -> str:
 
 
 def _build_kanji_records() -> list:
-    """Build list of (offset, data) tuples for the kanji name section."""
     records = []
     pos = _OFS_NOMI_SQK
 
-    # --- ML teams: squad_ml[31] first, squad_ml[0] last ---
+    # ML names are stored in reverse: squad_ml[31] first, squad_ml[0] last.
     for i in range(32):
         team_idx = 94 - i
         budget = _LUN_NOMIK[team_idx]
@@ -287,7 +276,7 @@ def _build_kanji_records() -> list:
         records.append((pos, data))
         pos += budget * 2
 
-    # --- National/allstar teams: squad_nazall[62] first, squad_nazall[0] last ---
+    # Nationals are also reversed: squad_nazall[62] first, squad_nazall[0] last.
     for i in range(63):
         team_idx = 62 - i
         budget = _LUN_NOMIK[team_idx]
@@ -307,7 +296,13 @@ def _build_kanji_records() -> list:
 
 
 def _make_ppf1(description: str, records: list) -> bytes:
-    """Generate a PPF1 format patch from (offset, data) records."""
+    """Generate a PPF1 format patch from (offset, data) records.
+
+    Header: b"PPF10" + u8 encoding + 50-byte description.
+    Record: u32 LE offset + u8 count + `count` bytes, so 255 is the format's
+    hard per-record limit and longer data must be split across consecutive
+    offsets.
+    """
     buf = bytearray()
     buf.extend(b"PPF10")
     buf.append(0x00)
@@ -331,9 +326,8 @@ def _make_ppf1(description: str, records: list) -> bytes:
 def generate_spanish_ppf(assets_dir: str = "") -> bytes:
     """Generate the built-in Spanish translation PPF for WE2002.
 
-    If assets_dir is given and contains the community English PPF,
-    translated menu records are merged in so the menus appear in
-    Spanish instead of Japanese.
+    A community English PPF in `assets_dir` also supplies the menu strings,
+    which are otherwise left in Japanese.
     """
     records = _build_kanji_records()
     if assets_dir:

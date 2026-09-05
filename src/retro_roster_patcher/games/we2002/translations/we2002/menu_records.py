@@ -1,44 +1,34 @@
 """Community PPF menu record extractor and translator.
 
-Reads the community English PPF2 (w202-english.ppf) and provides
-translated (offset, data) records for other languages.
+Reads the community English PPF2 (w202-english.ppf) and returns its records
+retranslated for another language.
 
-The PPF2 file format:
-  - Header: "PPF20" + encoding byte + 50-byte description + 4-byte expected
-    size + 1024-byte validation block (total 1084 bytes before records)
-  - If FILE_ID.DIZ present (last 8 bytes contain ".DIZ"): strip idlen + 38
-    bytes from end
-  - Records start at offset 1084: 4-byte LE offset + 1-byte count + count
-    bytes of data
+PPF2 layout: "PPF20" + encoding byte + 50-byte description + u32 expected size
++ 1024-byte validation block, so records start at 1084 as u32 LE offset + u8
+count + `count` bytes. A trailing FILE_ID.DIZ (".DIZ" at buf[-8:-4]) is idlen +
+38 bytes and is stripped first.
 
-For records that are purely printable ASCII (all bytes 32-126 or 0), the
-content is a menu/UI string and can be looked up in a translation dict.
-Non-ASCII records (binary data, graphics) pass through unchanged.
+A record of purely printable ASCII is a menu string and is looked up in the
+translation dict; anything else is graphics or binary and passes through.
 """
 
 import os
 import struct
 
-# ---------------------------------------------------------------------------
-# PPF2 parser
-# ---------------------------------------------------------------------------
-
 
 def _parse_ppf2(ppf_path: str) -> list[tuple[int, bytes]]:
-    """Parse PPF2 file into list of (offset, data) records."""
     with open(ppf_path, "rb") as f:
         data = f.read()
 
-    # Validate magic
     if data[:4] != b"PPF2":
         raise ValueError(f"Not a PPF2 file: {ppf_path}")
 
-    # Strip FILE_ID.DIZ if present (PPF2 spec: ".DIZ" at buf[-8:-4])
+    # FILE_ID.DIZ: ".DIZ" at buf[-8:-4], trailer is idlen + 38 bytes.
     if len(data) > 38 and data[-8:-4] == b".DIZ":
         idlen = struct.unpack_from("<I", data, len(data) - 4)[0]
         data = data[: -(idlen + 38)]
 
-    # Records start at offset 1084 (5 magic + 1 encoding + 50 desc + 4 size + 1024 validation)
+    # Records start at 1084: 5 magic + 1 encoding + 50 desc + 4 size + 1024 check.
     records = []
     pos = 1084
     while pos + 5 <= len(data):
@@ -53,27 +43,17 @@ def _parse_ppf2(ppf_path: str) -> list[tuple[int, bytes]]:
     return records
 
 
-# ---------------------------------------------------------------------------
-# Record classification and translation
-# ---------------------------------------------------------------------------
-
-
 def _is_text_record(data: bytes) -> bool:
-    """Check if a record contains purely printable ASCII (or null bytes).
-
-    Requires at least 3 bytes to avoid matching tiny binary fragments
-    that happen to look like text.
-    """
+    """Require 3 bytes minimum: shorter runs of printable bytes are binary
+    fragments that would be mistranslated."""
     return len(data) >= 3 and all(32 <= b <= 126 or b == 0 for b in data)
 
 
 def _translate_record(data: bytes, translations: dict[str, str]) -> bytes:
-    """Translate a text record using the given translation dict.
+    """Translate one record, preserving its exact byte width.
 
-    1. Decode to ASCII, strip trailing nulls
-    2. Look up stripped text (no leading/trailing spaces) in translations
-    3. If found, pad/truncate translated text to original field width
-    4. If not found, return original data unchanged
+    The ROM field is fixed size, so the replacement is padded or truncated to
+    the original length and any trailing null is put back.
     """
     text = data.decode("ascii", errors="replace").rstrip("\x00")
     stripped = text.strip()
@@ -89,14 +69,7 @@ def _translate_record(data: bytes, translations: dict[str, str]) -> bytes:
     return result
 
 
-# ---------------------------------------------------------------------------
-# Translation dictionaries
-# ---------------------------------------------------------------------------
-
 _TRANSLATIONS: dict[str, dict[str, str]] = {
-    # ===================================================================
-    # SPANISH
-    # ===================================================================
     "es": {
         # --- UI Labels ---
         "CANCEL": "ANULAR",
@@ -584,9 +557,6 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "ALL STARS": "ESTRELLAS",
         "AN N.C.": "AN N.C.",
     },
-    # ===================================================================
-    # FRENCH
-    # ===================================================================
     "fr": {
         # --- UI Labels ---
         "CANCEL": "ANNULER",
@@ -1074,9 +1044,6 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "ALL STARS": "ETOILES",
         "AN N.C.": "AN N.C.",
     },
-    # ===================================================================
-    # PORTUGUESE
-    # ===================================================================
     "pt": {
         # --- UI Labels ---
         "CANCEL": "CANCELAR",
@@ -1567,26 +1534,11 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
 }
 
 
-# ---------------------------------------------------------------------------
-# Public API
-# ---------------------------------------------------------------------------
-
-
 def get_menu_records(assets_dir: str, lang: str) -> list[tuple[int, bytes]] | None:
-    """Get translated menu records from the community English PPF.
+    """Return (offset, data) records translated into `lang`, or None if
+    `assets_dir` has no w202-english.ppf.
 
-    Parses the community PPF2 file (w202-english.ppf) and translates
-    text records for the requested language. Binary/non-ASCII records
-    pass through unchanged.
-
-    Args:
-        assets_dir: Path to the assets directory containing w202-english.ppf.
-        lang: Language code ("es", "fr", or "pt"). For "en" or unknown
-              languages the original English records are returned as-is.
-
-    Returns:
-        List of (offset, data) tuples ready to be written to the ROM,
-        or None if the community PPF file is not available.
+    "en" and unknown codes return the English records untouched.
     """
     ppf_path = os.path.join(assets_dir, "w202-english.ppf")
     if not os.path.exists(ppf_path):

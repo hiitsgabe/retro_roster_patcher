@@ -11,8 +11,6 @@ from .models import (
 
 
 class StatMapper:
-    """Maps real-world player stats to WE2002's 1-9 attribute scale."""
-
     PERCENTILE_TABLE = [
         (95, 9),
         (85, 8),
@@ -96,34 +94,10 @@ class StatMapper:
         ),
     }
 
-    # UPSTREAM BEHAVIOUR, KNOWN WRONG, PRESERVED DELIBERATELY: this class does
-    # not consult `PlayerStats.unsupplied` at all.
-    #
-    # A provider that does not measure a statistic writes a filler `0` into the
-    # field, and `unsupplied` names those fields so a consumer can tell "did not
-    # win a duel" from "nobody counted duels". Nothing here reads it. ESPN, the
-    # only provider this game has, measures neither duels nor dribbles, so every
-    # player in the league ties at a raw value of zero for `body_balance`,
-    # `technique` and `dribble`, nobody ranks below anybody, and all three
-    # percentile to the floor. Three of fifteen attributes are a constant 1 for
-    # every player in every patched image.
-    #
-    # A `CATEGORY_INPUTS` table, an `estimate` fallback in `_rate` and three
-    # position-and-age estimators used to sit here and fix exactly that. They
-    # were removed: the ratings they produced are bytes no released build of
-    # this patcher ever wrote into the ISO, nothing in this repository has been
-    # validated against a real disc, and a byte sequence the game has never
-    # actually been fed is a crash risk that outweighs three wrong attributes.
-    # Fidelity to the original beats correctness of the data. Measured: on
-    # ESPN-shaped input the gating moved 1 251 bytes across 32 Master League
-    # slots, and 150 of 150 synthetic leagues came out different from upstream's.
-    #
-    # `games/iss_snes/stat_mapper.py` still gates on `unsupplied`, and is not
-    # inconsistent with this: the audit measured the intersection of its
-    # `CATEGORY_OPTIONAL_INPUTS` with what ESPN leaves unsupplied to be empty, so
-    # not one of its 405 attributes moves and it writes upstream's bytes anyway.
-
-    # Position code mapping
+    # Never gate on `PlayerStats.unsupplied` here: a provider's filler zero must
+    # rank like a measurement, even though that pins body_balance, technique and
+    # dribble to 1 for every player under ESPN. These are the bytes the game has
+    # been fed; do not "fix" them.
     POSITION_CODES = {
         "Goalkeeper": 0,
         "Defender": 1,
@@ -137,7 +111,6 @@ class StatMapper:
         all_rosters: list[TeamRoster],
     ) -> WETeamRecord:
         """Map team using league-wide percentile normalization."""
-        # Collect all player stats for percentile computation
         all_stats = {}
         for roster in all_rosters:
             for pid, ps in roster.player_stats.items():
@@ -145,10 +118,8 @@ class StatMapper:
 
         percentiles = self._compute_percentiles(all_stats)
 
-        # Select best 22 players, starters first
         best_22 = self._select_best_22(team_roster.players, team_roster.player_stats)
 
-        # Map each player
         we_players = []
         for player in best_22:
             stats = team_roster.player_stats.get(player.id)
@@ -184,15 +155,8 @@ class StatMapper:
     ) -> WEPlayerAttributes:
         """Convert a real player's stats to WE2002 format.
 
-        Ten of the fifteen attributes are the player's percentile in his league
-        for that category; the other five have no statistic behind them at all
-        and are estimated from position and age.
-
-        `body_balance`, `technique` and `dribble` are among the ten and ESPN
-        measures none of their inputs, so under this tree's only provider all
-        three are the floor rating for every player. See the note above
-        `POSITION_CODES`: that is upstream's behaviour, it is wrong, and it is
-        preserved on purpose.
+        Ten of the fifteen attributes are league percentiles; the other five have
+        no statistic behind them and are estimated from position and age.
         """
         if not stats or stats.appearances == 0:
             return self._fallback_attributes(player)
@@ -224,10 +188,8 @@ class StatMapper:
     ) -> int:
         """Rate one category from this player's league percentile.
 
-        The `50` default is reached only when `_compute_percentiles` produced no
-        entry for this player in this category, which today means an empty
-        league. Upstream wrote this expression out ten times inside `map_player`;
-        naming it once writes the same byte.
+        The `50` default only applies when `_compute_percentiles` produced no
+        entry for this player, i.e. an empty league.
         """
         return self._percentile_to_rating(percentiles.get(category, {}).get(stats.player_id, 50))
 
@@ -236,23 +198,13 @@ class StatMapper:
     ) -> dict[str, dict[int, float]]:
         """Compute league-wide percentiles for each stat category.
 
-        Every record in `all_stats` is ranked in every category, including the
-        ones whose value is a provider's filler zero rather than a measurement.
-        Two things follow, and both are upstream's:
-
-          * an unmeasured player is placed below every measured one, so "nobody
-            counted this" reads as the worst possible performance;
-          * he counts towards `n`, so in a mixed-provider league the measured
-            players are percentiled against a population that includes
-            non-answers.
-
-        Skipping him was tried and is reverted; the note above `POSITION_CODES`
-        says why.
+        Every record is ranked in every category, filler zeros included: an
+        unmeasured player sorts below every measured one and still counts
+        towards `n`. Do not skip him — see the note above `POSITION_CODES`.
         """
         if not all_stats:
             return {}
 
-        # Define how to compute each category's raw value
         categories = {
             "offensive": lambda s: (
                 s.goals + s.assists * 0.7 + (s.shots_on * 0.3 if s.shots_on else 0)
@@ -282,7 +234,6 @@ class StatMapper:
 
             cat_percentiles = {}
             for pid, value in raw_values.items():
-                # Count how many values are below this one
                 below = sum(1 for v in sorted_values if v < value)
                 cat_percentiles[pid] = (below / n) * 100
             percentiles[cat_name] = cat_percentiles
@@ -290,7 +241,6 @@ class StatMapper:
         return percentiles
 
     def _percentile_to_rating(self, percentile: float) -> int:
-        """Map percentile to 1-9 rating."""
         for threshold, rating in self.PERCENTILE_TABLE:
             if percentile >= threshold:
                 return rating
@@ -299,7 +249,6 @@ class StatMapper:
     def _apply_position_adjustments(
         self, attrs: WEPlayerAttributes, position: str
     ) -> WEPlayerAttributes:
-        """Apply position-based stat adjustments."""
         if position == "Goalkeeper":
             attrs.defensive = min(9, attrs.defensive + 2)
             attrs.jump_power = min(9, attrs.jump_power + 2)
@@ -317,7 +266,6 @@ class StatMapper:
             attrs.shoot_accuracy = min(9, attrs.shoot_accuracy + 1)
             attrs.shoot_power = min(9, attrs.shoot_power + 1)
 
-        # Clamp all values to [1, 9]
         for field_name in [
             "offensive",
             "defensive",
@@ -341,7 +289,7 @@ class StatMapper:
         return attrs
 
     def _fallback_attributes(self, player: Player) -> WEPlayerAttributes:
-        """Generate attributes from position + age when no stats available."""
+        """Position-and-age defaults for a player with no usable stats."""
         defaults = self.FALLBACK_ATTRS.get(player.position, self.FALLBACK_ATTRS["Midfielder"])
         attrs = WEPlayerAttributes(**defaults)
 
@@ -364,7 +312,6 @@ class StatMapper:
         return attrs
 
     def _estimate_speed(self, player: Player) -> int:
-        """Estimate speed from position and age heuristics."""
         base = {"Goalkeeper": 4, "Defender": 5, "Midfielder": 5, "Attacker": 6}
         val = base.get(player.position, 5)
         if player.age < 25:
@@ -374,17 +321,14 @@ class StatMapper:
         return max(1, min(9, val))
 
     def _estimate_jump(self, player: Player) -> int:
-        """Estimate jump power from position."""
         base = {"Goalkeeper": 7, "Defender": 6, "Midfielder": 5, "Attacker": 5}
         return base.get(player.position, 5)
 
     def _estimate_heading(self, player: Player) -> int:
-        """Estimate heading from position."""
         base = {"Goalkeeper": 5, "Defender": 6, "Midfielder": 5, "Attacker": 5}
         return base.get(player.position, 5)
 
     def _estimate_curve(self, player: Player) -> int:
-        """Estimate curve from position (wingers/playmakers higher)."""
         base = {"Goalkeeper": 3, "Defender": 3, "Midfielder": 5, "Attacker": 5}
         return base.get(player.position, 4)
 
@@ -395,9 +339,7 @@ class StatMapper:
     ) -> list[Player]:
         """Select best 22 players ordered with starting XI first.
 
-        Uses games.lineups (starting XI count) from API stats to sort
-        players by importance within each position.  The first 11 slots
-        form the default starting lineup (1 GK, 4 DF, 4 MF, 2 FW).
+        The first 11 slots are the default lineup: 1 GK, 4 DF, 4 MF, 2 FW.
         """
         stats = player_stats or {}
 
@@ -408,7 +350,6 @@ class StatMapper:
                 return (-s.lineups, -s.appearances, -s.minutes)
             return (0, 0, 0)
 
-        # Squad targets: total roster composition
         squad_targets = {
             "Goalkeeper": 3,
             "Defender": 7,
@@ -416,27 +357,23 @@ class StatMapper:
             "Attacker": 6,
         }
 
-        # Sort players by lineups within each position
         by_position: dict[str, list[Player]] = {}
         for p in players:
             by_position.setdefault(p.position, []).append(p)
         for pos in by_position:
             by_position[pos].sort(key=_sort_key)
 
-        # Pick the full 22-man squad (sorted by importance within position)
         squad = []
         for pos, count in squad_targets.items():
             available = by_position.get(pos, [])
             squad.extend(available[:count])
 
-        # Fill if under 22
         remaining = [p for p in players if p not in squad]
         remaining.sort(key=_sort_key)
         while len(squad) < 22 and remaining:
             squad.append(remaining.pop(0))
 
-        # Now split into starting XI (first 11) and bench (rest 11)
-        # Starting XI: 1 GK, 4 DF, 4 MF, 2 FW (default 4-4-2)
+        # Starting XI is a 4-4-2: 1 GK, 4 DF, 4 MF, 2 FW
         xi_targets = {"Goalkeeper": 1, "Defender": 4, "Midfielder": 4, "Attacker": 2}
         squad_by_pos: dict[str, list[Player]] = {}
         for p in squad:
@@ -454,49 +391,16 @@ class StatMapper:
     def _format_player_name(self, player: Player) -> tuple:
         """Build ROM-friendly (last_name, first_name) from a Player.
 
-        Prefers the display name (the player's preferred/known name) and falls
-        back to `last_name` when there is none. The game displays at most 8
-        characters for player names.
-        Rules:
-        - Single word (mononym): use as-is → "HULK", "NEYMAR"
-        - Two+ words: "F. Surname" → "V. Hugo", "G. Pique", "R. Veiga"
+        The game displays at most 8 characters. A mononym is used as-is
+        ("HULK", "NEYMAR"); two or more words become "F. Surname" ("V. Hugo",
+        "G. Pique").
 
-        Each of the three provider strings is stripped after conversion and
-        before it is tested, so that a field holding nothing but whitespace
-        counts as absent and the fallback behind it is reached. This is a
-        DELIBERATE DIVERGENCE from the upstream this was ported from, whose body
-        is otherwise byte-identical and which tested the unstripped strings for
-        truthiness. That cost it three things:
-
-          * a whitespace-only `display` skipped the `last_name` fallback, then
-            `" ".split()` returned `[]` and `words[-1]` raised `IndexError` out
-            of `map_rosters`, so one player aborted the whole patch;
-          * where `last_name` held a usable surname it was unreachable, so the
-            correct answer was discarded along with the run;
-          * `"  Neymar  "` kept its padding through `display[:8]`, giving
-            `"  Neyma"` — two of the eight ROM characters spent on spaces — and
-            a whitespace `first_name` beat the `words[0]` fallback the same way.
-
-        The reachable case is not a malformed payload. `_to_ascii` drops every
-        character it cannot render and keeps the spaces between them, so any
-        display name of two or more words in a non-Latin script — Cyrillic,
-        Arabic, Hangul — arrives here as `" "`. A single-word one arrives as
-        `""` and always took the fallback correctly, which is why this went
-        unnoticed. The provider's own `name` reaches here uncleaned; nothing
-        upstream of this method normalises it.
-
-        The order matters and is not interchangeable: stripping the provider
-        string before conversion would not help, because `"Ivanov Petrov"` in
-        Cyrillic is not whitespace until `_to_ascii` has run.
-
-        Do NOT "restore" the unstripped version in a port audit.
-
-        The three `.strip()` calls are the whole divergence; every other line is
-        upstream's. Nothing further is needed below them, because a stripped
-        single-word `display` is its own `words[0]`, and a stripped non-empty
-        `display` holds at least one non-whitespace character — and
-        `str.split()` with no argument never yields an empty string — so `words`
-        and `words[0]` are both non-empty by the time they are indexed.
+        Strip each provider string AFTER `_to_ascii` and before testing it:
+        `_to_ascii` drops unrenderable characters but keeps the spaces between
+        them, so a multi-word non-Latin name arrives as `" "`. Without the
+        strip it is truthy, the fallback is skipped, and `words[-1]` raises
+        `IndexError`. Stripping before conversion does not work — Cyrillic is
+        not whitespace until `_to_ascii` has run.
         """
         from .rom_writer import _to_ascii
 
@@ -520,7 +424,7 @@ class StatMapper:
         return jersey[:8], (first or words[0])[:8]
 
     def _truncate_name(self, name: str, max_bytes: int) -> str:
-        """Smart truncation: strip diacritics and abbreviate if too long."""
+        """Fold to ASCII, then hard-truncate to `max_bytes`."""
         if not name:
             return ""
         from .rom_writer import _to_ascii

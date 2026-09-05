@@ -1,18 +1,10 @@
 """Winning Eleven 2002 (PlayStation).
 
-Soccer ROMs have fixed team slots with no code to match against, so this patcher
-requires an explicit slot mapping. It needs no credential: its one provider is
-ESPN, which is keyless.
+Team slots are fixed and carry no in-ROM code to match against, so this patcher
+requires an explicit slot mapping.
 
-`AfsHandler` (the Konami asset archive) and `CsvHandler` (roster export/import
-for hand-editing) are stdlib-only and exported eagerly. `TimGenerator` is not:
-its module does `try: from PIL import Image` at import time, and PIL is the
-optional `images` extra. Importing it from here would make every
-`import retro_roster_patcher` attempt a third-party import — a `sys.path` scan
-for a package that is deliberately absent — against a root docstring promising
-no I/O at import time and a project policy of zero runtime dependencies. So it
-is resolved on first attribute access instead, which keeps the name in
-`__all__` and reachable by `getattr` without paying for it.
+Keep `TimGenerator` lazy: its module imports PIL, the optional `images` extra,
+and the package must not attempt a third-party import at import time.
 """
 
 from typing import Any
@@ -25,11 +17,10 @@ __all__ = ["AfsHandler", "CsvHandler", "TimGenerator", "WE2002Patcher"]
 
 
 def __getattr__(name: str) -> Any:
-    """Resolve `TimGenerator` on first use; refuse every other name.
+    """Resolve `TimGenerator` on first use.
 
-    Refusing is not a formality: without the final `raise` this function
-    returns `None` for a typo, so `we2002.WE2002Pacher` becomes a silent
-    success holding the wrong thing.
+    Must raise on any other name: falling through returns `None` and turns a
+    typo into a silent success.
     """
     if name == "TimGenerator":
         from .tim_generator import TimGenerator
@@ -39,11 +30,5 @@ def __getattr__(name: str) -> Any:
 
 
 def __dir__() -> list[str]:
-    """List the lazy name too.
-
-    Without this, `dir()` reports only what is in the module dict, so the one
-    export that is not imported eagerly is the one export a consumer browsing
-    the package cannot see — which is the whole failure this export exists to
-    fix.
-    """
+    """List the lazy name too; it is not in the module dict until first use."""
     return sorted(set(globals()) | set(__all__))
