@@ -767,15 +767,20 @@ def test_every_espn_record_says_which_stats_were_not_measured(tmp_path):
     assert stats[15].passes_accuracy == 80.0
 
 
-def test_a_squad_fetched_from_espn_is_not_uniformly_clumsy_after_mapping(tmp_path):
-    # Fetched from ESPN and mapped to ROM attributes, end to end, rather than
-    # from a hand-built `PlayerStats`. Every one of these five records carries a
-    # filler zero for duels and dribbles; without the declaration on them all
-    # three attributes percentile to 1 for the entire league, and the ratings
-    # that are supplied stay correct and hide it.
-    #
-    # Concrete values rather than a spread, because a spread alone would also be
-    # produced by rating the players on the wrong thing.
+def test_a_squad_fetched_from_espn_is_uniformly_clumsy_after_mapping(tmp_path):
+    """PINS UPSTREAM FIDELITY DELIBERATELY, and it is known to be wrong.
+
+    Fetched from ESPN and mapped to ROM attributes, end to end, rather than from
+    a hand-built `PlayerStats`. Every one of these five records carries a filler
+    zero for duels and dribbles and says so in `unsupplied`; the mapper does not
+    read it, so all five tie at a raw value of zero and all three attributes
+    percentile to the floor for the entire league. The ratings that *are*
+    supplied stay correct and hide it, which is why this is worth a test of its
+    own rather than a note.
+
+    `games/we2002/stat_mapper.py` argues why the fix for this was reverted. Do
+    not restore it here.
+    """
     p = _espn_patcher(tmp_path)
     data = p.fetch(season=2025, league_id=2001)
 
@@ -784,36 +789,38 @@ def test_a_squad_fetched_from_espn_is_not_uniformly_clumsy_after_mapping(tmp_pat
 
     # Eight characters is the ROM's whole budget for a surname, hence the cuts.
     assert sorted(by_name) == ["A. Becke", "D. Szobo", "M. Salah", "R. Grave", "V. Dijk"]
-    # Goalkeeper 32, defender 28, midfielders 22 and 31, forward 26.
-    assert by_name["A. Becke"].body_balance == 6
-    assert by_name["V. Dijk"].body_balance == 7
-    assert by_name["R. Grave"].body_balance == 5
-    assert by_name["D. Szobo"].body_balance == 5
-    assert by_name["M. Salah"].body_balance == 6
-    assert by_name["A. Becke"].dribble == 3
-    assert by_name["V. Dijk"].dribble == 3
-    assert by_name["R. Grave"].dribble == 7
-    assert by_name["D. Szobo"].dribble == 6
-    assert by_name["M. Salah"].dribble == 7
-    # And the attribute that was never broken still tracks the goals scored: 27
-    # against 0, 1, 3 and 6, so four of five below him — the 80th percentile,
+    # Goalkeeper 32, defender 28, midfielders 22 and 31, forward 26 -- five
+    # positions and five ages, and one rating between them.
+    assert {a.body_balance for a in by_name.values()} == {1}
+    assert {a.dribble for a in by_name.values()} == {1}
+    # `technique` is 1 for everyone but the two midfielders, whom
+    # `_apply_position_adjustments` gives a +1 after the floored percentile.
+    assert by_name["R. Grave"].technique == 2
+    assert by_name["A. Becke"].technique == 1
+    # And the attribute that was never affected still tracks the goals scored: 27
+    # against 0, 1, 3 and 6, so four of five below him -- the 80th percentile,
     # rating 7, and the +1 `_apply_position_adjustments` gives a forward.
     assert by_name["M. Salah"].offensive == 8
     assert by_name["A. Becke"].offensive == 1
 
 
-def test_the_three_estimated_attributes_take_more_than_one_value_across_the_squad(tmp_path):
-    # The spread the estimators produce, measured on the real client rather than
-    # on a hand-built `PlayerStats`. One distinct value is the bug; these are the
-    # counts the estimators produce for this squad.
+def test_the_three_collapsed_attributes_take_one_value_across_the_squad(tmp_path):
+    """PINS UPSTREAM FIDELITY DELIBERATELY, and it is known to be wrong.
+
+    The counterpart of the assertion above, stated as distinct-value counts, and
+    measured on the real client. The seven attributes ESPN does supply are
+    unaffected: `offensive` takes five values across the same five players, so
+    this is a collapse of three specific attributes and not of the mapper.
+    """
     p = _espn_patcher(tmp_path)
     data = p.fetch(season=2025, league_id=2001)
     mapped = p.map_rosters(data, [SlotMapping(slot_index=0, team_id=364, team_name="Liverpool")])
     attrs = [rec.attributes for rec in mapped.teams[0].players]
 
-    assert len({a.body_balance for a in attrs}) == 3
-    assert len({a.dribble for a in attrs}) == 3
-    assert len({a.technique for a in attrs}) == 4
+    assert len({a.body_balance for a in attrs}) == 1
+    assert len({a.dribble for a in attrs}) == 1
+    assert len({a.technique for a in attrs}) == 2
+    assert len({a.offensive for a in attrs}) == 5
 
 
 # ── default_slot_mapping ─────────────────────────────────────────────────
