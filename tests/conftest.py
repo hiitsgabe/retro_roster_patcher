@@ -21,7 +21,7 @@ builds a real client before overwriting `p.api` with a fake, and the other 9
 build a patcher of their own; the constructor-time exposure is identical either
 way. Of the 66 tests in `tests/games/nhl94_snes/test_patcher.py`, 61 add the
 same exposure -- 59 an `EspnClient`, 2 an `NhlApiClient`, none of them both; of
-the 100 in `tests/games/nbalive95_genesis/test_patcher.py`, 81 add it through
+the 102 in `tests/games/nbalive95_genesis/test_patcher.py`, 83 add it through
 `EspnClient`; of the 137 in `tests/games/kgj_mlb_snes/test_patcher.py`, 111 do;
 of the 76 in `tests/games/we2002/test_patcher.py`, 57 do; of the 103 in
 `tests/games/iss_snes/test_patcher.py`, 92 do; of the 161 in
@@ -30,14 +30,14 @@ of the 76 in `tests/games/we2002/test_patcher.py`, 57 do; of the 103 in
 `tests/games/nhl05_ps2/test_patcher.py`, 112 do -- 110 an `EspnClient`, 2 an
 `NhlApiClient`, none of them both; and of the 163 in
 `tests/games/mvp_psp/test_patcher.py`, 136 do, all through `EspnClient`.
-Across the whole suite 879 items reach a client built with `transport=None`.
-Autouse covers 4758 of the 4766 tests a default run executes; the remaining 8
-opt out explicitly. The suite collects 4772 -- `addopts` deselects
+Across the whole suite 881 items reach a client built with `transport=None`.
+Autouse covers 4813 of the 4821 tests a default run executes; the remaining 8
+opt out explicitly. The suite collects 4827 -- `addopts` deselects
 `tests/test_packaging.py`'s 6, which are covered too on the run that selects
-them -- so 4764 of 4772 counted that way.
+them -- so 4819 of 4827 counted that way.
 
 Every number in the paragraph above moves when anyone adds a test; this is the
-fourteenth commit that has had to re-derive them. Re-derive rather than adjust:
+fifteenth commit that has had to re-derive them. Re-derive rather than adjust:
 `pytest --collect-only -q` prints the selected/collected pair, `pytest -m allow_default_transport
 --collect-only -q` prints the opt-out count, and the per-file figures come from a
 throwaway `-p` plugin that wraps both client `__init__`s and records which items
