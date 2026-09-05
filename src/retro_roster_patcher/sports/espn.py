@@ -558,6 +558,14 @@ class EspnClient:
                         hand_info.get("abbreviation", "") if isinstance(hand_info, dict) else ""
                     )
 
+                # `weight` is reported in pounds, the same unit and the same
+                # key `_parse_hockey_squad` reads. It was not parsed here until
+                # `games/mvp_psp` needed it, so every baseball Player carried
+                # 0.0 and MVP Baseball wrote all 750 of its patched players at
+                # one constant weight. Zero still means "not reported", and a
+                # consumer must treat it that way rather than as a measurement.
+                weight = athlete.get("weight", 0) or 0
+
                 players.append(
                     Player(
                         id=int(athlete.get("id", 0)),
@@ -569,6 +577,7 @@ class EspnClient:
                         position=pos_abbrev,
                         number=number,
                         photo_url="",
+                        weight=float(weight),
                         handedness=throw_hand,
                         bats=bat_hand,
                     )

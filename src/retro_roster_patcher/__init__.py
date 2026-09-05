@@ -47,6 +47,7 @@ from .sports.serde import league_data_from_dict, league_data_to_dict
 # describes is silently undone.
 from .games import iss_snes as _iss_snes  # noqa: E402,F401
 from .games import kgj_mlb_snes as _kgj_mlb_snes  # noqa: E402,F401
+from .games import mvp_psp as _mvp_psp  # noqa: E402,F401
 from .games import nbalive95_genesis as _nbalive95_genesis  # noqa: E402,F401
 from .games import nhl05_ps2 as _nhl05_ps2  # noqa: E402,F401
 from .games import nhl07_psp as _nhl07_psp  # noqa: E402,F401
