@@ -2,13 +2,9 @@
 
 Two inputs per player: the roster entry (`sports.models.Player`) and, when the
 provider had one, a dict of season totals keyed by ESPN's own abbreviations --
-`AVG`, `OPS`, `ERA`, `WHIP` and so on. **The leaders endpoint only returns each
-category's leaders**, so most players have a partial dict and some have none at
+`AVG`, `OPS`, `ERA`, `WHIP` and so on. The leaders endpoint only returns each
+category's leaders, so most players have a partial dict and some have none at
 all, and the position defaults below are what a player with no dict gets.
-
-Everything here is arithmetic on those two inputs. Nothing reads the ROM and
-nothing reaches the network, so `map_rosters` runs on a machine that has never
-seen the ISO.
 """
 
 from __future__ import annotations
@@ -81,10 +77,7 @@ THROWS_LEFT = 1
 class PositionDefaults:
     """What a player at one position gets when the provider reported no stats.
 
-    Frozen, and read through `POSITION_DEFAULTS[pos]`, so there is no shared
-    mutable default object to hand to every record -- the defect
-    `games/nhl94_genesis` fixed with `dataclasses.replace` and which this game
-    did not have, because the source read its dicts and never stored one.
+    Frozen on purpose: no shared mutable default object may reach a record.
     """
 
     speed: int
@@ -108,10 +101,8 @@ POSITION_DEFAULTS: dict[str, PositionDefaults] = {
     "DH": PositionDefaults(30, 30, 30, 40, 40, 65, 70),
 }
 
-# Ratings a pitcher gets for the things pitchers are not rated on. Applied
-# whether or not stats were found, at slightly different values for each --
-# the source's, preserved, and the difference is small enough to be an accident
-# rather than a judgement, so it is named rather than harmonised.
+# Ratings a pitcher gets for the things pitchers are not rated on. The two pairs
+# differ by five points for no stated reason; preserved, not harmonised.
 PITCHER_NO_STATS_BATTING = (25, 15)  # contact, power
 PITCHER_WITH_STATS_BATTING = (20, 10)
 
@@ -127,10 +118,7 @@ def _clamp(val: int, lo: int = ATTR_MIN, hi: int = ATTR_MAX) -> int:
 def _scale(value: float, low: float, high: float) -> int:
     """Map `value` from the range `[low, high]` onto 0-99, clamped at both ends.
 
-    An inverted or empty range answers 50, the scale's midpoint. That branch is
-    reachable only from a caller that hardcodes the range, and every caller
-    here hardcodes a valid one, so it is a guard against a future edit rather
-    than a live path.
+    An inverted or empty range answers 50, the scale's midpoint.
     """
     if high <= low:
         return 50
@@ -140,24 +128,15 @@ def _scale(value: float, low: float, high: float) -> int:
 def _stat(stats: dict[str, Any], key: str, default: float) -> float:
     """One statistic as a float, with `default` for absent, None, empty or zero.
 
-    **`or default` treats a reported zero as an absence**, which is the source's
-    behaviour and is preserved because it is right for the keys it is used on
-    and wrong for none of them: a pitcher with an ERA of exactly 0.00 has not
-    thrown enough innings for the number to mean anything, and a batter with an
-    OPS of exactly 0.000 is a pitcher taking at-bats. It is stated here because
-    it is not what the expression looks like it does.
+    `or default` treats a reported zero as an absence, deliberately: an ERA of
+    exactly 0.00 means too few innings for the number to mean anything, and an
+    OPS of exactly 0.000 is a pitcher taking at-bats.
     """
     return float(stats.get(key, default) or default)
 
 
 class MVPStatMapper:
-    """Maps ESPN player data onto `MVPPlayerRecord`.
-
-    Stateless. The source's class was too, apart from `team_stats`, which lived
-    on the *patcher* rather than here.
-    """
-
-    # -- batters ------------------------------------------------------------
+    """Maps ESPN player data onto `MVPPlayerRecord`. Stateless."""
 
     def map_batter(self, player: Player, stats: dict[str, Any] | None = None) -> MVPPlayerRecord:
         """One position player.
@@ -167,14 +146,9 @@ class MVPStatMapper:
         plate discipline, bunting, baserunning, stealing -- take fixed values.
         """
         pos = self.normalize_position(player.position)
-        # The fallback is PROVEN EQUIVALENT under mutation, and kept. Every
-        # string `normalize_position` can return is a value of
-        # `POSITION_ALIASES` or `DEFAULT_POSITION`, and all twelve of those are
-        # keys of `POSITION_DEFAULTS` -- pinned by a test in
-        # `test_stat_mapper.py` -- so `.get`'s second argument cannot be
-        # reached from here and could be any position at all. Kept because the
-        # two tables are separate and a future alias added to one and not the
-        # other should land somewhere stated rather than raise `KeyError`.
+        # Unreachable fallback, and kept: `POSITION_ALIASES` and
+        # `POSITION_DEFAULTS` are separate tables, and an alias added to one and
+        # not the other must land somewhere stated rather than raise `KeyError`.
         defaults = POSITION_DEFAULTS.get(pos, POSITION_DEFAULTS[DEFAULT_POSITION])
 
         rec = MVPPlayerRecord(
@@ -184,13 +158,10 @@ class MVPStatMapper:
             bats=self.map_bat_hand(player.bats or player.handedness),
             throws=self.map_throw_hand(player.handedness),
             primary_position=pos,
-            # UPSTREAM BEHAVIOUR, KNOWN WRONG, PRESERVED DELIBERATELY: no weight
-            # is read from anywhere, so `MVPPlayerRecord.weight` keeps its
-            # default of 190 and every one of the 750 patched players is written
-            # at 190 lb. `Player.weight` is right there, filled by
-            # `sports/espn.py` from the MLB roster endpoint's own figure, and it
-            # is not read. See `patcher._build_attrib_fields` for why that
-            # stands.
+            # Upstream behaviour, known wrong, preserved deliberately: no weight
+            # is read, so `MVPPlayerRecord.weight` keeps its default and all 750
+            # patched players are written at 190 lb. `Player.weight` holds the
+            # real figure and is not read. See `patcher._build_attrib_fields`.
             is_pitcher=False,
         )
 
@@ -221,10 +192,7 @@ class MVPStatMapper:
     ) -> MVPPlayerRecord:
         """Derive a batter's ratings from his season totals.
 
-        The source also read `OPS` here, with a default of 0.700, and never used
-        the value. Dropped: `_stat` is pure, so reading it had no effect beyond
-        suggesting to a reader that on-base-plus-slugging fed a rating. It does
-        feed one -- `select_roster`'s batting order -- and not any of these.
+        `OPS` feeds `select_roster`'s batting order and none of these ratings.
         """
         avg = _stat(stats, "AVG", 0.250)
         hr = _stat(stats, "HR", 0)
@@ -247,8 +215,8 @@ class MVPStatMapper:
 
         if rec.bats == BATS_SWITCH:
             # A switch hitter has no weak side, so the two splits collapse to
-            # their mean -- which is 2 or 3 points below the stronger side, not
-            # equal to it, because the mean of x and x-5 is x-2.
+            # their mean -- 2 or 3 points below the stronger side, not equal to
+            # it, because the mean of x and x-5 is x-2.
             rec.contact_rhp = rec.contact_lhp = (rec.contact_rhp + rec.contact_lhp) // 2
             rec.power_rhp = rec.power_lhp = (rec.power_rhp + rec.power_lhp) // 2
 
@@ -273,8 +241,6 @@ class MVPStatMapper:
         rec.starpower = _scale(hits * 0.3 + hr * 2 + rbi * 0.5, 20, 200)
         return rec
 
-    # -- pitchers -----------------------------------------------------------
-
     def map_pitcher(
         self,
         player: Player,
@@ -284,25 +250,14 @@ class MVPStatMapper:
     ) -> MVPPlayerRecord:
         """One pitcher.
 
-        UPSTREAM BEHAVIOUR, KNOWN WRONG, PRESERVED DELIBERATELY -- **the arsenal
-        is overwritten on the way out.** The last statement of this method is an
-        unconditional
-
-            rec.pitches = self.default_pitches(is_starter)
-
-        *outside* the `if stats:` branch, so it runs after `_apply_pitcher_stats`
-        has computed a velocity from strikeouts and a control from WHIP and ERA
-        and stored them through `default_pitches(is_starter, vel, control)`. The
-        second assignment discards the first. Every pitcher in the game ships
-        with the same 50-velocity, 50-control arsenal, and the whole derivation
-        -- twelve lines and four statistics in `_apply_pitcher_stats` -- is dead
-        code that this port keeps running and keeps throwing away.
-
-        Deleting one line would fix it and change `pitchattrib`'s movement,
-        control and velocity columns on every patched pitcher. This port's output
-        has never been checked against a retail UMD, and a byte the source did
-        not write is a hardware risk that better ratings do not buy off, so the
-        line stays and so does the derivation behind it.
+        Upstream behaviour, known wrong, preserved deliberately: the last
+        statement assigns `default_pitches(is_starter)` *outside* the `if stats:`
+        branch, discarding the velocity and control `_apply_pitcher_stats` just
+        derived, so every pitcher ships with the same 50-velocity, 50-control
+        arsenal. Do not move the line inside the branch: it would change
+        `pitchattrib`'s movement, control and velocity columns on every patched
+        pitcher, and this port's output has never been checked against a retail
+        UMD.
         """
         rec = MVPPlayerRecord(
             first_name=self.first_name(player.name),
@@ -324,8 +279,7 @@ class MVPStatMapper:
             rec.contact_rhp, rec.power_rhp = PITCHER_NO_STATS_BATTING
             rec.contact_lhp, rec.power_lhp = PITCHER_NO_STATS_BATTING
 
-        # The overwrite. See the label on this method: it is outside the branch
-        # above on purpose, because that is where the source put it.
+        # Outside the branch above on purpose. See this method's docstring.
         rec.pitches = self.default_pitches(is_starter)
         return rec
 
@@ -365,11 +319,8 @@ class MVPStatMapper:
         # *lower* ERA both raise it.
         control = (_scale(1.60 - whip, 0.0, 0.70) + _scale(6.0 - era, 0.0, 4.0)) // 2
 
-        # DEAD, and knowingly so: `map_pitcher` overwrites this with
-        # `default_pitches(is_starter)` on the way out, so the velocity and
-        # control computed just above never reach a disc. Kept because the
-        # source computed them and threw them away in exactly this shape; see
-        # the label on `map_pitcher`.
+        # Dead, and knowingly so: `map_pitcher` overwrites this on the way out,
+        # so the velocity and control above never reach a disc. Keep it.
         rec.pitches = self.default_pitches(is_starter, velocity, control)
 
         rec.contact_rhp, rec.power_rhp = PITCHER_WITH_STATS_BATTING
@@ -397,10 +348,8 @@ class MVPStatMapper:
         pitch is stored but never written -- column 8 is the first type column
         and pitch 1 is always a fastball, so the game has no column for it.
 
-        **`movement` is not clamped for the fastball** and is for the other two.
-        `velocity // 2` cannot exceed 49 so the clamp would never fire, which is
-        presumably why the source omitted it; it is left omitted so the two
-        forms do not look like they mean different things.
+        The fastball's `movement` is unclamped where the other two are clamped:
+        `velocity // 2` cannot exceed 49, so the clamp could never fire.
         """
         pitches = [
             MVPPitch(
@@ -438,8 +387,6 @@ class MVPStatMapper:
             )
         return pitches
 
-    # -- roster selection ---------------------------------------------------
-
     def select_roster(
         self,
         players: list[Player],
@@ -454,13 +401,11 @@ class MVPStatMapper:
         Shorter than 25 when the squad is: a team the provider gave nine players
         for produces nine, and `patch` writes nine.
 
-        The three sort keys are composites rather than tuples, so a single
-        number decides each: on-base-plus-slugging times a thousand plus hits
-        for a batter, wins times a hundred plus innings for a starter, saves
-        times a hundred plus ten-minus-ERA for a reliever. Each is the source's.
-        The reliever key's `10 - era` term is what breaks ties between pitchers
-        with no saves, and it can go negative for an ERA above 10 without
-        disordering anything, because it is bounded by the 100-point save step.
+        Each sort key is a single composite number: OPS x 1000 + hits for a
+        batter, wins x 100 + innings for a starter, saves x 100 + (10 - ERA) for
+        a reliever. The reliever key's last term breaks ties between pitchers
+        with no saves and may go negative above an ERA of 10 without
+        disordering anything, being bounded by the 100-point save step.
         """
         stats = stats or {}
         pitchers = [p for p in players if self.is_pitcher(p)]
@@ -486,34 +431,19 @@ class MVPStatMapper:
         selected_starters = starters[:STARTERS_PER_TEAM]
         selected_relievers = relievers[:RELIEVERS_PER_TEAM]
 
-        # Whichever group came up short takes from whatever is left over, in
-        # the order the leftovers already have -- surplus starters first, then
-        # surplus relievers.
+        # Whichever group came up short takes from whatever is left over.
         #
-        # **The bullpen is filled first and the rotation gets the remainder**,
-        # which is the opposite of what the shape of this code suggests: the
-        # two slices above happen before either top-up loop, so `relievers[:5]`
-        # is already spoken for by the time the rotation asks for anybody.
-        # ESPN lists most of a staff as a bare `P`, which this treats as relief,
-        # so a squad of six such pitchers puts its five best in the bullpen and
-        # the sixth in the rotation -- and a squad of five puts all five in the
-        # bullpen and leaves the rotation empty. Inherited, measured, and
-        # preserved; it is pinned by a test rather than left to be rediscovered.
+        # Inherited and preserved: the bullpen is filled first and the rotation
+        # gets the remainder, because both slices above happen before either
+        # top-up loop. ESPN lists most of a staff as a bare `P`, which this
+        # treats as relief, so a squad of five such pitchers puts all five in
+        # the bullpen and leaves the rotation empty.
         #
-        # The order of the two slices in `remaining` is PROVEN EQUIVALENT under
-        # mutation, and for a reason worth writing down rather than rediscovering:
-        # the first loop runs only when `len(starters) < STARTERS_PER_TEAM`,
-        # which is exactly when `starters[STARTERS_PER_TEAM:]` is empty, and the
-        # second only when `relievers[RELIEVERS_PER_TEAM:]` is empty. So at most
-        # one of the two slices is non-empty on any run where either loop pops
-        # anything, and concatenating them the other way round cannot change
-        # which player is taken.
+        # The order of the two slices, and of the two loops, cannot matter: a
+        # loop runs only when its own group is short, which is exactly when that
+        # group's surplus slice is empty, so at most one slice is non-empty on
+        # any run where either loop pops anything.
         remaining = starters[STARTERS_PER_TEAM:] + relievers[RELIEVERS_PER_TEAM:]
-        # The *order of these two loops* is equivalent for the same reason: the
-        # group that is short is the group whose surplus slice is empty, so only
-        # one of them can ever pop anything on a given squad. Both facts are
-        # measured rather than assumed -- swapping the slices and swapping the
-        # loops were separate mutations and both survived the suite.
         while len(selected_starters) < STARTERS_PER_TEAM and remaining:
             selected_starters.append(remaining.pop(0))
         while len(selected_relievers) < RELIEVERS_PER_TEAM and remaining:
@@ -530,13 +460,11 @@ class MVPStatMapper:
         than filled, and the bench then runs longer.
 
         Identity, not equality, decides whether a player has been used: two
-        distinct `Player` objects with the same id are two roster entries as far
-        as this is concerned, which is the source's behaviour and the only one
-        available -- `Player` is not hashable and comparing by id would drop a
-        provider's duplicate entry silently.
+        distinct `Player` objects sharing an id are two roster entries here, and
+        comparing by id would silently drop a provider's duplicate entry.
 
-        The order positions are filled in is `SELECTION_POSITIONS`, which is
-        **not** the order the lineup is written in; `models` says why.
+        Positions are filled in `SELECTION_POSITIONS` order, which is not the
+        order the lineup is written in; `models` says why.
         """
         by_pos: dict[str, list[Player]] = {}
         for p in batters:
@@ -553,27 +481,17 @@ class MVPStatMapper:
                     break
 
         for p in batters:
-            # PROVEN EQUIVALENT under mutation: `>` instead of `>=` appends one
-            # more batter and then leaves on the following iteration, and the
-            # `[:BATTERS_PER_TEAM]` below drops exactly that one. Kept as `>=`
-            # because the bench is fifteen deep and stopping at sixteen to throw
-            # the sixteenth away is not what this loop means.
+            # `>=`, not `>`: the bench is fifteen deep, and stopping at sixteen
+            # to have the slice below throw the sixteenth away is not the rule.
             if len(selected) >= BATTERS_PER_TEAM:
                 break
             if id(p) not in used:
                 selected.append(p)
                 used.add(id(p))
 
-        # This slice and the `>=` above are PROVEN EQUIVALENT under mutation
-        # *individually*, because they are redundant with each other: the
-        # position pass can add at most nine, the loop stops the list at
-        # fifteen, and the slice then has nothing to remove. Both are kept --
-        # deleting either leaves the other carrying a bound it does not state,
-        # and a squad is not "the first fifteen of however many the loop felt
-        # like".
+        # Redundant with the `>=` above, and kept: deleting either leaves the
+        # other carrying a bound it does not state.
         return selected[:BATTERS_PER_TEAM]
-
-    # -- small conversions --------------------------------------------------
 
     @staticmethod
     def is_pitcher(player: Player) -> bool:
@@ -581,13 +499,7 @@ class MVPStatMapper:
 
     @staticmethod
     def normalize_position(position: str) -> str:
-        """A provider's position string as one of this game's nine.
-
-        The source's version took an `is_pitcher` flag and returned `"SP"` when
-        it was set. Every call site passed `False`; the pitcher branch was
-        never taken, and `map_pitcher` sets the position itself from
-        `is_starter`. The parameter is gone.
-        """
+        """A provider's position string as one of this game's nine."""
         return POSITION_ALIASES.get((position or "").upper(), DEFAULT_POSITION)
 
     @staticmethod
@@ -623,11 +535,9 @@ class MVPStatMapper:
         would leave the surname empty.
         """
         parts = full_name.strip().split()
-        # PROVEN EQUIVALENT under mutation: `< 1` reaches the same answer for a
-        # one-word name the long way round -- `parts[1:]` is empty, so `kept` is
-        # empty and the return below falls to `parts[-1]`, which is the one
-        # word. Kept because "a one-word name is its own surname" is the rule,
-        # and arriving at it through an empty suffix filter is not.
+        # Redundant with the suffix filter below, and kept: "a one-word name is
+        # its own surname" is the rule, and reaching it through an empty filter
+        # result is not.
         if len(parts) <= 1:
             return parts[0] if parts else UNNAMED
         kept = [p for p in parts[1:] if p.rstrip(".").upper() not in NAME_SUFFIXES]
@@ -637,13 +547,8 @@ class MVPStatMapper:
     def get_team_slot(team_abbrev: str) -> int | None:
         """The ROM slot a provider's team abbreviation maps to, or None."""
         mvp_abbrev = MODERN_MLB_TO_MVP.get(team_abbrev.upper())
-        # Both lines below are PROVEN EQUIVALENT under mutation and both are
-        # kept. Deleting the guard leaves `MVP_ABBREV_TO_INDEX.get(None)`, which
-        # is None, the same answer by accident. And giving that `.get` a default
-        # cannot fire: every value of `MODERN_MLB_TO_MVP` is a key of
-        # `MVP_ABBREV_TO_INDEX`, which `test_models.py` pins. What the two say
-        # together is that an unknown club has no slot rather than slot zero,
-        # and slot zero is Anaheim.
+        # Keep the guard and keep the bare `.get`: together they say an unknown
+        # club has no slot rather than slot zero, and slot zero is Anaheim.
         if mvp_abbrev is None:
             return None
         return MVP_ABBREV_TO_INDEX.get(mvp_abbrev)

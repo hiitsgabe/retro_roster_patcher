@@ -3,14 +3,10 @@
     records -> CSV text -> RefPack -> the section's own fixed allocation
                                    -> database.big -> ISO copy
 
-**Every section has a fixed home and no length word.** A section starts at its
-offset in `SECTION_MAP` and ends where the next one starts; there is nothing in
-the file that says how long it actually is, so the only way to store a section
-is to fit it in that space and zero the remainder. A recompressed section that
-does not fit cannot be written at all.
-
-That is the whole of this module's difficulty, and it is where the source's
-worst defect was. See `_rebuild_section_bytes`.
+Every section has a fixed home and no length word. A section starts at its
+offset in `SECTION_MAP` and ends where the next one starts, so the only way to
+store one is to fit it in that space and zero the remainder. A recompressed
+section that does not fit cannot be written at all.
 """
 
 from __future__ import annotations
@@ -28,7 +24,7 @@ from .models import (
 )
 from .rom_reader import MVPPSPRomReader, Table
 
-# How much of a file to move per read while copying. 4 MiB, the source's.
+# How much of a file to move per read while copying.
 COPY_CHUNK_BYTES = 4 * 1024 * 1024
 
 # What a record and a section line end with. The comma before the semicolon is
@@ -51,10 +47,8 @@ def build_csv_record(hash_id: str, fields: dict[int, str]) -> str:
     `00b87d5f5,0 Ichiro,1 Suzuki,22 61,;`
 
     Columns are emitted in ascending numeric order, which is not necessarily the
-    order the disc had them in -- a record read back and written out unchanged
-    is byte-identical only if the disc's own order was ascending. Nothing in
-    this repository can establish whether it is, and the source made the same
-    assumption; it is stated here rather than left implicit.
+    order the disc had them in: a record read back and written out unchanged is
+    byte-identical only if the disc's own order was ascending.
     """
     parts = [hash_id]
     parts.extend(f"{num} {fields[num]}" for num in sorted(fields))
@@ -75,10 +69,9 @@ def build_csv_section(
     that is no longer in `records` is skipped, which is how a deleted record
     leaves.
 
-    Encoded ASCII with `errors="replace"`, the source's choice, so a name
-    carrying a character the disc's charset has no room for becomes `?` rather
-    than raising in the middle of a rebuild. Every non-ASCII character costs one
-    byte of a fixed allocation and this is the point at which that is decided.
+    Encoded ASCII with `errors="replace"`, so a name carrying a character the
+    disc's charset has no room for becomes `?` rather than raising in the middle
+    of a rebuild.
     """
     lines = [header + RECORD_TERMINATOR]
 
@@ -98,11 +91,7 @@ def build_csv_section(
 
 
 class SectionTooLargeError(RomError):
-    """A rebuilt section does not fit the space `database.big` reserves for it.
-
-    A `RomError` because it is a statement about what will and will not fit on
-    the user's disc, and `Patcher.patch` promises `RomError` for that.
-    """
+    """A rebuilt section does not fit the space `database.big` reserves for it."""
 
     def __init__(self, table: str, compressed: int, allocation: int) -> None:
         self.table = table
@@ -133,14 +122,11 @@ class MVPPSPRomWriter:
         self.section_headers: dict[str, str] = {}
         self._modified_tables: set[str] = set()
 
-    # -- loading ------------------------------------------------------------
-
     def load(self) -> bool:
         """Read and parse the source ISO's `database.big`.
 
         False when the file cannot be read or does not carry this game's
-        `database.big`. The caller turns that into a `RomError`; the source
-        returned it up through three layers of boolean and lost the reason.
+        `database.big`. The caller turns that into a `RomError`.
         """
         if not self.reader.load():
             return False
@@ -165,8 +151,6 @@ class MVPPSPRomWriter:
             if idx >= 0:
                 self.section_headers[name] = text[:idx]
 
-    # -- staging edits ------------------------------------------------------
-
     def update_records(self, table_name: str, records: Table) -> None:
         """Replace a whole table. Used for `roster`, which is rebuilt from scratch."""
         self.reader.records[table_name] = records
@@ -182,19 +166,15 @@ class MVPPSPRomWriter:
         A column absent from `fields` keeps whatever the disc had for the player
         whose id is being reused.
 
-        The existing record is copied before being updated. The source mutated
-        the dict it got back from `reader.records`, which is the same object the
-        reader's own `record_order` and every other accessor see; under the new
-        architecture `patch` may be called twice on one writer's reader and the
-        second call would have started from the first call's results.
+        Copy the existing record before updating it: mutating the dict
+        `reader.records` handed back would make a second `patch` on the same
+        reader start from the first one's results.
         """
         table = self.reader.records.setdefault(table_name, {})
         merged = dict(table.get(player_hash, {}))
         merged.update(fields)
         table[player_hash] = merged
         self._modified_tables.add(table_name)
-
-    # -- rebuilding ---------------------------------------------------------
 
     def _rebuild_section_bytes(self, name: str) -> bytes | None:
         """Rebuild one table and compress it, or None if it cannot be rebuilt.
@@ -219,21 +199,10 @@ class MVPPSPRomWriter:
         allocation is zeroed, so the fixed offsets the game expects are
         preserved. Sections nothing touched are copied through byte for byte.
 
-        DELIBERATE DIVERGENCE -- a section that does not fit raises
-        `SectionTooLargeError` where the source did `continue`. That `continue`
-        kept the *original* section, dropping every edit to that table, and then
-        returned a successful `PatchResult` reporting the full count of teams
-        and players patched. For the `roster` table that is the entire roster
-        assignment for all thirty clubs; for `attrib` it is every name. And it
-        is not a theoretical branch: RefPack is an LZ77 variant, so how well the
-        table compresses depends on how much text repeats inside it, and a
-        rebuild that replaces 750 names with 750 different names can compress
-        worse than what it replaced. The user would be told the patch succeeded
-        and would boot a disc with the 2005 roster on it.
-
-        Raising costs a user who hits it the patch. That is the right trade
-        because the alternative costs them the same patch *and* the knowledge
-        that they did not get it.
+        Deliberate, adjudicated divergence from upstream: a section that does not
+        fit raises `SectionTooLargeError` where the source did `continue`. Do not
+        restore the `continue`; it kept the original section, dropped every edit
+        to that table, and still reported a successful patch.
 
         The `attrib_compact` section is skipped, and that is an inherited defect
         rather than a decision -- see `_skip_compact_attrib`.
@@ -246,13 +215,9 @@ class MVPPSPRomWriter:
         for _, name in SECTION_MAP:
             if name not in self._modified_tables:
                 continue
-            # PROVEN EQUIVALENT under mutation, and kept. `if False` here
-            # changes nothing: `_rebuild_section_bytes` reads the same
-            # dictionary with `.get`, answers None for a name it has no header
-            # for, and `if not compressed` below then does the same `continue`.
-            # It is kept because it says at the top of the loop which sections
-            # are candidates, where the other reads as "the rebuild produced
-            # nothing" -- a different fact that happens to share an outcome.
+            # Redundant with the `if not compressed` below, and kept: this one
+            # says which sections are candidates, that one says the rebuild
+            # produced nothing.
             if name not in self.section_headers:
                 continue
             if self._skip_compact_attrib(name):
@@ -276,36 +241,23 @@ class MVPPSPRomWriter:
     def _skip_compact_attrib(name: str) -> bool:
         """Is this the compact attribute table, which is never rewritten?
 
-        INHERITED DEFECT, preserved and named. `attrib_compact` is a second copy
-        of the player attributes in some narrower form -- 324 bytes of
-        allocation against `attrib`'s 61 448 -- and the source wrote `attrib`
-        and deliberately skipped it. If any screen in the game reads the compact
-        table, that screen shows the 2005 player where every other screen shows
-        the patched one.
+        Inherited defect, preserved: `attrib_compact` is a second copy of the
+        player attributes in a narrower form -- 324 bytes of allocation against
+        `attrib`'s 61 448 -- and any screen that reads it shows the 2005 player.
+        Fixing it needs the compact table's column layout, which is nowhere in
+        this repository, and writing a guess is worse than not writing.
 
-        It is preserved rather than fixed because fixing it needs the compact
-        table's column layout, which is not in `models` and cannot be derived
-        from anything in this repository: no disc may enter it. Writing a guess
-        into a table the game reads is worse than not writing it.
-
-        The check is also **unreachable through `patch`**, and that is worth
-        being precise about rather than deleting it as dead. `_modified_tables`
-        only ever gains the five names in `models.MODIFIED_TABLES`, so the guard
-        above it already excludes this table. It is kept as the statement of
-        intent, because a future caller that stages an edit here would otherwise
-        write it, and that is exactly the change that needs a reader to stop.
+        Unreachable through `patch`, since `_modified_tables` only ever gains the
+        names in `models.MODIFIED_TABLES`. Kept so a future caller that stages an
+        edit here is stopped rather than writing it.
         """
         return name == COMPACT_ATTRIB_TABLE
-
-    # -- output -------------------------------------------------------------
 
     def copy_iso(self) -> None:
         """Copy the source image to the output path, creating its directory.
 
-        Raises `OSError`; the caller wraps it. The source caught everything and
-        returned False, which reached the user as "Failed to save patched ISO"
-        whether the cause was a full disk, a read-only directory or a vanished
-        source.
+        Let `OSError` propagate; the caller wraps it and names the file the OS
+        complained about.
         """
         output_dir = os.path.dirname(self.output_path)
         if output_dir:
@@ -332,13 +284,9 @@ class MVPPSPRomWriter:
             RomError: nothing was loaded, or a section does not fit.
             OSError: the copy or the write failed; the caller wraps it.
         """
-        # PROVEN EQUIVALENT under mutation, and kept. `rebuild_database_big`
-        # makes the same test on the same attribute one line later and raises a
-        # `RomError` carrying the identical message, so no observation --
-        # not the type, not the text, not the fact that nothing was written --
-        # can tell this check from its absence. It is kept because `finalize`
-        # copies a several-hundred-megabyte image, and stating the precondition
-        # where the method begins is worth one redundant comparison.
+        # Redundant with the identical test in `rebuild_database_big`, and kept:
+        # `finalize` copies a several-hundred-megabyte image, so the precondition
+        # belongs where the method begins.
         if self.reader.database_big is None:
             raise RomError("database.big was never loaded")
 

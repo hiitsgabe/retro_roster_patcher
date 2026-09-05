@@ -14,9 +14,8 @@ The six tables this package touches, and how they chain:
           rather than in SPAI is what makes his slot a goalie slot
     STEA  the team table, read for `RomSlot.current_name` and nothing else
 
-**None of the field names or widths below has ever been checked against a
-retail disc**, here or upstream; no real ISO may enter this repository. They are
-transcribed from the source package.
+The field names and widths below are transcribed from the source package and
+have never been checked against a retail disc.
 """
 
 from __future__ import annotations
@@ -26,12 +25,9 @@ from dataclasses import dataclass, field
 # STEA table INDX -> modern team abbreviation. The 30 NHL clubs of 2004-05, then
 # the two All-Star sides.
 #
-# **`SJ` is 24 and `STL` is 25, the opposite of NHL 07.** Two adjacent slots
-# whose abbreviations are three characters apart in a sorted list is exactly the
-# shape of difference a port copies straight over, and getting it wrong writes
-# the Sharks' roster onto the Blues and the Blues' onto the Sharks --
-# a full swap that no size check, no CRC and no test of counts would notice.
-# The source package carried a comment saying so and it is kept.
+# `SJ` is 24 and `STL` is 25, the opposite of NHL 07. Do not copy that game's
+# order over: swapping them writes the Sharks' roster onto the Blues and the
+# Blues' onto the Sharks, which no size check or count would notice.
 NHL05_TEAM_INDEX = {
     0: "ANA",
     1: "ATL",
@@ -67,63 +63,58 @@ NHL05_TEAM_INDEX = {
     31: "WES",
 }
 
-# Modern NHL abbreviation -> STEA INDX, for matching a fetched roster to a slot.
-# Both providers' spellings are here, which is why this maps 39 codes onto 32
-# slots: ESPN says `LA`, `NJ`, `SJ` and `TB` where the NHL API says `LAK`,
-# `NJD`, `SJS` and `TBL`. Six further codes are relocations or expansions that
-# reuse an ancestor's slot. **Collapsing 39 keys onto 32 values means two
-# fetched teams can name one slot**, which `NHL05PS2Patcher.map_rosters` has to
-# guard; the comment there says what goes wrong without it.
+# Modern NHL abbreviation -> STEA INDX. 39 codes onto 32 slots: ESPN says `LA`,
+# `NJ`, `SJ` and `TB` where the NHL API says `LAK`, `NJD`, `SJS` and `TBL`, and
+# six further codes are relocations reusing an ancestor's slot. Two fetched teams
+# can therefore name one slot, which `NHL05PS2Patcher.map_rosters` must guard.
 #
-# `SEA` and `VGK` point at the two All-Star slots and are **dead entries**: this
-# game patches slots 0-29 only. See `PATCHABLE_SLOT_COUNT`.
+# `SEA` and `VGK` name the All-Star slots and are dead entries: this game patches
+# slots 0-29 only. See `PATCHABLE_SLOT_COUNT`.
 MODERN_NHL_TO_NHL05 = {
-    "ANA": 0,  # Anaheim Ducks
-    "ATL": 1,  # Atlanta Thrashers (now WPG)
-    "BOS": 2,  # Boston Bruins
-    "BUF": 3,  # Buffalo Sabres
-    "CGY": 4,  # Calgary Flames
-    "CAR": 5,  # Carolina Hurricanes
-    "CHI": 6,  # Chicago Blackhawks
-    "COL": 7,  # Colorado Avalanche
-    "CBJ": 8,  # Columbus Blue Jackets
-    "DAL": 9,  # Dallas Stars
-    "DET": 10,  # Detroit Red Wings
-    "EDM": 11,  # Edmonton Oilers
-    "FLA": 12,  # Florida Panthers
-    "LAK": 13,  # Los Angeles Kings
-    "LA": 13,  # ESPN abbreviation
-    "MIN": 14,  # Minnesota Wild
-    "MTL": 15,  # Montreal Canadiens
-    "NSH": 16,  # Nashville Predators
-    "NJD": 17,  # New Jersey Devils
-    "NJ": 17,  # ESPN abbreviation
-    "NYI": 18,  # New York Islanders
-    "NYR": 19,  # New York Rangers
-    "OTT": 20,  # Ottawa Senators
-    "PHI": 21,  # Philadelphia Flyers
-    "PHX": 22,  # Phoenix Coyotes (now UTA)
-    "ARI": 22,  # Arizona Coyotes (became UTA)
-    "UTA": 22,  # Utah Hockey Club -> use Phoenix slot
-    "PIT": 23,  # Pittsburgh Penguins
-    "SJS": 24,  # San Jose Sharks
-    "SJ": 24,  # ESPN abbreviation
-    "STL": 25,  # St. Louis Blues
-    "TBL": 26,  # Tampa Bay Lightning
-    "TB": 26,  # ESPN abbreviation
-    "TOR": 27,  # Toronto Maple Leafs
-    "VAN": 28,  # Vancouver Canucks
-    "WSH": 29,  # Washington Capitals
+    "ANA": 0,
+    "ATL": 1,
+    "BOS": 2,
+    "BUF": 3,
+    "CGY": 4,
+    "CAR": 5,
+    "CHI": 6,
+    "COL": 7,
+    "CBJ": 8,
+    "DAL": 9,
+    "DET": 10,
+    "EDM": 11,
+    "FLA": 12,
+    "LAK": 13,
+    "LA": 13,
+    "MIN": 14,
+    "MTL": 15,
+    "NSH": 16,
+    "NJD": 17,
+    "NJ": 17,
+    "NYI": 18,
+    "NYR": 19,
+    "OTT": 20,
+    "PHI": 21,
+    "PHX": 22,
+    "ARI": 22,
+    "UTA": 22,
+    "PIT": 23,
+    "SJS": 24,
+    "SJ": 24,
+    "STL": 25,
+    "TBL": 26,
+    "TB": 26,
+    "TOR": 27,
+    "VAN": 28,
+    "WSH": 29,
     # Expansion and relocation, mapped to the closest slot.
-    "WPG": 1,  # Winnipeg Jets -> use Atlanta slot
-    "VGK": 31,  # Vegas -> the WES All-Star slot, which is never patched
-    "SEA": 30,  # Seattle -> the EAS All-Star slot, which is never patched
+    "WPG": 1,
+    "VGK": 31,
+    "SEA": 30,
 }
 
-# Display names by team index, used for `RomSlot.display_name` and for progress
-# messages. Distinct across all 32 entries, which `RomSlot.display_name`
-# requires: a slot-picking UI lists this field and two identical rows leave the
-# user unable to tell them apart.
+# Display names by team index. Keep all 32 distinct: a slot-picking UI lists this
+# field and identical rows are indistinguishable.
 NHL05_TEAM_NAMES = [
     "Anaheim",  # 0
     "Atlanta",  # 1
@@ -159,31 +150,18 @@ NHL05_TEAM_NAMES = [
     "West All-Star",  # 31
 ]
 
-# The NHL clubs alone, and **also every slot this game patches**. That is the
-# difference from `games/nhl07_psp`, where the two numbers are 30 and 32.
-#
-# Three places in the source agreed on 30 and none of them was a coincidence:
-# `map_rosters_to_nhl05` dropped a slot at `slot >= 30`, `_read_team_slots`
-# dropped a STEA record at `INDX > 29`, and `TEAM_COUNT` bounded the fallback
-# slot list. So `analyze` lists 30 slots and `patch` writes 30, which is
-# self-consistent -- and it makes `MODERN_NHL_TO_NHL05`'s `SEA` and `VGK`
-# entries dead, since the slots they name are dropped immediately afterwards.
-#
-# Carried over unchanged rather than raised to 32. Whether NHL 2005's All-Star
-# ROST rows have the structure the writer needs cannot be established here, and
-# writing them is not obviously wanted: an All-Star side is a selection from the
-# league rather than a club, so overwriting it with Seattle's roster is a
-# different feature, not a bug fix. The dead entries are recorded above.
+# The NHL clubs alone, and also every slot this game patches: the two All-Star
+# slots are read and listed but never written. Do not raise this to 32; whether
+# NHL 2005's All-Star ROST rows have the structure the writer needs is unknown.
 TEAM_COUNT = 30
 PATCHABLE_SLOT_COUNT = TEAM_COUNT
 
-# The number of slots the game has a *name* for, All-Star sides included. Used
-# for `RomSlot.display_name` and progress messages only, never for deciding what
-# to patch.
+# The slots the game has a name for, All-Star sides included. Display only, never
+# a bound on what to patch.
 NAMED_SLOT_COUNT = len(NHL05_TEAM_NAMES)
 
-# TDB POS_ field code -> position string. The reverse direction is what the
-# writer uses; a position the game does not know maps to 0, a centre.
+# TDB POS_ field code -> position string. A position the game does not know maps
+# to 0, a centre.
 POSITION_MAP = {
     0: "C",
     1: "LW",
@@ -193,30 +171,18 @@ POSITION_MAP = {
 }
 POSITION_REVERSE = {v: k for k, v in POSITION_MAP.items()}
 
-# The two TDB members of `DB.VIV`, spelled as the source spells them. NHL 07 has
-# a third, `nhlbioatt.tdb`, holding a mirror of SPBT/SPAI/SGAI; this game has no
-# such file, so those three tables are written once each.
-#
-# `nhl2005.tdb` is also this game's signature: it is a year-specific name, where
-# NHL 07's `nhlbioatt.tdb` is on every EA NHL disc of the era. See
-# `rom_reader.NHL05PS2RomReader.validate`.
+# The two TDB members of `DB.VIV`. There is no `nhlbioatt.tdb` mirror on this
+# game, so SPBT/SPAI/SGAI are written once each. `nhl2005.tdb` is also this
+# game's signature, being year-specific; see `rom_reader.validate`.
 TDB_MASTER = "nhl2005.tdb"
 TDB_ROSTER = "nhlrost.tdb"
 
-# SPBT's `FNME` and `LNME` are 128-bit fields: 16 ASCII bytes each. The source
-# declared this width as a constant and then never referenced it, truncating to
-# a literal 15 in two other modules.
+# SPBT's `FNME` and `LNME` are 128-bit fields: 16 ASCII bytes each.
 NAME_FIELD_BYTES = 16
 
-# The longest name that survives a write. `TDBTable.write_record` NUL-pads
-# whatever it is given to fill the field, so a 16-character name would leave no
-# terminator; 15 is the last length that does. Derived from the width above
-# rather than transcribed, which is what makes the source's unused constant
-# load-bearing and the two literal 15s impossible to disagree with it.
-#
-# NHL 07's fields are 20 bytes and its limit is 19. Both the mapper and the
-# writer truncate -- the mapper so the caller sees what will be written, the
-# writer so a record built by hand cannot get past it.
+# The longest name that survives a write: `TDBTable.write_record` NUL-pads to
+# fill the field, so 16 characters would leave no terminator. Derive it here;
+# never re-spell it as a literal 15.
 NAME_FIELD_CHARS = NAME_FIELD_BYTES - 1
 
 
@@ -224,10 +190,9 @@ NAME_FIELD_CHARS = NAME_FIELD_BYTES - 1
 class NHL05SkaterAttributes:
     """Skater ratings on NHL 2005's 0-63 scale, one six-bit TDB field each.
 
-    `fighting` is the exception: `FIGH` is two bits, so 0-3, and the default of
-    1 is what an unrated skater gets. Every other default is 30, the middle of
-    the six-bit range; `stat_mapper.SKATER_DEFAULTS` overrides them per position
-    and is what actually reaches a record.
+    `FIGH` is the exception at two bits, so 0-3. Every other default is 30, the
+    middle of the six-bit range; `stat_mapper.SKATER_DEFAULTS` overrides them per
+    position.
     """
 
     balance: int = 30  # BALA
@@ -285,19 +250,14 @@ class NHL05GoalieAttributes:
 class NHL05PlayerRecord:
     """One player, reduced to what the three TDB tables take.
 
-    Exactly one of `skater_attrs` and `goalie_attrs` is ever set, and which one
-    follows `is_goalie`. Both are `None` by default rather than a shared default
-    object: a dataclass field defaulting to a mutable instance is one object for
-    every record ever built, and two of the migrated games shipped that bug.
+    Exactly one of `skater_attrs` and `goalie_attrs` is set, following
+    `is_goalie`. Both default to `None` and must not default to a shared mutable
+    instance.
 
-    UPSTREAM BEHAVIOUR, KNOWN WRONG, PRESERVED DELIBERATELY -- `height` is the
-    encoded five-bit `HEIG` and nothing ever sets it to anything but this
-    default, because `stat_mapper.map_player` derives it from a `Player.height`
-    that no provider model in this library has. Every patched player is
-    therefore written at 16, about 5'10". That is what the source wrote onto a
-    disc and it is what this port writes, because a byte sequence this code has
-    never had validated against real hardware is not worth improving on. See
-    `rom_writer.NHL05PS2RomWriter.write_player_bio`.
+    Upstream behaviour, known wrong, preserved deliberately: `height` is the
+    encoded five-bit `HEIG` and nothing ever overrides this default, because
+    `stat_mapper.map_player` derives it from a `Player.height` no provider model
+    here has. Every patched player is written at 16, about 5'10".
     """
 
     first_name: str = ""
@@ -318,15 +278,11 @@ class NHL05PlayerRecord:
 class NHL05TeamSlot:
     """One team slot as the reader found it in STEA, or as a fallback name.
 
-    `name` comes from the disc when STEA has an `FNME` or `SNME` string for the
-    slot, and from `NHL05_TEAM_NAMES` when it does not. `abbreviation` likewise
-    prefers STEA's own `ABBR` -- which is where this differs from NHL 07, whose
-    STEA is read for a `NAME`/`CITY` pair and whose abbreviation always comes
-    from the constant.
+    `name` comes from STEA's `FNME` or `SNME` when present, else from
+    `NHL05_TEAM_NAMES`; `abbreviation` prefers STEA's `ABBR`.
 
-    `index` is STEA's own `INDX` value rather than the record's position,
-    because the two need not agree: the source's STEA is reported to hold 94
-    records for 32 slots.
+    `index` is STEA's own `INDX` value, not the record's position: STEA is
+    reported to hold 94 records for 32 slots, so the two do not agree.
     """
 
     index: int
@@ -338,8 +294,7 @@ class NHL05TeamSlot:
 class NHL05RomInfo:
     """What the reader learned about one ISO.
 
-    Internal to this package: `NHL05PS2Patcher.analyze_rom` translates it into
-    the library's `RomInfo`. `size` is the ISO's size on disk, not `DB.VIV`'s.
+    `size` is the ISO's size on disk, not `DB.VIV`'s.
     """
 
     path: str
