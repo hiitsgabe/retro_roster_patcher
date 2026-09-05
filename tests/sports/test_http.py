@@ -164,9 +164,6 @@ def test_the_default_transport_is_urllib_based():
     assert _http.default_transport.__name__ == "_urllib_transport"
 
 
-# --- the real urllib transport, against a loopback server (never the network) ---
-
-
 class _Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 

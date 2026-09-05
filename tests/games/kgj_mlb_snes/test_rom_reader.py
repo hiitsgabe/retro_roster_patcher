@@ -54,9 +54,6 @@ def _validated(path):
     return reader
 
 
-# -- derived constants -------------------------------------------------------
-
-
 def test_the_team_data_span_is_the_28_blocks_and_the_gap_between_the_leagues():
     # 14 AL blocks of 800 bytes, 2 880 bytes of something else, 14 NL blocks.
     # Retranscribed here rather than imported, so a change to `AL_TO_NL_GAP`
@@ -70,9 +67,6 @@ def test_the_expected_rom_size_is_16_mbit():
 
 def test_the_copier_header_is_512_bytes():
     assert SMC_HEADER_SIZE == 512
-
-
-# -- load --------------------------------------------------------------------
 
 
 def test_load_answers_false_for_a_file_that_is_not_there(tmp_path):
@@ -99,9 +93,6 @@ def test_load_answers_false_for_a_path_that_exists_but_cannot_be_read(tmp_path):
 def test_load_reads_the_whole_file(rom):
     reader = _loaded(rom)
     assert len(reader.data) == fixture.ROM_SIZE
-
-
-# -- validate ----------------------------------------------------------------
 
 
 def test_validate_accepts_a_headerless_image(rom):
@@ -191,9 +182,6 @@ def test_validate_leaves_the_offset_at_zero_when_it_fails(tmp_path):
     assert reader.first_team_offset == 0
 
 
-# -- offsets -----------------------------------------------------------------
-
-
 def test_get_team_offset_refuses_to_answer_before_validate_succeeds(rom):
     # DELIBERATE DIVERGENCE from upstream, which computed from 0 and read the
     # head of the file as if it were team 0's roster.
@@ -253,9 +241,6 @@ def test_player_offsets_agree_with_the_fixtures_own_layout(rom):
     assert reader.get_player_offset(20, 17) == expected
 
 
-# -- names -------------------------------------------------------------------
-
-
 def test_a_decoded_name_loses_its_padding(rom):
     reader = _validated(rom)
     assert reader._decode_name(fixture.encode_name("GRIFFEY")) == "GRIFFEY"
@@ -272,9 +257,6 @@ def test_a_byte_the_encoding_table_does_not_name_decodes_as_a_question_mark(rom)
 def test_the_lone_lowercase_letter_decodes(rom):
     reader = _validated(rom)
     assert reader._decode_name(bytes([0x17, 0x36, 0x11])) == "McG"
-
-
-# -- read_player -------------------------------------------------------------
 
 
 def test_a_batter_reads_back_the_name_the_fixture_wrote(rom):
@@ -430,9 +412,6 @@ def test_read_player_before_load_answers_empty(tmp_path):
     assert reader.read_player(0, 0) == {}
 
 
-# -- read_team_roster --------------------------------------------------------
-
-
 def test_a_team_roster_holds_every_slot(rom):
     reader = _validated(rom)
     names, players = reader.read_team_roster(11)
@@ -486,9 +465,6 @@ def test_a_team_whose_first_record_is_off_the_end_reads_nothing(tmp_path):
     reader = _validated(path)
     _, players = reader.read_team_roster(27)
     assert players == []
-
-
-# -- get_info ----------------------------------------------------------------
 
 
 def test_get_info_reports_a_headerless_image_as_valid(rom):

@@ -57,9 +57,6 @@ def _ratings(mapper, stats, position="SF"):
     return mapper.map_player(_player(position=position), stats).ratings
 
 
-# -- the two scaling primitives ---------------------------------------------
-
-
 def test_the_clamp_floor_is_twenty_five_and_not_zero():
     """The reason the README calls this a 25-99 scale on a 0-99 field."""
     assert _clamp(0) == 25
@@ -99,9 +96,6 @@ def test_a_window_with_no_width_answers_fifty_rather_than_dividing_by_zero():
 
 def test_an_inverted_window_answers_fifty_too():
     assert _scale(7.0, 9.0, 5.0) == 50
-
-
-# -- one attribute at a time ------------------------------------------------
 
 
 def test_shooting_comes_from_field_goal_percentage(mapper):
@@ -254,9 +248,6 @@ def test_every_rating_a_stat_line_produces_is_inside_the_field_the_rom_holds(map
     assert [r for r in ratings if not 25 <= r <= 99] == []
 
 
-# -- position defaults ------------------------------------------------------
-
-
 def test_a_player_with_no_stats_gets_the_position_defaults(mapper):
     assert _ratings(mapper, {}) == POSITION_DEFAULTS[POSITION_SF]
 
@@ -293,9 +284,6 @@ def test_the_default_row_is_copied_and_not_shared_with_the_record(mapper):
 def test_an_empty_stat_dict_is_treated_as_no_stats_at_all(mapper):
     """`if stats:` and not `if stats is not None:`, so `{}` takes the defaults."""
     assert _ratings(mapper, {}) == _ratings(mapper, None)
-
-
-# -- the rest of the record -------------------------------------------------
 
 
 def test_the_position_byte_is_the_games_own_encoding(mapper):
@@ -442,9 +430,6 @@ def test_a_mapped_record_carries_no_appearance_at_all(mapper):
     assert record.hair_style == 0
 
 
-# -- roster selection -------------------------------------------------------
-
-
 def _squad(positions, minutes=None):
     minutes = minutes or {}
     players = [
@@ -463,12 +448,10 @@ def test_a_roster_is_cut_to_twelve(mapper):
 def test_a_very_large_squad_is_still_cut_to_twelve(mapper):
     """The trailing `selected[:12]` is REDUNDANT and this says so.
 
-    Ten come from the position pass and both fill loops test `len(selected) >=
-    12` before every append, so the list can never exceed twelve and the slice
-    can never truncate. A mutation to `selected[:13]` survives the whole suite
-    for exactly that reason: it is an equivalent mutant, not a hole. Kept here
-    because "cut to twelve" is the behaviour a caller depends on however it is
-    achieved.
+    Ten come from the position pass and both fill loops test `len(selected) >= 12`
+    before every append, so the list can never exceed twelve and the slice can never
+    truncate. Kept because "cut to twelve" is the behaviour a caller depends on
+    however it is achieved.
     """
     players, stats = _squad(["PG", "SG", "SF", "PF", "C"] * 20)
     assert len(mapper.select_roster(players, stats)) == 12
@@ -616,9 +599,6 @@ def test_selection_still_orders_by_minutes_within_a_position_after_the_copy(mapp
     """The copy must not cost the sort: the busiest centre still comes first."""
     players, stats = _squad(["C", "C", "C"], minutes={0: 3.0, 1: 30.0, 2: 12.0})
     assert [p.id for p in mapper.select_roster(players, stats)] == [1, 2, 0]
-
-
-# -- slot lookup ------------------------------------------------------------
 
 
 def test_a_team_code_maps_to_its_rom_slot(mapper):

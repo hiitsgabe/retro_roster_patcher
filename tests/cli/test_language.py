@@ -1,16 +1,12 @@
 """`--language`, from the command line to the patcher that honours it.
 
 `Patcher.patch` ends in `**options`, so nothing downstream can tell a keyword it
-does not understand from one it forgot to read: an unrecognised option is
-dropped in silence and the run still reports success. That is the whole reason
-`cli.commands._patch_options` exists, and it is what these tests aim at — that
-the three translations the project ships are reachable from the surface the
-Flutter app drives, and that a code the named game cannot honour is refused on
-the protocol stream rather than ignored.
+does not understand from one it forgot to read: an unrecognised option is dropped
+in silence and the run still reports success.
 
 The stub's language set is deliberately `("aa", "bb")` and not WE2002's four
-codes. A stub that agreed with the real patcher would let a `_patch_options`
-which had the codes hardcoded pass every stub test.
+codes. A stub that agreed with the real patcher would let a `_patch_options` with
+the codes hardcoded pass every stub test.
 """
 
 import json
@@ -117,9 +113,6 @@ def _options_seen():
     return [call for call in SEEN if call[0] == "patch"][0][1]
 
 
-# -- the flag reaches `patch` ------------------------------------------------
-
-
 def test_a_language_the_game_declares_reaches_patch_as_an_option(tmp_path, stubs):
     code = main(_stub_argv(tmp_path, "two-lang-game", "--language", "bb"))
     assert code == 0
@@ -140,9 +133,6 @@ def test_without_the_flag_patch_is_given_no_language_at_all(tmp_path, stubs):
     code = main(_stub_argv(tmp_path, "two-lang-game"))
     assert code == 0
     assert _options_seen() == {}
-
-
-# -- the flag is refused, and refused with the named game's codes -------------
 
 
 def test_a_language_outside_the_games_set_is_a_usage_error(tmp_path, stubs, capsys):
@@ -193,9 +183,6 @@ def test_a_bad_language_is_refused_before_the_fetch(tmp_path, stubs, capsys):
     main(_stub_argv(tmp_path, "two-lang-game", "--language", "cc"))
     assert SEEN == []
     assert [e["event"] for e in events(capsys)] == ["error"]
-
-
-# -- end to end, through the real WE2002 patcher -----------------------------
 
 
 @pytest.fixture
@@ -348,9 +335,6 @@ def test_a_language_on_nhl94_is_refused_by_name(tmp_path, capsys):
     )
     assert code == 2
     assert events(capsys)[-1]["msg"] == "nhl94-genesis does not take --language"
-
-
-# -- what the class attribute and the help text promise ----------------------
 
 
 def test_we2002_declares_exactly_the_four_codes_it_ships():

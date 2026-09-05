@@ -47,11 +47,6 @@ def test_the_fixture_archive_is_not_degenerate():
     assert [len(data) for _, data in FILES] == [300, 17, 129]
 
 
-# ──────────────────────────────────────────────────────────────
-# bigf_parse
-# ──────────────────────────────────────────────────────────────
-
-
 def test_parse_returns_one_entry_per_file_in_directory_order():
     entries = bigf_parse(ARCHIVE)
     assert [entry.name for entry in entries] == ["nhl2007.tdb", "NHLROST.TDB", "nhlbioatt.tdb"]
@@ -164,11 +159,6 @@ def test_an_archive_with_no_files_parses_to_no_entries():
     assert bigf_parse(build_bigf(BigfSpec(files=[]))) == []
 
 
-# ──────────────────────────────────────────────────────────────
-# bigf_extract
-# ──────────────────────────────────────────────────────────────
-
-
 @pytest.mark.parametrize(("name", "index"), [("nhl2007.tdb", 0), ("NHLROST.TDB", 1)])
 def test_extract_returns_that_files_exact_bytes(name, index):
     assert bigf_extract(ARCHIVE, name) == FILES[index][1]
@@ -196,11 +186,6 @@ def test_extract_of_an_empty_file_is_empty_bytes_and_not_none():
     # it has no content for.
     archive = build_bigf(BigfSpec(files=[("a.tdb", b""), ("b.tdb", b"xy")]))
     assert bigf_extract(archive, "a.tdb") == b""
-
-
-# ──────────────────────────────────────────────────────────────
-# bigf_replace
-# ──────────────────────────────────────────────────────────────
 
 
 def test_replace_puts_the_new_bytes_in_and_leaves_the_others_alone():
@@ -249,11 +234,6 @@ def test_replace_matches_case_insensitively_but_checks_case_sensitively():
     assert bigf_extract(bigf_replace(ARCHIVE, "nhl2007.tdb", b"x"), "nhl2007.tdb") == b"x"
 
 
-# ──────────────────────────────────────────────────────────────
-# bigf_replace_inplace
-# ──────────────────────────────────────────────────────────────
-
-
 def test_replace_inplace_writes_at_the_original_offset():
     archive = bytearray(ARCHIVE)
     entry = bigf_parse(ARCHIVE)[0]
@@ -293,9 +273,9 @@ def test_replace_inplace_leaves_the_directory_size_at_the_original_allocation():
 
 
 def test_replace_inplace_zero_fills_a_single_leftover_byte():
-    # One byte short of the allocation is the boundary the padding branch turns
-    # on at, and mutation testing found it unguarded: `if remaining > 1` passes
-    # every other test in this file and leaves one stale byte behind.
+    # One byte short of the allocation is the boundary the padding branch turns on at:
+    # `if remaining > 1` passes every other test in this file and leaves one stale byte
+    # behind.
     archive = bytearray(ARCHIVE)
     entry = bigf_parse(ARCHIVE)[0]
     assert bigf_replace_inplace(archive, "nhl2007.tdb", b"\x77" * 299) is True
@@ -346,11 +326,6 @@ def test_replace_inplace_takes_the_last_of_two_entries_sharing_a_name():
     assert bigf_replace_inplace(archive, "dup.tdb", b"ZZ") is True
     assert bytes(archive[entries[1].offset : entries[1].offset + 2]) == b"ZZ"
     assert bytes(archive[entries[0].offset : entries[0].offset + 2]) == b"AA"
-
-
-# ──────────────────────────────────────────────────────────────
-# bigf_build
-# ──────────────────────────────────────────────────────────────
 
 
 def test_build_then_parse_returns_what_went_in():

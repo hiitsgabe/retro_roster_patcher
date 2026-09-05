@@ -2,19 +2,7 @@
 
 NHL 94 is copyrighted, so nothing here touches a real image. Every test builds a
 1 MB `bytearray` under `tmp_path`; the reader takes a path rather than bytes, so
-there is no injection seam and a file has to exist. That costs about 1.3 ms per
-test (build, write, load), which is why each test gets its own image instead of
-sharing a session-scoped one.
-
-This file's arrival made `tests/` a real package. `tests/__init__.py` is the
-load-bearing one: without it pytest prepends `tests/` to `sys.path`, so
-`tests.fixtures.synthetic_rom` and `fixtures.synthetic_rom` both resolve — to two
-distinct module objects wrapping one file — and `mypy src tests` refuses to run at
-all, reporting the same file under two module names. The three leaf `__init__.py`
-files below it are convention (matching `tests/core/` and `tests/sports/`) and
-defensive: with `tests/__init__.py` in place, pytest 9.1.1 collects a second
-`tests/games/we2002/test_rom_reader.py` with or without them, but the
-package-qualified module name is what makes that true.
+there is no injection seam and a file has to exist.
 
 The second half of this file pins defects rather than intended behaviour. The
 reader is a faithful port and fidelity is the standing policy, so these tests
@@ -73,9 +61,6 @@ def _unterminated_rom():
     return rom
 
 
-# ── The fixture itself ───────────────────────────────────────────────────
-
-
 def test_the_fixture_is_bound_under_exactly_one_module_name():
     # The mechanism, not a restatement of the import: `tests/` staying off
     # sys.path is what makes `fixtures.synthetic_rom` unreachable, and so makes
@@ -86,9 +71,6 @@ def test_the_fixture_is_bound_under_exactly_one_module_name():
     assert synthetic_rom.__name__ == "tests.fixtures.synthetic_rom"
     assert [p for p in sys.path if p.endswith("/tests")] == []
     assert "fixtures.synthetic_rom" not in sys.modules
-
-
-# ── Loading and validation ───────────────────────────────────────────────
 
 
 def test_the_synthetic_rom_validates(tmp_path):
@@ -126,9 +108,6 @@ def test_a_pointer_past_the_end_of_the_file_does_not_validate(tmp_path):
         b"\xff\xff\xff\xff"
     )
     assert _reader(_write(tmp_path, "bad.bin", rom)).validate() is False
-
-
-# ── Section offsets ──────────────────────────────────────────────────────
 
 
 def test_section_offsets_resolve_to_absolute_addresses(tmp_path):
@@ -208,9 +187,6 @@ def test_a_team_index_at_the_count_resolves_to_nothing(tmp_path):
     assert reader.get_team_player_region(synthetic_rom.TEAM_COUNT) == (0, 0)
 
 
-# ── Team slots ───────────────────────────────────────────────────────────
-
-
 def test_team_slots_read_the_city_strings(tmp_path):
     info = _loaded_reader(tmp_path).get_info()
     assert info.is_valid is True
@@ -286,9 +262,6 @@ def test_a_city_length_word_is_honoured_up_to_forty_and_rejected_above_it(tmp_pa
     assert slots[20].current_name == "St. Louis"
 
 
-# ── Roster reading ───────────────────────────────────────────────────────
-
-
 def test_the_roster_region_spans_every_record_and_the_sentinel(tmp_path):
     reader = _loaded_reader(tmp_path)
     assert reader.get_team_player_region(0) == (0x010200, 452)
@@ -360,9 +333,6 @@ def test_a_length_word_of_two_ends_the_roster(tmp_path):
     names, stats = reader.read_team_roster(0)
     assert (len(names), len(stats)) == (25, 25)
     assert reader.get_team_player_region(0) == (0x010200, 452)
-
-
-# ── Pinned defects ───────────────────────────────────────────────────────
 
 
 def test_validate_accepts_a_rom_that_get_info_then_crashes_on(tmp_path):

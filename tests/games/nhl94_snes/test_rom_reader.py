@@ -39,9 +39,6 @@ def _write(tmp_path, name, rom):
     return path
 
 
-# -- the fixture itself ----------------------------------------------------
-
-
 def test_the_fixture_is_bound_under_exactly_one_module_name():
     assert fixture.__name__ == "tests.fixtures.synthetic_snes_rom"
 
@@ -76,9 +73,6 @@ def test_the_fixtures_team_names_differ_from_the_constant_table_somewhere():
     """
     assert fixture.CITIES[20] != NHL94_TEAM_ORDER[20]
     assert len(fixture.CITIES) == TEAM_COUNT
-
-
-# -- addressing ------------------------------------------------------------
 
 
 def test_a_lorom_address_folds_to_the_bank_window():
@@ -121,9 +115,6 @@ def test_a_headerless_image_is_read_at_face_value(tmp_path):
     reader = _loaded(tmp_path)
     assert reader.has_header is False
     assert reader.header_offset == 0
-
-
-# -- load and validate -----------------------------------------------------
 
 
 def test_a_missing_file_fails_to_load(tmp_path):
@@ -195,9 +186,6 @@ def test_get_info_reads_no_slot_out_of_an_image_that_does_not_validate(tmp_path)
     assert info.team_slots == []
 
 
-# -- team names ------------------------------------------------------------
-
-
 def test_the_city_is_the_first_string_after_the_roster(tmp_path):
     reader = _loaded(tmp_path)
     read = [reader._read_team_city(fixture.team_base(i)) for i in range(TEAM_COUNT)]
@@ -219,9 +207,6 @@ def test_a_slot_whose_city_string_is_unreadable_falls_back_to_the_constant(tmp_p
     slots = reader.get_info().team_slots
     assert slots[20].current_name == NHL94_TEAM_ORDER[20]
     assert slots[19].current_name == fixture.CITIES[19]
-
-
-# -- roster ----------------------------------------------------------------
 
 
 def test_a_roster_reads_back_as_the_names_and_stat_bytes_written(tmp_path):
@@ -259,9 +244,6 @@ def test_a_shorter_roster_stops_at_its_terminator(tmp_path):
     assert len(names) == 5
     assert len(stats) == 5
     assert names[-1] == fixture.player_name(2, 4)
-
-
-# -- player counts ---------------------------------------------------------
 
 
 def test_the_forward_and_defence_counts_come_from_byte_17(tmp_path):
@@ -310,9 +292,6 @@ def test_counts_from_an_unloaded_reader_fall_back_to_the_default(tmp_path):
     assert reader.read_team_player_counts(0) == (2, 14, 7)
 
 
-# -- length-prefixed strings -----------------------------------------------
-
-
 @pytest.mark.parametrize(
     ("length", "expected"),
     [
@@ -359,9 +338,6 @@ def test_a_non_ascii_byte_in_a_name_is_replaced_rather_than_raising(tmp_path):
     rom[offset + 2] = 0xFF
     names, _ = _reader(_write(tmp_path, "x.sfc", rom)).read_team_roster(0)
     assert names[0] == "�" + fixture.player_name(0, 0)[1:]
-
-
-# -- header skipping -------------------------------------------------------
 
 
 def test_the_header_size_word_is_where_the_player_records_begin(tmp_path):

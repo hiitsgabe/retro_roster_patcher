@@ -1,18 +1,5 @@
 """The NHL94 SNES patcher against the unified interface.
 
-The reader, writer and stat mapper below it are a faithful port of an untested
-upstream; this layer is where its contract violations are absorbed and where the
-migration's own decisions live. Four things here are not in the ported code at
-all and are the reason this file is the longest of the four:
-
-  * the roster counts' two-hop journey from `RomInfo.extra` through
-    `map_rosters(roster_counts=...)` onto `NHL94TeamRecord`, and out again in
-    the header `patch` writes;
-  * `players_patched` counting records that reached the image;
-  * the alias guard, without which an empty `LA` wipes a populated `LAK`;
-  * `analyze_rom`'s structural check, without which this patcher claims every
-    ROM in the user's library.
-
 Every read-back of a patched ROM goes through a *fresh* reader on the output
 path. `NHL94SNESRomWriter.__init__` builds its own reader over the *input* file,
 so `writer.reader.data` is the pre-write image for the writer's whole lifetime
@@ -57,11 +44,10 @@ SJS_SLOT = 19
 
 
 class FakeApi:
-    """Stands in for EspnClient / NhlApiClient.
+    """Stands in for EspnClient / NhlApiClient, recording what it was asked for.
 
-    Records what it was asked for, because the ESPN and NHL branches of `fetch`
-    key on different things -- team id versus three-letter code -- and upstream
-    forwarded the season on only one of them.
+    The ESPN and NHL branches of `fetch` key on different things -- team id
+    versus three-letter code -- and upstream forwarded the season on only one.
     """
 
     def __init__(self, teams, squad_size=15, leaders=None):
@@ -109,8 +95,8 @@ def rom(tmp_path):
 def _league_data(*entries, season=2025):
     """`LeagueData` with one `TeamRoster` per `(code, squad size)`, in order.
 
-    The order is what decides which of two colliding aliases lands in the shared
-    slot, so it is a parameter rather than an accident of a dict.
+    The order decides which of two colliding aliases lands in the shared slot, so
+    it is a parameter rather than an accident of a dict.
     """
     return LeagueData(
         league=League(id=0, name="NHL", country="USA", country_code="US", season=season),
@@ -151,9 +137,6 @@ def _read_back(path, slot):
     return reader.read_team_roster(slot)
 
 
-# -- registration ----------------------------------------------------------
-
-
 def test_the_patcher_is_registered_with_its_capabilities():
     from retro_roster_patcher import get_patcher
 
@@ -166,10 +149,10 @@ def test_the_patcher_is_registered_with_its_capabilities():
 
 
 def test_importing_the_package_root_is_what_registers_the_game(tmp_path):
-    # Registration is a side-effect import at the bottom of the package
-    # `__init__`. Dropping it leaves `get_patcher` green for anyone who imported
-    # the game module first -- which every other test in this file does -- and
-    # broken for the CLI, which only imports the root. Hence the subprocess.
+    # Registration is a side-effect import at the bottom of the package `__init__`.
+    # Dropping it leaves `get_patcher` green for anyone who imported the game module
+    # first -- which every other test here does -- and broken for the CLI, which only
+    # imports the root. Hence the subprocess.
     source = textwrap.dedent(
         """
         import retro_roster_patcher
@@ -194,9 +177,6 @@ def test_the_two_nhl94_patchers_are_distinct_registrations():
 
     assert get_patcher("nhl94-snes") is not get_patcher("nhl94-genesis")
     assert get_patcher("nhl94-snes").platform != get_patcher("nhl94-genesis").platform
-
-
-# -- construction ----------------------------------------------------------
 
 
 def test_the_default_provider_is_espn(tmp_path):
@@ -225,9 +205,6 @@ def test_an_api_key_argument_is_refused(tmp_path):
 def test_a_string_cache_dir_is_normalised_to_a_path(tmp_path):
     p = NHL94SNESPatcher(cache_dir=str(tmp_path))
     assert p.cache_dir == tmp_path
-
-
-# -- analyze ---------------------------------------------------------------
 
 
 def test_a_synthetic_rom_is_recognised(patcher, rom):
@@ -274,10 +251,10 @@ def test_a_file_that_is_not_this_game_is_reported_rather_than_raised(patcher, tm
 def test_an_nhl94_genesis_rom_is_not_claimed_by_the_snes_patcher(patcher, tmp_path):
     """The reason `_looks_like_nhl94_snes` exists.
 
-    `validate()` tests size alone, and the Genesis image is 1 MB, so upstream's
+    `validate()` tests size alone and the Genesis image is 1 MB, so upstream's
     test says yes to it. `analyze` probes every registered patcher against one
-    file, so a yes here puts NHL 94 (SNES) beside NHL 94 (Genesis) in the
-    matches for a Genesis cartridge.
+    file, so a yes here puts NHL 94 (SNES) beside NHL 94 (Genesis) for a Genesis
+    cartridge.
     """
     genesis = tmp_path / "genesis.bin"
     genesis.write_bytes(bytes(genesis_fixture.build_nhl94_genesis_rom()))
@@ -323,20 +300,16 @@ def test_a_team_block_whose_first_record_is_unreadable_is_not_claimed(patcher, t
 
 
 def test_patch_still_runs_on_an_image_analyze_declines_to_claim(patcher, tmp_path):
-    """The asymmetry is deliberate, so it is pinned rather than left to drift.
+    """`analyze_rom` applies the structural check and `patch` does not.
 
-    `analyze_rom` applies the structural check and `patch` does not. Every bound
-    in that check is derived from this package's own reader and writer and none
-    of it has ever been run against a real dump, because no real ROM may enter
-    this repository. A false positive would cost the user every unrelated ROM
-    they own; a false negative costs only auto-detection, and `--game
-    nhl94-snes` still patches. Making `patch` repeat the check would trade the
-    cheap failure for the expensive one.
+    Do not make `patch` repeat it. Every bound in the check comes from this
+    package's own reader and writer and none has been run against a real dump. A
+    false positive costs the user every unrelated ROM they own; a false negative
+    costs only auto-detection, and `--game nhl94-snes` still patches.
     """
     rom = fixture.build_nhl94_snes_rom()
-    # Slot 13's header word is one byte short of what the line table needs, so
-    # the structural check refuses the image -- while every pointer still reads
-    # and slot 1 is untouched.
+    # Slot 13's header word is one byte short of what the line table needs, so the
+    # structural check refuses the image -- while every pointer still reads.
     rom[fixture.team_base(13)] = 74
     odd = tmp_path / "odd.sfc"
     odd.write_bytes(bytes(rom))
@@ -371,9 +344,6 @@ def test_the_intact_image_passes_the_structural_check(patcher, rom):
     assert _looks_like_nhl94_snes(reader) is True
 
 
-# -- the roster counts, hop one: analyze publishes them --------------------
-
-
 def test_analyze_publishes_one_roster_count_triple_per_slot(patcher, rom):
     counts = patcher.analyze_rom(rom).extra["roster_counts"]
     assert len(counts) == TEAM_COUNT
@@ -382,8 +352,8 @@ def test_analyze_publishes_one_roster_count_triple_per_slot(patcher, rom):
     expected[26] = [2, 14, 7]
     expected[27] = [2, 14, 7]
     assert counts == expected
-    # Not one repeated triple, which is what would make the equality above hold
-    # for a reader that ignored the slot index.
+    # Not one repeated triple, which is what would make the equality above hold for a
+    # reader that ignored the slot index.
     assert len({tuple(c) for c in counts}) == 26
 
 
@@ -407,9 +377,6 @@ def test_an_invalid_rom_publishes_no_counts_at_all(patcher, tmp_path):
     assert "roster_counts" not in patcher.analyze_rom(other).extra
 
 
-# -- fetch -----------------------------------------------------------------
-
-
 def test_fetch_returns_only_teams_that_have_a_rom_slot(patcher):
     data = patcher.fetch(season=2025)
     assert [roster.team.code for roster in data.teams] == ["BOS", "CHI"]
@@ -427,8 +394,8 @@ def test_the_espn_branch_passes_the_season_to_both_calls(patcher):
     """Upstream passed it to neither.
 
     The squad call's season is a cache key, so without it the first season ever
-    fetched was served forever; the leaders call's is a path segment of the
-    request, so without it a `--season 2024` run asked for another year.
+    fetched was served forever; the leaders call's is a path segment, so without
+    it a `--season 2024` run asked for another year.
     """
     patcher.fetch(season=2024)
     assert patcher.api.squad_calls == [(1, 2024), (2, 2024)]
@@ -472,9 +439,6 @@ def test_fetch_narrates_its_first_step(patcher):
     assert seen == ["Fetching NHL teams..."]
 
 
-# -- map -------------------------------------------------------------------
-
-
 def test_mapping_puts_each_team_in_its_own_slot(patcher):
     mapped = patcher.map_rosters(_league_data(("BOS", 20), ("CHI", 20)))
     assert type(mapped) is MappedRosters
@@ -495,10 +459,8 @@ def test_a_slot_mapping_is_refused(patcher):
 def test_without_counts_every_slot_is_cut_to_the_default(patcher):
     """The shape a caller gets when it skips the first hop.
 
-    The CLI no longer skips it -- `cli/commands._map_extras` makes the hop, and
-    `test_the_cli_threads_the_roms_counts_through_the_same_two_hops` below pins
-    that. This is still the answer for a library caller with no ROM in hand, and
-    for the CLI on an image `analyze_rom` declines to identify.
+    Still the answer for a library caller with no ROM in hand, and for the CLI on
+    an image `analyze_rom` declines to identify.
     """
     mapped = patcher.map_rosters(_league_data(("BOS", 40)))
     record = mapped.teams[BOS_SLOT]
@@ -512,8 +474,8 @@ def test_the_roms_counts_change_how_many_players_are_selected(patcher, rom):
     """Hop two: the counts `analyze_rom` published come back in.
 
     Slot 4's image says 14 forwards and 6 defencemen, so 22 players, against the
-    default's 23. That one-player difference is the whole observable effect and
-    a fixture with uniform counts would hide it.
+    default's 23. That one-player difference is the whole observable effect and a
+    fixture with uniform counts would hide it.
     """
     counts = patcher.analyze_rom(rom).extra["roster_counts"]
     assert counts[CHI_SLOT] == [2, 14, 6]
@@ -559,11 +521,8 @@ def test_a_negative_roster_count_is_refused(patcher):
 def test_an_empty_alias_does_not_displace_a_populated_one(patcher):
     """`SJS` and ESPN's `SJ` are one slot, and upstream assigned it twice.
 
-    Upstream kept its rosters in a dict keyed by team code and only stored a
-    team whose squad was non-empty, so the collision could not cost anything.
-    Here the slot is assigned directly, so without the guard the empty roster
-    arriving second wipes the populated one and `patch` reports success having
-    left the 1994 roster in place.
+    Without the guard the empty roster arriving second wipes the populated one and
+    `patch` reports success having left the 1994 roster in place.
     """
     mapped = patcher.map_rosters(_league_data(("SJS", 20), ("SJ", 0)))
     assert len(mapped.teams[SJS_SLOT].players) == 20
@@ -578,9 +537,6 @@ def test_an_empty_roster_that_collides_with_nothing_still_takes_its_slot(patcher
     """It records which slot a provider team matched; `patch` is what skips it."""
     mapped = patcher.map_rosters(_league_data(("BOS", 0)))
     assert mapped.teams[BOS_SLOT].players == []
-
-
-# -- patch -----------------------------------------------------------------
 
 
 def test_a_patch_writes_the_mapped_names_into_the_image(patcher, rom, tmp_path):
@@ -613,7 +569,7 @@ def test_a_patch_counts_the_slots_it_wrote(patcher, rom, tmp_path):
 
 
 def test_players_patched_counts_records_that_reached_the_image(patcher, rom, tmp_path):
-    """The regression this migration exists to fix, on a roster that overflows.
+    """A roster that overflows the region.
 
     The image holds 23 records of an 8-byte name, so each region is 416 bytes.
     `_records` names are 10 bytes, costing 20 each, and the writer stops while
@@ -634,26 +590,21 @@ def test_players_patched_counts_records_that_reached_the_image(patcher, rom, tmp
 def test_a_slot_whose_region_takes_nothing_still_gets_its_header_written(patcher, tmp_path):
     """PINS UPSTREAM FIDELITY DELIBERATELY, and it is known to be wrong.
 
-    Upstream's `write_team_roster` returned True for a region too small to hold
-    one record -- only `not self.data`, an out-of-range index and a zero-size
-    region made it return False -- so upstream wrote byte 17 and the 56-byte
-    line table for that slot anyway. A line table over a region that holds no
-    records names records that do not exist and the game reads the zero-fill as
-    a player. It is written all the same: skipping it is 49 bytes per slot that
-    no released build of this patcher ever produced, and nothing here has been
-    validated against a real dump.
+    Upstream wrote byte 17 and the 56-byte line table even for a region too small
+    to hold one record, and the game reads the zero-fill as a player. Do not
+    "fix" it by skipping the header: nothing here has been validated against a
+    real dump.
 
-    What does *not* come back is upstream's counts. `rom_writer.header_counts`
-    still clamps, so the header claims (0, 0) rather than the requested (14, 7).
-    The two are different questions and must not be conflated: the clamp decides
-    WHAT counts go in, this test is about WHETHER a header is written at all.
+    The counts do not come back: `rom_writer.header_counts` still clamps, so the
+    header claims (0, 0) rather than the requested (14, 7). The clamp decides WHAT
+    counts go in; this test is about WHETHER a header is written at all.
     """
     empty = fixture.write_nhl94_snes_rom(tmp_path / "empty.sfc", players_per_team=0)
     out = tmp_path / "out.sfc"
     mapped = MappedRosters(game_id="nhl94-snes", teams={BOS_SLOT: _team_record(BOS_SLOT, 10)})
     result = patcher.patch(rom_path=empty, output_path=out, rosters=mapped)
-    # No record reached the image, so neither counter moves: `PatchResult`
-    # defines both as what reached the ROM, and that reporting contract stays.
+    # No record reached the image, so neither counter moves: `PatchResult` defines
+    # both as what reached the ROM.
     assert result.teams_patched == 0
     assert result.players_patched == 0
 
@@ -685,9 +636,7 @@ def test_the_header_is_written_from_the_counts_on_the_record(patcher, rom, tmp_p
     line table indexes defencemen from `2 + forwards`.
 
     Twenty-one players and not ten, so `rom_writer.header_counts` has nothing to
-    clamp and this test still says what it says: 2 + 12 + 7 is 21 and all 21
-    reach the image. Ten would now produce a header of 8 and 0 -- correct, but
-    it would no longer show the record's triple surviving to the ROM.
+    clamp: 2 + 12 + 7 is 21 and all 21 reach the image.
     """
     out = tmp_path / "out.sfc"
     mapped = MappedRosters(
@@ -703,9 +652,8 @@ def test_the_header_is_written_from_the_counts_on_the_record(patcher, rom, tmp_p
 def test_the_header_does_not_claim_defencemen_the_writer_dropped(patcher, rom, tmp_path):
     """The filed defect, at the layer where it reaches the ROM.
 
-    The same 23-into-21 overflow `test_players_patched_counts_records_that_
-    reached_the_image` uses. Upstream, and this port until now, wrote the
-    requested 14 and 7; 2 + 14 + 7 is 23 and only 21 records exist.
+    The same 23-into-21 overflow as above. Upstream, and this port until now,
+    wrote the requested 14 and 7; 2 + 14 + 7 is 23 and only 21 records exist.
     """
     out = tmp_path / "out.sfc"
     mapped = MappedRosters(game_id="nhl94-snes", teams={BOS_SLOT: _team_record(BOS_SLOT, 23)})
@@ -718,10 +666,10 @@ def test_the_header_does_not_claim_defencemen_the_writer_dropped(patcher, rom, t
 def test_no_line_slot_names_a_record_the_writer_never_wrote(patcher, rom, tmp_path):
     """The consequence the header byte alone does not show.
 
-    Under the requested 14 and 7 the table's highest index is 21; 21 records
-    were written, so records 0..20 exist and 21 does not. Asserted as the exact
-    maximum rather than as a bound: `max(...) <= 20` would also pass on a table
-    of all zeroes, which is the failure a zero-filled header would produce.
+    Under the requested 14 and 7 the table's highest index is 21; 21 records were
+    written, so records 0..20 exist and 21 does not. Asserted as the exact maximum
+    rather than as a bound: `max(...) <= 20` would also pass on a table of all
+    zeroes, which is what a zero-filled header produces.
     """
     out = tmp_path / "out.sfc"
     mapped = MappedRosters(game_id="nhl94-snes", teams={BOS_SLOT: _team_record(BOS_SLOT, 23)})
@@ -755,11 +703,10 @@ def test_an_out_of_range_slot_index_is_dropped_after_the_json_boundary(patcher, 
     )
     result = patcher.patch(rom_path=rom, output_path=out, rosters=mapped)
     assert result.teams_patched == 0
-    # And nothing was written for them either. `teams_patched` alone does not
-    # say that: slot -1 gets past the writer's only bounds test, which is
-    # `team_index >= TEAM_COUNT`, resolves the four bytes *before* the pointer
-    # table as a pointer, and lands a two-byte terminator wherever that points
-    # -- then reports 0 written and is skipped here.
+    # And nothing was written for them either. `teams_patched` alone does not say
+    # that: slot -1 gets past the writer's only bounds test, `team_index >=
+    # TEAM_COUNT`, resolves the four bytes *before* the pointer table as a pointer,
+    # and lands a two-byte terminator wherever that points.
     assert out.read_bytes() == rom.read_bytes()
 
 
@@ -790,17 +737,16 @@ def test_a_roster_region_running_past_the_end_of_the_image_raises(patcher, tmp_p
     """`_get_team_player_region` walks off the end and the writes then raise.
 
     Its loop test only checks the offset it is about to read, so a record chain
-    with no terminator yields a region reaching past the image. `patch` turns
-    the resulting `IndexError` into `RomError`; carrying on would finalize a
+    with no terminator yields a region reaching past the image. `patch` turns the
+    resulting `IndexError` into `RomError`; carrying on would finalize a
     half-written ROM under a success return.
     """
     rom = fixture.build_nhl94_snes_rom()
     start = fixture.team_base(BOS_SLOT) + fixture.TEAM_HEADER_SIZE
-    # A record chain with no terminator, laid down at the same 47-byte stride
-    # the scan walks. 47 does not divide the distance from `start` to the end of
-    # the file, so the last step lands past it rather than exactly on it -- and
-    # it is the overshoot, not the missing terminator, that makes the region
-    # unwritable.
+    # A record chain with no terminator, at the same 47-byte stride the scan walks.
+    # 47 does not divide the distance from `start` to the end of the file, so the last
+    # step lands past it -- and it is the overshoot, not the missing terminator, that
+    # makes the region unwritable.
     length = 39
     offset = start
     while offset + 2 <= len(rom):
@@ -860,9 +806,6 @@ def test_an_unknown_option_is_ignored(patcher, rom, tmp_path):
     assert result.teams_patched == 1
 
 
-# -- the whole sequence ----------------------------------------------------
-
-
 def test_fetch_map_and_patch_run_end_to_end(patcher, rom, tmp_path):
     """The four calls a wizard makes, in order, with the counts threaded."""
     out = tmp_path / "out.sfc"
@@ -885,14 +828,10 @@ def test_the_cli_threads_the_roms_counts_through_the_same_two_hops(rom, tmp_path
     signature, so a caller working through `Patcher.map_rosters` could simply not
     pass it -- and the CLI did not, so every command-line run selected and
     headered `DEFAULT_ROSTER_COUNTS` for all 28 slots whatever byte 17 said.
-    Upstream read byte 17 per team and used each team's own nibbles, so wiring
-    this up restores upstream's bytes rather than diverging from them. Measured
-    against upstream's own `patch_rom` on a ROM with non-default nibbles: 3 164
-    bytes of a 25-team patch differed, in every one of 25 runs; 0 after.
 
     Slot 1's image says 13 forwards and 8 defencemen and slot 4's says 14 and 6,
-    so neither equals the 14/7 default and the two do not equal each other --
-    a run that fell back would write one number into both.
+    so neither equals the 14/7 default and the two do not equal each other -- a
+    run that fell back would write one number into both.
     """
     from retro_roster_patcher.cli.__main__ import main
 
@@ -904,11 +843,10 @@ def test_the_cli_threads_the_roms_counts_through_the_same_two_hops(rom, tmp_path
                 "teams": [
                     {
                         "team": {"id": i + 1, "name": code, "code": code},
-                        # Three-character names on purpose: the fixture's region
-                        # holds 414 bytes and a record costs 10 + len(name), so
-                        # anything longer truncates the roster and the *kept*
-                        # header-count clamp starts moving these bytes too. This
-                        # test is about which counts arrived, not about the clamp.
+                        # Three-character names on purpose: the region holds 414
+                        # bytes and a record costs 10 + len(name), so anything
+                        # longer truncates the roster and the header-count clamp
+                        # starts moving these bytes too.
                         "players": [
                             {
                                 "id": i * 100 + n,
@@ -956,9 +894,9 @@ def test_the_cli_threads_the_roms_counts_through_the_same_two_hops(rom, tmp_path
 def test_a_patched_rom_can_be_analysed_and_patched_again(patcher, rom, tmp_path):
     """Nothing here touches a checksum, so the output stays a valid input.
 
-    Which is only true because NHL '94 (SNES) does not verify one. A patcher
-    that recomputed the SNES header checksum would have to keep it recomputed;
-    one that verified it could not accept its own output at all.
+    Only true because NHL '94 (SNES) does not verify one. A patcher that
+    recomputed the SNES header checksum would have to keep it recomputed; one that
+    verified it could not accept its own output at all.
     """
     once = tmp_path / "once.sfc"
     twice = tmp_path / "twice.sfc"

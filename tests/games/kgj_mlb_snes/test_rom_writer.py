@@ -117,9 +117,6 @@ def _pitcher(**overrides):
     return dataclasses.replace(record, **overrides)
 
 
-# -- character encoding ------------------------------------------------------
-
-
 def test_a_letter_encodes_to_its_table_byte():
     assert _encode_char("K") == 0x15
 
@@ -163,9 +160,6 @@ def test_a_name_exactly_the_field_length_is_neither_padded_nor_cut():
     assert len(_encode_name("ABCDEFGH", 8)) == 8
 
 
-# -- attribute packing -------------------------------------------------------
-
-
 def test_a_rating_pair_stores_each_value_minus_one():
     # 1-10 becomes 0x0-0x9, high nibble first.
     assert _encode_stat_pair(10, 1) == 0x90
@@ -181,9 +175,6 @@ def test_a_rating_above_ten_clamps_to_nine():
 
 def test_a_rating_below_one_clamps_to_zero():
     assert _encode_stat_pair(-7, 5) == 0x04
-
-
-# -- the split stat ----------------------------------------------------------
 
 
 def test_a_three_digit_stat_splits_into_a_byte_and_a_nibble():
@@ -209,9 +200,6 @@ def test_a_negative_stat_floors_at_zero():
     assert _encode_split_stat(-40) == (0x00, 0x0)
 
 
-# -- load --------------------------------------------------------------------
-
-
 def test_load_answers_false_for_a_file_that_is_not_there(tmp_path):
     w = KGJRomWriter(str(tmp_path / "absent.sfc"), str(tmp_path / "out.sfc"))
     assert w.load() is False
@@ -232,9 +220,6 @@ def test_load_takes_its_own_copy_of_the_image(writer):
 
 def test_load_copies_every_byte(writer, rom):
     assert bytes(writer.data) == rom.read_bytes()
-
-
-# -- write_player, batter ----------------------------------------------------
 
 
 def _written_batter(writer, team=4, slot=6, **overrides):
@@ -355,9 +340,6 @@ def test_a_batter_leaves_the_bytes_no_field_owns_alone(writer):
     assert _written_batter(writer)["untouched"] == before
 
 
-# -- write_player, pitcher ---------------------------------------------------
-
-
 def _written_pitcher(writer, team=4, slot=17, **overrides):
     assert writer.write_player(team, slot, _pitcher(**overrides)) is True
     return fixture.decode_player_record(writer.data, _offset(team, slot))
@@ -439,9 +421,6 @@ def test_a_pitcher_leaves_the_bytes_no_field_owns_alone(writer):
     assert _written_pitcher(writer)["untouched"] == before
 
 
-# -- write_player, refusals --------------------------------------------------
-
-
 def test_a_team_index_past_the_league_is_refused(writer):
     assert writer.write_player(TEAM_COUNT, 0, _batter()) is False
 
@@ -469,9 +448,6 @@ def test_a_record_that_would_run_off_the_end_is_refused(tmp_path):
 def test_write_player_before_load_is_refused(tmp_path, rom):
     w = KGJRomWriter(str(rom), str(tmp_path / "out.sfc"))
     assert w.write_player(0, 0, _batter()) is False
-
-
-# -- write_team_roster -------------------------------------------------------
 
 
 def test_a_full_roster_reports_every_record_written(writer):
@@ -553,9 +529,6 @@ def test_writing_an_al_team_leaves_the_nl_half_alone(writer):
     before = fixture.decode_player_record(writer.data, _offset(14, 0))["raw"]
     writer.write_team_roster(13, [_batter() for _ in range(PLAYERS_PER_TEAM)])
     assert fixture.decode_player_record(writer.data, _offset(14, 0))["raw"] == before
-
-
-# -- the SNES checksum -------------------------------------------------------
 
 
 def _checksum_words(data, *, with_header=False):
@@ -657,9 +630,6 @@ def test_update_snes_checksum_before_load_does_nothing(tmp_path, rom):
     assert w.data is None
 
 
-# -- finalize ----------------------------------------------------------------
-
-
 def test_finalize_writes_the_image_it_holds(writer, tmp_path):
     writer.write_team_roster(0, [_batter() for _ in range(PLAYERS_PER_TEAM)])
     assert writer.finalize() is True
@@ -700,14 +670,10 @@ def test_finalize_does_not_recompute_the_checksum(writer, tmp_path):
     assert _checksum_words(bytearray((tmp_path / "out.sfc").read_bytes())) == before
 
 
-# -- the constants that reach bytes ------------------------------------------
-#
-# Every assertion above that mentions `HAND_SWITCH` or `ROSTER_TYPE_STARTER`
-# names the same constant the code under test does, so it holds however that
-# constant is renumbered. Mutation testing found exactly that: changing
-# `HAND_SWITCH` to 0x21 and `ROSTER_TYPE_STARTER` to 0x20 both survived the
-# whole suite. These pin the literal values, and the two below them pin the
-# bytes that reach the image against the fixture's own transcription.
+# Every assertion above that mentions `HAND_SWITCH` or `ROSTER_TYPE_STARTER` names the
+# same constant the code under test does, so it holds however that constant is
+# renumbered. These pin the literal values, and the two below them pin the bytes that
+# reach the image against the fixture's own transcription.
 
 
 def test_a_right_handed_batter_is_stored_as_zero():

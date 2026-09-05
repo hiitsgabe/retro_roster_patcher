@@ -40,23 +40,21 @@ def _game_ids(stdout: str) -> set[str]:
 
 
 def test_the_import_resolved_to_an_installed_package():
-    # Everything else in this file passes against `src/` too. Without this the
-    # wheel job goes vacuous the moment anything puts `src/` back on the path
-    # ahead of site-packages — a `pythonpath` reaching into it, or an editable
-    # install landing after the wheel — and stays green forever while proving
-    # nothing. The job's `cd /tmp` is not that mechanism: measured, running this
-    # from inside the checkout still resolves to site-packages, because
-    # `pythonpath = ["."]` inserts the repository root and the package lives one
-    # level down under `src/`.
+    # Everything else in this file passes against `src/` too. Without this the wheel
+    # job goes vacuous the moment anything puts `src/` back on the path ahead of
+    # site-packages -- a `pythonpath` reaching into it, or an editable install landing
+    # after the wheel -- and stays green forever. The job's `cd /tmp` is not that
+    # mechanism: running this from inside the checkout still resolves to site-packages,
+    # because `pythonpath = ["."]` inserts the repository root and the package lives
+    # one level down under `src/`.
     installed = "site-packages" in Path(retro_roster_patcher.__file__).parts
     assert installed is True
 
 
 def test_the_translation_ppf_is_readable_as_package_data():
     data = package_bytes("retro_roster_patcher.games.we2002.assets", "we2002_english.ppf")
-    # Pins the format version too, which is what `apply_ppf` dispatches on. Not
-    # the byte length: that is Task 19 generator output and any legitimate edit
-    # to the translation would move it.
+    # Pins the format version too, which is what `apply_ppf` dispatches on. Not the
+    # byte length: any legitimate edit to the translation would move it.
     assert data[:5] == b"PPF10"
 
 
@@ -85,14 +83,11 @@ def _shipped_game_packages() -> set[str]:
 
 
 def test_the_registry_is_populated_by_importing_the_root_package():
-    # Runs in a subprocess, and that is the whole test. In-process this claim
-    # cannot be made: `tests/games/<id>/` imports each game package directly, so
-    # `@register` has already run for every game by the time this file executes,
-    # and the registry looks complete even when `retro_roster_patcher/__init__.py`
-    # imports none of them. Measured -- commenting out one import line left this
-    # green in-process and failed only the two subprocess tests below.
-    #
-    # A clean interpreter that imports nothing but the root package is the only
+    # Runs in a subprocess, and that is the whole test. In-process this claim cannot
+    # be made: `tests/games/<id>/` imports each game package directly, so `@register`
+    # has already run for every game by the time this file executes, and the registry
+    # looks complete even when `retro_roster_patcher/__init__.py` imports none of
+    # them. A clean interpreter that imports nothing but the root package is the only
     # place the claim is falsifiable.
     proc = subprocess.run(
         [

@@ -97,9 +97,6 @@ def _records(count, *, name="Fourteen Char", goalies=2):
     return made
 
 
-# -- nibble encoding -------------------------------------------------------
-
-
 def test_two_nibbles_pack_high_first():
     assert encode_nibble(6, 1) == 0x61
 
@@ -123,9 +120,6 @@ def test_a_weight_nibble_still_clamps_its_stat_half():
     assert encode_weight_nibble(0, 9) == 0x06
 
 
-# -- loading ---------------------------------------------------------------
-
-
 def test_a_writer_over_a_missing_file_fails_to_load(tmp_path):
     writer = NHL94SNESRomWriter(str(tmp_path / "absent.sfc"), str(tmp_path / "out.sfc"))
     assert writer.load() is False
@@ -136,9 +130,6 @@ def test_loading_copies_the_image_rather_than_aliasing_the_readers(tmp_path):
     writer = _writer(tmp_path)
     assert writer.data is not writer.reader.data
     assert writer.data == writer.reader.data
-
-
-# -- the region ------------------------------------------------------------
 
 
 def test_the_region_runs_from_the_first_record_to_the_end_of_the_terminator(tmp_path):
@@ -156,9 +147,6 @@ def test_a_shorter_existing_roster_gives_a_smaller_region(tmp_path):
 
 def test_a_region_past_the_last_team_is_empty(tmp_path):
     assert _writer(tmp_path)._get_team_player_region(TEAM_COUNT) == (0, 0)
-
-
-# -- writing a roster ------------------------------------------------------
 
 
 def test_a_roster_that_fits_is_written_whole(tmp_path):
@@ -264,9 +252,6 @@ def test_writing_one_team_leaves_its_neighbours_untouched(tmp_path):
     assert after[start + size :] == before[start + size :]
 
 
-# -- the count, which is the point ----------------------------------------
-
-
 def test_the_number_written_is_not_the_number_asked_for(tmp_path):
     """The regression this port exists to fix, on a fixture where they differ.
 
@@ -319,9 +304,6 @@ def test_an_empty_roster_erases_the_region_and_reports_nothing_written(tmp_path)
     assert writer.write_team_roster(5, []) == 0
     assert writer.finalize() is True
     assert _finalized_reader(writer).read_team_roster(5) == ([], [])
-
-
-# -- names -----------------------------------------------------------------
 
 
 def test_a_name_too_long_for_the_remaining_space_is_truncated(tmp_path):
@@ -382,9 +364,6 @@ def test_a_non_ascii_name_is_replaced_rather_than_raising(tmp_path):
     assert writer.finalize() is True
     names, _ = _finalized_reader(writer).read_team_roster(5)
     assert names == ["Gr?goire"]
-
-
-# -- _write_player_stats, and why its out-of-range branch stays --------------
 
 
 class _FixedRegionWriter(NHL94SNESRomWriter):
@@ -466,9 +445,6 @@ def test_a_region_inside_the_image_never_reaches_the_stat_bound(tmp_path):
     assert writer.write_team_roster(5, _records(4, name="x")) == 1
 
 
-# -- header_counts ----------------------------------------------------------
-
-
 def test_a_roster_that_lost_nothing_keeps_the_counts_it_asked_for():
     # 2 + 14 + 7 = 23 records written, so nothing is clamped and the header
     # bytes are the ones upstream wrote. This is the byte-identity case.
@@ -545,9 +521,6 @@ def test_a_header_written_from_the_requested_counts_names_an_absent_record(tmp_p
     assert data is not None
     base = fixture.team_base(5) + LINE_TABLE_BYTE
     assert max(data[base : base + LINE_COUNT * LINE_SLOTS]) == 21
-
-
-# -- the team header -------------------------------------------------------
 
 
 def test_the_count_byte_packs_forwards_high_and_defencemen_low(tmp_path):
@@ -630,9 +603,6 @@ def test_a_header_write_with_no_pointer_to_read_is_refused(tmp_path):
     writer = NHL94SNESRomWriter(str(short), str(tmp_path / "out.sfc"))
     assert writer.load() is True
     assert writer.write_team_header(0, 14, 7) is False
-
-
-# -- finalize --------------------------------------------------------------
 
 
 def test_finalize_writes_the_buffer_to_the_output_path(tmp_path):

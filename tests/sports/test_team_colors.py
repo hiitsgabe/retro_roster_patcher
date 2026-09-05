@@ -19,9 +19,6 @@ def _league(*rosters: TeamRoster) -> LeagueData:
     return LeagueData(league=League(id=39, name="Premier League"), teams=list(rosters))
 
 
-# ── The palette ──────────────────────────────────────────────────────────
-
-
 def test_the_palette_is_the_ten_offered_colours():
     # Spelled out rather than counted: the palette indices are what a caller
     # persists, so reordering or respelling an entry silently repaints every team
@@ -55,9 +52,6 @@ def test_the_rgb_palette_is_each_hex_split_into_red_green_blue():
         (108, 172, 228),
         (255, 105, 180),
     ]
-
-
-# ── The cache file ───────────────────────────────────────────────────────
 
 
 def test_setting_a_colour_writes_the_documented_json_shape(tmp_path):
@@ -157,9 +151,6 @@ def test_saving_into_the_working_directory_still_fails(tmp_path, monkeypatch):
         team_colors.set_team_color("", 33, "DA291C", "FBE122")
 
 
-# ── Applying cached colours to league data ───────────────────────────────
-
-
 def test_apply_cached_colors_fills_the_teams_it_knows_and_leaves_the_rest(tmp_path):
     team_colors.set_team_color(str(tmp_path), 33, "DA291C", "FBE122")
     data = _league(
@@ -215,16 +206,13 @@ def test_apply_cached_colors_ignores_an_object_with_no_teams(tmp_path):
     #
     # The other arm is not separately pinned, and that is deliberate rather than an
     # oversight: `hasattr(None, "teams")` is already `False`, so dropping
-    # `not league_data` leaves both cases here behaving identically — measured, the
-    # file stays green. Telling the arms apart needs something both falsy and carrying
-    # a non-empty `teams`, and `LeagueData` declares neither `__bool__` nor `__len__`,
-    # so a real one is never falsy.
+    # `not league_data` leaves both cases here behaving identically. Telling the arms
+    # apart needs something both falsy and carrying a non-empty `teams`, and
+    # `LeagueData` declares neither `__bool__` nor `__len__`, so a real one is never
+    # falsy.
     team_colors.set_team_color(str(tmp_path), 33, "DA291C", "FBE122")
 
     assert team_colors.apply_cached_colors(str(tmp_path), object()) is None
-
-
-# ── The "every team is covered" check ────────────────────────────────────
 
 
 def test_all_teams_have_colors_is_true_once_every_team_is_covered(tmp_path):

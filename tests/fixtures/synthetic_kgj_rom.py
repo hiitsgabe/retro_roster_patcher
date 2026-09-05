@@ -1,53 +1,34 @@
 """Fabricate a structurally valid Ken Griffey Jr. Presents MLB (SNES) ROM in memory.
 
 Nothing here is derived from a real ROM. Every byte is computed from the format
-`games/kgj_mlb_snes/rom_reader.py` and `rom_writer.py` document, and the layout
-constants below are chosen to be legal rather than to match a real dump.
+`games/kgj_mlb_snes/rom_reader.py` and `rom_writer.py` document.
 
-Why the image is exactly 2 MB, or exactly 2 MB + 512
-----------------------------------------------------
-`KGJRomReader.validate` accepts those two sizes and nothing else -- not a floor,
-not a band. The headered variant is the headerless one with 512 bytes of copier
-header stuck on the front, which is what a real `.smc` is.
+The image is exactly 2 MB, or exactly 2 MB + 512: `KGJRomReader.validate` accepts
+those two sizes and nothing else -- not a floor, not a band. The headered variant
+is the headerless one with 512 bytes of copier header on the front, which is what
+a real `.smc` is.
 
-Why the marker's position is a parameter
-----------------------------------------
 There is no fixed offset to the team tables. `validate` searches the whole image
-for a 14-byte marker and takes the byte after it as team 0's first player. That
-is what makes the copier header cost nothing: prepending 512 bytes moves the
-marker by 512 and everything derived from it follows. It is also the one thing
-`validate` does not bound, so `marker_offset` is a parameter here: a builder
-call that puts it near the end of the file produces the image
-`patcher._team_data_fits` refuses.
+for a 14-byte marker and takes the byte after it as team 0's first player, which
+is what makes the copier header cost nothing. It is also the one thing `validate`
+does not bound, so `marker_offset` is a parameter here: a call that puts it near
+the end of the file produces the image `patcher._team_data_fits` refuses.
 
-Why the constants here are literals and not imports
----------------------------------------------------
-The marker, the record field offsets and the character encoding are
-retranscribed below rather than imported from `games.kgj_mlb_snes.models`. That
-duplication is the point: a test that located a field using the very constant it
-is meant to pin would move with the constant and assert nothing. Moving
-`AL_TO_NL_GAP`, or shifting `CHAR_TO_BYTE` by one, must break tests here, and it
-only can if these are independent transcriptions.
+The marker, the record field offsets and the character encoding are retranscribed
+here rather than imported from `games.kgj_mlb_snes.models`, so that moving
+`AL_TO_NL_GAP` or shifting `CHAR_TO_BYTE` by one breaks tests. `encode_char` is
+written as the *rule* the table encodes -- space at 0, the ten digits from 0x01,
+A-Z from 0x0B, and a lone lowercase `c` at 0x36 -- so it disagrees with any
+renumbering of it.
 
-`encode_char` is written as the *rule* the table encodes -- space at 0, the ten
-digits from 0x01, A-Z from 0x0B, and a lone lowercase `c` at 0x36 -- rather than
-as a copy of the table, so it disagrees with any renumbering of it.
-
-Why every byte in a record is unique to its (team, slot)
---------------------------------------------------------
 Each player's name, jersey, position, attributes and stats encode both the team
-index and the roster slot. Uniform filler would make the 700 records identical,
-and then no assertion could tell which record a read or a write landed on: a
-writer that ignored `team_index`, or filled a roster in reverse, or confused the
-AL and NL halves, would satisfy every equality a test could write.
+index and the roster slot, so a writer that ignored `team_index`, filled a roster
+in reverse, or confused the AL and NL halves cannot satisfy an equality.
 
-Why the filler is pseudo-random rather than zero
-------------------------------------------------
+The filler is a deterministic LCG rather than zero because
 `KGJRomWriter.update_snes_checksum` sums every byte in the file. Against a
-zero-filled image that sum is a constant, and starting it at a different offset,
-or over a different length, produces the same number -- so the test would pass
-against a checksum routine that summed nothing at all. The filler below is a
-deterministic LCG, so every byte of the image contributes.
+zero-filled image that sum is a constant, and starting it at a different offset
+or over a different length produces the same number.
 """
 
 from __future__ import annotations

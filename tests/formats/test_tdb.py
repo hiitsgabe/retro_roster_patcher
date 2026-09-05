@@ -1,23 +1,12 @@
 """TDB: the bit-packed record database, and the CRC chain that validates it.
 
-The instrument here is not a transcribed offset table, because there are no
-offsets to transcribe: a game addresses a TDB by field name. So the claims are
-
-- `parse` reads back the exact values `tests.fixtures.synthetic_tdb.pack_bits`
-  wrote, field by field, from an independent bit packer;
-- `serialize(parse(b)) == b` for every file in `TDB_CORPUS`, whose CRC chain the
-  fixture computed with an independent bitwise CRC; and
-- the chain is checked link by link against that independent CRC, including the
-  two links `serialize` deliberately never rewrites.
-
-The second of those is the one that would go vacuous quietly. `serialize` starts
-from the bytes `parse` was given, so it would be byte-identical for a great many
-broken implementations — one that recomputed no CRC at all, for instance. What
-makes it a real claim is that the fixture builds the chain itself: a file from
-`build_tdb` is only stable under `serialize` if the module's chain arithmetic
-agrees with the fixture's, link for link. `test_serialize_rewrites_the_chain_
-after_a_write` closes the rest, by changing a record and requiring the CRCs to
-move.
+A game addresses a TDB by field name, so there is no offset table to transcribe.
+The claims are that `parse` reads back the exact values
+`tests.fixtures.synthetic_tdb.pack_bits` wrote, field by field, from an
+independent bit packer; that `serialize(parse(b)) == b` for every file in
+`TDB_CORPUS`, whose CRC chain the fixture computed with an independent bitwise
+CRC; and that the chain matches that CRC link by link, including the two links
+`serialize` deliberately never rewrites.
 """
 
 import struct
@@ -55,10 +44,6 @@ from tests.fixtures.synthetic_tdb import (
     player_table,
     player_values,
 )
-
-# ──────────────────────────────────────────────────────────────
-# The corpus
-# ──────────────────────────────────────────────────────────────
 
 TDB_CORPUS: dict[str, list[TableSpec]] = {
     # One table: the chain degenerates to the trailing four bytes alone, and
@@ -141,8 +126,7 @@ def test_the_corpus_holds_ten_files_covering_the_degenerate_shapes():
     # Every parametrised test below runs once per entry, so an emptied corpus
     # would collect nothing and report green.
     assert len(TDB_CORPUS) == 10
-    # And the shapes that collapse an arithmetic step are each present by name,
-    # because a corpus of ten similar three-table files would satisfy the count.
+    # And each shape that collapses an arithmetic step is present by name.
     assert len(TDB_CORPUS["no_tables"]) == 0
     assert len(TDB_CORPUS["single"]) == 1
     assert len(TDB_CORPUS["three"]) == 3
@@ -159,11 +143,6 @@ def test_the_corpus_files_are_all_different():
     assert len({_build(label) for label in TDB_CORPUS}) == 10
 
 
-# ──────────────────────────────────────────────────────────────
-# The CRC
-# ──────────────────────────────────────────────────────────────
-
-
 def test_the_crc_matches_the_published_check_value_for_crc32_mpeg2():
     # The one anchor in this file that comes from outside the project. CRC
     # catalogues give 0x0376E6E7 as CRC-32/MPEG-2 of b"123456789", so this says
@@ -177,9 +156,8 @@ def test_the_crc_of_nothing_is_the_initial_accumulator():
 
 def test_it_is_not_the_zlib_crc32_someone_would_reach_for():
     # Reflected input and output and a final XOR: the same polynomial and a
-    # different function. Worth pinning, because `zlib.crc32` is the obvious
-    # substitution and it would leave every round-trip test in this file green
-    # while producing a file the game rejects.
+    # different function. `zlib.crc32` is the obvious substitution and would leave
+    # every round-trip test here green while producing a file the game rejects.
     assert tdb_crc(b"123456789") != zlib.crc32(b"123456789")
 
 
@@ -217,11 +195,6 @@ def test_the_crc_distinguishes_inputs_that_differ_in_one_bit():
     # Guards against an implementation that returns a constant, which would
     # satisfy the round trip for a file whose chain was built with it too.
     assert tdb_crc(b"\x00\x00\x00\x00") != tdb_crc(b"\x00\x00\x00\x01")
-
-
-# ──────────────────────────────────────────────────────────────
-# parse
-# ──────────────────────────────────────────────────────────────
 
 
 @pytest.mark.parametrize("data", [b"", b"DB", TDB_MAGIC, TDB_MAGIC + b"\x00" * 15])
@@ -262,9 +235,8 @@ def test_parse_reads_every_field_definition():
 
 
 def test_parse_preserves_the_header_words_nothing_reads():
-    # `_header_unk` and `_padding` are stored and never consulted, which is
-    # exactly why they need pinning: they are part of what `serialize` has to
-    # carry across untouched.
+    # `_header_unk` and `_padding` are stored and never consulted, which is why they
+    # need pinning: `serialize` has to carry them across untouched.
     table = TDBFile.parse(_build("single")).tables["SPBT"]
     assert table._header_unk == 0x11110001
     assert table._padding == 0x22220001
@@ -304,17 +276,11 @@ def test_get_table_is_case_sensitive_and_answers_none_for_a_name_it_lacks():
     assert tdb.get_table("ZZZZ") is None
 
 
-# ──────────────────────────────────────────────────────────────
-# read_record
-# ──────────────────────────────────────────────────────────────
-
-
 @pytest.mark.parametrize("index", range(8))
 def test_read_record_returns_the_values_the_fixture_packed(index):
-    # The strongest single claim in this file. `pack_bits` wrote these numbers
-    # LSB-first the long way; `read_record` reads them back through a completely
-    # different code path, and every value encodes both the table and the record
-    # so a swap of either lands somewhere else.
+    # `pack_bits` wrote these numbers LSB-first the long way; `read_record` reads
+    # them back through a different code path, and every value encodes both the table
+    # and the record, so a swap of either lands somewhere else.
     table = TDBFile.parse(_build("single")).tables["SPBT"]
     assert table.read_record(index) == player_values(1, index)
 
@@ -354,10 +320,9 @@ def test_a_string_field_stops_at_its_first_nul():
 
 
 def test_a_string_field_whose_first_byte_is_nul_reads_as_empty():
-    # The boundary in `raw.find(b"\\x00")`: a field that begins with a NUL gives
-    # index 0, and `>= 0` rather than `> 0` is what turns that into an empty
-    # string instead of twelve bytes of NUL. Mutation testing found the
-    # distinction unguarded.
+    # The boundary in `raw.find(b"\\x00")`: a field that begins with a NUL gives index
+    # 0, and `>= 0` rather than `> 0` is what turns that into an empty string instead
+    # of twelve bytes of NUL.
     table = TDBFile.parse(_build("single")).tables["SPBT"]
     table.write_record(0, {"FNME": ""})
     assert table.read_record(0)["FNME"] == ""
@@ -427,11 +392,6 @@ def test_a_table_with_no_allocation_can_be_read_from_at_no_index():
         table.read_record(0)
 
 
-# ──────────────────────────────────────────────────────────────
-# write_record
-# ──────────────────────────────────────────────────────────────
-
-
 def test_write_record_changes_only_the_fields_it_was_given():
     table = TDBFile.parse(_build("single")).tables["SPBT"]
     before = table.read_record(2)
@@ -492,11 +452,10 @@ def test_a_string_longer_than_its_field_is_truncated():
 
 
 def test_an_over_long_string_does_not_run_into_the_records_that_follow():
-    # Reading the field back is not enough, and mutation testing showed it:
-    # dropping the `[:byte_len]` truncation still reads back twelve characters,
+    # Dropping the `[:byte_len]` truncation still reads back twelve characters,
     # because the field is twelve bytes wide however many were written. What it
-    # changes is everything after — 40 bytes from offset 0 of record 0 reach
-    # into records 1 and 2 and silently rewrite two other players.
+    # changes is everything after — 40 bytes from offset 0 of record 0 reach into
+    # records 1 and 2 and silently rewrite two other players.
     table = TDBFile.parse(_build("single")).tables["SPBT"]
     table.write_record(0, {"FNME": "A" * 40})
     assert table.read_record(1) == player_values(1, 1)
@@ -545,11 +504,6 @@ def test_a_float_is_truncated_toward_zero_the_way_int_would():
     table = TDBFile.parse(_build("single")).tables["SPBT"]
     table.write_record(0, {"SACC": 7.9})
     assert table.read_record(0)["SACC"] == 7
-
-
-# ──────────────────────────────────────────────────────────────
-# find_record, find_records, allocate_record
-# ──────────────────────────────────────────────────────────────
 
 
 def test_find_record_returns_the_first_match():
@@ -619,11 +573,6 @@ def test_allocate_record_refuses_once_the_allocation_is_full():
 def test_allocate_record_refuses_on_a_table_with_no_allocation():
     table = TDBFile.parse(_build("empty_capacity")).tables["NONE"]
     assert table.allocate_record() == -1
-
-
-# ──────────────────────────────────────────────────────────────
-# serialize
-# ──────────────────────────────────────────────────────────────
 
 
 @pytest.mark.parametrize("label", sorted(TDB_CORPUS))
@@ -755,20 +704,12 @@ def test_a_file_with_no_tables_serializes_unchanged():
     assert len(raw) == DIRECTORY_START + 4
 
 
-# ──────────────────────────────────────────────────────────────
-# Inherited hazards, pinned rather than fixed
-# ──────────────────────────────────────────────────────────────
-
-
 def test_a_live_count_above_the_allocation_parses_and_then_raises_on_read():
-    # Nothing validates `currentRecords <= maxRecords`. The file parses, and a
-    # caller looping `range(table.num_records)` — which is what the source's
-    # readers do — is handed an `IndexError` from the file's own contents.
-    #
-    # Not clamped here: clamping would make `serialize` write back a count it
-    # did not read and break the round trip above. Not raised at parse either:
-    # that refuses a whole disc over one header word. The game's reader is where
-    # the loop gets bounded, and this test is what says so.
+    # Nothing validates `currentRecords <= maxRecords`. The file parses, and a caller
+    # looping `range(table.num_records)` is handed an `IndexError` from the file's own
+    # contents. Not clamped here — that would make `serialize` write back a count it
+    # did not read — and not raised at parse, which refuses a whole disc over one
+    # header word. The game's reader is where the loop gets bounded.
     raw = bytearray(_build("single"))
     header_start = _block_bounds(TDB_CORPUS["single"])[0][0]
     struct.pack_into("<H", raw, header_start + 22, 60000)

@@ -1,53 +1,35 @@
 """Fabricate a structurally valid International Superstar Soccer (SNES) ROM in memory.
 
 Nothing here is derived from a real ROM. Every byte is computed from the format
-`games/iss_snes/rom_reader.py` and `rom_writer.py` document, and the layout
-below is chosen to be legal rather than to match a real dump.
+`games/iss_snes/rom_reader.py` and `rom_writer.py` document.
 
-Why the image is 1 MB
----------------------
-`ISSRomReader.validate_rom` accepts a floor of 1 048 576 bytes, which is the
-8 Mbit size its own constants name as the USA/EUR release.
+The image is 1 MB because `ISSRomReader.validate_rom` accepts a floor of
+1 048 576 bytes, the 8 Mbit size its own constants name as the USA/EUR release.
 `rom_writer.MIN_PATCHABLE_SIZE` is 296 140, so the two guards are three and a
-half times apart and a test can sit between them: `SIZE_ARITHMETIC_MINIMUM`
-below is an image `data_fits` accepts and `validate_rom` refuses, which is the
-asymmetry `patch` and `analyze` are deliberately built around.
+half times apart and a test can sit between them: `SIZE_ARITHMETIC_MINIMUM` below
+is an image `data_fits` accepts and `validate_rom` refuses.
 
-Why the constants here are literals and not imports
----------------------------------------------------
 Every offset, the two team orders, the character encoding and the three pointer
-formats are retranscribed rather than imported from `games.iss_snes`. That
-duplication is the point: a test that located a table using the very constant it
-is meant to pin would move with the constant and assert nothing. Moving
-`_OFS_PLAYER_NAMES`, or swapping Scotland back to index 5 of the name order, or
-dropping the 0x80 bias out of `_encode_p40000`, must break tests, and it only
-can if these are independent transcriptions.
-
+formats are retranscribed here rather than imported from `games.iss_snes`, so
+that moving `_OFS_PLAYER_NAMES`, swapping Scotland back to index 5 of the name
+order, or dropping the 0x80 bias out of `_encode_p40000` breaks tests.
 `encode_char` is written as the *rule* the ROM font encodes -- space at 0x00,
 punctuation at six scattered values, the digits from 0x62, upper case from 0x6C
 and lower case from 0x86 -- rather than as a copy of the table.
 
-Why every player's name and record encode both coordinates
-----------------------------------------------------------
 `player_name(team, slot)` is `T00P00` through `T26P14` and every byte of the
-6-byte data record varies with both. Uniform filler would make the 405 records
-identical, and then no assertion could tell which record a read or a write
-landed on: a writer that ignored the team index, or that used the enum order
-where the names use the name order -- the exact defect the two disjoint 27-entry
-orders invite -- would satisfy every equality a test could write.
+6-byte data record varies with both, so a writer that ignored the team index, or
+used the enum order where the names use the name order, cannot satisfy an
+equality. `player_name` is indexed by *name-order* position while
+`player_data_record` is indexed by *enum-order* position: slot 5 is Scotland in
+one and Wales in the other.
 
-The two orders are why `player_name` is indexed by *name-order* position while
-`player_data_record` is indexed by *enum-order* position. Slot 5 is Scotland in
-one and Wales in the other; a fixture that used one order for both could not
-detect a writer that used the wrong one.
-
-Why the filler is pseudo-random rather than zero
-------------------------------------------------
-Three of the writer's methods read bytes back and preserve some of their bits:
-`write_player_data` keeps the high five bits of two bytes, the high nibble of
-two more and three bits of the last, and the two kit writers keep the eight
-words of hair and skin colour that follow the kit. Against a zero-filled image
-every one of those preservations is indistinguishable from a write of zero.
+The filler is pseudo-random rather than zero because three writer methods
+preserve bits they read back -- `write_player_data` keeps the high five bits of
+two bytes, the high nibble of two more and three bits of the last, and the two
+kit writers keep the eight words of hair and skin colour that follow the kit.
+Against a zero-filled image each preservation is indistinguishable from a write
+of zero.
 """
 
 from __future__ import annotations
@@ -133,7 +115,7 @@ TEAM_NAME_ORDER = [
     "Super Star",
 ]
 
-# -- independent transcriptions of the offsets -------------------------------
+
 OFS_PLAYER_NAMES = 0x3B62C
 PLAYER_NAME_LENGTH = 8
 OFS_PLAYER_DATA = 0x387EC
@@ -182,14 +164,14 @@ DISPLACEMENT_PATCH_POINTS = (
 UNPATCHED_BANK_BYTE = 0x89
 PATCHED_BANK_BYTE = 0x82
 
-# -- name-text blob region ---------------------------------------------------
+
 #: Where this fixture puts the 27 selection-screen name blobs. Below
 #: `MAX_NAME_TEXT_ADDR`, so `write_team_name_texts` computes a positive budget.
 NAME_TEXT_BASE = 0x43000
 #: Entries in one blob. `1 + count * 4` bytes each, so 4 is 17 bytes.
 NAME_TEXT_ENTRIES = 4
 
-# -- name-tile blob region ---------------------------------------------------
+
 #: Where this fixture puts the 27 Konami-compressed tile blobs. The writer's own
 #: comment says the game's data occupies 0x48000-0x483FE and that new flag tiles
 #: go after it at 0x48400, so 27 blobs have 1 022 bytes to share and this
@@ -198,7 +180,7 @@ NAME_TEXT_ENTRIES = 4
 NAME_TILE_BASE = 0x48000
 NAME_TILE_BLOB_SIZE = 36
 
-# -- description region ------------------------------------------------------
+
 #: SNES bank $02: a pointer of `snes_addr` means file offset
 #: `0x10000 + (snes_addr - 0x8000)`.
 DESC_BANK_BASE = 0x10000

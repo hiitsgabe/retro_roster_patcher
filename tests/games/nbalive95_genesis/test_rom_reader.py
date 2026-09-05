@@ -39,9 +39,6 @@ def _loaded(path):
     return reader
 
 
-# -- load -------------------------------------------------------------------
-
-
 def test_load_returns_false_for_a_file_that_is_not_there(tmp_path):
     reader = NBALive95RomReader(str(tmp_path / "absent.bin"))
     assert reader.load() is False
@@ -71,9 +68,6 @@ def test_load_returns_false_rather_than_raising_when_the_file_cannot_be_read(rom
 def test_load_reads_the_whole_file(rom):
     reader = _loaded(rom)
     assert len(reader.data) == fixture.ROM_SIZE
-
-
-# -- validate ---------------------------------------------------------------
 
 
 def test_validate_accepts_the_synthetic_image(rom):
@@ -156,9 +150,6 @@ def test_validate_accepts_a_name_field_with_exactly_the_ascii_floor(rom):
     data[offset : offset + 24] = b"ABC" + bytes(21)
     rom.write_bytes(bytes(data))
     assert _loaded(rom).validate() is True
-
-
-# -- offsets ----------------------------------------------------------------
 
 
 def test_the_team_address_table_is_the_one_the_fixture_transcribed(rom):
@@ -247,9 +238,6 @@ def test_the_size_floor_admits_a_file_whose_last_teams_cannot_be_read(tmp_path):
     assert unreadable == list(range(18, 30))
 
 
-# -- name decoding ----------------------------------------------------------
-
-
 def test_a_name_with_no_null_is_all_last_name(rom):
     assert _loaded(rom)._decode_name(b"JORDAN") == ("JORDAN", "")
 
@@ -278,9 +266,6 @@ def test_the_printable_range_stops_below_delete(rom):
 
 def test_surrounding_spaces_are_stripped_from_a_decoded_name(rom):
     assert _loaded(rom)._decode_name(b"  JORDAN \x00 MIKE \x00") == ("JORDAN", "MIKE")
-
-
-# -- reading records --------------------------------------------------------
 
 
 def test_a_record_reads_back_every_field_the_fixture_wrote(rom):
@@ -350,9 +335,6 @@ def test_a_roster_stops_at_the_first_slot_it_cannot_read(rom):
 
 def test_a_roster_past_the_last_team_is_empty(rom):
     assert _loaded(rom).read_team_roster(30) == []
-
-
-# -- get_info ---------------------------------------------------------------
 
 
 def test_get_info_before_load_reports_a_size_of_zero(rom):

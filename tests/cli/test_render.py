@@ -42,9 +42,6 @@ def events(stream: io.StringIO) -> list[dict]:
     return [json.loads(line) for line in stream.getvalue().splitlines()]
 
 
-# -- JsonRenderer -----------------------------------------------------------
-
-
 def test_json_writes_one_object_per_line_on_stdout():
     out = io.StringIO()
     r = JsonRenderer(out=out)
@@ -136,9 +133,9 @@ def test_json_flushes_the_stream_after_every_event():
 
 
 def test_a_json_renderer_with_no_streams_binds_the_process_streams():
-    # Tasks 23-25 construct renderers bare. A default that bound `out` to stderr
-    # would break the wire protocol outright while every test here stayed green,
-    # because all of them pass both streams explicitly.
+    # Callers construct renderers bare. A default that bound `out` to stderr would
+    # break the wire protocol outright and no other test here would notice, because
+    # all of them pass both streams explicitly.
     r = JsonRenderer()
     assert r.out is sys.stdout
     assert r.err is sys.stderr
@@ -148,9 +145,6 @@ def test_json_passes_a_payload_with_no_kind_straight_through():
     out = io.StringIO()
     JsonRenderer(out=out).result({"output_path": "/x"})
     assert events(out) == [{"output_path": "/x", "event": "result", "ok": True}]
-
-
-# -- HumanRenderer ----------------------------------------------------------
 
 
 def test_a_human_renderer_with_no_streams_binds_the_process_streams():

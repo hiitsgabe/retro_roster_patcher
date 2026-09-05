@@ -3,23 +3,17 @@ trip, and by decoding what the encoder emitted back into commands.
 
 The three are not redundant. A round trip alone would pass for any encoder that
 emits something this module's own decompressor understands, including one that
-picks a worse encoding than the game's tools do — and the output of
-`refpack_compress` is what the console loads, so "decompresses correctly" is
-necessary and not sufficient. `REFERENCE_COMPRESSED` closes that: it is the
-exact output of the compressor inside `console_utilities` that this module was
-ported from, captured over the fifteen inputs in `vector_inputs.py`, so a port
-that re-derived a different-but-valid encoding fails here rather than shipping.
+picks a worse encoding than the game's tools do, and the output of
+`refpack_compress` is what the console loads. `REFERENCE_COMPRESSED` closes that:
+it is the exact output of the compressor inside `console_utilities` that this
+module was ported from, captured over the inputs in `vector_inputs.py`.
 
 Nothing in this file imports `console_utilities`. The references are literals.
 
-Mutation-tested: 97 mutations of `formats/ea_tdb.py`, 95 killed by this
-directory. The two survivors are equivalent mutants and both are argued at the
-line they mutate — `_is_encodable`'s second upper bound, which the third clause
-subsumes, and the `size - 2` insertion bound, whose last position no
-`find_match` can reach. Two of the fifteen inputs in `vector_inputs.py`
-(`low_alphabet` and `hash_chain`) exist only because mutation found the
-encoder's two search parameters — the lazy-match rule and the chain-depth limit
-— unobservable without them.
+Two equivalent mutants are deliberately left uncovered, each argued at the line
+it mutates: `_is_encodable`'s second upper bound, which the third clause
+subsumes, and the `size - 2` insertion bound, whose last position no `find_match`
+can reach.
 """
 
 import random
@@ -146,11 +140,6 @@ def _decode_commands(stream: bytes) -> list[str]:
     return kinds
 
 
-# ──────────────────────────────────────────────────────────────
-# The corpus itself, before anything is asserted about its members
-# ──────────────────────────────────────────────────────────────
-
-
 def test_the_reference_corpus_holds_fifteen_cases():
     # A parametrised suite over an empty or shrunken dict passes by collecting
     # nothing. This is the assertion that makes the count deliberate: every test
@@ -186,11 +175,6 @@ def test_the_corpus_holds_both_a_case_that_shrinks_and_one_that_grows():
     assert len(grew) == 8
 
 
-# ──────────────────────────────────────────────────────────────
-# Byte fidelity against the source compressor
-# ──────────────────────────────────────────────────────────────
-
-
 @pytest.mark.parametrize("label", sorted(VECTOR_INPUTS))
 def test_compress_reproduces_the_source_compressor_byte_for_byte(label):
     # The claim the round-trip tests cannot make. A different-but-valid encoding
@@ -213,11 +197,6 @@ def test_a_compressor_that_returned_its_input_would_fail_the_references():
     assert refpack_compress(VECTOR_INPUTS["long_run"]) != VECTOR_INPUTS["long_run"]
     assert len(REFERENCE_COMPRESSED["long_run"]) == 15
     assert len(VECTOR_INPUTS["long_run"]) == 1200
-
-
-# ──────────────────────────────────────────────────────────────
-# Round trip over a wider corpus
-# ──────────────────────────────────────────────────────────────
 
 
 def _round_trip_corpus() -> dict[str, bytes]:
@@ -311,10 +290,6 @@ def test_an_overlapping_match_repeats_the_byte_it_points_at():
     assert refpack_decompress(REFERENCE_COMPRESSED["run_of_one"]) == b"\x5a" * 40
 
 
-# ──────────────────────────────────────────────────────────────
-# The encoder and the decoder as inverses, independent of the matcher
-# ──────────────────────────────────────────────────────────────
-
 # (length, offset) pairs on and either side of every boundary the three copy
 # encodings have. `_is_encodable` decides which are emittable, and the test below
 # holds it to `_emit_copy` for the ones it accepts.
@@ -399,11 +374,6 @@ def test_a_refused_pair_is_one_no_command_could_hold(length, offset):
     # `else` branch would silently truncate it into a valid command naming a
     # different length or a different offset.
     assert _is_encodable(length, offset) is False
-
-
-# ──────────────────────────────────────────────────────────────
-# Rejections, and the two things this module does NOT check
-# ──────────────────────────────────────────────────────────────
 
 
 @pytest.mark.parametrize(

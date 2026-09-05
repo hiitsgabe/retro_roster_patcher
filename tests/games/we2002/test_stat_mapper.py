@@ -1,32 +1,25 @@
 """The two places `StatMapper` turns provider data into something the ROM stores.
 
 `_format_player_name` is the one place a provider string becomes ROM bytes
-without passing through a numeric mapping, so it is where a malformed payload
-gets to decide whether the whole patch runs. It has three fallbacks — display
-name to last name, and forename to the display name's first word — and each of
-them was reached by testing a string for truthiness, which a string of spaces
-passes.
+without passing through a numeric mapping. Its three fallbacks -- display name to
+last name, and forename to the display name's first word -- were each reached by
+testing a string for truthiness, which a string of spaces passes.
 
-The second half of this file is the rating path, and specifically what happens to
-an attribute whose statistic the player's provider does not measure. A filler
-zero is not a measurement of zero: percentiled against a league it lands on the
-floor, so a provider-wide absence rates every player in the game at the minimum
-for that attribute while the attributes that are supplied stay correct and make
-a spot check look fine. `PlayerStats.unsupplied` is what tells the two apart --
-and this mapper does not read it.
+The second half is the rating path, and what happens to an attribute whose
+statistic the player's provider does not measure. A filler zero is not a
+measurement of zero: percentiled against a league it lands on the floor, so a
+provider-wide absence rates every player at the minimum for that attribute while
+the supplied attributes stay correct and make a spot check look fine.
+`PlayerStats.unsupplied` is what tells the two apart -- and this mapper does not
+read it.
 
 That is upstream's behaviour, it is wrong, and it is preserved deliberately.
 ESPN is this game's only provider and it measures neither duels nor dribbles, so
 `body_balance`, `technique` and `dribble` are the floor rating for every player
-in every patched ISO. A `CATEGORY_INPUTS` table and three position-and-age
-estimators fixed exactly that and have been removed: they wrote bytes no
-released build of this patcher ever produced, nothing in this repository has
-been validated against a real disc, and fidelity to the original beats
-correctness of the data. Measured, the gating moved 1 251 bytes across 32 Master
-League slots and made 150 of 150 synthetic leagues differ from upstream.
-
-The tests below therefore pin the collapse, and each one that does says so in
-its own docstring. Do not "fix" them.
+in every patched ISO. A `CATEGORY_INPUTS` gate and three position-and-age
+estimators fixed exactly that and have been removed: they wrote bytes no released
+build of this patcher ever produced, and fidelity to the original beats
+correctness of the data here. Do not "fix" the tests below that pin the collapse.
 """
 
 from dataclasses import replace
@@ -52,9 +45,6 @@ def _name(mapper, name, last_name="", first_name=""):
             position="Midfielder",
         )
     )
-
-
-# ── the absent display name ──────────────────────────────────────────────
 
 
 def test_an_absent_display_name_falls_back_to_the_last_name(mapper):
@@ -97,9 +87,6 @@ def test_a_whitespace_last_name_is_also_treated_as_absent(mapper):
     assert _name(mapper, "", last_name="  ", first_name="Ana") == ("", "Ana")
 
 
-# ── names that become whitespace on the way to ASCII ─────────────────────
-
-
 def test_a_one_word_non_latin_name_falls_back_to_the_last_name(mapper):
     # `_to_ascii` drops every character it cannot render, so a name in a
     # non-Latin script comes back empty and the fallback was always reached.
@@ -136,9 +123,6 @@ def test_the_strip_happens_after_the_ascii_conversion_and_not_before(mapper):
     assert _name(mapper, "Иванов Петров", last_name="Petrov") == ("Petrov", "")
 
 
-# ── padding around a real name ───────────────────────────────────────────
-
-
 def test_a_padded_mononym_loses_its_padding(mapper):
     # The mononym branch returned `display[:8]`, not `words[0]`, so a padded
     # name was truncated with its padding still attached: `"  Neymar  "[:8]`
@@ -162,9 +146,6 @@ def test_a_supplied_forename_still_beats_the_first_word(mapper):
     # The fallback only fires when there is nothing to fall back from: a real
     # forename must not be replaced by the display name's first word.
     assert _name(mapper, "Victor Hugo", first_name="Vitinho") == ("V. Hugo", "Vitinho")
-
-
-# ── the shapes that already worked ───────────────────────────────────────
 
 
 def test_a_mononym_is_used_as_it_stands(mapper):
@@ -195,9 +176,6 @@ def test_a_name_that_is_only_punctuation_is_not_whitespace_and_is_kept(mapper):
     assert _name(mapper, "-") == ("-", "")
 
 
-# ── through the mapper's own entry point ─────────────────────────────────
-
-
 def test_a_whitespace_named_player_no_longer_aborts_the_whole_team(mapper):
     # `map_team_with_league_context` is what `map_rosters` calls, and the
     # `IndexError` left it uncaught: one malformed player in one team killed the
@@ -217,8 +195,6 @@ def test_a_whitespace_named_player_no_longer_aborts_the_whole_team(mapper):
     assert sorted(p.last_name for p in record.players) == ["Neymar", "Silva", "V. Hugo"]
     assert len(record.players) == 3
 
-
-# ── the stats a provider does not measure ────────────────────────────────
 
 # The four `PlayerStats` fields ESPN's soccer statistics document has no
 # counterpart for. Spelled out here rather than imported from the client, so that
@@ -281,9 +257,6 @@ def _rate_squad(mapper, attribute, unsupplied=()):
     all_stats = _squad_stats(unsupplied)
     percentiles = mapper._compute_percentiles(all_stats)
     return [getattr(mapper.map_player(p, all_stats[p.id], percentiles), attribute) for p in SQUAD]
-
-
-# --- what a declared absence does, which is nothing ---
 
 
 def test_a_provider_that_measures_no_duels_puts_the_whole_squad_on_the_floor(mapper):
@@ -351,9 +324,6 @@ def test_the_attributes_espn_does_supply_are_unaffected_by_the_declaration(mappe
     assert _rate_squad(mapper, "defensive", ABSENT_FROM_ESPN) == [3, 2, 2, 1, 1, 1, 1]
 
 
-# --- a measured zero, and the unmeasured one it is indistinguishable from ---
-
-
 def test_a_player_who_genuinely_won_no_duels_rates_at_the_floor(mapper):
     # The half that was never wrong: this player was in 310 duels and won none of
     # them, his provider measured that, and he is the worst in the league at it.
@@ -393,9 +363,6 @@ def test_an_unmeasured_player_is_ranked_below_every_measured_one(mapper):
     percentiles = mapper._compute_percentiles(mixed)
     assert sorted(percentiles["body_balance"]) == [1, 2, 3]
     assert percentiles["body_balance"] == {1: 33.33333333333333, 2: 66.66666666666666, 3: 0.0}
-
-
-# --- the estimators that remain ---
 
 
 @pytest.mark.parametrize(
@@ -447,9 +414,6 @@ def test_a_player_with_no_stats_at_all_takes_the_fallback_attributes(mapper):
     assert attrs.body_balance == 5
     assert attrs.dribble == 6
     assert attrs.technique == 5
-
-
-# --- through the mapper's own entry point ---
 
 
 def test_a_whole_squad_mapped_with_absent_duel_data_is_uniformly_clumsy(mapper):

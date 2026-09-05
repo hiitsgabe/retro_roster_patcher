@@ -65,9 +65,6 @@ def make_writer(tmp_path, spec=None, *, name="game.iso", out="out.iso"):
     return writer
 
 
-# -- constants -------------------------------------------------------------
-
-
 def test_a_record_ends_with_a_comma_and_a_semicolon():
     assert RECORD_SUFFIX == ",;"
 
@@ -86,9 +83,6 @@ def test_the_record_terminator_is_the_header_suffix_and_the_line_terminator():
 
 def test_the_copy_moves_four_mebibytes_at_a_time():
     assert COPY_CHUNK_BYTES == 4 * 1024 * 1024
-
-
-# -- build_csv_record ------------------------------------------------------
 
 
 def test_a_record_starts_with_its_id():
@@ -130,9 +124,6 @@ def test_a_built_record_round_trips_through_the_fixtures_own_parser():
     assert parsed["00b87d5f5"] == columns
 
 
-# -- build_csv_section -----------------------------------------------------
-
-
 def test_a_section_starts_with_its_header_line():
     data = build_csv_section("one,two", {}, None)
     assert data == b"one,two;\r\n"
@@ -169,11 +160,9 @@ def test_a_record_the_order_names_but_the_table_no_longer_holds_is_skipped():
 
 
 def test_a_record_the_table_no_longer_holds_leaves_no_line_at_all():
-    # The test above cannot tell "skipped" from "written as `00000000gone,;`":
-    # the fixture's parser drops a record with no columns, so both readings
-    # yield the same one-id order. Mutation testing said so -- `records.get(id)`
-    # against `records.get(id, {})` survived it. These are the bytes, and the
-    # deleted id is not among them.
+    # The test above cannot tell "skipped" from "written as `00000000gone,;`": the
+    # fixture's parser drops a record with no columns, so both readings yield the same
+    # one-id order. These are the bytes, and the deleted id is not among them.
     data = build_csv_section("h,e", {"00000000a": {0: "a"}}, ["00000000a", "00000000gone"])
     assert data == b"h,e;\r\n00000000a,0 a,;\r\n"
 
@@ -202,9 +191,6 @@ def test_a_built_section_round_trips_through_the_fixtures_own_parser():
     records = {"00000000a": {0: "Ichiro", 1: "Suzuki"}, "00000000b": {0: "Ken", 1: "Griffey"}}
     data = build_csv_section("h,e", records, ["00000000b", "00000000a"])
     assert fixture.parse_table(data) == records
-
-
-# -- load ------------------------------------------------------------------
 
 
 def test_loading_a_real_image_answers_true(tmp_path):
@@ -245,9 +231,6 @@ def test_a_section_with_no_terminator_contributes_no_header(tmp_path):
     writer.reader.sections["attrib"] = b"no terminator here"
     writer._extract_headers()
     assert "attrib" not in writer.section_headers
-
-
-# -- update_records / update_player_record ---------------------------------
 
 
 def test_replacing_a_table_replaces_it(tmp_path):
@@ -291,9 +274,6 @@ def test_merging_does_not_mutate_the_dict_the_reader_handed_over(tmp_path):
     original = writer.reader.records["attrib"][pid]
     writer.update_player_record("attrib", pid, {ATTRIB_FIRST_NAME: "New"})
     assert original[ATTRIB_FIRST_NAME] == "Disc00"
-
-
-# -- rebuild_database_big --------------------------------------------------
 
 
 def test_a_rebuild_with_no_edits_is_the_original_blob(tmp_path):
@@ -365,12 +345,11 @@ def test_the_tail_of_an_edited_sections_allocation_is_zeroed(tmp_path):
     assert set(rebuilt[stream_end : offset + allocation]) == {0}
 
 
-# The test above cannot see the zero-fill. The fixture already pads each
-# section to its allocation with zeros, and an edit that changes one name
-# leaves the rebuilt stream about as long as the one it replaced, so the slack
-# it checks was zero before anything was written -- zero over zero, and
-# deleting the fill survived it. These three shrink a section to a header line
-# and look at the window the old stream used to occupy.
+# The test above cannot see the zero-fill. The fixture already pads each section to
+# its allocation with zeros, and an edit that changes one name leaves the rebuilt
+# stream about as long as the one it replaced, so the slack it checks was zero before
+# anything was written -- zero over zero. These three shrink a section to a header
+# line and look at the window the old stream used to occupy.
 
 
 def _shrunk_teamstat(tmp_path):
@@ -414,11 +393,10 @@ def test_a_section_nothing_staged_is_not_rebuilt(tmp_path):
 
 def test_a_table_changed_behind_the_writers_back_is_still_not_rebuilt(tmp_path):
     # What decides which sections are rewritten is `_modified_tables` -- what
-    # `update_records` and `update_player_record` were asked for -- and not the
-    # current contents of `reader.records`. The test above cannot show that:
-    # re-serialising an untouched table reproduces the disc's own bytes exactly,
-    # so dropping the check entirely is invisible against a fixture disc, and
-    # mutation testing confirmed it survives. This changes a table without
+    # `update_records` and `update_player_record` were asked for -- and not the current
+    # contents of `reader.records`. The test above cannot show that: re-serialising an
+    # untouched table reproduces the disc's own bytes exactly, so dropping the check
+    # entirely is invisible against a fixture disc. This changes a table without
     # staging it, so the two answers differ.
     writer = make_writer(tmp_path)
     original = writer.reader.database_big
@@ -439,13 +417,12 @@ def test_a_staged_table_with_no_header_is_not_rebuilt(tmp_path):
     assert rebuilt[offset : offset + allocation] == original[offset : offset + allocation]
 
 
-# A section whose very first byte is the record terminator has a header, and
-# that header is the empty string. `_extract_headers` stores it -- `idx == 0`
-# is `>= 0` -- so the table passes `name in self.section_headers` and is stopped
-# one step later by `_rebuild_section_bytes`'s own `if not header`. That is the
-# only state in which the two guards disagree, and without it three separate
-# mutations survived: dropping the header guard, dropping the empty-rebuild
-# guard, and (below) the records guard.
+# A section whose very first byte is the record terminator has a header, and that
+# header is the empty string. `_extract_headers` stores it -- `idx == 0` is `>= 0` --
+# so the table passes `name in self.section_headers` and is stopped one step later by
+# `_rebuild_section_bytes`'s own `if not header`. That is the only state in which the
+# two guards disagree, so it is the only place the header guard, the empty-rebuild
+# guard and the records guard below are distinguishable from each other.
 
 
 def _writer_with_an_empty_team_header(tmp_path):
@@ -503,9 +480,6 @@ def test_rebuilding_without_a_loaded_blob_raises(tmp_path):
     writer = MVPPSPRomWriter(str(write_iso(tmp_path)), str(tmp_path / "out.iso"))
     with pytest.raises(RomError):
         writer.rebuild_database_big()
-
-
-# -- the section-size bound, which is bug 2 --------------------------------
 
 
 def test_a_section_that_outgrows_its_allocation_raises(tmp_path):
@@ -580,14 +554,11 @@ def test_a_section_that_exactly_fills_its_allocation_does_not_raise(tmp_path):
     )
 
 
-# The bound is `len(compressed) > allocation`, and the two tests above stand on
-# either side of it *loosely* -- one section is thousands of bytes over and the
-# other some hundreds under. Mutation testing moved the bound to
-# `> allocation + 1` and both of them still passed, because no rebuild in this
-# module lands within one byte of the line. RefPack output length is not a
-# quantity a fixture can dial to an exact byte by choosing record text, so these
-# two hand `rebuild_database_big` a section of an exact length instead. That is
-# the whole of what the bound reads.
+# The bound is `len(compressed) > allocation`, and the two tests above stand on either
+# side of it *loosely* -- one section is thousands of bytes over and the other some
+# hundreds under. RefPack output length is not a quantity a fixture can dial to an
+# exact byte by choosing record text, so these two hand `rebuild_database_big` a
+# section of an exact length instead. That is the whole of what the bound reads.
 
 
 def test_a_section_one_byte_over_its_allocation_raises(tmp_path, monkeypatch):
@@ -616,9 +587,6 @@ def test_a_section_one_byte_over_reports_that_one_byte(tmp_path, monkeypatch):
     with pytest.raises(SectionTooLargeError) as excinfo:
         writer.rebuild_database_big()
     assert excinfo.value.compressed - excinfo.value.allocation == 1
-
-
-# -- copy_iso and finalize -------------------------------------------------
 
 
 def test_the_copy_is_byte_identical_to_the_source(tmp_path):

@@ -76,9 +76,6 @@ def test_every_exception_class_in_the_package_is_a_retro_roster_error(qualname):
     assert RetroRosterError in _DISCOVERED[qualname].__mro__
 
 
-# -- the walk itself, so the test above cannot pass by finding nothing -------
-
-
 @pytest.mark.parametrize(
     "qualname",
     [
@@ -144,9 +141,6 @@ def test_no_exception_class_is_defined_outside_the_hierarchy_without_a_reason():
     """The count is derived, not typed: it is what the walk found minus the list."""
     outside = {name for name, cls in _DISCOVERED.items() if RetroRosterError not in cls.__mro__}
     assert sorted(outside - _DELIBERATELY_OUTSIDE) == []
-
-
-# -- the hierarchy's own shape ----------------------------------------------
 
 
 def test_base_error_is_an_exception():

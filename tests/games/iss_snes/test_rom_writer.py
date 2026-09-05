@@ -1,20 +1,16 @@
 """The ISS writer: encoders, the compressor, the font, and the machine-code patch.
 
-This is the file where the port earns its keep, because none of the writer is
-reviewable by reading. Four things in it are ROM hacking rather than field
-writing -- a ten-byte 65816 patch, a compressor, three pointer encodings and a
-hand-rolled 2bpp font -- and each is pinned here against the *rule* the module
-documents rather than against its own output.
+Four things in it are ROM hacking rather than field writing -- a ten-byte 65816
+patch, a compressor, three pointer encodings and a hand-rolled 2bpp font -- and
+each is pinned against the *rule* the module documents rather than against its
+own output.
 
-Two habits run through the file:
-
-  * every read-back is of the *output* file, opened fresh. The writer holds the
-    output handle for its whole lifetime and `finalize` is what flushes it, so
-    reading before then can see a stale page;
-  * every expected value is either hand-derived from a documented format or
-    computed by `tests/fixtures/synthetic_iss_rom.py`, which retranscribes the
-    formats independently. Nothing below calls the function it is checking to
-    work out what that function should have returned.
+Every read-back is of the *output* file, opened fresh: the writer holds the
+output handle for its whole lifetime and `finalize` is what flushes it, so
+reading before then can see a stale page. Every expected value is either
+hand-derived from a documented format or computed by
+`tests/fixtures/synthetic_iss_rom.py`, which retranscribes the formats
+independently.
 """
 
 from __future__ import annotations
@@ -89,9 +85,6 @@ def _team(count=PLAYERS_PER_TEAM, **kwargs):
     )
 
 
-# -- text -------------------------------------------------------------------
-
-
 def test_to_ascii_strips_diacritics_rather_than_the_letter():
     assert _to_ascii("José Ramírez") == "Jose Ramirez"
 
@@ -118,9 +111,6 @@ def test_an_unmappable_character_encodes_to_a_space_and_not_a_terminator():
 
 def test_encoding_an_empty_name_gives_eight_spaces():
     assert _encode_iss_name("") == bytes(8)
-
-
-# -- colour -----------------------------------------------------------------
 
 
 def test_bgr555_puts_red_in_the_low_five_bits():
@@ -185,9 +175,6 @@ def test_near_black_is_classified_red():
     above 200, and with all three equal and low the `r >= g and r >= b` arm wins,
     so a black kit sets the predominant colour to Red."""
     assert _rgb_to_predominant(10, 10, 10) == 2
-
-
-# -- the two attribute scales -----------------------------------------------
 
 
 @pytest.mark.parametrize(
@@ -293,9 +280,6 @@ def test_speed_is_clamped_at_both_ends():
     assert _speed_to_rom(99) == _speed_to_rom(16)
 
 
-# -- the three pointer encodings --------------------------------------------
-
-
 def test_p40000_biases_the_high_byte_by_0x80():
     assert _encode_p40000(0x43000) == fixture.encode_p40000(0x43000)
     assert _encode_p40000(0x43000) == bytes([0x00, 0xB0])
@@ -322,9 +306,6 @@ def test_p40000_raises_above_the_range_its_bias_can_express():
     ceiling and not this."""
     with pytest.raises(ValueError):
         _encode_p40000(0x48000)
-
-
-# -- Konami literal-run compression -----------------------------------------
 
 
 def test_the_compressed_stream_declares_its_own_total_length():
@@ -362,9 +343,6 @@ def test_compressing_nothing_gives_a_bare_header():
 def test_the_payload_survives_the_wrapping_verbatim():
     payload = bytes(range(1, 32))
     assert _konami_compress_literal(payload)[3:] == payload
-
-
-# -- the 2bpp font ----------------------------------------------------------
 
 
 def test_a_rendered_grid_is_eight_rows_of_thirty_two():
@@ -452,9 +430,6 @@ def test_a_solid_4bpp_tile_is_thirty_two_bytes():
     assert len(_make_solid_4bpp_tile(0x0D)) == 32
 
 
-# -- the selection-screen name display list ---------------------------------
-
-
 def test_a_two_letter_name_encodes_right_to_left_bottom_before_top():
     """Hand-derived from the documented format.
 
@@ -507,9 +482,6 @@ def test_an_empty_name_encodes_to_a_count_of_zero():
     assert _encode_team_name_text("") == bytes([0])
 
 
-# -- the size bound ---------------------------------------------------------
-
-
 def test_the_minimum_is_the_flag_tile_write_and_nothing_higher():
     """Derived in the module from a `max` over its own offsets; retranscribed in
     the fixture as the flag-tile address plus two compressed 96-byte halves."""
@@ -543,9 +515,6 @@ def test_the_bound_is_at_least_the_end_of_every_region_the_writer_touches():
 def test_the_displaced_name_tile_region_holds_2432_bytes():
     assert NAME_TILES_CAPACITY == fixture.NAME_TILES_CAPACITY
     assert NAME_TILES_CAPACITY == 0x18000 - 0x17680
-
-
-# -- write_player_names -----------------------------------------------------
 
 
 def _read(path, offset, length):
@@ -625,9 +594,6 @@ def test_the_copier_header_shifts_the_name_block(tmp_path, out):
     writer.finalize()
     assert _read(out, fixture.OFS_PLAYER_NAMES + 512, 8) == fixture.encode_name("SHIFTED")
     assert _read(out, fixture.OFS_PLAYER_NAMES, 8) != fixture.encode_name("SHIFTED")
-
-
-# -- write_player_data ------------------------------------------------------
 
 
 def _record(path, slot, player, header=0):
@@ -803,9 +769,6 @@ def test_an_untouched_slot_keeps_every_byte_of_its_records(rom, out):
     assert _record(out, 26, 14) == fixture.player_data_record(26, 14)
 
 
-# -- kits -------------------------------------------------------------------
-
-
 def test_the_home_kit_writes_three_shirt_shades_at_the_range_one_offset(rom, out):
     writer = ISSRomWriter(str(rom), str(out))
     writer.write_kit_colors(0, _team(kit_home=((200, 0, 0), (255, 255, 255), (200, 0, 0))))
@@ -877,9 +840,6 @@ def test_a_record_with_no_kit_colours_writes_nothing(rom, out):
     writer.write_kit_colors(0, _team())
     writer.finalize()
     assert out.read_bytes() == before
-
-
-# -- flags and the predominant colour ---------------------------------------
 
 
 def test_the_predominant_colour_byte_lands_at_the_slots_own_offset(rom, out):
@@ -965,9 +925,6 @@ def test_no_patched_team_still_writes_the_shared_flag_tiles(rom, out):
     writer.finalize()
     assert out.read_bytes() != before
     assert out.read_bytes()[: fixture.OFS_FLAG_TILE_NEW] == before[: fixture.OFS_FLAG_TILE_NEW]
-
-
-# -- write_team_name_texts --------------------------------------------------
 
 
 def _name_text_pointers(path, header=0):
@@ -1180,9 +1137,6 @@ def test_a_budget_of_exactly_zero_also_raises(tmp_path, out):
     writer.close()
 
 
-# -- write_name_tiles: the machine-code patch -------------------------------
-
-
 def test_all_ten_code_bytes_are_redirected_to_the_new_bank(rom, out):
     writer = ISSRomWriter(str(rom), str(out))
     writer.write_name_tiles({0: "TST"})
@@ -1310,9 +1264,6 @@ def test_one_byte_under_the_capacity_is_accepted(tmp_path, out):
     assert 27 * 90 <= NAME_TILES_CAPACITY
 
 
-# -- write_team_descriptions ------------------------------------------------
-
-
 def test_a_patched_description_is_the_team_name_centred_in_fifteen_column_lines(rom, out):
     writer = ISSRomWriter(str(rom), str(out))
     writer.write_team_descriptions({0: "Arsenal"})
@@ -1391,9 +1342,6 @@ def test_a_name_with_no_ascii_at_all_pads_the_block_with_spaces(rom, out):
     writer.write_team_descriptions({0: "日本"})
     writer.finalize()
     assert _read(out, fixture.desc_text_start(0), fixture.DESC_TEXT_LENGTH) == b" " * 60
-
-
-# -- the handle -------------------------------------------------------------
 
 
 def test_the_constructor_copies_the_input_to_the_output(rom, out):

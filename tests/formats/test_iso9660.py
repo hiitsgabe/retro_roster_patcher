@@ -2,8 +2,6 @@
 
 Every image comes from `tests.fixtures.synthetic_iso`, which lays records out
 from the ECMA-119 field definitions rather than by calling anything under test.
-That is the point: a reader checked only against its own writer agrees with any
-layout the pair happen to share, including a wrong one.
 
 The layout every test starts from, unless it says otherwise:
 
@@ -16,16 +14,14 @@ The layout every test starts from, unless it says otherwise:
     24  TOPFILE.BIN
     25  MID.BIN
 
-Three properties of it are load-bearing and none is accidental:
+Three properties of it are load-bearing:
 
-- **No LBA equals the depth, the record position, or the file's length in
-  sectors.** A walk that returned a constant, or that used a loop counter for an
-  extent, cannot satisfy an assertion here.
-- **`ZZPAD.BIN` is listed after `TARGET.BIN` in DIR2 and also sits after it on
-  the disc**, with a one-sector gap. The gap is 1 and the file is 2 sectors long,
-  so "next LBA minus this LBA" and "this file's length" are different numbers.
-- **`DIR1` holds both a directory and a file**, so a walk that ignored the
-  directory flag would find `MID.BIN` where it wanted `DIR2`.
+- No LBA equals the depth, the record position, or the file's length in sectors.
+- `ZZPAD.BIN` is listed after `TARGET.BIN` in DIR2 and also sits after it on the
+  disc, with a one-sector gap. The gap is 1 and the file is 2 sectors long, so
+  "next LBA minus this LBA" and "this file's length" are different numbers.
+- `DIR1` holds both a directory and a file, so a walk that ignored the directory
+  flag would find `MID.BIN` where it wanted `DIR2`.
 """
 
 import ast
@@ -120,11 +116,6 @@ def handle(image: bytes) -> io.BytesIO:
     return io.BytesIO(image)
 
 
-# ──────────────────────────────────────────────────────────────
-# Constants
-# ──────────────────────────────────────────────────────────────
-
-
 def test_a_mode_1_sector_is_2048_bytes():
     assert iso9660.SECTOR_SIZE == 2048
 
@@ -137,11 +128,6 @@ def test_the_record_header_is_33_bytes_up_to_and_including_the_name_length():
     # 33 is what `_records` bounds its index of byte +32 by. Restated here as a
     # number rather than as `32 + 1` so that a change to either is visible.
     assert iso9660.RECORD_HEADER_LENGTH == 33
-
-
-# ──────────────────────────────────────────────────────────────
-# read_root
-# ──────────────────────────────────────────────────────────────
 
 
 def test_read_root_returns_the_root_directorys_extent():
@@ -184,11 +170,6 @@ def test_read_root_accepts_an_image_that_ends_exactly_at_the_pvd_sector():
     assert root == iso9660.Extent(lba=ROOT_LBA, size=fx.SECTOR_SIZE)
 
 
-# ──────────────────────────────────────────────────────────────
-# Extent arithmetic
-# ──────────────────────────────────────────────────────────────
-
-
 def test_extent_offset_is_the_lba_times_the_sector_size():
     assert iso9660.Extent(lba=21, size=99).offset == 21 * 2048
 
@@ -201,11 +182,6 @@ def test_extent_end_is_the_offset_plus_the_size_and_not_sector_aligned():
 
 def test_an_extent_of_zero_length_ends_where_it_begins():
     assert iso9660.Extent(lba=21, size=0).end == 21 * 2048
-
-
-# ──────────────────────────────────────────────────────────────
-# find_entry
-# ──────────────────────────────────────────────────────────────
 
 
 def test_find_entry_finds_a_file_and_reports_its_extent():
@@ -464,11 +440,6 @@ def test_find_entry_returns_the_first_of_two_records_with_one_name():
     assert entry.extent.lba == TARGET_LBA
 
 
-# ──────────────────────────────────────────────────────────────
-# walk
-# ──────────────────────────────────────────────────────────────
-
-
 def test_walk_descends_two_directories():
     f = handle(build())
     root = iso9660.read_root(f)
@@ -534,11 +505,6 @@ def test_walk_carries_the_declared_size_of_the_directory_it_reaches():
     root = iso9660.read_root(f)
     assert root is not None
     assert iso9660.walk(f, root, ["DIR1", "DIR2"]) == iso9660.Extent(lba=DIR2_LBA, size=777)
-
-
-# ──────────────────────────────────────────────────────────────
-# find_entry_with_next_lba
-# ──────────────────────────────────────────────────────────────
 
 
 def _dir2(image: bytes) -> tuple[io.BytesIO, iso9660.Extent]:
@@ -629,11 +595,6 @@ def test_find_entry_with_next_lba_carries_the_record_offset():
     assert found[0] == plain
 
 
-# ──────────────────────────────────────────────────────────────
-# Reading a located file
-# ──────────────────────────────────────────────────────────────
-
-
 def test_the_located_extent_names_the_bytes_the_file_was_built_from():
     # End to end: PVD, two directories, a file, and the bytes at the reported
     # offset are the ones the fixture wrote. `TARGET_SIZE` is deliberately not
@@ -653,11 +614,6 @@ def test_the_located_extent_names_the_bytes_the_file_was_built_from():
 def test_the_next_file_on_the_disc_is_untouched_by_reading_this_one():
     image = build()
     assert image[ZZPAD_LBA * 2048 : ZZPAD_LBA * 2048 + ZZPAD_SIZE] == ZZPAD_BYTES
-
-
-# ──────────────────────────────────────────────────────────────
-# The module's place in the package
-# ──────────────────────────────────────────────────────────────
 
 
 def test_the_module_declares_no_public_surface():
@@ -718,9 +674,6 @@ def test_every_public_helper_takes_a_file_object_and_never_a_path(name):
     assert getattr(iso9660, name).__annotations__[first] == "BinaryIO"
 
 
-# ──────────────────────────────────────────────────────────────
-# The name bound
-# ──────────────────────────────────────────────────────────────
 #
 # `name_end <= len(extent_bytes)` is reachable only through a record whose
 # declared length is SHORTER than its own name implies -- otherwise

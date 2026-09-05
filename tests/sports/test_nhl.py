@@ -191,8 +191,6 @@ def test_a_transport_failure_yields_no_teams(tmp_path):
     assert NhlApiClient(str(tmp_path), transport=failing).get_nhl_teams() == []
 
 
-# --- the transport seam (helpers live in conftest.py) ---
-
 # Every public method that issues a request, with arguments that reach the wire.
 # Annotated because every entry here takes positional arguments only: the empty
 # kwargs dicts leave mypy nothing to infer a value type from.

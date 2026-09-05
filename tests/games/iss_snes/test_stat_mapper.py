@@ -1,22 +1,16 @@
 """The ISS stat mapper: four attributes, three degrees of freedom, one gate.
 
-Two facts about this mapper are worth stating before the assertions, because
-both look like bugs and only one is being treated as one:
+`speed` and `stamina` come out of the *same* lambda, behind the same skip
+predicate, and through the same table, so they are equal for every player the
+provider measured -- and *not* for one who falls back to his position's defaults,
+where all four rows separate them. Preserved deliberately: nothing ESPN reports
+for a footballer measures pace.
 
-  * `speed` and `stamina` come out of the *same* lambda, behind the same skip
-    predicate, and go through the same table, so they are equal for every player
-    the provider measured -- and *not* for a player who falls back to his
-    position's defaults, where all four rows separate them. Preserved and pinned
-    below, because nothing ESPN reports for a footballer measures pace, so
-    inventing a speed formula would be a judgement about how the game should
-    play rather than a defect fix.
-  * `technique` is half dribbling and half passing, and ESPN measures no
-    dribbling at all. The gate is `CATEGORY_OPTIONAL_INPUTS`, and it is NOT
-    WE2002's rule: dropping the player from the category would leave it empty
-    and give all 405 players the same rating. The dribbling *term* is dropped
-    instead, which preserves the ranking exactly -- so the patched ROM is
-    byte-identical to the one upstream produced, and the loss of signal is
-    declared rather than hidden.
+`technique` is half dribbling and half passing, and ESPN measures no dribbling at
+all. The gate is `CATEGORY_OPTIONAL_INPUTS`, and it is NOT WE2002's rule:
+dropping the player from the category would leave it empty and give every player
+the same rating, so the dribbling *term* is dropped instead, which preserves the
+ranking exactly.
 """
 
 from __future__ import annotations
@@ -81,9 +75,6 @@ def _roster(players, stats):
     )
 
 
-# -- the two tables ---------------------------------------------------------
-
-
 def test_the_category_input_table_names_only_real_playerstats_fields():
     """The trap `CATEGORY_INPUTS` exists to close: a misspelt field name can
     never be found in `unsupplied`, so the gate silently stops gating."""
@@ -125,9 +116,6 @@ def test_no_required_input_is_a_field_espn_leaves_unsupplied():
     whole league would take the 50th-percentile default."""
     required = {name for names in ISSStatMapper.CATEGORY_INPUTS.values() for name in names}
     assert required.isdisjoint(SOCCER_UNSUPPLIED_STATS)
-
-
-# -- percentiles ------------------------------------------------------------
 
 
 def test_percentiles_of_an_empty_league_are_empty(mapper):
@@ -225,9 +213,6 @@ def test_no_fallback_row_gives_a_player_the_same_speed_and_stamina(
 def test_zero_appearances_does_not_divide_by_zero(mapper):
     all_stats = {1: _stats(1, appearances=0, minutes=0), 2: _stats(2)}
     assert mapper._compute_percentiles(all_stats)["stamina"][1] == 0.0
-
-
-# -- the unsupplied gate ----------------------------------------------------
 
 
 def test_technique_uses_both_halves_when_dribbling_is_measured(mapper):
@@ -329,9 +314,6 @@ def test_the_skipped_player_does_not_drag_the_denominator(mapper):
     assert mapper._compute_percentiles(all_stats)["stamina"][3] == 50.0
 
 
-# -- the two scales ---------------------------------------------------------
-
-
 @pytest.mark.parametrize(
     ("percentile", "expected"),
     [(100, 15), (95, 15), (94, 13), (85, 13), (70, 11), (50, 9), (35, 7), (20, 5), (10, 3), (0, 1)],
@@ -359,9 +341,6 @@ def test_a_negative_percentile_falls_off_the_bottom_of_the_speed_table(mapper):
 def test_every_shooting_value_the_table_produces_is_odd(mapper):
     values = {rating for _, rating in ISSStatMapper.SHOOTING_TABLE}
     assert sorted(values) == [1, 3, 5, 7, 9, 11, 13, 15]
-
-
-# -- fallbacks --------------------------------------------------------------
 
 
 def test_a_player_with_no_stats_gets_his_positions_defaults(mapper):
@@ -416,9 +395,6 @@ def test_each_call_builds_its_own_attributes_object(mapper):
     assert first.speed != second.speed
 
 
-# -- star players -----------------------------------------------------------
-
-
 def test_a_prolific_scorer_is_a_star(mapper):
     assert mapper._is_star_player(_player(1), _stats(1, appearances=20, goals=12)) is True
 
@@ -439,9 +415,6 @@ def test_fewer_than_five_appearances_disqualifies_however_good_the_rate(mapper):
 
 def test_a_player_with_no_stats_is_not_a_star(mapper):
     assert mapper._is_star_player(_player(1), None) is False
-
-
-# -- squad selection --------------------------------------------------------
 
 
 def _squad(counts):
@@ -504,9 +477,6 @@ def test_an_empty_squad_selects_nobody(mapper):
     assert mapper._select_best_15([], {}) == []
 
 
-# -- name formatting --------------------------------------------------------
-
-
 def test_a_two_word_name_reduces_to_the_surname(mapper):
     assert mapper._format_player_name(_player(1, name="Jurgen Klinsmann")) == "Klinsman"
 
@@ -531,9 +501,6 @@ def test_a_player_with_no_name_at_all_becomes_PLAYER(mapper):
 
 def test_diacritics_are_stripped_before_truncation(mapper):
     assert mapper._format_player_name(_player(1, name="José Giménez")) == "Gimenez"
-
-
-# -- the whole team ---------------------------------------------------------
 
 
 def test_mapping_a_team_produces_fifteen_records(mapper):

@@ -1,18 +1,5 @@
 """`NHL07PSPPatcher` against the unified interface.
 
-Six things here are not in the ported code at all, and each has its own section:
-
-  * `_db_viv_extent_fits`, the arithmetic bound, without which a truncated
-    archive is decompressed short, serialised shorter still, and written back to
-    the disc under a success report;
-  * `_compressed_image_format`, which refuses a `.cso` by name instead of
-    calling the user's good backup "not NHL 07";
-  * `_live_records`, the `min(num_records, capacity)` bound that
-    `formats/ea_tdb.py` hands to its consumers;
-  * the alias guard, without which an empty `LA` wipes a populated `LAK`;
-  * `season` threaded into both ESPN calls, which the source omitted from both;
-  * `TeamRoster.extra["leaders"]` in place of `self.team_stats`.
-
 Every read-back of a patched image goes through the fixture's own decoder --
 `iso_read_file`, `unpack_bits` -- and never through the reader and writer that
 produced it.
@@ -200,9 +187,6 @@ def patched(tmp_path, api=None, spec=None, on_progress=None):
     return result, out
 
 
-# -- registration ----------------------------------------------------------
-
-
 def test_the_game_is_registered_under_its_id():
     assert get_patcher("nhl07-psp") is NHL07PSPPatcher
 
@@ -221,12 +205,8 @@ def test_both_hockey_providers_are_offered():
 
 def test_no_slot_mapping_is_required():
     # Every one of the 32 slots is a real team with a real abbreviation, so
-    # `MODERN_NHL_TO_NHL07` matches them automatically. Unlike `iss-snes`, whose
-    # 27 slots are national teams no club abbreviation names.
+    # `MODERN_NHL_TO_NHL07` matches them automatically.
     assert NHL07PSPPatcher.requires_slot_mapping is False
-
-
-# -- construction ----------------------------------------------------------
 
 
 def test_the_default_provider_is_espn(tmp_path):
@@ -247,8 +227,7 @@ def test_an_unsupported_provider_is_refused(tmp_path):
 
 
 def test_an_api_key_argument_is_refused(tmp_path):
-    # A parameter that silently does nothing lets a caller believe a credential
-    # is in use. Neither provider takes one.
+    # Neither provider takes a credential.
     with pytest.raises(TypeError):
         NHL07PSPPatcher(tmp_path / "cache", api_key="secret")
 
@@ -257,9 +236,6 @@ def test_a_string_cache_directory_is_normalised(tmp_path):
     from pathlib import Path
 
     assert type(build(tmp_path).cache_dir) is type(Path("."))
-
-
-# -- the compressed-image refusal ------------------------------------------
 
 
 @pytest.mark.parametrize(
@@ -283,10 +259,9 @@ def test_a_file_too_short_for_a_magic_number_is_not_recognised(tmp_path):
 
 
 def test_analyzing_a_cso_raises_rather_than_reporting_the_wrong_game(tmp_path):
-    # The upstream front end advertised `.cso` while the reader had no support
-    # for it, so a user who picked a good backup was told it was not NHL 07.
-    # A `RomError` is the honest answer: the file is unreadable *by this
-    # patcher*, which is exactly what `analyze_rom` may raise for.
+    # The upstream front end advertised `.cso` while the reader had no support for
+    # it, so a user who picked a good backup was told it was not NHL 07. A `RomError`
+    # is the honest answer: the file is unreadable *by this patcher*.
     path = tmp_path / "game.cso"
     path.write_bytes(b"CISO" + b"\x00" * 65536)
     with pytest.raises(RomError, match="CSO"):
@@ -326,9 +301,6 @@ def test_patching_a_cso_writes_no_output(tmp_path):
     assert out.exists() is False
 
 
-# -- the arithmetic bound --------------------------------------------------
-
-
 def test_a_well_formed_image_has_an_extent_that_fits(tmp_path):
     path = iso(tmp_path)
     reader = NHL07PSPRomReader(str(path))
@@ -352,11 +324,10 @@ def test_the_extent_ends_where_the_directory_says_the_archive_ends(tmp_path):
 
 
 def test_an_extent_declared_past_the_end_of_the_file_does_not_fit(tmp_path):
-    # The declared length is 10 MB and the image is under 100 KB, so the
-    # archive the directory promises is not there. `_extract_db_viv` reads it
-    # short and silently: everything below `bigf_parse` is documented to stay
-    # quiet about a truncated stream, and `TDBFile.serialize` then shrinks its
-    # own output and moves every later table's offset.
+    # The declared length is 10 MB and the image is under 100 KB, so the archive the
+    # directory promises is not there. `_extract_db_viv` reads it short and silently,
+    # and `TDBFile.serialize` then shrinks its own output and moves every later
+    # table's offset.
     path = iso(tmp_path, fixture.DiscSpec(declared_db_viv_size=10_000_000))
     reader = NHL07PSPRomReader(str(path))
     reader.load()
@@ -399,10 +370,8 @@ def test_analyze_reports_a_truncated_extent_as_invalid(tmp_path):
 
 
 def test_patch_raises_on_a_truncated_extent(tmp_path):
-    # An ARITHMETIC BOUND guards both entry points, unlike the heuristic below.
-    # A file failing it provably cannot be patched, so letting `patch` through
-    # would preserve exactly the corrupted-disc-reported-as-success this check
-    # exists to kill.
+    # An ARITHMETIC BOUND guards both entry points, unlike the heuristic below: a
+    # file failing it provably cannot be patched.
     path = iso(tmp_path, fixture.DiscSpec(declared_db_viv_size=10_000_000))
     patcher = build(tmp_path)
     with pytest.raises(RomError, match="truncated"):
@@ -424,22 +393,18 @@ def test_the_truncation_message_names_both_the_extent_and_the_file_size(tmp_path
         )
 
 
-# -- the heuristic, and the asymmetry --------------------------------------
-
-
 def test_analyze_reports_a_disc_without_the_bio_mirror_as_invalid(tmp_path):
-    # The deep `validate` is a HEURISTIC -- a guess about what the content means
-    # -- so it guards `analyze_rom` and nothing else.
+    # The deep `validate` is a HEURISTIC -- a guess about what the content means --
+    # so it guards `analyze_rom` and nothing else.
     path = iso(tmp_path, fixture.DiscSpec(bioatt_name=None))
     assert build(tmp_path).analyze_rom(path).is_valid is False
 
 
 def test_patch_succeeds_on_a_disc_without_the_bio_mirror(tmp_path):
-    # THE ASYMMETRY, pinned. `nhlbioatt.tdb` is a mirror: the master TDB holds
-    # every table the patch needs. A false negative in the heuristic costs the
-    # user auto-detection, which `patch --game nhl07-psp` routes around, and a
-    # false positive would cost them every EA PSP disc they own showing as
-    # NHL 07. Do not harmonise these.
+    # THE ASYMMETRY, pinned. `nhlbioatt.tdb` is a mirror: the master TDB holds every
+    # table the patch needs. A false negative costs the user auto-detection, which
+    # `patch --game nhl07-psp` routes around; a false positive would show every EA
+    # PSP disc they own as NHL 07. Do not harmonise these.
     source = iso(tmp_path, fixture.DiscSpec(bioatt_name=None))
     patcher = build(tmp_path)
     result = patcher.patch(
@@ -451,7 +416,6 @@ def test_patch_succeeds_on_a_disc_without_the_bio_mirror(tmp_path):
 
 
 def test_the_same_disc_gives_is_valid_false_and_a_successful_patch(tmp_path):
-    # The two halves of the asymmetry, on one file, in one test.
     source = iso(tmp_path, fixture.DiscSpec(bioatt_name=None))
     patcher = build(tmp_path)
     analyzed = patcher.analyze_rom(source).is_valid
@@ -485,9 +449,6 @@ def test_the_missing_master_message_lists_what_the_archive_does_hold(tmp_path):
             output_path=tmp_path / "out.iso",
             rosters=patcher.map_rosters(league()),
         )
-
-
-# -- analyze_rom -----------------------------------------------------------
 
 
 def test_analyzing_a_valid_image_reports_it_valid(tmp_path):
@@ -558,8 +519,7 @@ def test_no_two_slots_share_a_display_name(tmp_path):
 
 def test_the_current_name_and_the_display_name_differ(tmp_path):
     # Pins both assertions above: if the reader answered the constant for
-    # `current_name`, the two lists would be equal and neither would say
-    # anything about the disc.
+    # `current_name`, the two lists would be equal.
     info = build(tmp_path).analyze_rom(iso(tmp_path))
     assert [s for s in info.slots if s.current_name == s.display_name] == []
 
@@ -596,9 +556,6 @@ def test_an_invalid_image_reports_no_slots(tmp_path):
     assert info.slots == []
 
 
-# -- fetch -----------------------------------------------------------------
-
-
 def test_fetching_returns_one_roster_per_slotted_team(tmp_path):
     api = FakeApi(squads={t.id: squad(100 * t.id) for t in default_teams()})
     assert len(build(tmp_path, api).fetch(season=2025).teams) == 4
@@ -621,19 +578,16 @@ def test_a_team_with_no_rom_slot_costs_no_request(tmp_path):
 
 
 def test_the_espn_squad_call_carries_the_season(tmp_path):
-    # DELIBERATE DIVERGENCE. The source called `get_hockey_squad(team.id)` with
-    # no season at all. The endpoint has no season in its URL but does have one
-    # in its cache key, so without it the first season ever fetched was served
-    # forever.
+    # The squad endpoint has no season in its URL but does have one in its cache key,
+    # so without it the first season ever fetched was served forever.
     api = FakeApi()
     build(tmp_path, api, provider="espn").fetch(season=2019)
     assert [season for _, season in api.squad_calls] == [2019, 2019, 2019, 2019]
 
 
 def test_the_espn_leaders_call_carries_the_season(tmp_path):
-    # The same omission with a different consequence: the season is a URL path
-    # segment here, so the default meant a `--season 2019` run asked ESPN for a
-    # different year's statistics and stapled them to the squad.
+    # The season is a URL path segment on the leaders endpoint, so the default meant
+    # a `--season 2019` run asked ESPN for a different year's statistics.
     api = FakeApi()
     build(tmp_path, api, provider="espn").fetch(season=2019)
     assert [season for _, season in api.leader_calls] == [2019, 2019, 2019, 2019]
@@ -660,10 +614,10 @@ def test_the_nhl_branch_also_carries_the_season(tmp_path):
 
 
 def test_leaders_travel_in_the_roster_rather_than_on_the_patcher(tmp_path):
-    # DELIBERATE DIVERGENCE from `self.team_stats`, an instance side channel
-    # that no serialised rosters file could carry -- and which the source read
-    # with `getattr(self, "team_stats", {})`, so calling the two steps out of
-    # order silently downgraded every player to position defaults.
+    # `TeamRoster.extra["leaders"]` rather than `self.team_stats`, an instance side
+    # channel no serialised rosters file could carry -- and which the source read with
+    # `getattr(self, "team_stats", {})`, so calling the two steps out of order
+    # silently downgraded every player to position defaults.
     leaders = {1: {"555": {"PTS": 91}}}
     api = FakeApi(leaders=leaders)
     data = build(tmp_path, api).fetch(season=2025)
@@ -715,9 +669,6 @@ def test_fetching_reports_status(tmp_path):
     assert seen == ["Fetching NHL teams..."]
 
 
-# -- map_rosters -----------------------------------------------------------
-
-
 def test_mapping_produces_one_entry_per_slotted_team(tmp_path):
     assert sorted(build(tmp_path).map_rosters(league()).teams) == DISC_SLOTS
 
@@ -763,11 +714,10 @@ def test_the_slot_bound_is_the_full_slot_count():
 
 
 def test_an_empty_alias_does_not_wipe_a_populated_slot(tmp_path):
-    # DELIBERATE DIVERGENCE. `LA` and `LAK` are one slot. The source assigned
-    # `teams[slot] = ...` unconditionally and got away with it only because its
-    # own fetch step kept a dict keyed by team code and stored a team only
-    # `if players:` -- protection that survives exactly until someone calls
-    # `map_rosters` on a rosters file.
+    # `LA` and `LAK` are one slot. Assigning `teams[slot] = ...` unconditionally got
+    # away with it only because the source's own fetch step kept a dict keyed by team
+    # code and stored a team only `if players:` -- protection that survives exactly
+    # until someone calls `map_rosters` on a rosters file.
     teams = [
         Team(id=1, name="Los Angeles Kings", code="LAK", logo_url=""),
         Team(id=2, name="Los Angeles Kings", code="LA", logo_url=""),
@@ -798,8 +748,8 @@ def test_an_empty_roster_that_collides_with_nothing_still_takes_its_slot(tmp_pat
 
 
 def test_leaders_reach_the_mapped_attributes(tmp_path):
-    # Without this the whole `extra["leaders"]` channel could be dropped and
-    # every test above would still pass -- the records would just be defaults.
+    # Without this the whole `extra["leaders"]` channel could be dropped and every
+    # test above would still pass -- the records would just be defaults.
     players = squad(3000)
     plain = build(tmp_path).map_rosters(
         league(teams=[Team(id=3, name="B", code="BOS", logo_url="")], squads={"BOS": players})
@@ -813,9 +763,6 @@ def test_leaders_reach_the_mapped_attributes(tmp_path):
     )
     slot = MODERN_NHL_TO_NHL07["BOS"]
     assert rated.teams[slot][2].skater_attrs.deking != plain.teams[slot][2].skater_attrs.deking
-
-
-# -- patch -----------------------------------------------------------------
 
 
 def test_patching_returns_a_patch_result(tmp_path):
@@ -914,8 +861,7 @@ def test_patching_an_out_of_range_slot_reports_nothing_patched(tmp_path):
 
 
 def test_a_slot_the_disc_has_no_rows_for_is_not_counted(tmp_path):
-    # Slot 20 is in range and has no ROST rows on this four-team disc. Upstream
-    # counted it: `teams_patched` incremented for every slot it looked at.
+    # Slot 20 is in range and has no ROST rows on this four-team disc.
     # `core/models.py` defines the field as slots something reached the ROM for.
     source = iso(tmp_path)
     patcher = build(tmp_path)
@@ -941,8 +887,6 @@ def test_patching_reports_progress_ending_at_one(tmp_path):
 
 
 def test_patching_reports_progress_monotonically(tmp_path):
-    # IMPROVEMENT: the source's spans ran to 60%, jumped back to 30% and
-    # finished at 70% having reported "Complete".
     seen: list[float] = []
     patched(tmp_path, on_progress=lambda p, m: seen.append(p))
     assert seen == sorted(seen)
@@ -992,9 +936,6 @@ def test_the_source_image_is_left_untouched(tmp_path):
         rosters=patcher.map_rosters(league()),
     )
     assert source.read_bytes() == before
-
-
-# -- what actually reached the disc ----------------------------------------
 
 
 def team_row_records(out, team):
@@ -1261,9 +1202,9 @@ def test_the_patched_image_can_be_patched_again(tmp_path):
 
 
 def test_patching_twice_with_the_same_rosters_is_idempotent(tmp_path):
-    # Not an incidental property: the write is in place inside the archive, so a
-    # second identical patch must reproduce the first image exactly. A CRC or an
-    # offset that depended on the previous contents would drift here.
+    # The write is in place inside the archive, so a second identical patch must
+    # reproduce the first image exactly. A CRC or an offset that depended on the
+    # previous contents would drift here.
     _, once = patched(tmp_path)
     patcher = build(tmp_path)
     twice = tmp_path / "twice.iso"
@@ -1323,9 +1264,6 @@ def test_a_capitalised_archive_really_receives_the_new_names(tmp_path):
         fixture.SPBT_RECORD_SIZE,
     )
     assert records[fixture.spbt_position(0, 0)]["FNME"].startswith("Given") is True
-
-
-# -- the ea_tdb bound ------------------------------------------------------
 
 
 def test_the_live_record_range_is_the_live_count_when_it_fits(tmp_path):
@@ -1476,23 +1414,16 @@ def test_breaking_four_rows_costs_the_one_player_the_spares_cannot_absorb(tmp_pa
     assert result.players_patched == fixture.TEAM_COUNT * 22 - 1
 
 
-# -- the over-large TDB refusal --------------------------------------------
-
-
 def test_a_recompressed_tdb_that_does_not_fit_raises(tmp_path):
-    # DELIBERATE DIVERGENCE. The source discarded `bigf_replace_inplace`'s
-    # return value, under a comment reasoning that a split TDB could be skipped
-    # because the master holds every table. The effect was a disc written back
-    # with two of its three TDBs disagreeing about the same roster, reported as
-    # a success -- the "success with zero work" report the migration plan keeps
-    # finding.
+    # `bigf_replace_inplace`'s return value must be checked. The source discarded it,
+    # reasoning that a split TDB could be skipped because the master holds every
+    # table; the effect was a disc written back with two of its three TDBs
+    # disagreeing about the same roster, reported as a success.
     #
-    # The refusal itself is driven here rather than by shrinking a BIGF entry,
-    # because whether a recompressed table grows depends on how the new roster's
-    # names compress, which is not a fact this test should depend on. The real
-    # size condition is pinned deterministically in
-    # `test_rom_writer.py::test_a_tdb_too_large_for_its_slot_raises`; what is
-    # pinned here is that the refusal reaches `patch`.
+    # Driven by a stub rather than by shrinking a BIGF entry, because whether a
+    # recompressed table grows depends on how the new roster's names compress. The
+    # real size condition is pinned in
+    # `test_rom_writer.py::test_a_tdb_too_large_for_its_slot_raises`.
     from retro_roster_patcher.games.nhl07_psp import rom_writer
 
     source = iso(tmp_path)
@@ -1536,17 +1467,12 @@ def test_the_same_patch_succeeds_with_the_replacement_left_alone(tmp_path):
     assert result.players_patched == fixture.TEAM_COUNT * 22
 
 
-# -- holes mutation testing found ------------------------------------------
-
-
 class StubMapper:
     """A mapper that answers one fixed slot, whatever it is asked.
 
     `MODERN_NHL_TO_NHL07` holds no out-of-range value, so the range guards in
     `map_rosters` and `_write_all_teams` are guards and not filters: nothing a
-    real provider returns can reach them. The precedent is
-    `kgj_mlb_snes/test_patcher.py`, which reaches its equivalent the same way --
-    an unexercised guard is one nobody notices deleting.
+    real provider returns can reach them.
     """
 
     def __init__(self, slot, inner):
@@ -1589,10 +1515,9 @@ def test_the_last_slot_in_range_is_kept_by_the_mapper(tmp_path):
 
 def test_an_out_of_range_slot_reaching_patch_is_dropped_before_the_team_name(tmp_path):
     # Kills `if 0 <= slot < SLOT_COUNT and players` -> `if players`. Without the
-    # progress callback the mutant is invisible: a slot of 99 matches no ROST
-    # row, so it writes nothing either way. With one, `NHL07_TEAM_NAMES[99]`
-    # raises `IndexError` -- an exception outside this library's hierarchy,
-    # escaping `patch`.
+    # progress callback the mutant is invisible: a slot of 99 matches no ROST row, so
+    # it writes nothing either way. With one, `NHL07_TEAM_NAMES[99]` raises
+    # `IndexError` -- outside this library's hierarchy, escaping `patch`.
     source = iso(tmp_path)
     patcher = build(tmp_path)
     mapped = patcher.map_rosters(league())
@@ -1643,15 +1568,12 @@ def test_a_row_past_the_live_count_is_not_patched(tmp_path):
 
 def test_line_flags_are_generated_for_the_players_that_got_a_row(tmp_path):
     # Kills `generate_team_line_flags([p for p, _ in pairs])` ->
-    # `generate_team_line_flags(players)`. The two lists agree whenever every
-    # player is placed, and they agree even when the *last* skater is dropped,
-    # because `zip` truncates the tail. They differ when a GOALIE is dropped:
-    # `players` still has him at index 1, so index 1 gets `G2__`, while `pairs`
-    # has the first skater there and he should get `L1C_`.
-    #
-    # Team 0's second goalie row is broken, so it has one goalie row and two
-    # goalies. The first skater then takes what would have been the backup
-    # goalie's position in the paired list.
+    # `generate_team_line_flags(players)`. The two lists agree whenever every player
+    # is placed, and even when the *last* skater is dropped, because `zip` truncates
+    # the tail. They differ when a GOALIE is dropped: `players` still has him at
+    # index 1, so index 1 gets `G2__`, while `pairs` has the first skater there and
+    # he should get `L1C_`. Team 0's second goalie row is broken here, so it has one
+    # goalie row and two goalies.
     source = iso(tmp_path)
     patcher = build(tmp_path)
     mapped = patcher.map_rosters(league())
@@ -1706,11 +1628,10 @@ def test_no_roster_row_of_that_team_carries_the_backup_goalie_flag(tmp_path):
 
 
 def test_a_mirror_row_past_the_mirrors_allocation_is_skipped(tmp_path):
-    # Kills `index < self.roster_rost.capacity` -> `<=`. The two TDBs have the
-    # same capacity on the fixture disc, so no index ever reaches the boundary;
-    # a mirror one record short puts one there. `TDBTable.write_record` raises
-    # `IndexError` past the allocation, which is why this guard exists at all
-    # and why the bio writes need none -- they test it themselves.
+    # Kills `index < self.roster_rost.capacity` -> `<=`. The two TDBs have the same
+    # capacity on the fixture disc, so no index ever reaches the boundary; a mirror
+    # one record short puts one there. `TDBTable.write_record` raises `IndexError`
+    # past the allocation.
     source = iso(tmp_path)
     patcher = build(tmp_path)
     mapped = patcher.map_rosters(league())

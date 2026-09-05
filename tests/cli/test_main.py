@@ -20,9 +20,6 @@ def run(argv, capsys) -> tuple[int, list[dict]]:
     return code, events(capsys)
 
 
-# -- list -------------------------------------------------------------------
-
-
 def test_list_json_returns_zero_and_one_result_event(capsys):
     code, evts = run(["list", "--json"], capsys)
     assert code == 0
@@ -67,9 +64,6 @@ def test_list_without_json_prints_a_table(capsys):
     # blob narrows that coupling; it does not remove it.
     assert lines[0] == "GAME               PLATFORM  SPORT       SLOT-MAP  PROVIDERS"
     assert "nhl94-genesis      genesis   hockey      no        espn,nhl" in lines
-
-
-# -- analyze ----------------------------------------------------------------
 
 
 def test_analyze_identifies_a_synthetic_nhl94_rom(tmp_path, cache, capsys):
@@ -128,10 +122,10 @@ def test_analyze_builds_every_registered_patcher_to_sweep_one_rom(
     #
     # The spy is what makes the name true. `code == 0` and a single `result` are
     # satisfied identically by a sweep that stops after `nhl94-genesis` and never
-    # constructs WE2002 at all: measured, WE2002 answers `is_valid=False` on every
-    # ROM this file hands it, so `cmd_analyze`'s `is_valid` filter drops it from
-    # `matches` either way and it leaves no trace in the payload. `visited` is the
-    # only thing that pins it as built.
+    # constructs WE2002 at all: WE2002 answers `is_valid=False` on every ROM this file
+    # hands it, so `cmd_analyze`'s `is_valid` filter drops it from `matches` either way
+    # and it leaves no trace in the payload. `visited` is the only thing that pins it
+    # as built.
     #
     # The whole event sequence, not just the last event: `build_patcher` hands
     # `renderer.status` and `renderer.partial` to every patcher it builds, and
@@ -195,10 +189,10 @@ def test_analyze_on_a_missing_file_is_a_typed_error(tmp_path, cache, capsys):
 def test_analyze_on_a_directory_is_a_typed_error(tmp_path, cache, capsys):
     romdir = tmp_path / "roms"
     romdir.mkdir()
-    # `is_file`, not `exists`: measured against an `exists` build, a directory is
-    # swept, rejected by every patcher, and reported as an empty `matches` — "no
-    # registered patcher recognised this ROM" in human mode — at exit 0. That is
-    # a success code for an input the CLI could never have read.
+    # `is_file`, not `exists`: under an `exists` build a directory is swept, rejected
+    # by every patcher, and reported as an empty `matches` -- "no registered patcher
+    # recognised this ROM" in human mode -- at exit 0. That is a success code for an
+    # input the CLI could never have read.
     code, evts = run(["analyze", "--rom", str(romdir), "--json", *cache], capsys)
     assert code == 1
     assert evts[-1]["type"] == "RomError"
@@ -216,9 +210,6 @@ def test_an_unknown_game_id_is_a_usage_error(tmp_path, cache, capsys):
     # double quote on the front of this first sentence.
     assert evts[-1]["msg"].split(". ")[0] == "Unknown game id 'nope'"
     assert "nhl94-genesis" in evts[-1]["msg"]  # the message lists the known ids
-
-
-# -- the sweep's RomError policy --------------------------------------------
 
 
 def test_the_unreadable_rom_fixture_is_big_enough_for_we2002_to_open_it(unreadable_rom):
@@ -254,9 +245,6 @@ def test_an_explicit_game_re_raises_the_rejection_the_sweep_would_swallow(
     assert evts[-1]["type"] == "RomError"
 
 
-# -- build_patcher ----------------------------------------------------------
-
-
 def _args(tmp_path, **overrides) -> argparse.Namespace:
     ns = argparse.Namespace(cache_dir=str(tmp_path / "cache"))
     for key, value in overrides.items():
@@ -266,10 +254,8 @@ def _args(tmp_path, **overrides) -> argparse.Namespace:
 
 def test_build_patcher_turns_an_unknown_game_id_into_a_usage_error(tmp_path):
     # Pins the conversion at `build_patcher`'s own call site. Driving it through
-    # `analyze` cannot: `cmd_analyze` resolves the id itself before the loop, so
-    # the CLI keeps answering `UsageError` even when this call stops converting.
-    # Measured — swapping this call for a bare `get_patcher` was green against
-    # the whole suite until this test existed.
+    # `analyze` cannot: `cmd_analyze` resolves the id itself before the loop, so the
+    # CLI keeps answering `UsageError` even when this call stops converting.
     renderer = JsonRenderer(out=io.StringIO())
     with pytest.raises(UsageError, match="Unknown game id 'nope'"):
         build_patcher("nope", _args(tmp_path), renderer)
@@ -312,15 +298,13 @@ def test_build_patcher_wires_the_renderer_status_callback(tmp_path):
 
 
 def test_build_patcher_wires_the_renderer_partial_callback(tmp_path):
-    # Not `patcher.on_partial == renderer.partial`, which is what this asserted
-    # until `_partial_adapter` came between them. Driving a payload through and
-    # reading the stream pins what the wiring is actually for. The dict is
-    # synthetic: no patcher in `src/` publishes one — `we2002`'s `fetch` is the
-    # only `on_partial` producer and it hands over a `LeagueData`, while
-    # `cmd_fetch` calls `renderer.partial` directly rather than through the
-    # adapter. That makes this test the sole witness for the adapter's
-    # pass-through branch: measured, replacing that branch with an unconditional
-    # `league_data_to_dict(data)` fails this test and no other.
+    # Not `patcher.on_partial == renderer.partial`, which is what this asserted until
+    # `_partial_adapter` came between them. Driving a payload through and reading the
+    # stream pins what the wiring is actually for. The dict is synthetic: no patcher in
+    # `src/` publishes one -- `we2002`'s `fetch` is the only `on_partial` producer and
+    # it hands over a `LeagueData`, while `cmd_fetch` calls `renderer.partial` directly
+    # rather than through the adapter. That makes this test the sole witness for the
+    # adapter's pass-through branch.
     out = io.StringIO()
     renderer = JsonRenderer(out=out)
     patcher = build_patcher("we2002", _args(tmp_path), renderer)
@@ -337,9 +321,6 @@ def test_an_empty_provider_leaves_the_patcher_default_alone(tmp_path):
     assert patcher.provider == "espn"
 
 
-# -- the default cache directory --------------------------------------------
-
-
 def test_the_default_cache_dir_hangs_off_the_users_home(tmp_path, monkeypatch):
     # `Path.home()` reads `$HOME` first on this platform, so this is hermetic:
     # nothing here can name, let alone create, the real `~/.cache`.
@@ -352,9 +333,6 @@ def test_the_cache_dir_flag_defaults_to_the_default_cache_dir(tmp_path):
     # naming the real default here still writes nothing.
     args = build_parser().parse_args(["analyze", "--rom", str(tmp_path / "nhl94.bin")])
     assert args.cache_dir == str(default_cache_dir())
-
-
-# -- what the except clauses must not catch ---------------------------------
 
 
 def test_main_lets_an_untyped_bug_out_instead_of_reporting_it_as_a_typed_error(monkeypatch):
@@ -406,9 +384,6 @@ def test_the_sweep_lets_an_untyped_bug_out_instead_of_calling_it_a_rejection(tmp
     args = _args(tmp_path, rom=str(rom), game="")
     with pytest.raises(RuntimeError, match="a bug, not a rejected ROM"):
         commands.cmd_analyze(args, renderer)
-
-
-# -- framing ----------------------------------------------------------------
 
 
 def test_a_missing_required_flag_exits_two():

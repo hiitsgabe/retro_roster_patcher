@@ -40,9 +40,6 @@ def mapper():
     return NHL94StatMapper()
 
 
-# -- scaling ---------------------------------------------------------------
-
-
 @pytest.mark.parametrize(
     ("value", "expected"),
     [(0, 0), (15, 1), (45, 3), (90, 6), (200, 6), (-50, 0)],
@@ -59,9 +56,6 @@ def test_a_degenerate_range_scales_to_the_middle():
 @pytest.mark.parametrize(("value", "expected"), [(-1, 0), (3, 3), (7, 6)])
 def test_clamping_holds_a_value_inside_zero_to_six(value, expected):
     assert _clamp(value) == expected
-
-
-# -- team slots ------------------------------------------------------------
 
 
 def test_a_team_code_maps_to_its_slot(mapper):
@@ -92,9 +86,6 @@ def test_thirty_codes_reach_twenty_six_slots(mapper):
     assert len(MODERN_NHL_TO_NHL94) == 30
     assert len(set(MODERN_NHL_TO_NHL94.values())) == 26
     assert max(MODERN_NHL_TO_NHL94.values()) == TEAM_COUNT - 3
-
-
-# -- one player ------------------------------------------------------------
 
 
 def test_a_player_with_no_stats_gets_the_defaults_for_their_position(mapper):
@@ -181,9 +172,6 @@ def test_any_other_handedness_is_encoded_as_left(mapper):
     assert mapper.map_player(_player(2, "C"), "BOS").handedness == 0
 
 
-# -- stats -----------------------------------------------------------------
-
-
 def test_a_scoring_skaters_attributes_come_from_the_stat_line(mapper):
     stats = {"G": 40, "A": 55, "PTS": 90, "+/-": 40, "PIM": 80}
     attributes = mapper.map_player(_player(1, "C"), "BOS", stats).attributes
@@ -266,9 +254,6 @@ def test_a_null_stat_value_is_read_as_zero_rather_than_raising(mapper):
 
 def test_an_empty_stat_dict_falls_through_to_the_defaults(mapper):
     assert mapper.map_player(_player(1, "D"), "BOS", {}).attributes == POSITION_DEFAULTS["D"]
-
-
-# -- roster selection ------------------------------------------------------
 
 
 def test_the_roster_is_ordered_goalies_then_forwards_then_defencemen(mapper):

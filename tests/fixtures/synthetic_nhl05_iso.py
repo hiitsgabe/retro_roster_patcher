@@ -3,52 +3,44 @@
     ISO 9660 -> /DB/DB.VIV -> BIGF -> two RefPacked TDBs
              -> PLAY / ROST / SPBT / SPAI / SGAI / STEA
 
-Nothing here comes from a real disc; no ISO may enter this repository. Every
-byte is generated, and the field layouts are this file's invention -- the real
-ones have never been seen by anything in this project, upstream included.
+Nothing here comes from a real disc; no ISO may enter this repository. Every byte
+is generated, and the field layouts are this file's invention -- the real ones
+have never been seen by anything in this project, upstream included.
 
-**A real PS2 image is gigabytes and this one is under 300 KB.** That is not a
-compromise: the patcher touches the PVD, two directory sectors and the `DB.VIV`
-extent, and nothing else on the disc. `write_iso(pad_to=...)` inflates the file
-with `truncate`, so a multi-megabyte image for the copy path costs a sparse hole
-rather than real bytes.
+A real PS2 image is gigabytes and this one is under 300 KB. The patcher touches
+the PVD, two directory sectors and the `DB.VIV` extent and nothing else, and
+`write_iso(pad_to=...)` inflates the file with `truncate`, so a multi-megabyte
+image for the copy path costs a sparse hole rather than real bytes.
 
-**Four things make this disc NHL 2005 rather than NHL 07**, and each is a place
-a copied fixture would leave a real difference untested:
+Four things make this disc NHL 2005 rather than NHL 07:
 
 - `DB.VIV` is at `/DB/DB.VIV`, one directory from the root and not three.
 - The archive has **two** members. There is no `nhlbioatt.tdb`, so nothing here
   mirrors SPBT, SPAI or SGAI.
-- ROST carries **64** line flags, in this game's own order, and `33LD`/`33RD`
-  are not among them.
-- `FNME` and `LNME` are **16 bytes**, not 20, so a 16-character name is
-  truncated to 15 here and would survive on NHL 07.
+- ROST carries **64** line flags, in this game's own order, and `33LD`/`33RD` are
+  not among them.
+- `FNME` and `LNME` are **16 bytes**, not 20, so a 16-character name is truncated
+  to 15 here and would survive on NHL 07.
 
-Two things are deliberately **independent reimplementations** of code under
-test, and that is the point of the file:
+Two things are independent reimplementations of code under test:
 
-- `unpack_bits` reads LSB-first bit fields the long way, from a `FieldSpec`
-  list this file owns. `TDBTable.write_record` is what puts them there, so a
-  test can assert a named field holds the number it should -- rather than that a
-  round trip through one bit-width mistake preserved it.
-- `synthetic_tdb.mpeg2_crc`, which `build_tdb` uses for the chain, is the
-  bitwise form of the nibble-table CRC in `formats/ea_tdb.py`.
+- `unpack_bits` reads LSB-first bit fields the long way, from a `FieldSpec` list
+  this file owns. `TDBTable.write_record` is what puts them there, so a test can
+  assert a named field holds the number it should.
+- `synthetic_tdb.mpeg2_crc`, which `build_tdb` uses for the chain, is the bitwise
+  form of the nibble-table CRC in `formats/ea_tdb.py`.
 
-The ISO 9660 layer is `synthetic_iso`, which lays records out from ECMA-119 and
-is what `tests/formats/test_iso9660.py` checks `formats/iso9660.py` against.
+The ISO 9660 layer is `synthetic_iso`, which lays records out from ECMA-119.
 Reading a patched image back goes through `iso_read_file` below, a third walk
 that is neither of those two.
 
-`refpack_compress` *is* the module's own, and that is the one place a fixture
-leans on the code under test. It is justified: `tests/formats/test_refpack.py`
-pins its output byte-for-byte against the source compressor over fifteen inputs
-covering all seven command families, on top of a 52-case round-trip corpus, so
-reimplementing it here would add a second compressor to get wrong.
+`refpack_compress` *is* the module's own, and that is the one place this fixture
+leans on the code under test. `tests/formats/test_refpack.py` pins its output
+byte-for-byte against the source compressor.
 
-Record contents are self-identifying. Every player's name, jersey, weight and
+Record contents are self-identifying: every player's name, jersey, weight and
 every attribute encode the team, the roster row and the field, so a write that
-landed on the wrong record, the wrong table or the wrong field cannot satisfy an
-assertion.
+landed on the wrong record, table or field cannot satisfy an assertion.
 """
 
 from __future__ import annotations
@@ -105,9 +97,7 @@ ROOT_FILE_BYTES = b"BOOT2 = cdrom0:\\SLUS_209.36;1\r\nVER = 1.00\r\n"
 # reads it.
 MEMBER_SLACK = 8192
 
-# ──────────────────────────────────────────────────────────────
-# TDB field layouts
-# ──────────────────────────────────────────────────────────────
+
 #
 # Bit offsets are chosen so that most integer fields are NOT byte-aligned and
 # several straddle a byte boundary. A layout of byte-aligned bytes would let a
@@ -326,9 +316,6 @@ STEA_FIELDS = [
 ]
 STEA_RECORD_SIZE = 33
 
-# ──────────────────────────────────────────────────────────────
-# The roster the fixture disc ships with
-# ──────────────────────────────────────────────────────────────
 
 # Four teams is enough for the two collisions that matter -- a slot patched and
 # a slot left alone -- while keeping the whole image small. Twenty-five rows a
@@ -642,11 +629,6 @@ def _stea_table() -> TableSpec:
     )
 
 
-# ──────────────────────────────────────────────────────────────
-# TDB files and the BIGF around them
-# ──────────────────────────────────────────────────────────────
-
-
 def build_master_tdb(height: int = DEFAULT_DISC_HEIGHT) -> bytes:
     """`nhl2005.tdb`: every table, in an order the patcher does not assume.
 
@@ -772,11 +754,6 @@ def build_db_viv(spec: DiscSpec | None = None) -> bytes:
     if spec.archive_magic != b"BIGF":
         archive = spec.archive_magic + archive[4:]
     return archive
-
-
-# ──────────────────────────────────────────────────────────────
-# ISO 9660
-# ──────────────────────────────────────────────────────────────
 
 
 def _sectors_for(length: int) -> int:
@@ -909,11 +886,6 @@ def write_iso(path, spec: DiscSpec | None = None) -> int:  # type: ignore[no-unt
         if spec.pad_to > len(image):
             f.truncate(spec.pad_to)
     return max(len(image), spec.pad_to)
-
-
-# ──────────────────────────────────────────────────────────────
-# Independent readers, for assertions
-# ──────────────────────────────────────────────────────────────
 
 
 def unpack_bits(fields: list[FieldSpec], record: bytes) -> dict[str, object]:

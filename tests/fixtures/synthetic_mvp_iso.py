@@ -3,46 +3,40 @@
     ISO bytes -> database.big at a chosen LBA -> 19 RefPack sections
               -> 19 CSV tables linked by nine-hex-digit ids
 
-Nothing here comes from a real disc; no ISO may enter this repository. Every
-byte is generated, and the column layouts are this file's invention -- the real
-ones have never been seen by anything in this project, upstream included.
+Nothing here comes from a real disc; no ISO may enter this repository. Every byte
+is generated, and the column layouts are this file's invention -- the real ones
+have never been seen by anything in this project, upstream included.
 
-**A real PSP UMD image is hundreds of megabytes and this one is under 500 KB.**
-The patcher touches exactly one region, `[lba * 2048, lba * 2048 + 386977)`, and
-nothing else, so the fixture writes a small header, that region, and a short
-tail. Tests shrink `models.DATABASE_BIG_LBA` with `monkeypatch` --
-`models.database_big_extent()` reads it at call time, so the reader, the writer
-and the patcher shrink together -- and `use_small_layout` is the one place that
-happens. A sparse file would not help: `MVPPSPRomWriter.copy_iso` reads the
-image and writes what it read, so a 686 MB hole costs 686 MB of real writes.
+A real PSP UMD image is hundreds of megabytes and this one is under 500 KB. The
+patcher touches exactly one region, `[lba * 2048, lba * 2048 + 386977)`, so the
+fixture writes a small header, that region, and a short tail. Tests shrink
+`models.DATABASE_BIG_LBA` with `monkeypatch` -- `models.database_big_extent()`
+reads it at call time, so the reader, the writer and the patcher shrink together
+-- and `use_small_layout` is the one place that happens. A sparse file would not
+help: `MVPPSPRomWriter.copy_iso` reads the image and writes what it read, so a
+686 MB hole costs 686 MB of real writes.
 
-**Three parts of this file are independent reimplementations of code under
-test, and that is the point of it.** Every read-back in a test goes through
-these rather than through the writer that produced the bytes, so a bug shared
-between a writer and its own reader cannot satisfy an assertion:
+Three parts are independent reimplementations of code under test, and every
+read-back in a test goes through them rather than through the writer that
+produced the bytes:
 
 - `render_table` builds CSV section text from the format description, not from
-  `rom_writer.build_csv_section`. It emits columns in the order it is given
-  them, which lets a fixture hold a record whose columns are *not* ascending --
-  the one case where `build_csv_record`'s `sorted()` is visible.
+  `rom_writer.build_csv_section`. It emits columns in the order it is given them,
+  which lets a fixture hold a record whose columns are *not* ascending -- the one
+  case where `build_csv_record`'s `sorted()` is visible.
 - `parse_table` reads a section back the long way, not through
   `rom_reader.parse_csv_section`.
 - `read_database_big` seeks the extent out of a written image with its own
   arithmetic, not through `MVPPSPRomReader.load`.
 
 `refpack_compress` and `refpack_decompress` *are* the module's own, and that is
-the one place this fixture leans on code under test. It is justified:
-`tests/formats/test_refpack.py` pins the compressor byte-for-byte against the
-source compressor over fifteen inputs covering all seven command families, on
-top of a 52-case round-trip corpus, so a second compressor here would be a
-second thing to get wrong.
+the one place this fixture leans on code under test. `tests/formats/test_refpack.py`
+pins the compressor byte-for-byte against the source compressor.
 
-**No identifier equals a record position.** Every generated id is at least
-0x100000000, which is the smallest nine-hex-digit value, so no id can collide
-with an index, a slot number or a loop counter. Names, jersey numbers and every
-rating encode the team and the roster slot they belong to, so a write that
-landed on the wrong record, the wrong table or the wrong column cannot satisfy
-an assertion.
+No identifier equals a record position: every generated id is at least
+0x100000000, the smallest nine-hex-digit value, so no id can collide with an
+index, a slot number or a loop counter. Names, jersey numbers and every rating
+encode the team and the roster slot they belong to.
 """
 
 from __future__ import annotations
@@ -123,11 +117,6 @@ def roster_row_id(team: int, slot: int) -> str:
     return f"{ROSTER_BASE + ROSTER_STRIDE * (1 + team * SLOT_LIMIT + slot):09x}"
 
 
-# ──────────────────────────────────────────────────────────────
-# CSV rendering and parsing, both independent of the code under test
-# ──────────────────────────────────────────────────────────────
-
-
 def render_record(hash_id: str, columns: list[tuple[int, str]]) -> str:
     """One record line, in the order the columns are given.
 
@@ -201,10 +190,6 @@ def parse_table_order(data: bytes) -> list[str]:
             order.append(hash_id)
     return order
 
-
-# ──────────────────────────────────────────────────────────────
-# Table contents
-# ──────────────────────────────────────────────────────────────
 
 # Header lines, one per section. Each names its columns, and no first token is
 # nine hex characters, so `_looks_like_record_id` rejects every one of them.
@@ -576,11 +561,6 @@ def decompress_section_at(blob: bytes, name: str) -> bytes:
     if raw[0] == 0xC0:
         raw = b"\x10\xfb" + raw[2:]
     return refpack_decompress(raw)
-
-
-# ──────────────────────────────────────────────────────────────
-# Images on disk
-# ──────────────────────────────────────────────────────────────
 
 
 def _filler(length: int, seed: int) -> bytes:

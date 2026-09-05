@@ -130,9 +130,6 @@ GOALIE = NHL07PlayerRecord(
 )
 
 
-# -- constants -------------------------------------------------------------
-
-
 def test_there_are_thirty_line_flags():
     assert len(LINE_FLAGS) == 30
 
@@ -233,9 +230,6 @@ def test_the_progress_spans_are_ordered():
     assert PROGRESS_COPY_END < PROGRESS_RECORDS_END
 
 
-# -- copy_iso --------------------------------------------------------------
-
-
 def test_the_copy_is_byte_identical_to_the_source(tmp_path):
     source = tmp_path / "source.iso"
     fixture.write_iso(source)
@@ -321,9 +315,6 @@ def test_the_writer_reads_the_output_and_not_the_input(tmp_path):
     # input would assert nothing about what was written.
     writer = prepared(tmp_path)
     assert writer.reader.iso_path == writer.output_path
-
-
-# -- write_player_bio ------------------------------------------------------
 
 
 def test_a_bio_write_lands_the_first_name_in_the_named_field(tmp_path):
@@ -507,9 +498,6 @@ def test_a_bio_write_past_the_allocation_is_a_no_op(tmp_path):
     assert bytes(spbt._raw_data) == before
 
 
-# -- write_skater_attrs / write_goalie_attrs -------------------------------
-
-
 def _write_attrs_and_read(tmp_path, index, kind):
     from pathlib import Path
 
@@ -673,9 +661,6 @@ def test_an_attribute_write_past_the_allocation_is_a_no_op(tmp_path):
     assert bytes(spai._raw_data) == before
 
 
-# -- roster_values ---------------------------------------------------------
-
-
 def test_roster_values_carries_the_jersey():
     assert NHL07PSPRomWriter.roster_values(44, 0, 1)["JERS"] == 44
 
@@ -747,9 +732,6 @@ def test_the_disc_shipped_that_row_with_a_different_flag_set(tmp_path):
         fixture.build_master_tdb(), "ROST", fixture.ROST_FIELDS, fixture.ROST_RECORD_SIZE
     )
     assert [f for f in fixture.LINE_FLAG_NAMES if records[7][f] == 1] == ["L4LW"]
-
-
-# -- rebuild_and_write -----------------------------------------------------
 
 
 def test_rebuilding_leaves_the_image_the_same_length(tmp_path):
@@ -1000,9 +982,6 @@ def test_the_rebuilt_archive_is_flushed_to_disk(tmp_path):
         assert os.read(fd, 4) == b"BIGF"
     finally:
         os.close(fd)
-
-
-# -- holes mutation testing found ------------------------------------------
 
 
 def test_the_copy_progress_span_ends_at_thirty_per_cent():

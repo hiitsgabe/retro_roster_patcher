@@ -1,20 +1,19 @@
 """The inputs whose exact compressed form `test_refpack.py` pins.
 
-Kept apart from the test that uses them because the reference outputs beside
-them in `test_refpack.py` were produced by running the *source* compressor —
-the one inside `console_utilities` this module was ported from — over exactly
-these thirteen inputs. Anything that edits an input here invalidates the
-corresponding reference, and having the two in separate files makes that hard
-to do by accident.
+Kept apart from the test that uses them because the reference outputs beside them
+in `test_refpack.py` were produced by running the *source* compressor -- the one
+inside `console_utilities` this module was ported from -- over exactly these
+inputs. Editing an input here invalidates the corresponding reference, and having
+the two in separate files makes that hard to do by accident.
 
 Each entry exists to force a particular command out of the encoder, and
-`test_refpack.py::test_the_corpus_between_them_uses_every_command_family`
-decodes the references and fails if any family stops appearing. Between them
-they cover all four copy encodings, the literal-only command, and end markers
-carrying zero, one and three trailing literals.
+`test_refpack.py::test_the_corpus_between_them_uses_every_command_family` decodes
+the references and fails if any family stops appearing. Between them they cover
+all four copy encodings, the literal-only command, and end markers carrying zero,
+one and three trailing literals.
 
-The inputs are built here rather than written out as literals because two of
-them are 20 KB, and a repr that long is not something a reader can check.
+The inputs are built here rather than written out as literals because two of them
+are 20 KB, and a repr that long is not something a reader can check.
 """
 
 import random
@@ -88,13 +87,12 @@ VECTOR_INPUTS: dict[str, bytes] = {
     # A 4-byte match at one position with a 9-byte match one byte later, which is
     # what makes the lazy-match branch take a different path from the greedy one.
     "lazy": b"WXYZ" + b"QWXYZRSTUV" + b"QQQQ" + b"WXYZRSTUVX",
-    # Three distinct byte values over 400 bytes. Every hash bucket holds dozens
-    # of positions and almost every position has several candidate matches of
-    # nearly equal length, which is what makes the encoder's two search
-    # parameters observable: mutation testing showed that relaxing the lazy
-    # rule from `next_length > length + 1` to `> length`, or cutting the chain
-    # depth from 128 to 4, changes no output in any other vector here and
-    # changes this one.
+    # Three distinct byte values over 400 bytes. Every hash bucket holds dozens of
+    # positions and almost every position has several candidate matches of nearly
+    # equal length, which is what makes the encoder's two search parameters
+    # observable: relaxing the lazy rule from `next_length > length + 1` to
+    # `> length`, or cutting the chain depth from 128 to 4, changes no output in any
+    # other vector here and changes this one.
     "low_alphabet": bytes(_rng.randrange(3) for _ in range(400)),
     # A nine-byte block, then 129 three-byte groups chosen so that the mutant
     # hash `(b0 << 7) ^ (b1 << 4) ^ b2` maps every one of them onto the same

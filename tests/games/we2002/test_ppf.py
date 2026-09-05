@@ -1,27 +1,23 @@
 """Characterisation tests for the PPF applier.
 
-The plan for this port expected `get_ppf_info` to raise `PPFError` on a bad
-magic. It does not: it returns `{"version": 0, ...}` and quotes the magic it saw
-in the description, and only `apply_ppf` raises. These tests pin the behaviour
-that is actually there rather than the behaviour that was assumed.
+`get_ppf_info` does not raise `PPFError` on a bad magic: it returns
+`{"version": 0, ...}` and quotes the magic it saw in the description. Only
+`apply_ppf` raises. These tests pin the behaviour that is there.
 
 Every patch and every target here is synthetic and built in-test. No community
 PPF and no disc image is in this repository or reachable from these tests.
 
-All three formats are covered, and all three are reachable in product. Every
-patch this project generates is PPF1 and is applied with validation on; a
-community `w202-english.ppf` an operator drops into `assets_dir` is applied as
-it stands with `skip_validation=True`, and those are typically PPF2 or PPF3. So
-a wrong record stride in a supplied file writes chosen bytes at chosen offsets
-into the output ISO with only the magic in the way.
+All three formats are covered and all three are reachable in product. Every patch
+this project generates is PPF1 and is applied with validation on; a community
+`w202-english.ppf` an operator drops into `assets_dir` is applied as it stands
+with `skip_validation=True`, and those are typically PPF2 or PPF3. So a wrong
+record stride in a supplied file writes chosen bytes at chosen offsets into the
+output ISO with only the magic in the way.
 
-One mutant in this file's subject is EQUIVALENT and deliberately not covered:
-`_apply_ppf2`'s `while len(data) >= 5` versus `>= 6`. They differ only on a
-trailing remnant of exactly five bytes, where a count of 0 writes an empty slice
-and any other count hits the short-record break — so neither form touches a
-byte. Running the real applier both ways over all 256 possible count bytes plus
-eight other remnant lengths gives identical images. The same is true of
-`_apply_ppf1`'s copy of that loop.
+`_apply_ppf2`'s `while len(data) >= 5` versus `>= 6` is an EQUIVALENT mutant and
+is deliberately not covered: they differ only on a trailing remnant of exactly
+five bytes, where a count of 0 writes an empty slice and any other count hits the
+short-record break. The same is true of `_apply_ppf1`'s copy of that loop.
 """
 
 import struct
@@ -190,9 +186,6 @@ def test_get_ppf_info_reports_a_near_miss_magic_as_version_zero(tmp_path, magic)
     assert info["expected_size"] == 0
 
 
-# ── PPF 2.0 ──────────────────────────────────────────────────────────────
-
-
 def _ppf2_patch(description: str, records: bytes, *, expected_size: int, block: bytes) -> bytes:
     """Build a synthetic PPF 2.0 patch.
 
@@ -216,11 +209,11 @@ def _target(tmp_path, size=4096):
 
 
 def test_a_ppf2_patch_writes_every_one_of_its_records(tmp_path):
-    # Three records rather than one, because the record stride — `5 + count`, and
-    # `count` differs per record — is what steps from one to the next. With a
-    # single record any stride at all leaves the loop with nothing to misread,
-    # which is why a wrong stride survived here: it would write attacker-chosen
-    # bytes at attacker-chosen offsets into the output ISO.
+    # Three records rather than one, because the record stride -- `5 + count`, and
+    # `count` differs per record -- is what steps from one to the next. With a single
+    # record any stride at all leaves the loop with nothing to misread, and a wrong
+    # stride writes attacker-chosen bytes at attacker-chosen offsets into the output
+    # ISO.
     target = _target(tmp_path)
     original = target.read_bytes()
 
@@ -319,9 +312,6 @@ def test_a_ppf2_patch_that_passes_both_checks_applies_without_skip_validation(tm
     expected = bytearray(original)
     expected[5:7] = b"\xaa\xbb"
     assert target.read_bytes() == bytes(expected)
-
-
-# ── PPF 3.0 ──────────────────────────────────────────────────────────────
 
 
 def _ppf3_patch(description: str, records: bytes, *, blockcheck=0, undo=0, block=b"") -> bytes:

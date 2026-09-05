@@ -1,38 +1,25 @@
 """The ISO9660 / CD-ROM-EDC subsystem behind `RomWriter.flush_tex_patches`.
 
 `we2002/patcher.py` calls `flush_tex_patches` on every patch, and it opens the
-user's output image `r+b` and rewrites sectors in place. Until this file existed
-nothing in the suite executed a line of it: `tests/games/we2002/test_patcher.py`
-substitutes a `FakeRomWriter` whose `flush_tex_patches` appends to a log, and its
-signature-parity check pins the four method names without running any body.
+user's output image `r+b` and rewrites sectors in place.
 
 WE2002 is copyrighted, so no disc image may enter this repository. Every image
 here is built by `_build_iso` out of bytes chosen in this file: a `truncate` to
 the full 95-TEX length followed by writes to the six directory sectors and to the
-handful of TEX sectors a given test needs. The result is sparse — a 24 MB
-apparent length holding under 100 KB of allocated blocks — which is what keeps
-these tests cheap. Nothing in it came from the game.
+handful of TEX sectors a given test needs. The result is sparse -- a 24 MB
+apparent length holding under 100 KB of allocated blocks.
 
-Which functions this covers, and which it deliberately does not:
-
-  * `finalize`'s body is `pass` (`rom_writer.py:3032-3038`). There is nothing to
-    execute, so nothing here pretends to execute it. `test_patcher.py` already
-    pins that `patch` calls it.
-  * `patch_3d_jersey` and the four in-memory helpers it alone uses —
-    `_build_tex_dir_map`, `_read_cd_file`, `_write_cd_file_with_edc`,
-    `_update_iso_dir_size` — are unreachable from `WE2002Patcher.patch`. That is
-    not an assertion, it is a measurement: a `sys.settrace` call trace over a
-    real `patch()` run against a synthetic image reaches the other nine and none
-    of these five, because the only caller of `patch_3d_jersey` anywhere in
-    `src/` or `tests/` is nobody. They are still shipped public surface, and a
-    consumer that calls the method gets the whole family, so they are covered
-    here too — but by direct call, not by pretending `patch` drives them.
+`patch_3d_jersey` and the four in-memory helpers it alone uses --
+`_build_tex_dir_map`, `_read_cd_file`, `_write_cd_file_with_edc`,
+`_update_iso_dir_size` -- are unreachable from `WE2002Patcher.patch`. They are
+still shipped public surface, so they are covered here by direct call rather than
+by pretending `patch` drives them.
 
 The `_edc_compute` pins are literals rather than round-trips on purpose. It is a
 pure function over bytes, it is the one thing here a console checks, and a disc
-whose EDC is wrong is a disc the hardware rejects — so it is worth pinning to
-exact values that a change of polynomial, of table construction or of shift
-direction all move.
+whose EDC is wrong is a disc the hardware rejects -- so it is pinned to exact
+values that a change of polynomial, of table construction or of shift direction
+all move.
 """
 
 import struct
@@ -171,11 +158,6 @@ def _team(colour):
     return WETeamRecord(name="Synthetic", short_name="SYN", kit_home=colour)
 
 
-# ---------------------------------------------------------------------------
-# _edc_compute — the pure computation, pinned to exact values
-# ---------------------------------------------------------------------------
-
-
 def _edc_bitwise(data: bytes) -> int:
     """The same CRC computed one bit at a time, with no lookup table.
 
@@ -246,11 +228,6 @@ def test_an_all_zero_sector_payload_checks_to_zero():
     assert _edc_compute(bytes(2056)) == 0
 
 
-# ---------------------------------------------------------------------------
-# _find_best_tex_match
-# ---------------------------------------------------------------------------
-
-
 def test_the_source_and_destination_slots_this_file_uses_are_really_distinct():
     # Every end-to-end test below depends on the colour table steering slot 63 at
     # slot 66. If the table changed, those tests would still pass while silently
@@ -290,11 +267,6 @@ def test_an_empty_colour_table_yields_no_match(monkeypatch):
     # the table is the only way to show the guard is wired to anything.
     monkeypatch.setattr(rw, "_TEX_JERSEY_COLORS", {})
     assert _find_best_tex_match((1, 2, 3)) is None
-
-
-# ---------------------------------------------------------------------------
-# Directory parsing
-# ---------------------------------------------------------------------------
 
 
 def _dir_blob(records_by_sector):
@@ -389,11 +361,6 @@ def test_the_whole_image_parser_finds_both_slots_the_directory_lists(tmp_path):
     assert sizes == {_DST_TEX: 400, _SRC_TEX: 3064}
 
 
-# ---------------------------------------------------------------------------
-# Sector-level read and write
-# ---------------------------------------------------------------------------
-
-
 def test_reading_a_file_over_a_handle_skips_the_sector_headers(tmp_path):
     # 3064 bytes spans two sectors, so a reader that ignored the 304 bytes of
     # per-sector overhead would return the right length and the wrong second half.
@@ -463,11 +430,6 @@ def test_the_in_memory_writer_produces_the_same_image_as_the_handle_writer(tmp_p
     assert bytes(rom) == path.read_bytes()
 
 
-# ---------------------------------------------------------------------------
-# Directory size rewriting
-# ---------------------------------------------------------------------------
-
-
 def test_the_new_size_is_written_little_endian_at_offset_ten(tmp_path):
     # 0x00010203 reads back as 0x03020100 the other way round, so this is a size
     # that cannot pass with the two fields swapped.
@@ -518,11 +480,6 @@ def test_the_in_memory_size_update_produces_the_same_image(tmp_path):
     assert bytes(rom) == path.read_bytes()
 
 
-# ---------------------------------------------------------------------------
-# _ensure_tex_cache
-# ---------------------------------------------------------------------------
-
-
 def test_a_missing_output_file_leaves_an_empty_cache(tmp_path):
     writer = RomWriter(str(tmp_path / "absent.bin"), str(tmp_path / "absent.bin"))
     writer._ensure_tex_cache()
@@ -556,11 +513,6 @@ def test_a_second_call_does_not_re_read_the_image(tmp_path):
         _write_cd_file_with_edc_to_handle(f, _tex_lba(_SRC_TEX), bytes(4096))
     writer._ensure_tex_cache()
     assert writer._tex_cache[_SRC_TEX] == payload
-
-
-# ---------------------------------------------------------------------------
-# flush_tex_patches — the method `patch` calls on every run
-# ---------------------------------------------------------------------------
 
 
 def _queued_writer(tmp_path, *, tex=None):
@@ -709,11 +661,6 @@ def test_a_slot_that_is_already_its_own_best_match_is_left_alone(tmp_path):
     assert _read_sector(path, _tex_lba(_SRC_TEX) + 1) == before
 
 
-# ---------------------------------------------------------------------------
-# patch_3d_jersey — shipped, and unreachable from `WE2002Patcher.patch`
-# ---------------------------------------------------------------------------
-
-
 def test_the_one_shot_jersey_patch_copies_the_matched_slot(tmp_path):
     path = _build_iso(tmp_path, {_DST_TEX: _tex_payload(400), _SRC_TEX: _tex_payload(3064)})
     writer = RomWriter(str(path), str(path))
@@ -751,11 +698,6 @@ def test_the_one_shot_jersey_patch_does_no_io_for_a_missing_file(tmp_path):
     writer = RomWriter(str(absent), str(absent))
     writer.patch_3d_jersey(_DST_TEX, _SRC_COLOUR)
     assert absent.exists() is False
-
-
-# ---------------------------------------------------------------------------
-# The whole path, driven by `WE2002Patcher.patch` rather than by the writer
-# ---------------------------------------------------------------------------
 
 
 def test_a_real_patch_run_rewrites_the_slots_tex_sectors(tmp_path):

@@ -1,35 +1,16 @@
 """Writer coverage against the synthetic ROM in `tests/fixtures/synthetic_rom.py`.
 
-The writer had no test at all in the codebase it was ported from, so this file is
-the first thing that has ever executed a line of it. As with the reader tests,
-nothing here touches a real image.
-
 Every read-back goes through a *fresh* `NHL94GenesisRomReader` opened on the
 output path. `NHL94GenesisRomWriter.__init__` builds its own reader over the
-*input* file and `write_team_roster` sizes its patch from that reader, so
-`writer.reader.data` is the pre-write image for the writer's whole lifetime;
-asserting against it would assert nothing about what was written.
+*input* file, so `writer.reader.data` is the pre-write image for the writer's
+whole lifetime and asserting against it would assert nothing about the write.
 
-The stat bytes are checked with `synthetic_rom.decode_player_stats`, which is
-transcribed from `_write_player_stats`'s documented byte layout rather than from
-its code. `src/` contains no nibble decoder, so without an independently written
-one the only available assertion about the packing would be that some byte came
-out non-zero.
+The stat bytes are checked with `synthetic_rom.decode_player_stats`, transcribed
+from `_write_player_stats`'s documented byte layout rather than from its code.
 
-Several tests build their own image with `_poisoned_rom` instead of taking the
-plain fixture. An assertion of the form "these bytes are zero" proves nothing
-against an image that was already zero there — it passes whether or not the
-writer ran at all — so every span this file needs to watch *become* zero, or
-watch *stay* untouched, is filled with a recognisable byte first.
-
-The last section pins defects rather than intended behaviour, matching the policy
-in the reader tests: the port is faithful and stays that way, so each of these
-asserts what the writer *does* under a comment saying why that is wrong. A fourth
-defect has no test because none is possible: the explicit `0x0000` sentinel store
-in `write_team_roster` is dead code. Removing it leaves `offset` unadvanced, so
-the zero-fill loop below it covers those two bytes instead of skipping them and
-the resulting image is byte-identical — an equivalent mutation no assertion can
-distinguish.
+Every span this file needs to watch *become* zero, or *stay* untouched, is
+filled with `POISON` first: against an image that was already zero there, "these
+bytes are zero" passes whether or not the writer ran.
 """
 
 import struct
@@ -137,9 +118,6 @@ def _line_bytes(rows):
     return bytes(value for row in rows for value in row)
 
 
-# ── Nibble packing ───────────────────────────────────────────────────────
-
-
 def test_encode_nibble_packs_high_and_low():
     assert encode_nibble(6, 3) == 0x63
     assert encode_nibble(0, 0) == 0x00
@@ -150,10 +128,9 @@ def test_encode_nibble_packs_high_and_low():
 
 
 def test_encode_nibble_clamps_both_nibbles_to_zero_through_six():
-    # The clamp is load-bearing: the ROM stat nibbles are a 0-6 scale, and a
-    # caller handing over a 0-15 rating must not be allowed to write 0xFF into a
-    # stat byte. Both arguments and both ends, because a clamp applied to only one
-    # of the two is the mistake this is here to catch.
+    # The ROM stat nibbles are a 0-6 scale, so a caller handing over a 0-15 rating
+    # must not write 0xFF into a stat byte. Both arguments and both ends: a clamp
+    # applied to only one of the two is the mistake this is here to catch.
     assert encode_nibble(15, 15) == 0x66
     assert encode_nibble(7, 0) == 0x60
     assert encode_nibble(0, 7) == 0x06
@@ -178,10 +155,9 @@ def test_encode_weight_nibble_clamps_the_weight_to_fourteen_not_to_six():
 
 def test_the_fixture_decoder_inverts_the_writers_encoders():
     # `decode_player_stats` is transcribed from a docstring, so it needs its own
-    # check before the tests below can lean on it. Every record the fixture plants
-    # is re-encoded through the writer's own functions and compared byte for byte,
-    # which is only satisfiable because the fixture keeps all 650 records inside
-    # the ranges `encode_nibble`/`encode_weight_nibble` can actually emit.
+    # check. Every fixture record is re-encoded through the writer's own functions,
+    # which is only satisfiable because the fixture keeps all 650 records inside the
+    # ranges `encode_nibble`/`encode_weight_nibble` can emit.
     for team_index in range(synthetic_rom.TEAM_COUNT):
         for slot in range(synthetic_rom.ROSTER_PLAYERS):
             stats = synthetic_rom.player_stats(team_index, slot)
@@ -200,9 +176,6 @@ def test_the_fixture_decoder_inverts_the_writers_encoders():
                 ]
             )
             assert reencoded == stats
-
-
-# ── Loading ──────────────────────────────────────────────────────────────
 
 
 def test_loading_a_missing_file_fails(tmp_path):
@@ -241,9 +214,7 @@ def test_finalize_creates_the_output_directory(tmp_path):
 def test_finalize_reports_false_when_the_output_directory_cannot_be_made(tmp_path):
     # `os.makedirs` raising NotADirectoryError, because a component of the path is
     # a regular file. This and the test below are the only two things that execute
-    # `finalize`'s `except Exception: return False` — the whole point of that
-    # swallow is that the CLI gets a False rather than a traceback, and without a
-    # test the arm could be changed to `return True` unnoticed.
+    # `finalize`'s `except Exception: return False`.
     source = synthetic_rom.write_nhl94_genesis_rom(tmp_path / "in.bin")
     blocker = tmp_path / "blocker"
     blocker.write_bytes(b"a regular file, not a directory")
@@ -255,8 +226,7 @@ def test_finalize_reports_false_when_the_output_directory_cannot_be_made(tmp_pat
 
 def test_finalize_reports_false_when_the_output_path_is_a_directory(tmp_path):
     # `open(dir, "wb")` raising IsADirectoryError. `os.makedirs` is happy here —
-    # the parent already exists and `exist_ok=True` — so this reaches the `open`
-    # rather than stopping at the directory creation.
+    # the parent already exists and `exist_ok=True` — so this reaches the `open`.
     source = synthetic_rom.write_nhl94_genesis_rom(tmp_path / "in.bin")
     output = tmp_path / "outdir"
     output.mkdir()
@@ -283,9 +253,6 @@ def test_a_file_far_too_small_to_be_a_rom_loads_and_survives_every_operation(tmp
     assert writer.write_team_header(0, _squad()) is False
     assert writer.finalize() is True
     assert output.read_bytes() == bytes([POISON]) * 16
-
-
-# ── Roster writing ───────────────────────────────────────────────────────
 
 
 def test_writing_a_roster_reports_how_many_players_fit(rom_paths):
@@ -359,17 +326,12 @@ def test_the_jersey_number_is_clamped_to_one_through_ninety_nine(rom_paths):
 
 
 def test_attributes_land_in_the_seven_stat_bytes(rom_paths):
-    # `encode_nibble` clamps every attribute to 0-6, so twelve attributes cannot
-    # all take distinct values — five have to repeat. The repeats are placed to
-    # straddle the packing rather than falling wherever: the six attributes stored
-    # in a high nibble all differ from one another, the six stored in a low nibble
-    # all differ from one another, and no byte holds two equal nibbles. So every
-    # swap of two attributes written into the same half of a byte, and every
-    # nibble read from the wrong half of one, changes a byte here. A swap of two
-    # equal-valued attributes that also crosses halves — def_awareness against
-    # agility — stays invisible, and no assignment of 0-6 to twelve fields can
-    # make it visible. The literal pins the layout; the decoded dict names which
-    # value went where.
+    # `encode_nibble` clamps every attribute to 0-6, so twelve attributes cannot all
+    # take distinct values. The repeats straddle the packing: the six attributes
+    # stored in a high nibble all differ, the six in a low nibble all differ, and no
+    # byte holds two equal nibbles. A swap of two equal-valued attributes that also
+    # crosses halves — def_awareness against agility — stays invisible, and no
+    # assignment of 0-6 to twelve fields can make it visible.
     writer, output = _loaded_writer(rom_paths)
     player = NHL94GenPlayerRecord(
         name="AA",
@@ -429,9 +391,8 @@ def test_the_record_defaults_are_written_as_the_middling_ratings(rom_paths):
 
 
 def test_an_out_of_range_attribute_is_clamped_before_it_reaches_the_rom(rom_paths):
-    # Ratings arriving from a sports API are on a wider scale than the ROM's 0-6.
-    # This is the path that keeps such a value from spilling out of its nibble and
-    # corrupting the neighbouring one.
+    # Ratings arriving from a sports API are on a wider scale than the ROM's 0-6;
+    # this is the path that keeps one from spilling into the neighbouring nibble.
     writer, output = _loaded_writer(rom_paths)
     player = NHL94GenPlayerRecord(
         name="AA",
@@ -448,17 +409,13 @@ def test_an_out_of_range_attribute_is_clamped_before_it_reaches_the_rom(rom_path
 
 
 def test_the_roster_ends_with_a_sentinel_and_the_rest_is_zero_filled(tmp_path):
-    # The stale tail matters: the region already holds 25 fixture records, so
-    # without the zero fill the reader would run straight on past a short new
-    # roster into whatever the previous team had there. The 16 bytes immediately
-    # after the region are poisoned because the fixture leaves them zero, and a
-    # fill that overran `end` would otherwise be invisible.
+    # The region already holds 25 fixture records, so without the zero fill the
+    # reader runs past a short new roster into whatever the previous team left. The
+    # 16 bytes after the region are poisoned because the fixture leaves them zero.
     #
-    # The region's own last two bytes are the old terminator, and the reader ends
-    # a region on any length word below 3, not on 0x0000 alone. Making the fixture's
-    # terminator 0x0002 keeps the region 452 bytes long while giving its final byte
-    # a non-zero value, so a fill that stopped one byte short would show up here
-    # instead of hiding behind a byte that was already zero.
+    # The reader ends a region on any length word below 3, not on 0x0000 alone, so
+    # the fixture's terminator is 0x0002: the region stays 452 bytes long while its
+    # final byte is non-zero, and a fill that stopped one byte short shows up.
     start = synthetic_rom.team_base(0) + synthetic_rom.SEC_PLAYERS
     rom = _poisoned_rom((start + ROSTER_REGION, 16))
     rom[start + ROSTER_REGION - 2 : start + ROSTER_REGION] = b"\x00\x02"
@@ -515,12 +472,9 @@ def test_a_roster_larger_than_the_region_is_truncated_not_overflowed(rom_paths):
 
 
 def test_a_non_ascii_name_becomes_one_question_mark_per_character(rom_paths):
-    # Accented surnames are routine on an NHL roster, not an edge case, so which
-    # codec and which error handler `write_team_roster` uses is load-bearing.
     # `errors="replace"` on the ascii codec emits exactly one "?" per unencodable
-    # character: dropping them instead ("ignore") would shorten the name, and
-    # widening the codec to latin-1 would emit a high byte the ROM's font cannot
-    # draw and the reader decodes back as U+FFFD.
+    # character. Dropping them ("ignore") would shorten the name, and latin-1 would
+    # emit a high byte the ROM's font cannot draw and the reader decodes as U+FFFD.
     writer, output = _loaded_writer(rom_paths)
     assert (
         writer.write_team_roster(
@@ -544,23 +498,16 @@ def test_a_non_ascii_name_becomes_one_question_mark_per_character(rom_paths):
 
 
 def test_an_empty_name_is_written_as_a_length_word_the_reader_reads_as_the_end(rom_paths):
-    # PINS UPSTREAM FIDELITY DELIBERATELY. This is upstream's behaviour and it is
-    # known to be wrong; it is preserved because the bytes it writes are the only
-    # bytes this game has ever been fed by a released build of the patcher, and
-    # nothing here has been validated against a real dump.
+    # PINS UPSTREAM FIDELITY DELIBERATELY. Known to be wrong, kept because these are
+    # the only bytes this game has ever been fed by a released build of the patcher.
     #
     # `read_team_roster` and `get_team_player_region` both stop at a length word
     # below 3, and an empty name encodes a length word of exactly 2. Written
-    # mid-roster it buries the end-of-roster sentinel inside the roster: the
-    # writer reports 20 written, only the three records ahead of it read back,
-    # and the region re-measures at 56 bytes instead of 355, so a later patch of
-    # the same team truncates against the short region. Both providers can hand
-    # over "" — `sports/nhl.py` joins two absent name keys and strips,
-    # `sports/espn.py` falls back to "" when neither display name is present —
-    # and `stat_mapper.map_player` passes it straight through.
+    # mid-roster it buries the end-of-roster sentinel inside the roster: the region
+    # re-measures at 56 bytes instead of 355, so a later patch of the same team
+    # truncates against the short region. Both providers can hand over "".
     #
-    # Do not "fix" this by writing a placeholder byte. That was tried, and it
-    # changes 621 bytes of a 26-team patch away from what upstream wrote.
+    # Do not "fix" this by writing a placeholder byte.
     writer, output = _loaded_writer(rom_paths)
     roster = [NHL94GenPlayerRecord(name=f"NAME{i:04d}", jersey_number=i + 1) for i in range(20)]
     roster[3] = NHL94GenPlayerRecord(name="", jersey_number=4)
@@ -586,9 +533,8 @@ def test_an_empty_name_is_written_as_a_length_word_the_reader_reads_as_the_end(r
 
 
 def test_a_one_character_name_survives_the_round_trip(rom_paths):
-    # Length word 3 is the low edge of the reader's `length < 3` sentinel test, so
-    # a one-character name is the shortest record that must not be read as the end
-    # of the roster. Nothing else in the suite round-trips one.
+    # Length word 3 is the low edge of the reader's `length < 3` sentinel test, so a
+    # one-character name is the shortest record that must not read as end-of-roster.
     writer, output = _loaded_writer(rom_paths)
     roster = [
         NHL94GenPlayerRecord(name=name, jersey_number=i + 1)
@@ -629,11 +575,9 @@ def test_a_name_is_truncated_when_only_part_of_it_fits(rom_paths):
 
 def test_the_region_of_a_team_whose_pointer_is_out_of_range_reports_no_space(tmp_path):
     # `get_team_player_region` answering (0, 0) is the writer's only signal that a
-    # team block is unreachable. What the `region_size == 0` guard buys is the
-    # documented -1 return and nothing more: with it removed `start` and `end` are
-    # both 0, so the record loop breaks on the first iteration, the sentinel store
-    # is skipped and the zero fill never runs — no byte is written either way, and
-    # only the reported result changes.
+    # team block is unreachable. The `region_size == 0` guard buys the documented -1
+    # return and nothing more: without it `start` and `end` are both 0, so no byte
+    # is written either way and only the reported result changes.
     rom = synthetic_rom.build_nhl94_genesis_rom()
     entry = synthetic_rom.POINTER_TABLE_OFFSET + 5 * 4
     rom[entry : entry + 4] = b"\xff\xff\xff\xff"
@@ -646,23 +590,17 @@ def test_the_region_of_a_team_whose_pointer_is_out_of_range_reports_no_space(tmp
 
 def test_a_team_index_at_the_count_is_refused(rom_paths):
     # Both `team_index >= TEAM_COUNT` checks in the writer are masked by the
-    # reader's own: `get_team_player_region` already answers (0, 0) and
-    # `get_team_section_offsets` already answers None for an index this large, and
-    # the guards behind those turn each into the same result. So this pins the
-    # behaviour rather than either line — deleting both leaves it green.
+    # reader's own, so this pins the behaviour rather than either line — deleting
+    # both leaves it green.
     writer, _ = _loaded_writer(rom_paths)
     assert writer.write_team_roster(TEAM_COUNT, _squad()) == -1
     assert writer.write_team_header(TEAM_COUNT, _squad()) is False
 
 
-# ── Team header ──────────────────────────────────────────────────────────
-
-
 def test_the_team_header_records_forward_and_defence_counts(tmp_path):
-    # The three ratings bytes ahead of the count byte are poisoned rather than left
-    # at the fixture's zeros: they are per-team values the writer must preserve, and
-    # against a zero image an assertion that they are still zero would also hold for
-    # a writer that had scribbled zeros over all four.
+    # The three ratings bytes ahead of the count byte are per-team values the writer
+    # must preserve, so they are poisoned: against the fixture's zeros "still zero"
+    # would also hold for a writer that scribbled zeros over all four.
     base = synthetic_rom.team_base(0)
     ratings = base + synthetic_rom.SEC_RATINGS
     source = _write_rom(tmp_path, "ratings.bin", _poisoned_rom((ratings, 3)))
@@ -684,11 +622,9 @@ def test_the_team_header_records_forward_and_defence_counts(tmp_path):
 
 def test_the_goalie_count_comes_from_the_flag_and_the_defence_count_from_the_position(rom_paths):
     # `write_team_header` mixes conventions: `goalie_count` reads `is_goalie` while
-    # `defense_count` reads `position`, and forwards are whatever is left over.
-    # `NHL94GenPlayerRecord` makes the two independent fields, so a roster where
-    # they disagree is what tells them apart — two players flagged as goalies while
-    # listed at centre, and nobody at position "G" at all. Reading the position
-    # instead would call them forwards and report 0x31.
+    # `defense_count` reads `position`, and forwards are whatever is left over. Two
+    # players flagged as goalies while listed at centre, and nobody at position "G",
+    # is what tells them apart; reading the position would report 0x31.
     writer, output = _loaded_writer(rom_paths)
     roster = [
         NHL94GenPlayerRecord(name="FLAGGED0", position="C", jersey_number=1, is_goalie=True),
@@ -729,8 +665,8 @@ def test_a_roster_of_twenty_five_at_one_position_saturates_its_count_nibble(rom_
 
 def test_the_header_counts_only_the_players_that_actually_fit(rom_paths):
     # `actual_count` exists because `write_team_roster` may have dropped the tail of
-    # the list; a header describing players that are not in the ROM would point the
-    # game's line data at roster slots that do not exist.
+    # the list; a header describing players not in the ROM would point the game's
+    # line data at roster slots that do not exist.
     writer, output = _loaded_writer(rom_paths)
     squad = _squad()
     assert writer.write_team_roster(0, squad) == 15
@@ -756,9 +692,7 @@ def test_writing_a_header_with_no_players_is_refused(rom_paths):
 
 def test_the_team_header_writes_sixty_four_bytes_of_line_data(rom_paths):
     # Eight lines of [01, LD, RD, LW, C, RW, EA, G] over a roster laid out as two
-    # goalies, then forwards 2-10, then defence 11-14. Pinned whole because the
-    # only other way to state it is to re-run `_generate_lines`, which would assert
-    # nothing about where the bytes landed or in what order.
+    # goalies, then forwards 2-10, then defence 11-14.
     writer, output = _loaded_writer(rom_paths)
     squad = _squad()
     assert writer.write_team_roster(0, squad) == 15
@@ -781,10 +715,9 @@ def test_the_team_header_writes_sixty_four_bytes_of_line_data(rom_paths):
 
 def test_a_roster_with_no_forwards_or_defence_points_every_slot_at_the_starter(rom_paths):
     # The `forward_count == 0` and `defense_count == 0` arms of `_generate_lines`.
-    # They do not prevent an overrun — without them `min(i, forward_count - 1)` is
-    # `min(i, -1)`, so `f()` would return `f_start - 1`, the last goalie, which is
-    # still a real roster slot. What the arms decide is *which* slot: every position
-    # on every line names the starting goalie at 0 rather than goalie 2.
+    # They do not prevent an overrun — `min(i, forward_count - 1)` would return the
+    # last goalie, still a real slot. What the arms decide is *which* slot: every
+    # position on every line names the starting goalie at 0 rather than goalie 2.
     writer, output = _loaded_writer(rom_paths)
     goalies = [
         NHL94GenPlayerRecord(name=f"GOALIE{i}", position="G", jersey_number=30 + i, is_goalie=True)
@@ -801,11 +734,9 @@ def test_a_roster_with_no_forwards_or_defence_points_every_slot_at_the_starter(r
 
 def test_a_single_defenceman_is_used_as_both_halves_of_every_pair(rom_paths):
     # The `min(i, defense_count - 1)` clamp inside `d()`. Every line asks for two
-    # defence slots, so with one defenceman on the roster the second ask is out of
-    # range and only the clamp keeps it from naming slot 6 on a six-player team.
-    # Four defencemen — what `_squad` has — never reach it: `d_pairs` is 2 there and
-    # the largest index requested is 3, so the clamp is a no-op and removing it
-    # changes nothing the other line-data test can see.
+    # defence slots, so with one defenceman the second ask is out of range and only
+    # the clamp keeps it from naming slot 6 on a six-player team. Four defencemen —
+    # what `_squad` has — never reach it: the largest index requested is 3.
     writer, output = _loaded_writer(rom_paths)
     roster = [
         NHL94GenPlayerRecord(name=f"GOALIE{i}", position="G", jersey_number=30 + i, is_goalie=True)
@@ -860,15 +791,10 @@ def test_the_goalie_byte_flags_a_third_goalie_and_preserves_the_byte_before_it(t
         assert output.read_bytes()[goalies_off : goalies_off + 2] == bytes([0x5A, expected])
 
 
-# ── Checksums and finalize ───────────────────────────────────────────────
-
-
 def test_disable_checksum_writes_an_rts_at_the_bypass_offset(tmp_path):
-    # The bytes either side of the patch are poisoned rather than left at the
-    # fixture's zeros, per the policy in this module's docstring: the image is
-    # already zero there, so "the neighbours are still zero" would hold just as
-    # well for a writer that had scribbled zeros over them, and the assertion
-    # would pass whether or not `disable_checksum` stayed inside its two bytes.
+    # The bytes either side of the patch are poisoned: the image is already zero
+    # there, so "the neighbours are still zero" would hold just as well for a writer
+    # that had scribbled zeros over them.
     source = _write_rom(
         tmp_path,
         "bypass.bin",
@@ -936,10 +862,9 @@ def test_disable_checksum_before_loading_does_nothing(tmp_path):
 
 def test_update_header_checksum_sums_every_word_from_0x200(tmp_path):
     # Both ends of the summed range are poisoned. The fixture leaves the word at
-    # 0x200 and the last word of the image zero, and a zero word contributes
-    # nothing to a sum — so against the plain fixture a range that started two
-    # bytes late or stopped two bytes early would produce an identical checksum
-    # and this test could not tell the difference.
+    # 0x200 and the last word of the image zero, and a zero word contributes nothing
+    # to a sum, so a range starting two bytes late or stopping two bytes early would
+    # produce an identical checksum.
     source = _write_rom(
         tmp_path,
         "edges.bin",
@@ -1006,21 +931,16 @@ def test_the_output_is_still_a_valid_rom_after_a_full_patch(rom_paths):
     assert [s.current_name for s in slots] == synthetic_rom.CITIES
 
 
-# ── Pinned defects ───────────────────────────────────────────────────────
-
-
 def test_a_negative_team_index_writes_a_roster_wherever_word_zero_points(tmp_path):
     # DEFECT: the guard is `team_index >= TEAM_COUNT` only, exactly as in the
-    # reader. A negative index reads the word below the pointer table, which is
-    # zero here, so the "team block" resolves to file offset 0 and its "player
-    # records" pointer is read out of the first word of the image — on a real
-    # cartridge, the top half of the initial supervisor stack pointer.
+    # reader. A negative index reads the word below the pointer table, which is zero
+    # here, so the "team block" resolves to file offset 0 and its "player records"
+    # pointer comes out of the first word of the image — on a real cartridge, the top
+    # half of the initial supervisor stack pointer.
     #
     # That word is set to 8 and a length-2 terminator planted there, so the write
     # lands somewhere that was not already zero: the call reports 0 rather than the
-    # documented -1, and the terminator is overwritten. Against the untouched
-    # fixture the write goes to offset 0 over bytes that are zero already, and no
-    # assertion could tell it from a call that did nothing at all.
+    # documented -1, and the terminator is overwritten.
     rom = synthetic_rom.build_nhl94_genesis_rom()
     rom[0:2] = b"\x00\x08"
     rom[8:10] = b"\x00\x02"
@@ -1038,26 +958,16 @@ def test_a_negative_team_index_writes_a_roster_wherever_word_zero_points(tmp_pat
 
 
 def test_a_roster_region_that_runs_past_the_end_of_the_file_raises(tmp_path):
-    # DEFECT: `get_team_player_region` reports a region two bytes past the image
-    # for an unterminated roster (pinned in test_rom_reader.py), and
-    # `write_team_roster` trusts the number. The records and the sentinel all land
-    # inside the file; it is the zero fill that walks off the end, so the call
-    # raises IndexError rather than returning the documented -1. This is the one
-    # path in the writer that does not degrade gracefully, and the orchestrator
-    # will have to catch it — `analyze`/`patch` probe every patcher against one ROM.
+    # DEFECT: `get_team_player_region` reports a region two bytes past the image for
+    # an unterminated roster, and `write_team_roster` trusts the number. The records
+    # and the sentinel all land inside the file; it is the zero fill that walks off
+    # the end, so the call raises IndexError rather than returning the documented -1.
     #
-    # `_write_player_stats`'s own `offset + STATS_SIZE > len(self.data)` guard
-    # cannot fire on an image shaped like this one. A record is written only while
-    # `max_name_len >= 1`, that is while `offset <= end - 13`, and the name is
-    # truncated to `end - offset - 12`, so its stats begin at or before `end - 10`
-    # and finish at or before `end - 2`. With `end` just two bytes past the image
-    # that is always in range. What reaches the guard is not a larger overshoot but
-    # a later `start`: a corrupt record chain leaves `start` deep inside the file,
-    # so the name write hits EOF first no matter how far `end` runs (a chain of
-    # maximal 16-bit hops reaches `end - len(data) == 65541` and still never fires
-    # it). Only a corrupt pointer table can put `start` within one record of the
-    # end, which fires the guard at an overshoot of just 98 bytes —
-    # `test_a_team_block_at_the_end_of_the_file_lets_stats_scribble_past_it`.
+    # `_write_player_stats`'s own `offset + STATS_SIZE > len(self.data)` guard cannot
+    # fire on an image shaped like this one: a record is written only while
+    # `offset <= end - 13` and the name is truncated to `end - offset - 12`, so the
+    # stats finish at or before `end - 2`. Only a corrupt pointer table can put
+    # `start` within one record of the end, which is the test below.
     rom = synthetic_rom.build_nhl94_genesis_rom()
     start = synthetic_rom.team_base(0) + synthetic_rom.SEC_PLAYERS
     record = synthetic_rom.player_record(0, 0)
@@ -1074,22 +984,16 @@ def test_a_roster_region_that_runs_past_the_end_of_the_file_raises(tmp_path):
 
 def test_a_team_block_at_the_end_of_the_file_lets_stats_scribble_past_it(tmp_path):
     # DEFECT: `write_team_roster`'s second IndexError route, and the one that shows
-    # `_write_player_stats`'s bounds guard is load-bearing rather than dead. Team 0's
-    # block is moved to 20 bytes from EOF with its players pointer at +10, so the
-    # region *starts* in range, and the length word planted there says 100, so the
-    # reader's scan clears the end of the file in a single step and reports a
+    # `_write_player_stats`'s bounds guard is load-bearing. Team 0's block is moved to
+    # 20 bytes from EOF with its players pointer at +10, so the region *starts* in
+    # range, and the length word planted there says 100, so the reader reports a
     # 108-byte region finishing 98 bytes past the image.
     #
     # The first record's stats then begin at `len(data) - 2`, the guard fires, and
-    # nothing is written; the loop advances and the *second* record's name write
-    # runs off the end at rom_writer.py:138. Drop the guard and there is no second
-    # record: the jersey BCD and the weight nibble land on the last two bytes of
-    # the ROM and the raise moves up into `_write_player_stats` at :186. Either
-    # way this is a route to IndexError distinct from the zero fill at :153 in the
-    # test above, and like that one it never returns the documented -1. The partial
-    # write is already in `self.data`, so a caller that catches the exception and
-    # finalizes anyway ships the damaged image — which the tail assertion reads back,
-    # and those last two bytes are exactly what the guard is worth.
+    # the *second* record's name write runs off the end. Drop the guard and the
+    # jersey BCD and weight nibble land on the last two bytes of the ROM instead.
+    # The partial write is already in `self.data`, so a caller that catches and
+    # finalizes anyway ships the damaged image.
     rom = synthetic_rom.build_nhl94_genesis_rom()
     end_of_file = len(rom)
     base = end_of_file - 20
@@ -1110,21 +1014,19 @@ def test_a_team_block_at_the_end_of_the_file_lets_stats_scribble_past_it(tmp_pat
         writer.write_team_roster(0, players)
     assert writer.finalize() is True
 
-    # Two zeros from before the region, the first record's length word, its six
-    # name bytes, then the second record's length word in the last two bytes. The
-    # eight stat bytes the first record should have had are simply absent: the
-    # guard returned the offset unchanged, so the name that follows overwrote
-    # nothing and the file ends on a length word rather than on a jersey and a
-    # weight nibble. That last pair is the whole difference the guard makes.
+    # Two zeros from before the region, the first record's length word, its six name
+    # bytes, then the second record's length word in the last two bytes. The eight
+    # stat bytes the first record should have had are absent: the guard returned the
+    # offset unchanged, so the file ends on a length word rather than on a jersey and
+    # a weight nibble.
     assert output.read_bytes()[-12:] == b"\x00\x00\x00\x08ABCDEF\x00\x08"
 
 
 def test_a_negative_team_index_overwrites_the_start_of_the_rom_with_line_data(rom_paths):
-    # DEFECT: the same missing guard in `write_team_header`, and far louder — all
-    # six section offsets resolve to 0, so the call reports success and writes the
-    # count byte, the goalie byte and 64 bytes of line assignments over the vector
-    # table at the head of the file. No poison is needed here: the line data is
-    # non-zero, so the write is visible against the fixture's zeros on its own.
+    # DEFECT: the same missing guard in `write_team_header`. All six section offsets
+    # resolve to 0, so the call reports success and writes the count byte, the goalie
+    # byte and 64 bytes of line assignments over the vector table at the head of the
+    # file.
     writer, output = _loaded_writer(rom_paths)
     assert writer.write_team_header(-1, _squad()) is True
     assert writer.finalize() is True
@@ -1134,13 +1036,10 @@ def test_a_negative_team_index_overwrites_the_start_of_the_rom_with_line_data(ro
 def test_the_writers_reader_never_observes_the_writers_own_patches(rom_paths):
     # DEFECT: `load` takes a *copy* of the reader's image, and every region lookup
     # goes back through that reader, so within one writer session the region for a
-    # team is always the one in the input file no matter what has been written over
-    # it. Writing the same team twice therefore both starts from the original 452
-    # bytes, which happens to be what a caller wants — but it is accidental, and
-    # dropping the `bytearray(...)` copy so the two share one buffer would make the
-    # second call see only what the first left, silently truncating the roster.
-    #
-    # Task 17 puts this behind a driver that may well write a team more than once.
+    # team is always the one in the input file. Writing the same team twice both
+    # start from the original 452 bytes, which is accidental: dropping the
+    # `bytearray(...)` copy so the two share one buffer would make the second call
+    # see only what the first left, silently truncating the roster.
     writer, output = _loaded_writer(rom_paths)
     start = synthetic_rom.team_base(0) + synthetic_rom.SEC_PLAYERS
     full = [NHL94GenPlayerRecord(name=f"NAME{i:04d}", jersey_number=1) for i in range(25)]
@@ -1159,9 +1058,8 @@ def test_the_writers_reader_never_observes_the_writers_own_patches(rom_paths):
 def test_patching_a_rom_that_was_already_patched_loses_roster_space(rom_paths):
     # DEFECT: the roster region is defined by where the sentinel currently sits, and
     # `write_team_roster` moves the sentinel down to the end of whatever it just
-    # wrote instead of leaving it at the end of the original space. A short roster
-    # therefore shrinks the region permanently, and re-patching the output can no
-    # longer fit a roster the original ROM had room for. The remaining tail is
+    # wrote. A short roster shrinks the region permanently, so re-patching the output
+    # can no longer fit a roster the original ROM had room for. The remaining tail is
     # zero-filled and unreachable, not reclaimed.
     writer, output = _loaded_writer(rom_paths)
     start = synthetic_rom.team_base(0) + synthetic_rom.SEC_PLAYERS

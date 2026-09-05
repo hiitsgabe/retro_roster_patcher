@@ -228,10 +228,6 @@ def build_tdb(specs: list[TableSpec], *, directory_crc: int = 0x1234ABCD) -> byt
     return bytes(out)
 
 
-# ──────────────────────────────────────────────────────────────
-# Ready-made tables
-# ──────────────────────────────────────────────────────────────
-
 # A player-bio table shaped like the SPBT the two NHL patchers write: two string
 # fields and three integers, one of them not byte-aligned and one of them
 # straddling a byte boundary. 16 bytes a record.
@@ -309,11 +305,6 @@ def empty_table(name: str, table_index: int) -> TableSpec:
     definitions alone.
     """
     return player_table(name, table_index, capacity=0)
-
-
-# ──────────────────────────────────────────────────────────────
-# BIGF
-# ──────────────────────────────────────────────────────────────
 
 
 @dataclass

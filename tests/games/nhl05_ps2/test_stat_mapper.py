@@ -68,9 +68,6 @@ def player(**kw) -> Player:
     return Player(**base)
 
 
-# -- helpers ---------------------------------------------------------------
-
-
 def test_the_attribute_range_is_six_bits():
     assert (ATTR_MIN, ATTR_MAX) == (0, 63)
 
@@ -134,9 +131,6 @@ def test_an_absent_stat_gives_the_default():
     assert _stat({}, "PTS") == 0.0
 
 
-# -- position defaults -----------------------------------------------------
-
-
 def test_every_position_has_defaults():
     assert sorted(SKATER_DEFAULTS) == ["C", "D", "LW", "RW"]
 
@@ -186,9 +180,6 @@ def test_a_goalie_without_stats_gets_a_copy_of_the_goalie_defaults():
 def test_a_goalie_without_stats_gets_the_goalie_defaults_values():
     record = MAPPER.map_player(player(position="G"), "COL")
     assert record.goalie_attrs == GOALIE_DEFAULTS
-
-
-# -- map_player: identity fields -------------------------------------------
 
 
 def test_the_first_name_is_everything_before_the_first_space():
@@ -309,9 +300,6 @@ def test_the_player_id_is_carried_over():
     assert MAPPER.map_player(player(id=8471214), "COL").player_id == 8471214
 
 
-# -- the team index --------------------------------------------------------
-
-
 def test_san_jose_takes_slot_twenty_four():
     # **The swap.** NHL 07 puts St. Louis at 24 and San Jose at 25. Copying that
     # table writes the Sharks' roster onto the Blues and back again.
@@ -360,9 +348,6 @@ def test_the_team_index_reaches_the_record():
 def test_an_unknown_team_code_puts_the_player_on_anaheim():
     # Slot 0, silently. The source's `.get(code, 0)`, kept.
     assert MAPPER.map_player(player(), "ZZZ").team_index == 0
-
-
-# -- skater derivations ----------------------------------------------------
 
 
 def skater(**stats):
@@ -464,9 +449,6 @@ def test_a_faceoff_percentage_replaces_the_position_default():
 
 def test_no_faceoff_percentage_leaves_the_position_default():
     assert skater(PTS=1).faceoffs == SKATER_DEFAULTS["C"].faceoffs
-
-
-# -- goalie derivations ----------------------------------------------------
 
 
 def goalie(**stats):
@@ -627,9 +609,6 @@ def test_the_two_low_save_zones_differ_by_two():
     assert attrs.glove_low - attrs.stick_low == 2
 
 
-# -- select_roster ---------------------------------------------------------
-
-
 def squad(counts: dict[str, int]) -> list[Player]:
     """One player per requested position, ids running from 1."""
     out: list[Player] = []
@@ -722,9 +701,6 @@ def test_no_player_is_selected_twice():
     players = squad({"C": 8, "LW": 8, "RW": 8, "D": 10, "G": 4})
     selected = MAPPER.select_roster(players, {})
     assert len({id(p) for p in selected}) == len(selected)
-
-
-# -- generate_team_line_flags ----------------------------------------------
 
 
 def records(counts: dict[str, int]) -> list[NHL05PlayerRecord]:

@@ -1,24 +1,12 @@
 """Both games fetched through `main` with no credential of any kind.
 
-The only provider that ever took an API key is gone, and with it the
-`--api-key` flag, the `api_key` constructor parameter and the `requires_api_key`
-capability. Every other test of that removal is local: the parser refuses the
-flag, the constructor raises `TypeError`, the `list` payload has no such field.
-None of them shows a whole verb working, which is the claim that actually
-matters to a user — so this file drives `retro-roster fetch` end to end for
-`nhl94-genesis` and for `we2002` and asserts the NDJSON stream both produce.
-
-The argv in both cases carries no credential because there is no longer any way
-to spell one. That is the point: these commands are what a user now types, and
-they are complete.
+The argv carries no credential because there is no longer any way to spell one.
 
 The bodies come from `tests/fixtures/api`, recorded from the real endpoints by
-`record.py`, and are served by a transport that routes on URL — so the clients
-build their real request paths and parse their real payloads. Two bodies are
+`record.py`, and are served by a transport that routes on URL, so the clients
+build their real request paths and parse their real payloads. Two are
 synthesised rather than recorded and are marked where they are built: ESPN's
-soccer team list and the NHL club-stats document, neither of which is in the
-fixture set. Everything a player's name, position or rating is derived from is
-recorded.
+soccer team list and the NHL club-stats document.
 """
 
 import json
@@ -151,9 +139,6 @@ def _nhl94_argv(tmp_path):
     ]
 
 
-# -- WE2002, whose provider is the one that replaced the keyed client ---------
-
-
 def test_we2002_fetch_exits_zero_with_no_credential(tmp_path, soccer_wire, capsys):
     assert main(_we2002_argv(tmp_path)) == 0
 
@@ -215,9 +200,6 @@ def test_we2002_fetch_sends_no_authorization_header(tmp_path, monkeypatch, capsy
         if "key" in key.lower() or "auth" in key.lower() or "token" in key.lower()
     }
     assert sorted(credentials) == []
-
-
-# -- NHL94, which never had a key and must still not need one -----------------
 
 
 def test_nhl94_fetch_exits_zero_with_no_credential(tmp_path, hockey_wire, capsys):
