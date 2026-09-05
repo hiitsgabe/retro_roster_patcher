@@ -96,26 +96,26 @@ def test_an_absent_first_name_shortens_the_last_name_instead_of_writing_an_initi
     assert _encode_name_variable("Curry", "", 6) == b"C\x00\x00\x00"
 
 
-def test_the_literal_a_the_encoder_falls_back_to_is_unreachable():
-    """DEAD CODE, pinned: `first_bytes[0] if first_bytes else ord("A")` cannot fire.
+def test_a_forenameless_name_never_reaches_the_initial_form():
+    """The dead branch that used to invent `A.`, re-derived after its removal.
 
-    The initial form costs `len(last) + 5` bytes and the full form with no first
-    name costs `len(last) + 3`, so a budget large enough for the first is always
-    large enough for the second -- and truncation, which is the only thing that
-    changes `len(last)`, cuts it to `budget - 5` and puts the full form back
-    inside the budget. Swept rather than argued, because the argument is exactly
-    the kind that turns out to have an edge.
+    Reaching the initial form needs `full_len > budget >= abbrev_len`, and both
+    lengths are computed from the same (possibly truncated) surname:
+    `full_len = len(last) + len(first) + 3` against `abbrev_len = len(last) + 5`.
+    So the branch is reachable only when `len(first) > 2`, whatever the budget
+    and whatever the truncation did. With no forename it cannot fire, which is
+    why `first_bytes[0]` needs no fallback.
 
     Budgets start at 3; the test below says what happens under that.
     `_compute_record_limits` floors every budget at 4, so nothing here is
-    reachable through the writer.
+    reachable through the writer either.
     """
     produced = [
         _encode_name_variable("X" * length, "", budget)
         for length in range(0, 31)
         for budget in range(3, 65)
     ]
-    assert [name for name in produced if b"A." in name] == []
+    assert [name for name in produced if b"." in name] == []
     assert len(produced) == 1922
     # Not vacuous: the same sweep with a first name does reach the initial form.
     with_first = [
@@ -124,6 +124,32 @@ def test_the_literal_a_the_encoder_falls_back_to_is_unreachable():
         for budget in range(3, 65)
     ]
     assert len([name for name in with_first if b"S." in name]) == 590
+
+
+def test_a_two_letter_forename_is_written_out_rather_than_abbreviated():
+    """The exact boundary the removed fallback's deadness rests on.
+
+    `Bo` costs the same two bytes as `B.`, so the full form is never beaten and
+    the initial form is unreachable for it; at three letters it is reachable.
+    Both budgets below are the tightest that admits each form.
+    """
+    assert _encode_name_variable("Curry", "Bo", 10) == b"Curry\x00Bo\x00\x00"
+    assert _encode_name_variable("Curry", "Bob", 10) == b"Curry\x00B.\x00\x00"
+
+
+def test_no_forename_length_under_three_ever_reaches_the_initial_form():
+    """Swept, because "reachable only above two" is the whole argument."""
+    reached = {
+        len(first): any(
+            _encode_name_variable("X" * length, first, budget).endswith(
+                first[:1].encode() + b".\x00\x00"
+            )
+            for length in range(0, 31)
+            for budget in range(3, 65)
+        )
+        for first in ("", "B", "Bo", "Bob", "Bobb")
+    }
+    assert reached == {0: False, 1: False, 2: False, 3: True, 4: True}
 
 
 def test_a_budget_of_two_raises_rather_than_returning_a_short_name():
