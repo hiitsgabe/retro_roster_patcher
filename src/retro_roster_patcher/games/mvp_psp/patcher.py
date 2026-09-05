@@ -732,14 +732,14 @@ class MVPPSPPatcher(Patcher):
         `games/nhl05_ps2` and `games/nhl07_psp` write the same constant into
         `HEIG` for the same reason.
 
-        DELIBERATE DIVERGENCE -- **weight is written only when the provider
-        supplied one**, where the source wrote it unconditionally from a field
-        nothing set, so every player weighed 190 lb. `Player.weight` has existed
-        in this library's models all along and `_parse_baseball_squad` simply
-        never filled it; it now reads the same `weight` key
-        `_parse_hockey_squad` has always read, `map_batter` and `map_pitcher`
-        carry the value, and a player the provider had no weight for keeps
-        whatever the disc holds for the id he was given.
+        UPSTREAM BEHAVIOUR, KNOWN WRONG, PRESERVED DELIBERATELY -- **weight is
+        written unconditionally too**, column 10, from a
+        `MVPPlayerRecord.weight` that nothing sets, so every patched player
+        weighs 190 lb and the disc's own weights go the way its heights do.
+        `Player.weight` is filled -- `sports/espn.py`'s `_parse_baseball_squad`
+        reads the MLB roster endpoint's own figure into it -- and `map_batter`
+        and `map_pitcher` do not read it. Same argument as the height above: an
+        unverified byte is the risk, not a stale number.
 
         The secondary position is written only when the mapper produced one,
         which it never does today -- `MVPPlayerRecord.secondary_position` has no
@@ -757,6 +757,7 @@ class MVPPSPPatcher(Patcher):
                 POS_STRING_TO_NUM.get(player.primary_position, DEFAULT_POS_NUM)
             ),
             ATTRIB_HEIGHT: str(player.height),
+            ATTRIB_WEIGHT: str(player.weight),
             ATTRIB_PLATE_DISCIPLINE: str(player.plate_discipline),
             ATTRIB_BUNTING: str(player.bunting),
             ATTRIB_STEALING_AGGRESSIVE: str(player.stealing),
@@ -769,8 +770,6 @@ class MVPPSPPatcher(Patcher):
             ATTRIB_DURABILITY: str(player.durability),
             ATTRIB_STARPOWER: str(player.starpower),
         }
-        if player.weight > 0:
-            fields[ATTRIB_WEIGHT] = str(player.weight)
         if player.secondary_position:
             fields[ATTRIB_SECONDARY_POS] = str(POS_STRING_TO_NUM.get(player.secondary_position, 0))
         return fields

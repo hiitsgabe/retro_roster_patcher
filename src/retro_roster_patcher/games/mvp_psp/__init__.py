@@ -25,7 +25,8 @@ argued and labelled at the line it lives on:
     arsenal, because `map_pitcher` overwrites the stat-derived one it has just
     computed (`stat_mapper.map_pitcher`).
   * PRESERVED -- every patched player is written at 6'0" and 190 lb from two
-    fields nothing ever sets (`patcher._build_attrib_fields`).
+    fields nothing ever sets (`patcher._build_attrib_fields`). `Player.weight`
+    is filled by `sports/espn.py` and this package does not read it.
 
 The two preserved ones are wrong and known to be wrong. Nothing in this package
 has ever been checked against a retail UMD, and writing a byte the source did not

@@ -559,9 +559,10 @@ class MVPPlayerRecord:
     mapper cannot know it, because which id a player gets depends on what the
     disc already holds. Everything else comes from the provider and the mapper.
 
-    UPSTREAM BEHAVIOUR, KNOWN WRONG, PRESERVED DELIBERATELY -- `height` has no
-    producer. Nothing in this package, and nothing in the source package it came
-    from, ever assigns it, so every player written to a disc is 6'0". See
+    UPSTREAM BEHAVIOUR, KNOWN WRONG, PRESERVED DELIBERATELY -- neither `height`
+    nor `weight` has a producer. Nothing in this package, and nothing in the
+    source package it came from, ever assigns either, so every player written to
+    a disc is 6'0" and 190 lb. Both are written unconditionally; see
     `patcher._build_attrib_fields`.
     """
 
@@ -573,7 +574,7 @@ class MVPPlayerRecord:
     primary_position: str = "CF"
     secondary_position: str = ""
     height: int = 72  # inches; see the class docstring -- nothing sets this
-    weight: int = 0
+    weight: int = 190  # pounds; see the class docstring -- nothing sets this either
 
     speed: int = 50
     fielding: int = 50
