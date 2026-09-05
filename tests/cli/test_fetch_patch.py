@@ -20,6 +20,10 @@ class StubPatcher(Patcher):
     mapped: LeagueData | None = None
 
     def analyze_rom(self, rom_path):
+        # Recorded, because `cmd_patch` must NOT call this for a patcher whose
+        # `map_rosters` has nothing to receive its answer: `analyze_rom` is a
+        # whole-image read and eight of the nine games would pay it for nothing.
+        StubPatcher.calls.append(("analyze", str(rom_path)))
         return RomInfo(path=str(rom_path), size=0, game_id=self.game_id)
 
     def fetch(self, *, season, league_id=None, on_progress=None):
@@ -94,6 +98,33 @@ class PartialStubPatcher(StubPatcher):
         return data
 
 
+class CountsStubPatcher(StubPatcher):
+    """A stub shaped like `nhl94_snes`: `map_rosters` takes `roster_counts`.
+
+    `Patcher.map_rosters` is `(data, slot_mapping)` and nothing else, so a game
+    that needs a measurement off the ROM to *select* players adds a keyword-only
+    extra and publishes the measurement in `RomInfo.extra`. `cmd_patch` is the
+    caller that has to join the two up, and for a long time it did not: it
+    called `map_rosters(data, slot_mapping=...)` and every CLI run of NHL 94
+    (SNES) selected and headered 2/14/7 for all 28 slots whatever byte 17 said.
+    """
+
+    counts: object = [[2, 13, 8]] * 3
+
+    def analyze_rom(self, rom_path):
+        StubPatcher.calls.append(("analyze", str(rom_path)))
+        info = RomInfo(path=str(rom_path), size=0, game_id=self.game_id)
+        if self.counts is not None:
+            info.extra["roster_counts"] = self.counts
+        return info
+
+    def map_rosters(self, data, slot_mapping=None, *, roster_counts=None):
+        self.check_slot_mapping(slot_mapping)
+        StubPatcher.mapped = data
+        StubPatcher.calls.append(("map", len(data.teams), slot_mapping, roster_counts))
+        return MappedRosters(game_id=self.game_id, teams={0: data.teams[0] if data.teams else None})
+
+
 class SlotStubPatcher(StubPatcher):
     """A stub that declares `requires_slot_mapping`, so a mapping reaches it.
 
@@ -147,6 +178,27 @@ def partial_stub():
         yield PartialStubPatcher
     finally:
         registry._REGISTRY.pop("partial-stub-game", None)
+
+
+@pytest.fixture
+def counts_stub():
+    """The same bargain again, for the stub whose mapper reads the ROM."""
+    StubPatcher.calls = []
+    StubPatcher.fail_with = None
+    StubPatcher.mapped = None
+    CountsStubPatcher.counts = [[2, 13, 8]] * 3
+    try:
+        registry.register("counts-stub-game", platform="test", sport="test", providers=("stub",))(
+            CountsStubPatcher
+        )
+        yield CountsStubPatcher
+    finally:
+        registry._REGISTRY.pop("counts-stub-game", None)
+
+
+@pytest.fixture
+def counts_base(tmp_path):
+    return ["--game", "counts-stub-game", "--cache-dir", str(tmp_path / "cache"), "--json"]
 
 
 @pytest.fixture
@@ -521,6 +573,83 @@ def test_a_rosters_file_keeps_non_ascii_names(tmp_path, stub, base):
     )
     assert StubPatcher.mapped.teams[0].team.name == "Atlético Münchén"
     assert StubPatcher.mapped.teams[0].players[0].name == "Raúl"
+
+
+def test_the_roms_own_measurements_reach_map_rosters(tmp_path, counts_stub, counts_base):
+    # The whole point of `RomInfo.extra` crossing the fetch/patch split. Upstream
+    # read byte 17 of every team block inside `patch_rom` and used each team's
+    # own nibbles; the port splits that into two hops, and this is the CLI making
+    # the second one. Without it every run selected and headered 2/14/7.
+    rom, out = tmp_path / "in.bin", tmp_path / "out.bin"
+    rom.write_bytes(b"\x00" * 16)
+    code = main(["patch", "--rom", str(rom), "--out", str(out), "--season", "2024", *counts_base])
+    assert code == 0
+    mapped = [c for c in StubPatcher.calls if c[0] == "map"][0]
+    assert mapped[3] == [[2, 13, 8]] * 3
+
+
+def test_the_measurements_are_read_from_the_rom_the_patch_will_write(
+    tmp_path, counts_stub, counts_base
+):
+    # Not from `--out`, and not from some other image: `analyze_rom` is handed
+    # the input ROM, which is the one whose team blocks the writer edits.
+    rom, out = tmp_path / "in.bin", tmp_path / "out.bin"
+    rom.write_bytes(b"\x00" * 16)
+    main(["patch", "--rom", str(rom), "--out", str(out), "--season", "2024", *counts_base])
+    analysed = [c for c in StubPatcher.calls if c[0] == "analyze"]
+    assert analysed == [("analyze", str(rom))]
+
+
+def test_the_rom_is_measured_before_the_fetch(tmp_path, counts_stub, counts_base):
+    # Ordering, and it is worth a byte of nobody's network quota: a ROM that
+    # cannot answer should be settled before a league's worth of provider
+    # requests, exactly as `--slot-map` and `--language` already are.
+    rom, out = tmp_path / "in.bin", tmp_path / "out.bin"
+    rom.write_bytes(b"\x00" * 16)
+    main(["patch", "--rom", str(rom), "--out", str(out), "--season", "2024", *counts_base])
+    assert [c[0] for c in StubPatcher.calls] == ["analyze", "fetch", "map", "patch"]
+
+
+def test_an_image_that_publishes_no_measurements_falls_back_rather_than_failing(
+    tmp_path, counts_stub, counts_base
+):
+    # `analyze_rom` publishes nothing for an image it judges invalid, and this is
+    # not the place to argue with it: `map_rosters` would reject a list of the
+    # wrong length with `MappingError`, and "I could not measure this" is not a
+    # measurement. `patch` refuses the image a moment later on its own terms.
+    CountsStubPatcher.counts = None
+    rom, out = tmp_path / "in.bin", tmp_path / "out.bin"
+    rom.write_bytes(b"\x00" * 16)
+    code = main(["patch", "--rom", str(rom), "--out", str(out), "--season", "2024", *counts_base])
+    assert code == 0
+    mapped = [c for c in StubPatcher.calls if c[0] == "map"][0]
+    assert mapped[3] is None
+
+
+def test_an_empty_measurement_list_is_not_passed_either(tmp_path, counts_stub, counts_base):
+    # The empty list is the shape `extra.get("roster_counts")` returns when a
+    # patcher published the key and then had nothing to put under it. Passing it
+    # on is a `MappingError` about a length; not passing it is the same fallback
+    # as the key being absent, which is what it means.
+    CountsStubPatcher.counts = []
+    rom, out = tmp_path / "in.bin", tmp_path / "out.bin"
+    rom.write_bytes(b"\x00" * 16)
+    assert (
+        main(["patch", "--rom", str(rom), "--out", str(out), "--season", "2024", *counts_base]) == 0
+    )
+    mapped = [c for c in StubPatcher.calls if c[0] == "map"][0]
+    assert mapped[3] is None
+
+
+def test_a_patcher_whose_mapper_takes_no_measurements_is_never_asked_for_any(tmp_path, stub, base):
+    # The signature check comes first precisely so the other eight games pay
+    # nothing: `analyze_rom` reads the whole image, and they have no parameter to
+    # receive its answer. Measured — without the check, `patch` on every game
+    # gains one full-file read.
+    rom, out = tmp_path / "in.bin", tmp_path / "out.bin"
+    rom.write_bytes(b"\x00" * 16)
+    assert main(["patch", "--rom", str(rom), "--out", str(out), "--season", "2024", *base]) == 0
+    assert [c for c in StubPatcher.calls if c[0] == "analyze"] == []
 
 
 def test_patch_result_reports_the_counts(tmp_path, stub, base, capsys):

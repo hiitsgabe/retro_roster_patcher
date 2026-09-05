@@ -19,6 +19,7 @@ so `writer.reader.data` is the pre-write image for the writer's whole lifetime
 and asserting against it would assert nothing.
 """
 
+import json
 import subprocess
 import sys
 import textwrap
@@ -492,7 +493,13 @@ def test_a_slot_mapping_is_refused(patcher):
 
 
 def test_without_counts_every_slot_is_cut_to_the_default(patcher):
-    """The shape the CLI gets, because it calls `map_rosters` through the ABC."""
+    """The shape a caller gets when it skips the first hop.
+
+    The CLI no longer skips it -- `cli/commands._map_extras` makes the hop, and
+    `test_the_cli_threads_the_roms_counts_through_the_same_two_hops` below pins
+    that. This is still the answer for a library caller with no ROM in hand, and
+    for the CLI on an image `analyze_rom` declines to identify.
+    """
     mapped = patcher.map_rosters(_league_data(("BOS", 40)))
     record = mapped.teams[BOS_SLOT]
     assert (record.num_goalies, record.num_forwards, record.num_defensemen) == (
@@ -869,6 +876,81 @@ def test_fetch_map_and_patch_run_end_to_end(patcher, rom, tmp_path):
     assert result.players_patched == 30
     names, _ = _read_back(out, BOS_SLOT)
     assert names == [f"P{i}" for i in range(15)]
+
+
+def test_the_cli_threads_the_roms_counts_through_the_same_two_hops(rom, tmp_path):
+    """The hop `cli/commands.py` did not make, and what it cost.
+
+    `map_rosters(roster_counts=...)` is a keyword-only extra on top of the ABC's
+    signature, so a caller working through `Patcher.map_rosters` could simply not
+    pass it -- and the CLI did not, so every command-line run selected and
+    headered `DEFAULT_ROSTER_COUNTS` for all 28 slots whatever byte 17 said.
+    Upstream read byte 17 per team and used each team's own nibbles, so wiring
+    this up restores upstream's bytes rather than diverging from them. Measured
+    against upstream's own `patch_rom` on a ROM with non-default nibbles: 3 164
+    bytes of a 25-team patch differed, in every one of 25 runs; 0 after.
+
+    Slot 1's image says 13 forwards and 8 defencemen and slot 4's says 14 and 6,
+    so neither equals the 14/7 default and the two do not equal each other --
+    a run that fell back would write one number into both.
+    """
+    from retro_roster_patcher.cli.__main__ import main
+
+    rosters = tmp_path / "rosters.json"
+    rosters.write_text(
+        json.dumps(
+            {
+                "league": {"id": 1, "name": "NHL", "season": 2025},
+                "teams": [
+                    {
+                        "team": {"id": i + 1, "name": code, "code": code},
+                        # Three-character names on purpose: the fixture's region
+                        # holds 414 bytes and a record costs 10 + len(name), so
+                        # anything longer truncates the roster and the *kept*
+                        # header-count clamp starts moving these bytes too. This
+                        # test is about which counts arrived, not about the clamp.
+                        "players": [
+                            {
+                                "id": i * 100 + n,
+                                "name": f"P{n:02d}",
+                                "position": pos,
+                                "number": n + 1,
+                            }
+                            for n, pos in enumerate(["G"] * 4 + ["C"] * 20 + ["D"] * 12)
+                        ],
+                        "extra": {"leaders": {}},
+                    }
+                    for i, code in enumerate(("BOS", "CHI"))
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    out = tmp_path / "out.sfc"
+    code = main(
+        [
+            "--json",
+            "patch",
+            "--game",
+            "nhl94-snes",
+            "--rom",
+            str(rom),
+            "--out",
+            str(out),
+            "--rosters",
+            str(rosters),
+            "--cache-dir",
+            str(tmp_path / "cache"),
+        ]
+    )
+    assert code == 0
+    written = out.read_bytes()
+    bos = fixture.team_base(BOS_SLOT) + fixture.PLAYER_COUNT_OFFSET
+    chi = fixture.team_base(CHI_SLOT) + fixture.PLAYER_COUNT_OFFSET
+    assert written[bos] == (13 << 4) | 8
+    assert written[chi] == (14 << 4) | 6
+    # And the image really was patched, so neither byte is the input's by luck.
+    assert written != rom.read_bytes()
 
 
 def test_a_patched_rom_can_be_analysed_and_patched_again(patcher, rom, tmp_path):

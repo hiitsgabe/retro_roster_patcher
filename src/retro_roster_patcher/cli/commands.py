@@ -224,21 +224,60 @@ def _patch_options(game_id: str, args: argparse.Namespace, patcher: Patcher) -> 
     return {"language": language}
 
 
+def _map_extras(patcher: Patcher, rom: Path) -> dict[str, Any]:
+    """Resolve the keyword-only extras `map_rosters` takes beyond the ABC's.
+
+    `Patcher.map_rosters` is `(data, slot_mapping)` and nothing else, because it
+    must be runnable on a machine that never sees the image — `fetch` and
+    `patch` are separable, with a rosters file between them. `nhl94_snes` needs
+    one thing from the ROM anyway: byte 17 of each team block packs that team's
+    forward and defenceman counts, upstream read all 28 of them inside
+    `patch_rom` and used each team's own pair, and the port carries them across
+    the split as `RomInfo.extra["roster_counts"]` for a caller to hand back to
+    `map_rosters(roster_counts=...)`.
+
+    This is that caller. Without it `_resolve_roster_counts(None)` falls back to
+    `DEFAULT_ROSTER_COUNTS` and every CLI run wrote 2/14/7 into all 28 slots —
+    the selection *and* the header — whatever the image said. Measured against
+    upstream's own orchestrator on a ROM with non-default nibbles: 3 164 bytes
+    of a 25-team patch differed, in every run.
+
+    Duck-typed on the signature, not on the game id, and the check is first so
+    the other eight patchers pay nothing: `analyze_rom` is a whole-file read and
+    they have no parameter to receive its answer. `analyze_rom` is the same call
+    `cmd_analyze` makes, and `extra` is JSON-serialisable by design precisely so
+    it can cross the `fetch`/`patch` boundary.
+
+    A ROM `analyze_rom` judges invalid publishes no counts, and this returns
+    nothing rather than an empty list: `map_rosters` would reject a list of the
+    wrong length with `MappingError`, and "I could not measure this image" is
+    not a measurement. `patch` refuses that image a moment later on its own
+    terms, which is the refusal worth reporting.
+    """
+    if "roster_counts" not in inspect.signature(patcher.map_rosters).parameters:
+        return {}
+    counts = patcher.analyze_rom(rom).extra.get("roster_counts")
+    return {"roster_counts": counts} if counts else {}
+
+
 def cmd_patch(args: argparse.Namespace, renderer: Renderer) -> None:
     rom = Path(args.rom)
     if not rom.is_file():
         raise RomError(f"No such ROM: {rom}")
 
     patcher = build_patcher(args.game, args, renderer)
-    # Options first, then the slot map: this one costs no I/O at all, and the
-    # slot map is a file read. Both precede the fetch, so a bad flag is rejected
-    # without paying for the network round trips its data would have come from.
+    # Options first, then the slot map, then whatever the mapper needs off the
+    # ROM: the first costs no I/O at all, the second is a small file read and
+    # the third a whole-image one. All three precede the fetch, so a bad flag or
+    # an image that cannot answer is settled without paying for the network
+    # round trips its data would have come from.
     options = _patch_options(args.game, args, patcher)
     slot_mapping = _load_slot_map(args.slot_map)
+    map_extras = _map_extras(patcher, rom)
     data = _rosters_for_patch(args, patcher, renderer)
 
     renderer.status("Mapping rosters...")
-    mapped = patcher.map_rosters(data, slot_mapping=slot_mapping)
+    mapped = patcher.map_rosters(data, slot_mapping=slot_mapping, **map_extras)
 
     out = Path(args.out)
     # Before `patcher.patch`, so an unwritable `--out` costs neither the ROM

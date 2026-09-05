@@ -20,9 +20,18 @@ travel in two hops -- `analyze_rom` publishes them in
 each `NHL94TeamRecord` it emits. `patch` then reads the counts off the record
 rather than off the ROM, which is what makes "selected as 2/14/7, header written
 as 2/13/8" unrepresentable rather than merely unlikely. A caller that skips the
-first hop -- `cli/commands.py` is one, since `map_rosters` is called through the
-ABC's signature -- gets `(2, 14, 7)` for every slot, and gets a header that
-describes that.
+first hop gets `(2, 14, 7)` for every slot, and gets a header that describes
+that; `cli/commands.py` was such a caller until `_map_extras` was added there,
+and every command-line run wrote the default into all 28 slots as a result.
+
+One case still skips it, and it is worth knowing about: `analyze_rom` publishes
+the counts only when it judges the image valid, and `_looks_like_nhl94_snes`
+judges an image invalid if *any* of the 28 blocks begins with a record whose
+length word is below `MIN_RECORD_LENGTH`. `patch` accepts that image -- it does
+not repeat the structural test -- so on an image with one empty team block the
+counts silently fall back to the default for all 28 slots. The alternative is
+publishing 28 triples for an image this code cannot identify, which is 28
+assertions about a file it does not recognise.
 
 **The pointer table is at file offset 0xE25E7, in bank $9C.** That is 927 207
 bytes in, so a file has to be at least ~950 KB before a single team pointer can
@@ -358,8 +367,10 @@ class NHL94SNESPatcher(Patcher):
         back in. It is a keyword-only extra on top of the ABC's signature --
         adding one is what let this stay ROM-independent without changing
         `Patcher.map_rosters` for the other games -- so a caller working through
-        the ABC, `cli/commands.py` included, simply does not pass it and every
-        slot is cut to `DEFAULT_ROSTER_COUNTS`. What matters is that whatever
+        the ABC can simply not pass it, and then every slot is cut to
+        `DEFAULT_ROSTER_COUNTS`. `cli/commands.py` does pass it: see
+        `_map_extras` there, which duck-types on this parameter's presence and
+        is the CLI's half of the two-hop journey. What matters is that whatever
         was used is recorded on the record, because `patch` writes the header
         from that and not from the ROM.
         """
