@@ -7,8 +7,8 @@ tests. `tests/games/` constructs live `EspnClient` and `NhlApiClient` objects
 through `NHL94GenesisPatcher.__init__` and `NHL94SNESPatcher.__init__`, and a
 live `EspnClient` through `WE2002Patcher.__init__`, `NBALive95Patcher.__init__`,
 `KGJMLBPatcher.__init__` and `ISSPatcher.__init__`, and both through
-`NHL07PSPPatcher.__init__`, and conftest scoping means a fixture one directory
-down is invisible to it.
+`NHL07PSPPatcher.__init__` and `NHL05PS2Patcher.__init__`, and conftest scoping
+means a fixture one directory down is invisible to it.
 
 The guard is autouse, so the claim covers every test in the suite instead of the
 ones whose authors thought to ask for it. Arming it by request would not: of the
@@ -23,17 +23,19 @@ same exposure — 56 an `EspnClient`, 2 an `NhlApiClient`, none of them both; of
 the 100 in `tests/games/nbalive95_genesis/test_patcher.py`, 81 add it through
 `EspnClient`; of the 122 in `tests/games/kgj_mlb_snes/test_patcher.py`, 101 do;
 of the 76 in `tests/games/we2002/test_patcher.py`, 57 do; of the 103 in
-`tests/games/iss_snes/test_patcher.py`, 92 do; and of the 161 in
+`tests/games/iss_snes/test_patcher.py`, 92 do; of the 161 in
 `tests/games/nhl07_psp/test_patcher.py`, 131 do — 128 an `EspnClient`, 3 an
+`NhlApiClient`, none of them both; and of the 141 in
+`tests/games/nhl05_ps2/test_patcher.py`, 111 do — 109 an `EspnClient`, 2 an
 `NhlApiClient`, none of them both.
-Across the whole suite 618 items reach a client built with `transport=None`.
-Autouse covers 3262 of the 3270 tests a default run executes; the remaining 8
-opt out explicitly. The suite collects 3276 — `addopts` deselects
+Across the whole suite 729 items reach a client built with `transport=None`.
+Autouse covers 3776 of the 3784 tests a default run executes; the remaining 8
+opt out explicitly. The suite collects 3790 — `addopts` deselects
 `tests/test_packaging.py`'s 6, which are covered too on the run that selects
-them — so 3268 of 3276 counted that way.
+them — so 3782 of 3790 counted that way.
 
 Every number in the paragraph above moves when anyone adds a test; this is the
-eleventh commit that has had to re-derive them. Re-derive rather than adjust:
+twelfth commit that has had to re-derive them. Re-derive rather than adjust:
 `pytest --collect-only -q` prints the selected/collected pair, `pytest -m allow_default_transport
 --collect-only -q` prints the opt-out count, and the per-file figures come from a
 throwaway `-p` plugin that wraps both client `__init__`s and records which items
