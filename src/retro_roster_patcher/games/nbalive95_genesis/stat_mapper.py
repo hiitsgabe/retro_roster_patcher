@@ -1,10 +1,6 @@
-"""Stat mapping for NBA Live 95 patcher.
+"""Maps NBA season stats onto NBA Live 95's 25-99 rating scale, falling back to
+position defaults when a player has no stat line.
 
-Maps NBA player stats from ESPN API to NBA Live 95's 0-99 attribute scale.
-Uses real season stats (PTS, REB, AST, STL, BLK, FG%, 3P%, FT%, etc.)
-with position-based defaults as fallback.
-
-References:
   - https://github.com/Team-95/rom-edit
 """
 
@@ -27,19 +23,16 @@ def _clamp(val: int, lo: int = 25, hi: int = 99) -> int:
 
 
 def _scale(value: float, low: float, high: float) -> int:
-    """Map a value within [low, high] to 25-99 scale."""
+    """Map a value within [low, high] onto the game's 25-99 scale."""
     if high <= low:
         return 50
     ratio = (value - low) / (high - low)
     return _clamp(round(25 + ratio * 74))
 
 
-# Default ratings by position (25-99 scale)
+# Default ratings by position, in the ROM's rating order:
 # [goals,3pt,FT,dunk,stl,blk,oreb,dreb,pass,oaware,daware,spd,quick,jump,drib,str]
-#
-# Each value is a plain list of ints and `map_player` copies it with `list(...)`
-# before it reaches a record, so the shared-mutable-default bug the Genesis and
-# SNES NHL 94 ports both had is not present here. Do not "fix" it.
+# `map_player` copies each with `list(...)`, so no record shares one.
 POSITION_DEFAULTS = {
     POSITION_PG: [50, 50, 65, 35, 55, 30, 30, 35, 75, 60, 55, 75, 75, 45, 75, 35],
     POSITION_SG: [55, 55, 65, 50, 50, 30, 30, 35, 50, 60, 50, 65, 65, 55, 55, 40],
@@ -50,61 +43,22 @@ POSITION_DEFAULTS = {
 
 
 class NBALive95StatMapper:
-    """Maps NBA API player data to NBA Live 95 ROM attributes."""
-
     def map_player(
         self,
         player: Player,
         stats: dict | None = None,
     ) -> NBALive95PlayerRecord:
-        """Map an NBA player to an NBA Live 95 player record.
-
-        PRESERVED, and the reasoning is recorded here because `season_stats` and
-        `skin_color` / `hair_style` are the same shape of field -- unsupplied,
-        defaulted to zero, written over the cartridge's own bytes -- and are kept
-        for different reasons.
-
-        `season_stats` is never supplied, so every record leaves here with
-        `NBALive95PlayerRecord`'s default of 17 zeros and
-        `rom_writer.write_player` writes all 34 bytes of them over the 1994
-        season line the cartridge shipped with. Three things could be done with
-        those bytes and zero is the best of them:
-
-        * **Fill them from the provider.** Not possible. The 17 fields are
-          season *totals* -- games, minutes, makes, attempts, rebounds, fouls --
-          and ESPN's team-leaders endpoint publishes per-game averages. Without
-          a games-played figure, which it does not publish either, no total can
-          be recovered from an average; multiplying by a guessed games count
-          would put fabricated counting stats in a field the game displays as
-          fact.
-        * **Leave the ROM's bytes alone.** Wrong here. There *is* a null season
-          line and it is 17 zeros: a player who has not played this game's
-          season has played 0 games and scored 0 points. Leaving the bytes would
-          attribute the previous occupant's 1994 totals -- 1 000 points, 400
-          rebounds -- to whoever now holds the slot, which is the one option of
-          the three that puts a statement known to be false on the screen.
-        * **Write the zeros**, which is what happens: the honest "no season yet"
-          for a roster the patch has just replaced.
-
-        So this is a limitation of the format meeting a limitation of the
-        provider, not an error in anyone's arithmetic, and repairing it needs a
-        provider that publishes season totals rather than a change here.
-        `rom_writer.write_player`'s stat clamp is the half of it that *was*
-        repairable, and was.
-
-        Skin and hair are the other half of the comparison and the answer there
-        is different: there is no null skin tone, so writing 0 asserts something
-        false where leaving the byte asserts nothing. That write is upstream's,
-        it is known wrong, and it is kept anyway -- not because zero is right but
-        because the bytes must match an original nothing here has been validated
-        against. See `rom_writer.write_player`.
+        """`season_stats` is left at its default of 17 zeros, which the writer then
+        writes over the cartridge's 1994 season line. The ROM's 17 fields are season
+        totals and ESPN publishes per-game averages with no games-played figure, so
+        no total can be recovered; zeros are the honest null season for a roster
+        that has just been replaced.
         """
         pos_str = self._normalize_position(player.position)
         pos_byte = POSITION_TO_BYTE.get(pos_str, POSITION_SF)
 
         last, first = self._split_name(player.name)
 
-        # Height: ESPN provides height string or we default
         height = self._estimate_height(pos_str, player)
         weight = self._estimate_weight(pos_str, player)
 
@@ -125,11 +79,11 @@ class NBALive95StatMapper:
         )
 
     def _map_stats_to_ratings(self, stats: dict, pos: int) -> list[int]:
-        """Map real NBA stats to 16 ratings (25-99 scale).
+        """Map a stat line onto the 16 ratings.
 
-        ESPN NBA leaders keys (per-game averages, percentages 0-100):
-        PTS, REB, AST, STL, BLK, FG%, 3P%, FT%, ORPG, DRPG,
-        3PM, MPG, PER, RAT, DBLDBL, PFPG.
+        ESPN's NBA leaders keys are per-game averages with percentages on 0-100:
+        PTS, REB, AST, STL, BLK, FG%, 3P%, FT%, ORPG, DRPG, 3PM, MPG, PER, RAT,
+        DBLDBL, PFPG.
         """
         pts = float(stats.get("PTS", 0) or 0)
         reb = float(stats.get("REB", 0) or 0)
@@ -140,21 +94,17 @@ class NBALive95StatMapper:
         dreb = float(stats.get("DRPG", stats.get("DREB", 0)) or 0)
         to = float(stats.get("TO", stats.get("TOPG", 0)) or 0)
 
-        # ESPN percentages are 0-100, convert to 0-1
+        # ESPN percentages are 0-100
         fg_pct = float(stats.get("FG%", 0) or 0) / 100.0
         three_pct = float(stats.get("3P%", 0) or 0) / 100.0
         ft_pct = float(stats.get("FT%", 0) or 0) / 100.0
 
-        # goals (FG%): 0.380-0.550 -> 25-99
         goals = _scale(fg_pct, 0.380, 0.550)
 
-        # 3pt (3P%): 0.250-0.420 -> 25-99
         three_pt = _scale(three_pct, 0.250, 0.420)
 
-        # FT (FT%): 0.600-0.920 -> 25-99
         ft = _scale(ft_pct, 0.600, 0.920)
 
-        # Dunking: position-based + athleticism
         dunk_base = {
             POSITION_C: 55,
             POSITION_PF: 60,
@@ -164,29 +114,21 @@ class NBALive95StatMapper:
         }
         dunk = _clamp(dunk_base.get(pos, 45) + (10 if fg_pct > 0.520 else 0))
 
-        # Stealing: STL/game 0.3-2.0 -> 25-99
         stealing = _scale(stl, 0.3, 2.0)
 
-        # Blocks: BLK/game 0.1-2.5 -> 25-99
         blocks = _scale(blk, 0.1, 2.5)
 
-        # Off rebounds: OREB/game 0.3-3.5 -> 25-99
         off_reb = _scale(oreb, 0.3, 3.5)
 
-        # Def rebounds: DREB/game 1.0-9.0 -> 25-99
         def_reb = _scale(dreb, 1.0, 9.0)
 
-        # Passing: AST/game 1.0-10.0 -> 25-99
         passing = _scale(ast, 1.0, 10.0)
 
-        # Offensive awareness: PTS/game
         off_awareness = _scale(pts, 5.0, 30.0)
 
-        # Defensive awareness: STL + BLK + DREB composite
         def_composite = stl * 2 + blk * 1.5 + dreb * 0.5
         def_awareness = _scale(def_composite, 1.0, 12.0)
 
-        # Speed: position-based + steals bonus
         speed_base = {
             POSITION_PG: 75,
             POSITION_SG: 65,
@@ -197,20 +139,16 @@ class NBALive95StatMapper:
         speed_bonus = 8 if stl > 1.2 else 0
         speed = _clamp(speed_base.get(pos, 50) + speed_bonus)
 
-        # Quickness: STL + AST proxy
         quickness_val = stl * 2 + ast * 0.5
         quickness = _scale(quickness_val, 1.0, 8.0)
 
-        # Jumping: BLK + athleticism
         jump_val = blk * 2 + (5 if fg_pct > 0.500 else 0)
         jumping = _scale(jump_val, 0.5, 8.0)
 
-        # Dribbling: AST + low TO ratio
         to_ratio = to / ast if ast > 0 else 2.0
         drib_val = ast * 0.8 + max(0, 2.0 - to_ratio) * 2
         dribbling = _scale(drib_val, 1.0, 10.0)
 
-        # Strength: rebounds + position
         strength_val = reb * 0.8 + (1 if pos in (POSITION_C, POSITION_PF) else 0) * 2
         strength = _scale(strength_val, 1.0, 10.0)
 
@@ -238,39 +176,11 @@ class NBALive95StatMapper:
         players: list[Player],
         stats: dict | None = None,
     ) -> list[Player]:
-        """Build NBA Live 95 roster: 12 players.
+        """Pick 12 by minutes played: 2 PG, 2 SG, 2 SF, 2 PF, 2 C, then the 2 best
+        remaining.
 
-        Pick top 12 by minutes played, sorted by position:
-        2 PG, 2 SG, 2 SF, 2 PF, 2 C + 2 best remaining.
-
-        DELIBERATE DIVERGENCE, in code that says what it does rather than in
-        what it does. Upstream opened with
-
-            # Filter out pitchers/non-basketball positions
-            eligible = [p for p in players
-                        if self._normalize_position(p.position)
-                        in ("PG", "SG", "SF", "PF", "C")]
-            if not eligible:
-                eligible = players
-
-        and the comment was false. `_normalize_position` answers `"SF"` for
-        every string it does not recognise, so the membership test is true for
-        every player alive and the comprehension is a copy: a squad of twelve
-        goalkeepers was selected whole, in full, exactly as a squad of twelve
-        guards would be. The `if not eligible` fallback was unreachable with it,
-        since an empty comprehension needs an empty `players`, in which case the
-        two are the same empty list anyway.
-
-        The filter is replaced by the copy it was, rather than made real. Making
-        it real would drop any player whose position string this game does not
-        know -- and mapping an unknown position to small forward is a decision
-        `map_player` makes on purpose, one line away, for the same input. A
-        selection that silently discarded players the mapper is willing to map
-        would be a new behaviour introduced under a comment fix, on the argument
-        that someone might point a basketball patcher at a hockey roster.
-
-        `list(players)` and not `players` itself: the sort below is in place, and
-        upstream's fallback branch handed it the caller's own list.
+        No position filter, deliberately: `_normalize_position` answers "SF" for
+        every string it does not recognise, so one could never exclude anybody.
         """
         stats = stats or {}
 
@@ -278,14 +188,13 @@ class NBALive95StatMapper:
             ps = stats.get(str(p.id), {})
             min_val = float(ps.get("MPG", ps.get("MIN", 0)) or 0)
             pts = float(ps.get("PTS", 0) or 0)
-            # Use minutes as primary, points as tiebreaker
+            # minutes first, points as the tiebreaker
             return min_val * 100 + pts
 
         eligible = list(players)
 
         eligible.sort(key=minutes_sort, reverse=True)
 
-        # Fill by position: 2 of each
         position_targets = {"PG": 2, "SG": 2, "SF": 2, "PF": 2, "C": 2}
         selected = []
         used = set()
@@ -302,7 +211,7 @@ class NBALive95StatMapper:
                     used.add(id(p))
                     filled += 1
 
-        # Fill remaining 2 bench spots with best unused
+        # the 2 bench spots go to the best unused
         for p in eligible:
             if len(selected) >= 12:
                 break
@@ -310,7 +219,6 @@ class NBALive95StatMapper:
                 selected.append(p)
                 used.add(id(p))
 
-        # If we still don't have 12, pad from whoever's left
         for p in players:
             if len(selected) >= 12:
                 break
@@ -321,7 +229,7 @@ class NBALive95StatMapper:
         return selected[:12]
 
     def _normalize_position(self, position: str) -> str:
-        """Normalize ESPN position strings to NBA Live 95 positions."""
+        """Map an ESPN position string onto one of the game's five."""
         pos = (position or "").upper().strip()
         pos_map = {
             "C": "C",
@@ -350,7 +258,7 @@ class NBALive95StatMapper:
 
         first = parts[0]
 
-        # Skip suffixes like Jr., Sr., III, IV
+        # drop suffixes: Jr., Sr., III, IV
         last_parts = []
         for p in parts[1:]:
             if p.rstrip(".").upper() in ("JR", "SR", "II", "III", "IV"):
@@ -365,25 +273,18 @@ class NBALive95StatMapper:
         return last, first
 
     def _estimate_height(self, pos: str, player: Player) -> int:
-        """Estimate height in inches from position.
-
-        ESPN Player model doesn't have height, so use position defaults.
-        """
+        """Height in inches, guessed from position: ESPN publishes none."""
         defaults = {"PG": 74, "SG": 77, "SF": 79, "PF": 81, "C": 83}
         return defaults.get(pos, 78)
 
     def _estimate_weight(self, pos: str, player: Player) -> int:
-        """Estimate weight in lbs from position.
-
-        ESPN Player model has weight field (may be 0).
-        """
+        """Weight in lbs, falling back to a position default when ESPN has none."""
         if player.weight > 0:
             return int(player.weight)
         defaults = {"PG": 190, "SG": 205, "SF": 220, "PF": 240, "C": 255}
         return defaults.get(pos, 220)
 
     def get_team_slot(self, team_abbrev: str) -> int | None:
-        """Get NBA Live 95 ROM slot for a modern NBA team."""
         code = team_abbrev.upper()
         if code in NO_SLOT_TEAMS:
             return None

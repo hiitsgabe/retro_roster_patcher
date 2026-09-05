@@ -1,11 +1,8 @@
 """ROM writer for NBA Live 95 patcher.
 
-Writes player data to NBA Live 95 (Sega Genesis) ROM.
-Player records are variable-length: 69 fixed bytes + variable name.
-Records are packed adjacently — name must fit within the gap to
-the next record.  Big-endian format (Motorola 68000).
+Player records are variable-length: 69 fixed bytes plus a name. They are packed
+adjacently, so a name must fit the gap to the next record. Big-endian (68000).
 
-References:
   - https://github.com/Team-95/rom-edit
 """
 
@@ -36,27 +33,21 @@ from .models import (
 )
 from .rom_reader import NBALive95RomReader
 
-# Fixed portion of player record (before name)
+# fixed portion of the record, before the name
 FIXED_SIZE = OFF_NAME  # 0x45 = 69 bytes
 
 
 def _encode_name_variable(last: str, first: str, max_bytes: int) -> bytes:
-    """Encode player name to fit within max_bytes.
-
-    Format: "Lastname\\0First" or "Lastname\\0F." if space is tight.
-    Terminated by two consecutive null bytes.
-    """
+    """Encode a name into `max_bytes` as "Lastname\\0First", or "Lastname\\0F." when
+    space is tight. Terminated by two consecutive nulls."""
     last_bytes = last.encode("ascii", errors="replace")
     first_bytes = first.encode("ascii", errors="replace")
 
-    # Need: last + \0 + first_initial + . + \0\0 = minimum
-    # Or:   last + \0 + first + \0\0
     min_needed = len(last_bytes) + 1 + 2 + 2  # last + \0 + F. + \0\0
 
     if min_needed > max_bytes and len(last_bytes) > max_bytes - 5:
         last_bytes = last_bytes[: max(1, max_bytes - 5)]
 
-    # Try full first name
     full_len = len(last_bytes) + 1 + len(first_bytes) + 2  # +2 for \0\0
     if full_len <= max_bytes:
         result = bytearray(full_len)
@@ -70,7 +61,6 @@ def _encode_name_variable(last: str, first: str, max_bytes: int) -> bytes:
         result[pos + 1] = 0
         return bytes(result)
 
-    # Use first initial + period
     abbrev_len = len(last_bytes) + 1 + 2 + 2  # last + \0 + F. + \0\0
     if abbrev_len <= max_bytes:
         result = bytearray(abbrev_len)
@@ -78,24 +68,8 @@ def _encode_name_variable(last: str, first: str, max_bytes: int) -> bytes:
         pos = len(last_bytes)
         result[pos] = 0
         pos += 1
-        # DELIBERATE DIVERGENCE: upstream wrote `first_bytes[0] if first_bytes
-        # else ord("A")`, and the fallback was dead code -- it invented the
-        # initial `A.` for a player with no forename, and nothing could ever
-        # reach it.
-        #
-        # Reaching this branch at all needs `full_len > max_bytes` above and
-        # `abbrev_len <= max_bytes` here, so `full_len > abbrev_len`. Both are
-        # computed from the same, possibly-truncated `last_bytes`:
-        #
-        #     full_len   = len(last_bytes) + len(first_bytes) + 3
-        #     abbrev_len = len(last_bytes) + 5
-        #
-        # so the condition is `len(first_bytes) > 2`. The initial form is only
-        # ever chosen for a forename of three characters or more -- at two it
-        # ties with the full name and the full name has already been returned --
-        # which makes `first_bytes[0]` safe by the same inequality that gets us
-        # here, for every budget and every pair of names. Nothing about the
-        # truncation above enters the argument.
+        # Reaching this branch requires `len(first_bytes) > 2`, so `first_bytes[0]`
+        # cannot be out of range.
         result[pos] = first_bytes[0]
         result[pos + 1] = ord(".")
         pos += 2
@@ -103,34 +77,12 @@ def _encode_name_variable(last: str, first: str, max_bytes: int) -> bytes:
         result[pos + 1] = 0
         return bytes(result)
 
-    # Last resort: just last name
+    # last resort: surname only
     result = bytearray(min(len(last_bytes) + 2, max_bytes))
-    # UPSTREAM BEHAVIOUR, KNOWN WRONG, PRESERVED DELIBERATELY: the two sides of
-    # this slice assignment are indexed differently on purpose -- the left by
-    # `len(last_bytes)`, the right by `len(result) - 2`. On a `bytearray` a slice
-    # assignment whose sides differ in length *resizes* the buffer, so whenever
-    # the surname is longer than the room for it the buffer shrinks by the
-    # difference, and `result[-2]` on the next line indexes off the front of a
-    # buffer that no longer has two bytes in it. At a budget of exactly 2 that is
-    # an `IndexError` out of a function whose whole job is to fit a name into a
-    # budget. This port made both sides the same for a while and returned
-    # `b"\x00\x00"` there instead.
-    #
-    # Restored because the repair is byte-changing in principle and this project
-    # writes upstream's bytes: nothing here has been validated against a real
-    # cartridge, so a name field this port invented is a worse risk than an
-    # exception on an input no caller produces.
-    #
-    # Exhaustively measured over surnames and forenames from {a,b,c} of length
-    # 0..4 against budgets 0..15 -- 234 256 triples -- the only budget at which
-    # the two forms differ at all is 2. Budgets 0 and 1 raise `IndexError` from
-    # `result[-2]` either way, because a name field shorter than its own two-byte
-    # terminator has no encoding. Budgets of 3 or more are identical: this branch
-    # is only reached with a surname truncated to one byte or with no surname,
-    # and there `len(last_bytes) <= len(result) - 2` already, so no resize
-    # happens. `_compute_record_limits` floors every budget at 4 and
-    # `write_player` defaults to 24, so no caller in this package can reach any
-    # of the three.
+    # Upstream's behaviour, known wrong, preserved for byte fidelity: the two sides
+    # of this slice are indexed differently, so at a budget of 2 the bytearray
+    # resizes and `result[-2]` raises. No caller in this package can reach that --
+    # limits are floored at 4. Do not "fix" the indices.
     result[: len(last_bytes)] = last_bytes[: len(result) - 2]
     result[-2] = 0
     result[-1] = 0
@@ -138,22 +90,17 @@ def _encode_name_variable(last: str, first: str, max_bytes: int) -> bytes:
 
 
 class NBALive95RomWriter:
-    """Writes player data to NBA Live 95 ROM.
-
-    Player records are variable-length at pointer-referenced offsets.
-    Only the fixed portion (69 bytes) and name are written, with the
-    name sized to fit the available gap to the next record.
-    """
+    """Only the fixed 69 bytes and the name are written, the name sized to fit the
+    gap to the next record."""
 
     def __init__(self, rom_path: str, output_path: str):
         self.rom_path = rom_path
         self.output_path = output_path
         self.data: bytearray | None = None
         self.reader = NBALive95RomReader(rom_path)
-        self._record_limits: dict = {}  # (team, slot) -> max bytes for name
+        self._record_limits: dict = {}  # (team, slot) -> max name bytes
 
     def load(self) -> bool:
-        """Load ROM data and precompute record size limits."""
         if not self.reader.load():
             return False
         if not self.reader.validate():
@@ -165,11 +112,8 @@ class NBALive95RomWriter:
         return False
 
     def _compute_record_limits(self) -> None:
-        """Compute how many bytes each player's name can occupy.
-
-        Records are packed: the gap between a player's offset and
-        the next player's offset determines the max record size.
-        """
+        """Records are packed, so the gap to the next player's offset is all the
+        room a name has."""
         if not self.data:
             return
 
@@ -178,7 +122,6 @@ class NBALive95RomWriter:
             if team_addr == 0:
                 continue
 
-            # Collect all player offsets for this team, sorted
             ptrs = []
             for slot in range(PLAYERS_PER_TEAM):
                 ptr = struct.unpack_from(">I", self.data, team_addr + slot * TEAM_POINTER_SIZE)[0]
@@ -191,14 +134,14 @@ class NBALive95RomWriter:
                 if i + 1 < len(ptrs):
                     gap = ptrs[i + 1][0] - ptr
                 else:
-                    # Last player: use original name length + fixed
+                    # last player: fall back to the original record's own length
                     gap = self._original_record_size(ptr)
 
                 max_name = gap - FIXED_SIZE
                 self._record_limits[(team_idx, slot)] = max(4, max_name)
 
     def _original_record_size(self, ptr: int) -> int:
-        """Get original record size by finding end of name (two nulls)."""
+        """The record ends at the name's two-null terminator."""
         if not self.data:
             return FIXED_SIZE + 10
         pos = ptr + OFF_NAME
@@ -212,7 +155,7 @@ class NBALive95RomWriter:
         return pos - ptr
 
     def apply_patches(self) -> None:
-        """Apply checksum bypass to disable game's internal verification."""
+        """Bypass the game's internal checksum verification."""
         if not self.data:
             return
         if CHECKSUM_BYPASS_OFFSET + len(CHECKSUM_BYPASS_BYTES) <= len(self.data):
@@ -223,7 +166,6 @@ class NBALive95RomWriter:
     def write_player(
         self, team_index: int, player_slot: int, player: NBALive95PlayerRecord
     ) -> bool:
-        """Write a player record to ROM, respecting variable-length layout."""
         if not self.data or team_index >= TEAM_COUNT:
             return False
         if player_slot >= PLAYERS_PER_TEAM:
@@ -235,70 +177,35 @@ class NBALive95RomWriter:
 
         d = self.data
 
-        # Fixed fields (0x00-0x44)
+        # fixed fields, 0x00-0x44
         d[off + OFF_JERSEY] = max(0, min(99, player.jersey))
         d[off + OFF_POSITION] = max(0, min(4, player.position))
         d[off + OFF_HEIGHT] = max(0, min(255, player.height_inches))
         d[off + OFF_WEIGHT] = max(0, min(255, player.weight_lbs - 100))
         d[off + OFF_EXPERIENCE] = max(0, min(255, player.experience))
 
-        # UPSTREAM BEHAVIOUR, KNOWN WRONG, PRESERVED DELIBERATELY: both bytes are
-        # written for every player, and nothing in this package supplies either.
-        # `stat_mapper.map_player` builds the record without them, so both arrive
-        # here as `NBALive95PlayerRecord`'s default of 0 for all 324 patched
-        # players, and every patched player therefore gets the same skin tone and
-        # the same hair laid over whatever variety the 1994 image shipped with.
-        # 0 is not a "not supplied" code in either field -- it is a real tone out
-        # of 4 and a real style out of 39 -- so this asserts an appearance from
-        # nothing. ESPN publishes neither attribute and no provider here can fill
-        # them. This port skipped the two writes for a while, on the argument
-        # that the image's own per-player byte is strictly more information than
-        # one constant.
-        #
-        # It writes them the upstream way again because skipping them is a record
-        # layout no released build of this patcher ever produced. Nothing in this
-        # repository has been validated against a real dump, and a 93-byte record
-        # that differs from the one the game has actually been fed is a crash
-        # risk on hardware that outweighs a uniform-looking roster. Fidelity to
-        # the original beats correctness of the data. Do not re-add the `> 0`
-        # guards.
-        #
-        # The `max(0, ...)` halves are upstream's and are kept with them: inside
-        # the old `> 0` guard they were dead, and outside it they are what stops
-        # a negative field reaching the buffer as a wrapped byte.
+        # Upstream's behaviour, known wrong, preserved for byte fidelity: nothing
+        # supplies either field, so every patched player is written with skin tone 0
+        # and hair style 0 over whatever the 1994 image had. Do not re-add the `> 0`
+        # guards that skipped the two writes.
         d[off + OFF_SKIN] = max(0, min(3, player.skin_color))
         d[off + OFF_HAIR] = max(0, min(0x26, player.hair_style))
 
-        # Season stats (17 x 2-byte BE)
-        #
-        # DELIBERATE DIVERGENCE: the clamp is new. Upstream packed this value
-        # straight into a `>H`, alone among this method's eight numeric fields
-        # -- jersey, position, height, weight, experience, skin, hair and the 16
-        # ratings are all clamped -- so a stat above 65 535 or below 0 came out
-        # of a `bool`-returning writer as a `struct.error`, which is outside this
-        # library's exception hierarchy and reaches `patch`'s caller uncaught.
-        #
-        # Not reachable today: `stat_mapper.map_player` supplies 17 zeros and
-        # says why. It becomes reachable the moment anything starts supplying
-        # real numbers, and a season point total is a plausible thing to overrun
-        # a 16-bit field with. Clamping now rather than later is what keeps that
-        # future change from being two problems at once; it costs nothing while
-        # the values are zeros, and it is the same answer the other eight fields
-        # already give to an out-of-range number.
+        # season stats, 17 x 2-byte BE; clamped because `>H` would otherwise raise
+        # `struct.error` on a total above 65 535
         for i in range(STAT_COUNT):
             stat_val = player.season_stats[i] if i < len(player.season_stats) else 0
             struct.pack_into(">H", d, off + OFF_STATS + i * 2, max(0, min(0xFFFF, stat_val)))
 
         d[off + OFF_UNKNOWN2] = 0x00
 
-        # Ratings (16 x 1 byte, 0-99 scale)
+        # ratings, 16 x 1 byte on a 0-99 scale
         for i in range(RATING_COUNT):
             rating = player.ratings[i] if i < len(player.ratings) else 50
             d[off + OFF_RATINGS + i] = max(0, min(99, rating))
 
-        # Preserve unknown bytes 0x3B-0x44 (don't zero them)
+        # bytes 0x3B-0x44 are unknown and left alone
 
-        # Name: variable length, must fit in available gap
         max_name = self._record_limits.get((team_index, player_slot), 24)
         name_bytes = _encode_name_variable(player.name_last, player.name_first, max_name)
         d[off + OFF_NAME : off + OFF_NAME + len(name_bytes)] = name_bytes
@@ -306,10 +213,7 @@ class NBALive95RomWriter:
         return True
 
     def write_team_roster(self, team_index: int, players: list[NBALive95PlayerRecord]) -> int:
-        """Write all players for a team.
-
-        Returns number of players written.
-        """
+        """Write a team's players and return how many were written."""
         if not self.data or team_index >= TEAM_COUNT:
             return -1
 
@@ -321,11 +225,8 @@ class NBALive95RomWriter:
         return written
 
     def _fix_checksum(self) -> None:
-        """Recalculate and update the Genesis ROM header checksum.
-
-        The checksum at offset 0x18E is the 16-bit sum of all
-        big-endian words from 0x200 to end of ROM.
-        """
+        """The header checksum at 0x18E is the 16-bit sum of every big-endian word
+        from 0x200 to the end of the ROM."""
         if not self.data or len(self.data) < 0x200:
             return
         total = 0
@@ -335,7 +236,6 @@ class NBALive95RomWriter:
         struct.pack_into(">H", self.data, 0x18E, total & 0xFFFF)
 
     def finalize(self) -> bool:
-        """Write the modified ROM to output path."""
         if not self.data:
             return False
         try:

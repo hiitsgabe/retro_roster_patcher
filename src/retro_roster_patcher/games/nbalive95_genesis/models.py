@@ -1,16 +1,13 @@
 """Data models for the NBA Live 95 patcher.
 
-NBA Live 95 (Sega Genesis, 1994).
-30 teams (27 NBA + East All-Stars + West All-Stars + Slammers), 12 players per team.
-Player records are 93 bytes each with plain ASCII names.
+30 teams (27 NBA + East All-Stars + West All-Stars + Slammers), 12 players each.
+A player record is 93 bytes with a plain ASCII name.
 
-References:
   - https://github.com/Team-95/rom-edit
 """
 
 from dataclasses import dataclass, field
 
-# Re-export shared sports models
 from ...sports.models import (  # noqa: F401
     League,
     LeagueData,
@@ -20,19 +17,17 @@ from ...sports.models import (  # noqa: F401
     TeamRoster,
 )
 
-# ROM layout constants
-PLAYER_SIZE = 93  # 93 bytes per player
+PLAYER_SIZE = 93
 PLAYERS_PER_TEAM = 12
 TEAM_COUNT = 30  # 27 NBA + East AS + West AS + Slammers
-NBA_TEAM_COUNT = 27  # Only patch NBA teams (not All-Stars/Slammers)
+NBA_TEAM_COUNT = 27  # the All-Stars and Slammers are never patched
 
-# Base offsets
 TEAM_METADATA_BASE = 0x00037ECE  # M_1 through M_29
 TEAM_ROSTER_BASE = 0x0003FEB4  # T_1 through T_29
 
-# Each team roster entry has 12 x 4-byte pointers (0x00-0x2C)
+# Each team roster entry is 12 x 4-byte pointers, 0x00-0x2C
 TEAM_POINTER_SIZE = 4
-TEAM_POINTER_COUNT = 12  # 12 player slots per team
+TEAM_POINTER_COUNT = 12
 
 # Checksum bypass: replace JSR $001F9270 (6 bytes) at 0x690 with 3 NOPs.
 # The original Team-95 offset 0x691 was misaligned for 68000 and created
@@ -43,7 +38,7 @@ CHECKSUM_BYPASS_BYTES = bytes([0x4E, 0x71, 0x4E, 0x71, 0x4E, 0x71])
 JERSEY_DISPLAY_OFFSET = 0x00008E4C
 JERSEY_DISPLAY_BYTES = bytes([0x42, 0x40, 0x4E, 0x71])
 
-# Player record field offsets (within 93-byte record)
+# Field offsets within the 93-byte player record
 OFF_JERSEY = 0x00  # 1 byte
 OFF_POSITION = 0x01  # 1 byte (0=C, 1=PF, 2=SF, 3=PG, 4=SG)
 OFF_HEIGHT = 0x02  # 1 byte (value + 5 = inches)
@@ -60,7 +55,6 @@ OFF_NAME = 0x45  # 24 bytes ("LASTNAME\0FIRST" ASCII)
 
 NAME_LENGTH = 24
 
-# Position encoding
 POSITION_C = 0
 POSITION_PF = 1
 POSITION_SF = 2
@@ -186,116 +180,97 @@ NBALIVE95_TEAM_ORDER = [
     "Slammers",  # 29
 ]
 
-# Modern NBA team abbreviation -> NBA Live 95 ROM slot index.
-# Maps current 30 NBA teams to the 27 ROM slots.
-# Toronto Raptors, Memphis Grizzlies, New Orleans Pelicans have no ROM slot.
-# Franchise moves since 1994:
-#   Seattle SuperSonics -> OKC Thunder -> OKC maps to Seattle slot (24)
-#   New Jersey Nets -> Brooklyn Nets -> BKN maps to New Jersey slot (16)
-#   Washington Bullets -> Washington Wizards -> WAS maps to Washington slot (26)
-#   Charlotte Hornets (original) -> current Charlotte Hornets -> CHA maps to slot 2
+# Modern NBA team abbreviation -> ROM slot index. The 30 current teams onto 27
+# slots; Toronto, Memphis and New Orleans have none.
 #
-# Ten of these codes are aliases of another: GS/GSW, BKN/NJN, NYK/NY, SA/SAS,
-# OKC/SEA, UTA/UTAH and WAS/WSH each name one slot twice. A provider that
-# returns both spellings hands `map_rosters` two teams for one slot, which is
-# why that method guards before it assigns.
+# GS/GSW, BKN/NJN, NYK/NY, SA/SAS, OKC/SEA, UTA/UTAH and WAS/WSH each name one
+# slot twice, so a provider returning both spellings hands `map_rosters` two teams
+# for one slot, which is why that method guards before it assigns.
 MODERN_NBA_TO_NBALIVE95 = {
-    "ATL": 0,  # Atlanta Hawks
-    "BOS": 1,  # Boston Celtics
-    "CHA": 2,  # Charlotte Hornets
-    "CHI": 3,  # Chicago Bulls
-    "CLE": 4,  # Cleveland Cavaliers
-    "DAL": 5,  # Dallas Mavericks
-    "DEN": 6,  # Denver Nuggets
-    "DET": 7,  # Detroit Pistons
-    "GS": 8,  # Golden State Warriors
-    "GSW": 8,  # ESPN alternate
-    "HOU": 9,  # Houston Rockets
-    "IND": 10,  # Indiana Pacers
-    "LAC": 11,  # LA Clippers
-    "LAL": 12,  # LA Lakers
-    "MIA": 13,  # Miami Heat
-    "MIL": 14,  # Milwaukee Bucks
-    "MIN": 15,  # Minnesota Timberwolves
-    "BKN": 16,  # Brooklyn Nets (was New Jersey Nets)
-    "NJN": 16,  # Legacy abbreviation
-    "NYK": 17,  # New York Knicks
-    "NY": 17,  # ESPN alternate
-    "ORL": 18,  # Orlando Magic
-    "PHI": 19,  # Philadelphia 76ers
-    "PHX": 20,  # Phoenix Suns
-    "POR": 21,  # Portland Trail Blazers
-    "SAC": 22,  # Sacramento Kings
-    "SA": 23,  # San Antonio Spurs
-    "SAS": 23,  # ESPN alternate
-    "OKC": 24,  # OKC Thunder (was Seattle SuperSonics)
-    "SEA": 24,  # Legacy abbreviation
-    "UTA": 25,  # Utah Jazz
-    "UTAH": 25,  # ESPN alternate
-    "WAS": 26,  # Washington Wizards (was Bullets)
-    "WSH": 26,  # ESPN alternate
+    "ATL": 0,
+    "BOS": 1,
+    "CHA": 2,
+    "CHI": 3,
+    "CLE": 4,
+    "DAL": 5,
+    "DEN": 6,
+    "DET": 7,
+    "GS": 8,
+    "GSW": 8,
+    "HOU": 9,
+    "IND": 10,
+    "LAC": 11,
+    "LAL": 12,
+    "MIA": 13,
+    "MIL": 14,
+    "MIN": 15,
+    "BKN": 16,  # was New Jersey
+    "NJN": 16,
+    "NYK": 17,
+    "NY": 17,
+    "ORL": 18,
+    "PHI": 19,
+    "PHX": 20,
+    "POR": 21,
+    "SAC": 22,
+    "SA": 23,
+    "SAS": 23,
+    "OKC": 24,  # was Seattle
+    "SEA": 24,
+    "UTA": 25,
+    "UTAH": 25,
+    "WAS": 26,  # was the Bullets
+    "WSH": 26,
 }
 
-# Teams with no ROM slot (expansion after 1994)
+# Expansion teams with no ROM slot
 NO_SLOT_TEAMS = {"TOR", "MEM", "NOP", "NO"}
 
-# Team metadata offsets (within team metadata block)
-# Each team metadata entry is ~80 bytes
-TEAM_META_SIZE = 0x50  # 80 bytes per team metadata entry
-META_OFF_INITIALS = 0x30  # Team initials string
-META_OFF_COURT_NAME = 0x34  # Court name string
-META_OFF_LOCATION = 0x38  # Location string
-META_OFF_TEAM_NAME = 0x3C  # Team name string
-META_OFF_SCORING = 0x45  # Team attribute: scoring
-META_OFF_REBOUNDS = 0x46  # Team attribute: rebounds
-META_OFF_BALL_CONTROL = 0x47  # Team attribute: ball control
-META_OFF_DEFENSE = 0x48  # Team attribute: defense
-META_OFF_OVERALL = 0x49  # Team attribute: overall
-META_OFF_BG_COLOR = 0x4B  # Background color
-META_OFF_BANNER_COLOR = 0x4C  # Banner color
-META_OFF_TEXT_COLOR = 0x4D  # Text color
+# Field offsets within an 80-byte team metadata entry
+TEAM_META_SIZE = 0x50
+META_OFF_INITIALS = 0x30  # initials string
+META_OFF_COURT_NAME = 0x34  # court name string
+META_OFF_LOCATION = 0x38  # location string
+META_OFF_TEAM_NAME = 0x3C  # team name string
+META_OFF_SCORING = 0x45
+META_OFF_REBOUNDS = 0x46
+META_OFF_BALL_CONTROL = 0x47
+META_OFF_DEFENSE = 0x48
+META_OFF_OVERALL = 0x49
+META_OFF_BG_COLOR = 0x4B
+META_OFF_BANNER_COLOR = 0x4C
+META_OFF_TEXT_COLOR = 0x4D
 
 
 @dataclass
 class NBALive95PlayerRecord:
-    """Complete player record ready to write to ROM (93 bytes).
+    """A 93-byte player record.
 
-    `skin_color` and `hair_style` have no producer and are not expected to get
-    one: `stat_mapper.map_player` builds this record without them and ESPN
-    publishes no such attribute. 0 is therefore what every mapped record carries,
-    and 0 is not a "not supplied" code -- it is tone 0 of 4 and style 0 of 39.
-    `rom_writer.write_player` writes both bytes for every player regardless, as
-    upstream did, so every patched player comes out with the same skin tone and
-    the same hair. That is known wrong and preserved deliberately for byte
-    fidelity; the argument is at the lines there.
-
-    `season_stats` defaults to 17 zeros and those zeros are written too. Same
-    shape of field and the same unconditional write, but zero is also the right
-    answer there rather than only the faithful one -- see
-    `stat_mapper.NBALive95StatMapper.map_player`.
+    `skin_color` and `hair_style` have no producer, so every mapped record carries
+    0 -- tone 0 of 4 and style 0 of 39, not a "not supplied" code -- and the writer
+    writes both bytes anyway. Upstream's behaviour, known wrong, preserved for byte
+    fidelity. `season_stats` is 17 zeros and those are written too.
     """
 
     name_last: str = "PLAYER"
-    name_first: str = "A"  # Full first name or initial
+    name_first: str = "A"  # full first name or initial
     jersey: int = 0
     position: int = POSITION_SF  # 0=C, 1=PF, 2=SF, 3=PG, 4=SG
-    height_inches: int = 78  # Total height in inches (e.g. 78 = 6'6")
+    height_inches: int = 78  # 78 = 6'6"
     weight_lbs: int = 220
-    experience: int = 0  # Years in NBA
+    experience: int = 0  # years in the NBA
     skin_color: int = 0  # 0x00-0x03
     hair_style: int = 0  # 0x00-0x26
 
-    # 16 ratings (0-99 scale)
+    # 0-99 scale
     ratings: list[int] = field(default_factory=lambda: [50] * RATING_COUNT)
 
-    # Season stats (17 x 2-byte values, zeroed for new rosters)
+    # 17 x 2-byte values, zeroed for new rosters
     season_stats: list[int] = field(default_factory=lambda: [0] * STAT_COUNT)
 
 
 @dataclass
 class NBALive95TeamRecord:
-    """Complete team record for patching."""
-
     index: int
     name: str
     players: list[NBALive95PlayerRecord] = field(default_factory=list)
@@ -303,17 +278,13 @@ class NBALive95TeamRecord:
 
 @dataclass
 class NBALive95TeamSlot:
-    """An existing team slot read from the ROM."""
-
     index: int
-    name: str  # From NBALIVE95_TEAM_ORDER
-    first_player: str  # First player name for verification
+    name: str  # from NBALIVE95_TEAM_ORDER
+    first_player: str
 
 
 @dataclass
 class NBALive95RomInfo:
-    """Information about a loaded NBA Live 95 ROM."""
-
     path: str
     size: int
     team_slots: list[NBALive95TeamSlot] = field(default_factory=list)
@@ -322,8 +293,6 @@ class NBALive95RomInfo:
 
 @dataclass
 class NBALive95SlotMapping:
-    """Maps a modern NBA team to an NBA Live 95 ROM slot."""
-
     team: Team
     slot_index: int
     slot_name: str
