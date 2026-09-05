@@ -3,10 +3,13 @@
 Two facts about this mapper are worth stating before the assertions, because
 both look like bugs and only one is being treated as one:
 
-  * `speed` and `stamina` come out of the *same* lambda and go through the same
-    table, so they are equal for every player. Ported unchanged and pinned below,
-    because inventing a speed formula is a judgement about how the game should
-    play.
+  * `speed` and `stamina` come out of the *same* lambda, behind the same skip
+    predicate, and go through the same table, so they are equal for every player
+    the provider measured -- and *not* for a player who falls back to his
+    position's defaults, where all four rows separate them. Preserved and pinned
+    below, because nothing ESPN reports for a footballer measures pace, so
+    inventing a speed formula would be a judgement about how the game should
+    play rather than a defect fix.
   * `technique` is half dribbling and half passing, and ESPN measures no
     dribbling at all. The gate is `CATEGORY_OPTIONAL_INPUTS`, and it is NOT
     WE2002's rule: dropping the player from the category would leave it empty
@@ -149,11 +152,21 @@ def test_tied_values_share_a_percentile(mapper):
 
 
 def test_speed_and_stamina_are_computed_from_the_same_expression(mapper):
-    """INHERITED DEFECT, ported unchanged and reported. Both are
+    """PRESERVED, reported at the module docstring. Both are
     `minutes / max(appearances, 1)`."""
     all_stats = {i: _stats(i, minutes=100 * i, appearances=i) for i in range(1, 11)}
     percentiles = mapper._compute_percentiles(all_stats)
     assert percentiles["speed"] == percentiles["stamina"]
+
+
+def test_the_two_categories_are_gated_on_the_same_two_fields(mapper):
+    """The other half of why they cannot differ: same formula, same skip.
+
+    A player dropped from one ranking is dropped from the other, so the two
+    dicts have the same keys as well as the same values.
+    """
+    assert ISSStatMapper.CATEGORY_INPUTS["speed"] == ("minutes", "appearances")
+    assert ISSStatMapper.CATEGORY_INPUTS["stamina"] == ("minutes", "appearances")
 
 
 def test_a_players_speed_and_stamina_ratings_are_always_equal(mapper):
@@ -164,11 +177,49 @@ def test_a_players_speed_and_stamina_ratings_are_always_equal(mapper):
 
 
 def test_the_ratings_are_not_all_the_same_value(mapper):
-    """Guards the test above from being satisfied by a constant."""
+    """Guards the test above from being satisfied by a constant.
+
+    Stated as the exact set the twenty players produce, not as "more than one":
+    a mapper that collapsed the scale to two values would satisfy a bound and
+    fails this.
+    """
     all_stats = {i: _stats(i, minutes=137 * i, appearances=1) for i in range(1, 21)}
     percentiles = mapper._compute_percentiles(all_stats)
     attrs = [mapper.map_player(_player(i), all_stats[i], percentiles) for i in range(1, 21)]
-    assert len({a.speed for a in attrs}) > 1
+    assert sorted({a.speed for a in attrs}) == [1, 2, 4, 6, 8, 10, 12, 14, 16]
+
+
+def test_the_unmeasured_player_is_the_one_whose_speed_and_stamina_differ(mapper):
+    """The claim the module docstring used to overstate as "every player".
+
+    The collapse is a property of the ranking, not of the record: a player the
+    provider has no appearances for takes `_fallback_attributes` instead, whose
+    four rows all give speed and stamina different numbers. Both paths appear in
+    one call here, so this cannot pass by everyone taking the same one.
+    """
+    all_stats = {i: _stats(i, minutes=90 * i, appearances=i) for i in range(1, 6)}
+    all_stats[6] = _stats(6, appearances=0, minutes=0)
+    percentiles = mapper._compute_percentiles(all_stats)
+    measured = [
+        mapper.map_player(_player(i, "Defender"), all_stats[i], percentiles) for i in range(1, 6)
+    ]
+    assert [a.speed for a in measured] == [a.stamina for a in measured]
+    unmeasured = mapper.map_player(_player(6, "Defender"), all_stats[6], percentiles)
+    assert unmeasured.speed == 8
+    assert unmeasured.stamina == 9
+
+
+@pytest.mark.parametrize(
+    ("position", "speed", "stamina"),
+    [("Goalkeeper", 6, 8), ("Defender", 8, 9), ("Midfielder", 8, 10), ("Attacker", 10, 7)],
+)
+def test_no_fallback_row_gives_a_player_the_same_speed_and_stamina(
+    mapper, position, speed, stamina
+):
+    """All four rows, at their values, so a row that became equal fails here."""
+    attrs = mapper._fallback_attributes(_player(1, position, age=27))
+    assert attrs.speed == speed
+    assert attrs.stamina == stamina
 
 
 def test_zero_appearances_does_not_divide_by_zero(mapper):
