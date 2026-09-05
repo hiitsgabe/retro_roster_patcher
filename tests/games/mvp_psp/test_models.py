@@ -478,6 +478,56 @@ def test_no_two_teams_share_a_hash():
     assert len(set(TEAM_HASHES.values())) == TEAM_COUNT
 
 
+# `MVP_TEAM_ABBREVS` and `MVP_TEAM_ORDER` are two parallel tuples and every test
+# that reads a display name reads it back through `MVP_TEAM_ORDER` itself, so
+# swapping two of its entries changed nothing anywhere -- mutation testing
+# exchanged Oakland and Seattle and the suite stayed green while every UI in the
+# library would have shown Oakland's roster under Seattle's name. This is the
+# pairing, written out from the 2005 league rather than from either tuple.
+
+CLUB_NAMES_2005 = {
+    "ANA": "Anaheim Angels",
+    "OAK": "Oakland Athletics",
+    "SEA": "Seattle Mariners",
+    "TEX": "Texas Rangers",
+    "CWS": "Chicago White Sox",
+    "CLE": "Cleveland Indians",
+    "DET": "Detroit Tigers",
+    "KC": "Kansas City Royals",
+    "MIN": "Minnesota Twins",
+    "BAL": "Baltimore Orioles",
+    "BOS": "Boston Red Sox",
+    "NYY": "New York Yankees",
+    "TB": "Tampa Bay Devil Rays",
+    "TOR": "Toronto Blue Jays",
+    "ARI": "Arizona Diamondbacks",
+    "COL": "Colorado Rockies",
+    "LA": "Los Angeles Dodgers",
+    "SD": "San Diego Padres",
+    "SF": "San Francisco Giants",
+    "CHC": "Chicago Cubs",
+    "CIN": "Cincinnati Reds",
+    "HOU": "Houston Astros",
+    "MIL": "Milwaukee Brewers",
+    "PIT": "Pittsburgh Pirates",
+    "STL": "St. Louis Cardinals",
+    "ATL": "Atlanta Braves",
+    "FLA": "Florida Marlins",
+    "WAS": "Washington Nationals",
+    "NYM": "New York Mets",
+    "PHI": "Philadelphia Phillies",
+}
+
+
+@pytest.mark.parametrize(("code", "name"), sorted(CLUB_NAMES_2005.items()))
+def test_the_slot_an_abbreviation_names_holds_that_clubs_name(code, name):
+    assert MVP_TEAM_ORDER[MVP_ABBREV_TO_INDEX[code]] == name
+
+
+def test_every_slot_is_named_by_the_2005_table():
+    assert sorted(CLUB_NAMES_2005) == sorted(MVP_TEAM_ABBREVS)
+
+
 @pytest.mark.parametrize("code", sorted(TEAM_HASHES))
 def test_every_team_hash_is_nine_lowercase_hex_digits(code):
     # `rom_reader._looks_like_record_id` rejects an upper-case id as a header

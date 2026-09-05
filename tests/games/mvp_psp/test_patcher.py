@@ -935,6 +935,31 @@ def test_progress_reaches_one(tmp_path):
     assert seen[-1] == 1.0
 
 
+def test_teams_are_written_in_slot_order_whatever_order_the_mapping_holds(tmp_path):
+    # `targets` is sorted, and it has to be: `_HashPool` hands ids out in the
+    # `attrib` table's order, so which player inherits which career depends on
+    # the order the clubs are visited in. A `MappedRosters` that crossed a JSON
+    # boundary carries whatever order its dict was built in, and every mapping
+    # in this file happens to be built in ascending slot order -- which is why
+    # dropping the sort survived. This one is built backwards.
+    seen = []
+    patcher = make_patcher(tmp_path)
+    mapped = patcher.map_rosters(league(squads={2: full_squad(1000), 1: full_squad(2000)}))
+    backwards = MappedRosters(
+        game_id=mapped.game_id, teams={13: mapped.teams[13], 0: mapped.teams[0]}
+    )
+    patcher.patch(
+        rom_path=write_iso(tmp_path, DISC),
+        output_path=tmp_path / "out.iso",
+        rosters=backwards,
+        on_progress=lambda f, m: seen.append(m),
+    )
+    assert [m for m in seen if m.startswith("Writing ")] == [
+        "Writing Anaheim Angels (25 players)...",
+        "Writing Toronto Blue Jays (25 players)...",
+    ]
+
+
 def test_the_record_phase_ends_before_the_copy(tmp_path):
     seen = []
     patcher = make_patcher(tmp_path)
@@ -1028,6 +1053,29 @@ def test_no_roster_row_id_is_reused(tmp_path):
     _, out = patch_one(tmp_path, {1: full_squad(1000), 3: full_squad(2000)})
     table = patched_table(out, "roster")
     assert len(table) == len(set(table))
+
+
+# The assertion above cannot fail. `table` is a dict, so `set(table)` is its own
+# key set and the two lengths are equal by construction -- zero over zero, and
+# mutation testing said so by starting `roster_counter` on the highest id the
+# disc already held instead of one past it and surviving the whole suite. What a
+# reused id actually does is silently drop a row, so these count the rows.
+
+
+def test_the_roster_table_holds_every_kept_row_and_every_new_one(tmp_path):
+    _, out = patch_one(tmp_path, {1: full_squad(1000)})
+    kept = (DISC.teams - 1) * DISC.players_per_team
+    assert len(patched_table(out, "roster")) == kept + len(FULL_SQUAD_POSITIONS)
+
+
+def test_the_highest_numbered_row_the_disc_had_still_names_its_own_player(tmp_path):
+    # New ids continue past the highest the disc held, so the row *holding* that
+    # highest id -- which belongs to a club nobody patched -- is the one a
+    # counter starting one too low would overwrite first.
+    _, out = patch_one(tmp_path, {1: full_squad(1000)})
+    last_team, last_slot = DISC.teams - 1, DISC.players_per_team - 1
+    row = patched_table(out, "roster")[fixture.roster_row_id(last_team, last_slot)]
+    assert row[ROSTER_PLAYERID] == fixture.player_id(last_team, last_slot)
 
 
 def test_every_new_roster_row_names_a_player_the_patch_wrote(tmp_path):
@@ -1338,6 +1386,32 @@ def test_an_exhausted_pool_is_reported(tmp_path):
         rosters=rosters,
     )
     assert len([m for m in seen if "synthesised id" in m]) == 1
+
+
+#: A disc holding exactly one team's worth of ids, with every third player a
+#: pitcher: nine pitcher ids and sixteen batter ids. A squad of fifteen batters
+#: and ten pitchers therefore exhausts the pitcher pool by exactly one and the
+#: batter pool not at all, so the run crosses once and synthesises nothing --
+#: the tier-2-alone case, which the test below is the only one to reach.
+ONE_TEAM_DISC = fixture.DiscSpec(teams=1, players_per_team=25)
+
+
+def test_a_run_that_only_crosses_still_reports(tmp_path):
+    # `or`, not `and`. The exhausted-pool test above is a disc small enough that
+    # both tiers fire, so reporting only when both had happened survived it.
+    seen = []
+    patcher = MVPPSPPatcher(tmp_path / "cache", on_status=seen.append)
+    patcher.api = FakeApi()
+    rosters = patcher.map_rosters(league(squads={1: full_squad(1000)}))
+    patcher.patch(
+        rom_path=write_iso(tmp_path, ONE_TEAM_DISC),
+        output_path=tmp_path / "out.iso",
+        rosters=rosters,
+    )
+    assert [m for m in seen if "position pool" in m] == [
+        "1 player(s) took an id from the other position pool and 0 were given a "
+        "synthesised id; their career statistics in this game will not be their own"
+    ]
 
 
 def test_a_patch_that_does_not_degrade_says_nothing_about_it(tmp_path):
