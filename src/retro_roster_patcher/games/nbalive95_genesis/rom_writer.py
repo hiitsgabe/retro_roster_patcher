@@ -78,7 +78,25 @@ def _encode_name_variable(last: str, first: str, max_bytes: int) -> bytes:
         pos = len(last_bytes)
         result[pos] = 0
         pos += 1
-        result[pos] = first_bytes[0] if first_bytes else ord("A")
+        # DELIBERATE DIVERGENCE: upstream wrote `first_bytes[0] if first_bytes
+        # else ord("A")`, and the fallback was dead code -- it invented the
+        # initial `A.` for a player with no forename, and nothing could ever
+        # reach it.
+        #
+        # Reaching this branch at all needs `full_len > max_bytes` above and
+        # `abbrev_len <= max_bytes` here, so `full_len > abbrev_len`. Both are
+        # computed from the same, possibly-truncated `last_bytes`:
+        #
+        #     full_len   = len(last_bytes) + len(first_bytes) + 3
+        #     abbrev_len = len(last_bytes) + 5
+        #
+        # so the condition is `len(first_bytes) > 2`. The initial form is only
+        # ever chosen for a forename of three characters or more -- at two it
+        # ties with the full name and the full name has already been returned --
+        # which makes `first_bytes[0]` safe by the same inequality that gets us
+        # here, for every budget and every pair of names. Nothing about the
+        # truncation above enters the argument.
+        result[pos] = first_bytes[0]
         result[pos + 1] = ord(".")
         pos += 2
         result[pos] = 0
