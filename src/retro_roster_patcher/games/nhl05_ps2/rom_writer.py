@@ -262,22 +262,23 @@ class NHL05PS2RomWriter:
         against NHL 07's 19 -- `FNME` and `LNME` are 16-byte fields here and
         20-byte fields there. `models.NAME_FIELD_BYTES` derives it.
 
-        `WEIG` is written only when it is positive, so a provider that reports
-        no weight leaves the disc's own value alone rather than flattening the
-        player to zero pounds.
+        `WEIG` and `HEIG` are each written only when positive, so a provider
+        that reports no weight leaves the disc's own value alone rather than
+        flattening the player to zero pounds.
 
-        DELIBERATE DIVERGENCE -- `HEIG` is not written at all. The source wrote
-        it from `getattr(player, "height", 0)` against a `Player` that has no
-        `height` attribute in either the old models or this library's, so the
-        expression was `0` for every player who ever passed through it, the
-        `if player_height > 0` branch never ran, and `NHL05PlayerRecord.height`
-        kept its default of 16. The effect was that **every patched player was
-        written at the same 5'10"**, overwriting whatever the disc knew. Not
-        writing the field preserves the disc's per-player heights, which is
-        strictly more information than one constant. Restoring the write means
-        first giving `sports.models.Player` a height the providers actually
-        supply; until then there is nothing to write. `games/nhl07_psp` made the
-        same call for the same reason.
+        UPSTREAM BEHAVIOUR, KNOWN WRONG, PRESERVED DELIBERATELY -- `HEIG` is
+        written, and it is always 16. `stat_mapper.map_player` derives the
+        height from `getattr(player, "height", 0)` against a `Player` that has
+        no `height` attribute in either the old models or this library's, so
+        that expression is `0` for every player who ever passes through it, the
+        `if player_height > 0` branch never runs, and `NHL05PlayerRecord.height`
+        keeps its default. **Every patched player is written at the same
+        5'10"**, overwriting whatever the disc knew, and the disc's own
+        per-player heights are lost. This port's output has never been checked
+        against a retail DVD, and a byte sequence the source did not write is a
+        risk on hardware that no improvement to the data justifies, so the
+        constant stands. `games/nhl07_psp` writes the same constant for the
+        same reason.
         """
         spbt = tdb.get_table("SPBT")
         if spbt is None or record_idx >= spbt.capacity:
@@ -293,6 +294,8 @@ class NHL05PS2RomWriter:
         }
         if player.weight > 0:
             values["WEIG"] = player.weight
+        if player.height > 0:
+            values["HEIG"] = player.height
 
         spbt.write_record(record_idx, values)
 

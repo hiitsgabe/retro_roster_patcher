@@ -229,21 +229,23 @@ class NHL07PSPRomWriter:
         and to `nhlbioatt.tdb`, and the second of those need not have the same
         capacity as the first.
 
-        `WEIG` is written only when it is positive, so a provider that reports
-        no weight leaves the disc's own value alone rather than flattening the
-        player to zero pounds.
+        `WEIG` and `HEIG` are each written only when positive, so a provider
+        that reports no weight leaves the disc's own value alone rather than
+        flattening the player to zero pounds.
 
-        DELIBERATE DIVERGENCE -- `HEIG` is not written at all. The source wrote
-        it from `getattr(player, "height", 0)` against a `Player` that has no
-        `height` attribute in either the old models or this library's, so the
-        expression was `0` for every player who ever passed through it, the
-        `if player_height > 0` branch never ran, and `NHL07PlayerRecord.height`
-        kept its default of 16. The effect was that **every patched player was
-        written at the same 5'10"**, overwriting whatever the disc knew. Not
-        writing the field preserves the disc's per-player heights, which is
-        strictly more information than one constant. Restoring the write means
-        first giving `sports.models.Player` a height the providers actually
-        supply; until then there is nothing to write.
+        UPSTREAM BEHAVIOUR, KNOWN WRONG, PRESERVED DELIBERATELY -- `HEIG` is
+        written, and it is always 16. `stat_mapper.map_player` derives the
+        height from `getattr(player, "height", 0)` against a `Player` that has
+        no `height` attribute in either the old models or this library's, so
+        that expression is `0` for every player who ever passes through it, the
+        `if player_height > 0` branch never runs, and `NHL07PlayerRecord.height`
+        keeps its default. **Every patched player is written at the same
+        5'10"**, overwriting whatever the disc knew, and the disc's own
+        per-player heights are lost. It would be one line to stop writing the
+        field, and one more to give `sports.models.Player` a real height -- but
+        this port's output has never been checked against a retail UMD, and a
+        byte sequence the source did not write is a risk on hardware that no
+        improvement to the data justifies. So the constant stands.
         """
         spbt = tdb.get_table("SPBT")
         if spbt is None or record_idx >= spbt.capacity:
@@ -259,6 +261,8 @@ class NHL07PSPRomWriter:
         }
         if player.weight > 0:
             values["WEIG"] = player.weight
+        if player.height > 0:
+            values["HEIG"] = player.height
 
         spbt.write_record(record_idx, values)
 

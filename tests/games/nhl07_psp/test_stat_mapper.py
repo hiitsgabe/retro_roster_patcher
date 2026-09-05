@@ -21,11 +21,14 @@ from retro_roster_patcher.games.nhl07_psp.models import (
 )
 from retro_roster_patcher.games.nhl07_psp.stat_mapper import (
     ATTR_MAX,
+    DEFAULT_HEIGHT,
     DEFAULT_JERSEY,
     DEFAULT_WEIGHT,
     GOALIE_DEFAULTS,
     HAND_LEFT,
     HAND_RIGHT,
+    HEIGHT_BASE_INCHES,
+    HEIGHT_MAX,
     MAX_PLAYERS,
     SKATER_DEFAULTS,
     NHL07StatMapper,
@@ -56,6 +59,21 @@ def player(pid=1, name="Connor McDavid", position="C", **kw):
     )
     fields.update(kw)
     return Player(**fields)
+
+
+class _WithHeight:
+    """A `Player` that also carries a `height`, which no provider model does.
+
+    `map_player` reads its input by attribute, so delegating is enough. This
+    exists only to drive the height branch that the real models make dead.
+    """
+
+    def __init__(self, wrapped, height):
+        self._wrapped = wrapped
+        self.height = height
+
+    def __getattr__(self, name):
+        return getattr(self._wrapped, name)
 
 
 # -- _clamp and _scale -----------------------------------------------------
@@ -341,11 +359,40 @@ def test_mutating_one_defaulted_players_attributes_leaves_the_other_alone():
     assert b.skater_attrs.speed == SKATER_DEFAULTS["C"].speed
 
 
-def test_a_record_has_no_height_attribute():
-    # The source carried one, wrote it from a `Player` attribute that has never
-    # existed, and so flattened every patched player to the same height. See
-    # `rom_writer.write_player_bio`.
-    assert hasattr(NHL07PlayerRecord(), "height") is False
+def test_every_mapped_player_gets_the_same_constant_height():
+    # PINS UPSTREAM FIDELITY DELIBERATELY, and this is the bug itself: the
+    # height comes from `getattr(player, "height", 0)` against a `Player` that
+    # has never had the attribute, so the derivation below it is dead and every
+    # patched player is written at `DEFAULT_HEIGHT`. Preserved because the
+    # source put these bytes on a disc. See `rom_writer.write_player_bio`.
+    tall = MAPPER.map_player(player(pid=1, position="D"), "BOS")
+    small = MAPPER.map_player(player(pid=2, position="G"), "TOR")
+    assert [tall.height, small.height] == [DEFAULT_HEIGHT, DEFAULT_HEIGHT]
+
+
+def test_a_provider_player_has_no_height_for_the_derivation_to_read():
+    # Why the test above holds. `getattr`'s default is the only value that
+    # expression can produce, so the `inches - 66` branch is unreachable.
+    assert hasattr(player(pid=1), "height") is False
+
+
+def test_the_height_derivation_still_encodes_inches_when_it_is_given_some():
+    # The dead branch, driven directly by a stand-in that does carry a height.
+    # Nothing in this library can reach it; it is here so the constant above is
+    # read as a consequence of the missing input and not as the encoding being
+    # absent.
+    stand_in = _WithHeight(player(pid=1, position="D"), 78)
+    assert MAPPER.map_player(stand_in, "BOS").height == 78 - HEIGHT_BASE_INCHES
+
+
+def test_the_height_derivation_clamps_a_giant_to_the_five_bit_ceiling():
+    stand_in = _WithHeight(player(pid=1, position="D"), 200)
+    assert MAPPER.map_player(stand_in, "BOS").height == HEIGHT_MAX
+
+
+def test_the_height_derivation_floors_someone_shorter_than_the_base():
+    stand_in = _WithHeight(player(pid=1, position="D"), 60)
+    assert MAPPER.map_player(stand_in, "BOS").height == 0
 
 
 # -- skater stat mapping ---------------------------------------------------

@@ -404,14 +404,15 @@ def test_a_bio_write_leaves_the_records_index_alone(tmp_path):
     assert _write_and_read(tmp_path, 3, SKATER)["INDX"] == fixture.player_id_for(team, row)
 
 
-def test_a_bio_write_leaves_the_height_the_disc_shipped(tmp_path):
-    # DELIBERATE DIVERGENCE. The source wrote `HEIG` from
-    # `getattr(player, "height", 0)` against a `Player` with no `height`, so the
-    # value was always the record's default and every patched player came out at
-    # the same height. Not writing it keeps the disc's own.
-    flat = (3 * fixture.SPBT_STRIDE + fixture.SPBT_SHIFT) % fixture.PLAYER_COUNT
-    team, row = divmod(flat, fixture.ROWS_PER_TEAM)
-    disc = fixture.disc_bio_values(team, row, height=29)
+def test_a_bio_write_stamps_the_records_constant_height_over_the_discs(tmp_path):
+    # PINS UPSTREAM FIDELITY DELIBERATELY. This is upstream's behaviour and it
+    # is known wrong: `stat_mapper.map_player` derives the height from
+    # `getattr(player, "height", 0)` against a `Player` with no `height`, so
+    # `NHL07PlayerRecord.height` is always its default and every patched player
+    # is flattened to that one encoded height. The disc's own per-player value
+    # is lost. Do not "fix" this by dropping the write -- writing a byte
+    # sequence the source did not write is a hardware risk this project will not
+    # take on output that has never been checked against a retail UMD.
     from pathlib import Path
 
     writer = prepared(tmp_path, fixture.DiscSpec(height=29))
@@ -425,14 +426,14 @@ def test_a_bio_write_leaves_the_height_the_disc_shipped(tmp_path):
         fixture.SPBT_RECORD_SIZE,
         3,
     )
-    assert record["HEIG"] == disc["HEIG"]
+    assert record["HEIG"] == SKATER.height
 
 
-def test_the_height_the_disc_shipped_is_not_the_default(tmp_path):
-    # Pins the test above. With the disc height at 16 -- the value the source's
-    # dead write always produced -- "kept the disc's height" and "wrote the
-    # default" are the same bytes and the assertion proves nothing.
-    assert fixture.DEFAULT_DISC_HEIGHT != 29
+def test_the_height_the_disc_shipped_is_not_the_one_the_record_carries(tmp_path):
+    # Pins the test above. With the disc shipping the record's own default,
+    # "stamped the record's constant" and "left the disc alone" are the same
+    # bytes and the assertion proves nothing.
+    assert fixture.DiscSpec(height=29).height != SKATER.height
 
 
 def test_a_zero_weight_leaves_the_discs_weight_alone(tmp_path):
@@ -443,6 +444,27 @@ def test_a_zero_weight_leaves_the_discs_weight_alone(tmp_path):
     disc_weight = fixture.disc_bio_values(team, row)["WEIG"]
     written = _write_and_read(tmp_path, 3, replace(SKATER, weight=0))
     assert written["WEIG"] == disc_weight
+
+
+def test_a_zero_height_leaves_the_discs_height_alone(tmp_path):
+    # The `if player.height > 0` guard the source wrote. Unreachable through
+    # `map_player`, which never produces a zero, but it is the source's guard
+    # and it is what stops a hand-built record blanking the field.
+    from dataclasses import replace
+    from pathlib import Path
+
+    writer = prepared(tmp_path, fixture.DiscSpec(height=29))
+    writer.write_player_bio(master(writer), 3, replace(SKATER, height=0))
+    writer.rebuild_and_write({TDB_MASTER: master(writer)})
+    record = read_back(
+        Path(writer.output_path),
+        TDB_MASTER,
+        "SPBT",
+        fixture.SPBT_FIELDS,
+        fixture.SPBT_RECORD_SIZE,
+        3,
+    )
+    assert record["HEIG"] == 29
 
 
 def test_a_zero_weight_still_writes_the_rest_of_the_record(tmp_path):
