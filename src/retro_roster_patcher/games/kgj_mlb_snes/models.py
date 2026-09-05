@@ -110,10 +110,11 @@ RELIEVERS_PER_TEAM = 5
 
 # Roster-type nibble written into the high half of record byte 0x19. The reader
 # decodes the same byte back: 3 = batter, 1 = starting pitcher, 0 = relief
-# pitcher. `KGJRomWriter.write_team_roster` chooses between them purely from the
-# slot index, and these three constants are what `patcher.map_rosters` uses to
-# stamp each record instead -- see `rom_writer.write_team_roster` for why the
-# stamping moved.
+# pitcher. Upstream chose between them purely from the slot index, in
+# `KGJRomWriter.write_team_roster`; `patcher.map_rosters` stamps each record with
+# one instead, taken from the group `select_roster_groups` put the player in.
+# `rom_writer.write_team_roster` says why the stamping moved and
+# `patcher._roster_types_for_groups` says why the slot index is not the source.
 ROSTER_TYPE_BATTER = 0x30
 ROSTER_TYPE_STARTER = 0x10
 ROSTER_TYPE_RELIEVER = 0x00

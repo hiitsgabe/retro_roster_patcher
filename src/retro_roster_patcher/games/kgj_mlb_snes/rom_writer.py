@@ -256,9 +256,13 @@ class KGJRomWriter:
         reloaded and handed to `patch` more than once under this library's
         architecture, and a writer that edits its input makes the second call's
         result depend on the first. `patcher.map_rosters` stamps `roster_type`
-        when it builds each record instead, from the same
-        `BATTERS_PER_TEAM`/`STARTERS_PER_TEAM` boundaries, and this method only
-        reads the field.
+        when it builds each record instead, and this method only reads the field.
+
+        Not from the same boundaries, either: it takes the nibble from the group
+        `stat_mapper.select_roster_groups` put the player in, so that on a
+        roster short of fifteen non-pitchers the nibble at byte 0x19 still
+        agrees with the record layout `write_player` picks from `is_pitcher`.
+        See `patcher._roster_types_for_groups`.
         """
         if not self.data or team_index >= TEAM_COUNT:
             return -1

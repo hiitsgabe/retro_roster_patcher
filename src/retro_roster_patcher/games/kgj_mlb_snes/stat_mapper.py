@@ -243,17 +243,47 @@ class KGJStatMapper:
         players: list[Player],
         stats: dict | None = None,
     ) -> list[Player]:
-        """Build KGJ roster with proper slot ordering.
+        """The three groups of `select_roster_groups`, concatenated.
 
-        Returns 25 players ordered:
+        Returns up to 25 players ordered:
           [0-14]  = batters (C, 1B, 2B, 3B, SS, LF, CF, RF, DH + bench)
           [15-19] = starting pitchers (sorted by wins)
           [20-24] = relief pitchers (closer first, then setup)
 
-        Those three counts are the *maxima*, not guarantees. A team with fewer
-        than 15 non-pitchers returns a shorter list and every pitcher after them
-        shifts down, so slot index and player kind stop agreeing. `patch` writes
-        `roster_type` from the slot index regardless, exactly as upstream did.
+        Those three counts are the *maxima*, not guarantees, and where they are
+        not met the slot index stops saying what kind of player is in it. A
+        caller that needs the kind must ask `select_roster_groups` and not
+        arithmetic on the index; `patcher.map_rosters` does.
+        """
+        batters, starters, relievers = self.select_roster_groups(players, stats)
+        return batters + starters + relievers
+
+    def select_roster_groups(
+        self,
+        players: list[Player],
+        stats: dict | None = None,
+    ) -> tuple[list[Player], list[Player], list[Player]]:
+        """The roster as `(batters, starters, relievers)`, each already ordered.
+
+        DELIBERATE DIVERGENCE, in shape rather than in output: the source had
+        only the concatenated list, and both of its callers then recovered the
+        kind of a player by comparing his index against `BATTERS_PER_TEAM` and
+        `STARTERS_PER_TEAM`. That is only correct while all three groups are
+        full. A team with 12 non-pitchers puts its first three starting pitchers
+        in slots 12, 13 and 14, and the index says "batter" for all three; one
+        with three genuine starters and seven relievers has two relievers
+        promoted into the rotation, and the index says "starter" for both --
+        which is right -- while a kind read off the provider's position would
+        say "reliever".
+
+        Neither the index nor the position is the fact wanted. The group is, and
+        it is known here and nowhere else, so it is returned rather than
+        reconstructed. `select_roster` still answers the flat list.
+
+        The three groups are the same players in the same order the source
+        produced, so for any roster that fills all three -- every complete
+        major-league squad -- concatenating them is byte-for-byte the source's
+        answer.
         """
         stats = stats or {}
 
@@ -311,7 +341,7 @@ class KGJStatMapper:
         batters.sort(key=batter_sort, reverse=True)
         selected_batters = self._select_position_players(batters)
 
-        return selected_batters + selected_starters + selected_relievers
+        return selected_batters, selected_starters, selected_relievers
 
     def _select_position_players(self, batters: list[Player]) -> list[Player]:
         """Select 15 batters filling required positions.

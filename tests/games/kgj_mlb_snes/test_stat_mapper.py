@@ -557,6 +557,28 @@ def test_a_squad_with_too_few_batters_returns_a_short_roster(mapper):
     assert len(selected) == 6 + STARTERS_PER_TEAM + RELIEVERS_PER_TEAM
 
 
+def test_the_groups_concatenate_to_the_flat_roster(mapper):
+    batters, starters, relievers = mapper.select_roster_groups(_squad())
+    assert batters + starters + relievers == mapper.select_roster(_squad())
+
+
+def test_the_groups_of_a_full_squad_are_fifteen_five_and_five(mapper):
+    batters, starters, relievers = mapper.select_roster_groups(_squad())
+    assert [len(batters), len(starters), len(relievers)] == [
+        BATTERS_PER_TEAM,
+        STARTERS_PER_TEAM,
+        RELIEVERS_PER_TEAM,
+    ]
+
+
+def test_a_short_batting_group_is_visible_in_the_groups(mapper):
+    # The fact the flat list loses. Six batters, so slots 6, 7 and 8 hold
+    # starting pitchers while the slot layout calls them batter slots -- and
+    # only the group split says which they are.
+    batters, starters, relievers = mapper.select_roster_groups(_squad(batters=6))
+    assert [len(batters), len(starters), len(relievers)] == [6, 5, 5]
+
+
 def test_a_short_batting_group_shifts_the_pitchers_down(mapper):
     selected = mapper.select_roster(_squad(batters=6))
     assert mapper.is_pitcher(selected[6]) is True

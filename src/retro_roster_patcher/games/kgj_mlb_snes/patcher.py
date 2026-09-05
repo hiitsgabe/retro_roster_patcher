@@ -120,19 +120,62 @@ def _team_data_fits(reader: KGJRomReader) -> bool:
 
 
 def _roster_type_for_slot(slot: int) -> int:
-    """Which roster-type nibble a record in this slot carries.
+    """Which roster-type nibble the *slot layout* assigns to a slot.
+
+    Kept, and no longer the way a record's nibble is chosen. It states the
+    layout `rom_writer.write_team_roster` documents -- fifteen batter slots,
+    then five starter slots, then five reliever slots -- which is a fact about
+    the ROM and worth having in one place. What it is not is a way to find out
+    what kind of player is *in* a slot; see `_roster_types_for_groups`.
 
     The single home of a fact upstream encoded twice, in two files, one of them
     as a magic number. `KGJRomWriter.write_team_roster` derived it from
     `BATTERS_PER_TEAM` and `STARTERS_PER_TEAM` while mutating the caller's
     records; `patcher.py` separately wrote `is_starter = idx < 20`, hardcoding
-    the sum of those two constants. Both now come from here.
+    the sum of those two constants.
     """
     if slot < BATTERS_PER_TEAM:
         return ROSTER_TYPE_BATTER
     if slot < BATTERS_PER_TEAM + STARTERS_PER_TEAM:
         return ROSTER_TYPE_STARTER
     return ROSTER_TYPE_RELIEVER
+
+
+def _roster_types_for_groups(batters: int, starters: int, relievers: int) -> list[int]:
+    """One roster-type nibble per selected player, from the group he came from.
+
+    DELIBERATE DIVERGENCE. Upstream stamped this nibble from the slot index --
+    `_roster_type_for_slot` -- and separately derived `is_starter` as
+    `idx < 20`. Both are correct only while all three groups are full.
+
+    A team with twelve non-pitchers is not a hypothetical shape; it is what a
+    provider returns for a club mid-teardown, or any club at all if the roster
+    endpoint is partial. Its first three starting pitchers land in slots 12, 13
+    and 14, and upstream then wrote them a batter nibble. That is not a
+    debatable roster-construction choice, it is a record that contradicts
+    itself: `rom_writer.write_player` dispatches on `KGJPlayerRecord.is_pitcher`
+    and writes a *pitcher*-shaped record -- byte 0x1D set to the pitcher flag
+    0x20, wins, losses, ERA, saves -- while byte 0x19's high nibble says 3, and
+    `rom_reader.read_player` reads that nibble back as `is_pitcher = False`. The
+    two bytes cannot both be right, and no reading of the format makes them so.
+
+    Taking the nibble from the group `select_roster_groups` put the player in
+    makes them agree, and it is also right in the opposite case, where a team
+    with three genuine starters has two relievers promoted into the rotation:
+    they are in the starters group, so they are typed and rated as starters,
+    which is what the promotion was for. Reading the kind off the provider's
+    position instead would undo it.
+
+    BYTE-IDENTITY: for any roster that fills all three groups -- every complete
+    major-league squad, and every fixture in this suite that does not
+    deliberately shorten one -- this returns exactly what
+    `_roster_type_for_slot` returned for each index.
+    """
+    return (
+        [ROSTER_TYPE_BATTER] * batters
+        + [ROSTER_TYPE_STARTER] * starters
+        + [ROSTER_TYPE_RELIEVER] * relievers
+    )
 
 
 @register(
@@ -318,15 +361,21 @@ class KGJMLBPatcher(Patcher):
             if slot is None or not 0 <= slot < TEAM_COUNT:
                 continue
             leaders = roster.extra.get("leaders") or {}
-            selected = self.mapper.select_roster(roster.players, leaders)
+            # The groups and not the flat list: the kind of a player is the
+            # group he came from, and on a roster short of fifteen non-pitchers
+            # his slot index no longer says it. `_roster_types_for_groups`
+            # carries the argument and the byte-identity claim.
+            batters, starters, relievers = self.mapper.select_roster_groups(roster.players, leaders)
+            selected = batters + starters + relievers
+            roster_types = _roster_types_for_groups(len(batters), len(starters), len(relievers))
 
             records: list[KGJPlayerRecord] = []
-            for index, player in enumerate(selected):
+            for player, roster_type in zip(selected, roster_types, strict=True):
                 player_stats = leaders.get(str(player.id), {})
-                # `is_starter` from the slot boundaries rather than upstream's
-                # `idx < 20`, which hardcoded `BATTERS_PER_TEAM +
-                # STARTERS_PER_TEAM`. Same value, one source.
-                is_starter = index < BATTERS_PER_TEAM + STARTERS_PER_TEAM
+                # From the group too, and not upstream's `idx < 20`. Identical
+                # on a full roster: slots 15-19 are the starters group and
+                # 20-24 the relievers.
+                is_starter = roster_type == ROSTER_TYPE_STARTER
                 if self.mapper.is_pitcher(player):
                     record = self.mapper.map_pitcher(
                         player,
@@ -338,7 +387,7 @@ class KGJMLBPatcher(Patcher):
                 # Stamped here, where the record is built. Upstream's
                 # `KGJRomWriter.write_team_roster` did it, mutating records the
                 # caller still held; see the DELIBERATE DIVERGENCE note there.
-                record.roster_type = _roster_type_for_slot(index)
+                record.roster_type = roster_type
                 records.append(record)
 
             # `MODERN_MLB_TO_KGJ` maps 30 codes onto 28 slots: CWS/CHW both name
