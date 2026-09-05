@@ -1,15 +1,14 @@
 """`MVPStatMapper`: ESPN rosters and team leaders onto MVP's 0-99 scale.
 
-**This is where the first of the three inherited bugs was**, and it has its own
-section. `map_pitcher` ended with an unconditional
-`rec.pitches = self._default_pitches(is_starter)` *outside* the `if stats:`
-branch, so the velocity and control `_apply_pitcher_stats` had just derived from
-strikeouts, WHIP and ERA were discarded and every pitcher in the game shipped
-with the same 50/50 arsenal. Twelve lines and four statistics were dead code.
-
-**And the third one is half here**: `Player.weight` was never read, so every
-patched player weighed the record's default. The other half is in
-`_parse_baseball_squad`, which never filled the field.
+**This is where the first of the three inherited bugs is**, and it has its own
+section. `map_pitcher` ends with an unconditional
+`rec.pitches = self.default_pitches(is_starter)` *outside* the `if stats:`
+branch, so the velocity and control `_apply_pitcher_stats` has just derived from
+strikeouts, WHIP and ERA are discarded and every pitcher in the game ships with
+the same 50/50 arsenal. Twelve lines and four statistics are dead code. It is
+upstream's, it is preserved deliberately, and the tests in that section say so
+one by one -- they drive `_apply_pitcher_stats` where they need the derivation,
+because that is the only place it survives.
 
 Nothing here touches the ROM or the network. The whole module is arithmetic on
 two inputs, and `map_rosters` runs on a machine that has never seen the ISO.
@@ -33,6 +32,7 @@ from retro_roster_patcher.games.mvp_psp.models import (
     RELIEVERS_PER_TEAM,
     STARTERS_PER_TEAM,
     MVPPitch,
+    MVPPlayerRecord,
 )
 from retro_roster_patcher.games.mvp_psp.stat_mapper import (
     BATS_LEFT,
@@ -62,6 +62,18 @@ MAPPER = MVPStatMapper()
 
 def player(pid=1, name="Ichiro Suzuki", position="RF", number=51, **kwargs):
     return Player(id=pid, name=name, position=position, number=number, **kwargs)
+
+
+def derived_arsenal(stats, *, is_starter=True):
+    """The arsenal `_apply_pitcher_stats` computes before `map_pitcher` drops it.
+
+    Every velocity and control assertion below goes through here rather than
+    through `map_pitcher`, because `map_pitcher` overwrites the result -- see
+    the module docstring and the label on that method. Reading these through
+    `map_pitcher` would assert a constant.
+    """
+    record = MVPPlayerRecord(is_pitcher=True)
+    return MAPPER._apply_pitcher_stats(record, stats, is_starter).pitches
 
 
 # -- the numbers, written out ----------------------------------------------
@@ -627,24 +639,47 @@ def test_a_pitcher_with_no_stats_gets_the_fifty_fifty_arsenal():
     assert record.pitches == MAPPER.default_pitches(True)
 
 
-def test_a_pitcher_with_stats_keeps_the_derived_arsenal():
-    # DELIBERATE DIVERGENCE, and this is bug 1. The source overwrote it here.
+def test_a_pitcher_with_stats_gets_the_fifty_fifty_arsenal_too():
+    # PINS UPSTREAM FIDELITY DELIBERATELY, and this is bug 1: the derivation
+    # runs and is then thrown away by the unconditional assignment at the end of
+    # `map_pitcher`. Do not delete that line -- it changes `pitchattrib`'s
+    # movement, control and velocity columns on every patched pitcher, and no
+    # disc has ever checked this port's output.
     record = MAPPER.map_pitcher(
         player(position="SP"), {"K": 250, "WHIP": 0.90, "ERA": 2.0}, is_starter=True
     )
-    assert record.pitches != MAPPER.default_pitches(True)
+    assert record.pitches == MAPPER.default_pitches(True)
+
+
+def test_the_arsenal_the_stats_derived_was_not_the_fifty_fifty_one():
+    # Pins the test above. Without this, "a pitcher with stats gets the default"
+    # is also satisfied by a derivation that happened to produce the default.
+    assert derived_arsenal({"K": 250, "WHIP": 0.90, "ERA": 2.0}) != MAPPER.default_pitches(True)
+
+
+def test_two_pitchers_with_different_statistics_get_the_same_arsenal():
+    # PINS UPSTREAM FIDELITY DELIBERATELY: the flattening, stated at the level a
+    # disc sees. A Cy Young winner and a replacement-level arm are written with
+    # identical movement, control and velocity.
+    first = MAPPER.map_pitcher(player(position="SP"), {"K": 250, "WHIP": 0.9}, is_starter=True)
+    second = MAPPER.map_pitcher(player(position="SP"), {"K": 90, "WHIP": 1.5}, is_starter=True)
+    assert first.pitches == second.pitches
+
+
+def test_the_two_derivations_those_pitchers_produced_did_differ():
+    # Pins the test above: the inputs really do drive different arsenals, so
+    # "the same" is the overwrite and not two identical stat lines.
+    assert derived_arsenal({"K": 250, "WHIP": 0.9}) != derived_arsenal({"K": 90, "WHIP": 1.5})
 
 
 def test_a_high_strikeout_pitcher_throws_harder_than_a_low_one():
-    power = MAPPER.map_pitcher(player(position="SP"), {"K": 250}, is_starter=True)
-    finesse = MAPPER.map_pitcher(player(position="SP"), {"K": 60}, is_starter=True)
-    assert power.pitches[0].velocity > finesse.pitches[0].velocity
+    assert derived_arsenal({"K": 250})[0].velocity > derived_arsenal({"K": 60})[0].velocity
 
 
 def test_a_low_whip_pitcher_has_better_control_than_a_high_one():
-    sharp = MAPPER.map_pitcher(player(position="SP"), {"WHIP": 0.90, "ERA": 2.0}, is_starter=True)
-    wild = MAPPER.map_pitcher(player(position="SP"), {"WHIP": 1.60, "ERA": 6.0}, is_starter=True)
-    assert sharp.pitches[0].control > wild.pitches[0].control
+    sharp = derived_arsenal({"WHIP": 0.90, "ERA": 2.0})
+    wild = derived_arsenal({"WHIP": 1.60, "ERA": 6.0})
+    assert sharp[0].control > wild[0].control
 
 
 def test_a_starter_and_a_reliever_read_the_same_strikeouts_on_different_scales():
@@ -652,9 +687,9 @@ def test_a_starter_and_a_reliever_read_the_same_strikeouts_on_different_scales()
     # reliever, so the same 90 is near the bottom of one scale and the top of
     # the other. Every other velocity test here holds the role fixed, so
     # exchanging the two ranges outright survived them.
-    starter = MAPPER.map_pitcher(player(position="SP"), {"K": 90}, is_starter=True)
-    reliever = MAPPER.map_pitcher(player(position="RP"), {"K": 90}, is_starter=False)
-    assert (starter.pitches[0].velocity, reliever.pitches[0].velocity) == (26, 99)
+    starter = derived_arsenal({"K": 90}, is_starter=True)
+    reliever = derived_arsenal({"K": 90}, is_starter=False)
+    assert (starter[0].velocity, reliever[0].velocity) == (26, 99)
 
 
 def test_a_pitcher_with_statistics_runs_at_thirty():
@@ -706,23 +741,15 @@ def test_control_reads_the_walks_and_hits_the_right_way_round():
     # the two whichever way the WHIP term is read -- so inverting the WHIP
     # subtraction survived it. Here ERA is held and only WHIP moves: a 0.90 WHIP
     # tops its scale and a 1.60 bottoms it, leaving the ERA term to halve alone.
-    sharp = MAPPER.map_pitcher(player(position="SP"), {"WHIP": 0.90, "ERA": 2.0}, is_starter=True)
-    wild = MAPPER.map_pitcher(player(position="SP"), {"WHIP": 1.60, "ERA": 2.0}, is_starter=True)
-    assert (sharp.pitches[0].control, wild.pitches[0].control) == (99, 49)
+    sharp = derived_arsenal({"WHIP": 0.90, "ERA": 2.0})
+    wild = derived_arsenal({"WHIP": 1.60, "ERA": 2.0})
+    assert (sharp[0].control, wild[0].control) == (99, 49)
 
 
 def test_the_derived_velocity_reaches_every_pitch_in_the_arsenal():
-    power = MAPPER.map_pitcher(player(position="SP"), {"K": 250}, is_starter=True)
-    finesse = MAPPER.map_pitcher(player(position="SP"), {"K": 60}, is_starter=True)
-    assert [p.velocity for p in power.pitches] != [p.velocity for p in finesse.pitches]
-
-
-def test_two_pitchers_with_different_statistics_get_different_arsenals():
-    # The zero-over-zero check on bug 1: a fix that derived one arsenal and
-    # gave it to everybody would pass every test above but this one.
-    first = MAPPER.map_pitcher(player(position="SP"), {"K": 250, "WHIP": 0.9}, is_starter=True)
-    second = MAPPER.map_pitcher(player(position="SP"), {"K": 90, "WHIP": 1.5}, is_starter=True)
-    assert first.pitches != second.pitches
+    power = derived_arsenal({"K": 250})
+    finesse = derived_arsenal({"K": 60})
+    assert [p.velocity for p in power] != [p.velocity for p in finesse]
 
 
 def test_a_pitcher_with_no_stats_is_a_pitcher():

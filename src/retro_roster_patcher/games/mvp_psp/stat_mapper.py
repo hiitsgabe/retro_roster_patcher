@@ -286,18 +286,25 @@ class MVPStatMapper:
     ) -> MVPPlayerRecord:
         """One pitcher.
 
-        DELIBERATE DIVERGENCE -- **the arsenal is no longer overwritten.** The
-        source ended this method with an unconditional
+        UPSTREAM BEHAVIOUR, KNOWN WRONG, PRESERVED DELIBERATELY -- **the arsenal
+        is overwritten on the way out.** The last statement of this method is an
+        unconditional
 
-            rec.pitches = self._default_pitches(is_starter)
+            rec.pitches = self.default_pitches(is_starter)
 
-        *outside* the `if stats:` branch, after `_apply_pitcher_stats` had
-        already computed a velocity from strikeouts and a control from WHIP and
-        ERA and stored them through `_default_pitches(is_starter, vel,
-        control)`. The second assignment discarded the first, so every pitcher
-        in the game shipped with the same 50-velocity, 50-control arsenal and
-        the whole derivation -- twelve lines, four statistics -- was dead code.
-        Here the arsenal is set once, on whichever branch ran.
+        *outside* the `if stats:` branch, so it runs after `_apply_pitcher_stats`
+        has computed a velocity from strikeouts and a control from WHIP and ERA
+        and stored them through `default_pitches(is_starter, vel, control)`. The
+        second assignment discards the first. Every pitcher in the game ships
+        with the same 50-velocity, 50-control arsenal, and the whole derivation
+        -- twelve lines and four statistics in `_apply_pitcher_stats` -- is dead
+        code that this port keeps running and keeps throwing away.
+
+        Deleting one line would fix it and change `pitchattrib`'s movement,
+        control and velocity columns on every patched pitcher. This port's output
+        has never been checked against a retail UMD, and a byte the source did
+        not write is a hardware risk that better ratings do not buy off, so the
+        line stays and so does the derivation behind it.
         """
         rec = MVPPlayerRecord(
             first_name=self.first_name(player.name),
@@ -311,14 +318,17 @@ class MVPStatMapper:
         )
 
         if stats:
-            return self._apply_pitcher_stats(rec, stats, is_starter)
+            rec = self._apply_pitcher_stats(rec, stats, is_starter)
+        else:
+            rec.stamina = DEFAULT_STARTER_STAMINA if is_starter else DEFAULT_RELIEVER_STAMINA
+            rec.pickoff = DEFAULT_PICKOFF
+            rec.speed = 35
+            rec.fielding = 40
+            rec.contact_rhp, rec.power_rhp = PITCHER_NO_STATS_BATTING
+            rec.contact_lhp, rec.power_lhp = PITCHER_NO_STATS_BATTING
 
-        rec.stamina = DEFAULT_STARTER_STAMINA if is_starter else DEFAULT_RELIEVER_STAMINA
-        rec.pickoff = DEFAULT_PICKOFF
-        rec.speed = 35
-        rec.fielding = 40
-        rec.contact_rhp, rec.power_rhp = PITCHER_NO_STATS_BATTING
-        rec.contact_lhp, rec.power_lhp = PITCHER_NO_STATS_BATTING
+        # The overwrite. See the label on this method: it is outside the branch
+        # above on purpose, because that is where the source put it.
         rec.pitches = self.default_pitches(is_starter)
         return rec
 
@@ -358,6 +368,11 @@ class MVPStatMapper:
         # *lower* ERA both raise it.
         control = (_scale(1.60 - whip, 0.0, 0.70) + _scale(6.0 - era, 0.0, 4.0)) // 2
 
+        # DEAD, and knowingly so: `map_pitcher` overwrites this with
+        # `default_pitches(is_starter)` on the way out, so the velocity and
+        # control computed just above never reach a disc. Kept because the
+        # source computed them and threw them away in exactly this shape; see
+        # the label on `map_pitcher`.
         rec.pitches = self.default_pitches(is_starter, velocity, control)
 
         rec.contact_rhp, rec.power_rhp = PITCHER_WITH_STATS_BATTING
