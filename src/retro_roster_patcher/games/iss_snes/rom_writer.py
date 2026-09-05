@@ -1160,14 +1160,36 @@ class ISSRomWriter:
 
         # Write name data (capped at budget for safety).
         #
-        # INHERITED DEFECT, ported unchanged: the `break` above gives up once
-        # every patched name is down to three characters, and if the total is
-        # still over budget this slice cuts the tail off mid-blob while the
-        # pointer table written just above still names the addresses the blobs
-        # would have had. The teams past the cut then draw whatever follows.
-        # Fixing it means either refusing the patch or falling back to the
-        # original names, and choosing between those needs a real ROM's own
-        # blob sizes, which this repository has none of.
+        # INHERITED DEFECT, ported unchanged and PRESERVED after review.
+        #
+        # The shrink loop above gives up -- `longest_idx < 0`, `break` -- once
+        # every patched name is down to three characters. If the total is still
+        # over budget, this slice cuts the tail off in the middle of a blob,
+        # while the pointer table written twelve lines up already names the
+        # addresses all 27 blobs *would* have had. So the run reports success
+        # and the cartridge is left with one truncated display list and a run of
+        # teams whose pointers address bytes this method never wrote. Nothing
+        # signals it: the method returns `None` on every path.
+        #
+        # The floor is not far-fetched arithmetic. Twenty-seven three-character
+        # names encode to 25 bytes each, 675 in all, so any image whose
+        # `min_addr` sits within 675 bytes of `_MAX_NAME_TEXT_ADDR` reaches this
+        # slice with every patched team already at its minimum.
+        #
+        # Not repaired, and the asymmetry with its own sibling is the reason
+        # rather than an oversight. `write_name_tiles`, 60 lines below, faces
+        # the same question -- new blobs that will not fit a bounded region --
+        # and raises `RomError`. It can, because `NAME_TILES_CAPACITY` is a
+        # property of a region *this patcher* creates by displacement, so
+        # "will not fit" is decidable from this repository's own constants. Here
+        # the budget is `_MAX_NAME_TEXT_ADDR - min(orig_addrs)`: half of it is
+        # read out of the image, and whether a genuine ISS cartridge can ever
+        # produce a `min_addr` that tight is exactly the fact no test here can
+        # establish. Raising would convert a cosmetic corruption of the
+        # selection screen into a refusal to patch at all, on an image nobody in
+        # this repository has seen; falling back to the original names would
+        # silently ignore what the operator asked for. Both are guesses, and
+        # `tests/games/iss_snes/test_rom_writer.py` pins what happens instead.
         self._seek(min_addr)
         self._file.write(bytes(all_data[:budget]))
 
