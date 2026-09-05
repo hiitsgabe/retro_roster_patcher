@@ -8,14 +8,36 @@ ISS has a simpler attribute system than WE2002:
 
 Players are mapped from the provider's data using percentile ranking.
 
-**`speed` and `stamina` are always equal, for every player.** Both are computed
-from `minutes / appearances` by the same lambda in `_compute_percentiles` and
-both are then mapped by `_percentile_to_speed`, so the two numbers cannot
-differ. Upstream's own comment on the first of them says "Proxy: endurance",
-which is what stamina is; ISS speed is not derived from anything the provider
-reports. This is almost certainly unintended and it is ported unchanged, because
-inventing a speed formula is a judgement about how the game should play and not
-a defect fix. The four attributes therefore carry three degrees of freedom.
+**`speed` and `stamina` are equal for every player the provider measured.**
+Both are computed from `minutes / appearances` by the same lambda in
+`_compute_percentiles`, over the same skip predicate -- `CATEGORY_INPUTS` names
+the same two fields for both -- and both are then mapped by
+`_percentile_to_speed`, so on that path the two numbers cannot differ. Upstream's
+own comment on the first of them says "Proxy: endurance", which is what stamina
+is; ISS speed is not derived from anything the provider reports. The four
+attributes therefore carry three degrees of freedom there.
+
+*Not* on the other path, and this docstring used to say "for every player" and
+be wrong about it. A player with no stats, or with no appearances, gets
+`_fallback_attributes`, and all four of `FALLBACK_ATTRS`' rows give speed and
+stamina different values -- a goalkeeper 6 and 8, a defender 8 and 9, a
+midfielder 8 and 10, an attacker 10 and 7 -- which the age adjustment then moves
+by different amounts again. So the collapse is a property of the ranking, not of
+the record.
+
+PRESERVED, and not for want of looking. There is nothing to build an ISS speed
+out of. `PlayerStats` carries twenty fields and ESPN, the only provider this
+game has, fills every one of them except duels and dribbles -- see
+`SOCCER_UNSUPPLIED_STATS` -- and none of what remains measures pace: goals,
+assists, shots, passes, pass accuracy, tackles, interceptions, blocks, fouls
+either way, cards, appearances, minutes, lineups. Dribbles are the one field on
+the object that would come close and they are exactly one of the two ESPN does
+not report. Deriving speed from anything else on that list would be a judgement
+about how the game ought to play, dressed as a defect fix, applied to 405
+players on every patched cartridge and checkable by nobody.
+
+`_speed_to_rom`'s own defect, which sent the value 8 to the slowest byte in the
+game, is a separate thing and is fixed; see `rom_writer`.
 """
 
 from __future__ import annotations
@@ -185,8 +207,14 @@ class ISSStatMapper:
         return ISSPlayerAttributes(
             speed=self._percentile_to_speed(percentiles.get("speed", {}).get(pid, 50)),
             shooting=self._percentile_to_shooting(percentiles.get("shooting", {}).get(pid, 50)),
-            # The same lambda and the same table as `speed` above; see the module
-            # docstring. Left as it is, not silently unified.
+            # The same lambda, the same skip predicate and the same table as
+            # `speed` above, so this line and that one cannot produce different
+            # numbers. PRESERVED rather than unified into one call: the two
+            # categories stay separate so that a provider which one day measures
+            # something ISS could call speed has a place to be read, and so that
+            # the collapse is visible in the code rather than hidden behind a
+            # shared variable. See the module docstring for why nothing this
+            # provider reports is that measurement.
             stamina=self._percentile_to_speed(percentiles.get("stamina", {}).get(pid, 50)),
             technique=self._percentile_to_shooting(percentiles.get("technique", {}).get(pid, 50)),
         )
