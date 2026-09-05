@@ -431,11 +431,11 @@ def test_no_espn_leaders_key_reaches_the_season_stat_block(mapper):
 
 
 def test_a_mapped_record_carries_no_appearance_at_all(mapper):
-    """ESPN publishes neither, so both stay at the "not supplied" default.
+    """ESPN publishes neither, so both stay at the dataclass default of 0.
 
-    `rom_writer.write_player` reads that 0 as "not supplied" and leaves the
-    image's own byte alone; it used to write it, and every patched player came
-    out with the same skin and the same hair.
+    `rom_writer.write_player` writes that 0 -- upstream's behaviour, restored
+    deliberately -- so every patched player comes out with the same skin and the
+    same hair. See the comment there.
     """
     record = mapper.map_player(_player(), {"PTS": 30.0})
     assert record.skin_color == 0

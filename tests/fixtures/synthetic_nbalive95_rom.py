@@ -235,8 +235,8 @@ def player_university(team: int, slot: int) -> int:
 def player_skin(team: int, slot: int) -> int:
     """1-3, never 0. `map_player` never sets skin, so every patched record
     arrives at the writer carrying 0; against a filler of 0 there would be no
-    telling "the writer left this byte alone" -- which is what it now does --
-    from "the writer wrote the record's zero", which is what it used to do."""
+    telling "the writer wrote the record's zero" -- which is what it does, as
+    upstream did -- from "the writer left this byte alone"."""
     return 1 + slot % 3
 
 

@@ -453,8 +453,9 @@ def test_skin_and_hair_are_clamped_to_the_ranges_the_game_defines(rom, out):
 
 
 # Slot 1 of team 4, whose fixture skin is 2: neither the 0 a mapped record
-# carries nor the 3 the clamp saturates at, so "left the image's byte alone" is
-# distinguishable from both "wrote the record's value" and "wrote the ceiling".
+# carries nor the 3 the clamp saturates at, so "overwrote the image's byte with
+# the record's 0" is distinguishable from both "left the image alone" and "wrote
+# the ceiling".
 _SKIN_TEAM = 4
 _SKIN_SLOT = 1
 
@@ -465,29 +466,37 @@ def test_the_slot_these_tests_use_has_a_skin_that_is_neither_zero_nor_the_ceilin
     assert fixture.player_hair(_SKIN_TEAM, _SKIN_SLOT) == 6
 
 
-def test_a_record_that_supplies_no_skin_leaves_the_images_own_tone_alone(rom, out):
-    """DELIBERATE DIVERGENCE: 0 is read as "not supplied", not as tone 0.
+def test_a_record_that_supplies_no_skin_overwrites_the_images_own_tone_with_zero(rom, out):
+    """PINS UPSTREAM FIDELITY DELIBERATELY. Do not "fix" this back.
 
-    Upstream wrote `max(0, min(3, 0))` here for every patched player.
+    0 is not a "not supplied" code -- it is tone 0 of 4 -- and every record
+    `stat_mapper.map_player` builds carries it. Upstream wrote
+    `max(0, min(3, 0))` here for all 324 patched players, so they all came out
+    with the same face. This port guarded the write on `> 0` for a while; the
+    guard is gone again because a 93-byte record that differs from the one the
+    game has actually been fed is a crash risk on hardware, and nothing in this
+    repository has been validated against a real dump. See
+    `rom_writer.write_player`.
     """
     writer = _loaded(rom, out)
     writer.write_player(_SKIN_TEAM, _SKIN_SLOT, _record(skin_color=0))
     decoded = fixture.decode_player_record(
         writer.data, fixture.player_offset(_SKIN_TEAM, _SKIN_SLOT)
     )
-    assert decoded["skin"] == 2
+    assert decoded["skin"] == 0
 
 
-def test_a_record_that_supplies_no_hair_leaves_the_images_own_style_alone(rom, out):
+def test_a_record_that_supplies_no_hair_overwrites_the_images_own_style_with_zero(rom, out):
+    """PINS UPSTREAM FIDELITY DELIBERATELY -- see the skin test above."""
     writer = _loaded(rom, out)
     writer.write_player(_SKIN_TEAM, _SKIN_SLOT, _record(hair_style=0))
     decoded = fixture.decode_player_record(
         writer.data, fixture.player_offset(_SKIN_TEAM, _SKIN_SLOT)
     )
-    assert decoded["hair"] == 6
+    assert decoded["hair"] == 0
 
 
-def test_a_skin_the_caller_did_supply_is_still_written(rom, out):
+def test_a_skin_the_caller_did_supply_is_written(rom, out):
     """1, not the 2 the image holds: the write is a difference and not a no-op."""
     writer = _loaded(rom, out)
     writer.write_player(_SKIN_TEAM, _SKIN_SLOT, _record(skin_color=1))
@@ -497,7 +506,7 @@ def test_a_skin_the_caller_did_supply_is_still_written(rom, out):
     assert decoded["skin"] == 1
 
 
-def test_a_hair_style_the_caller_did_supply_is_still_written(rom, out):
+def test_a_hair_style_the_caller_did_supply_is_written(rom, out):
     writer = _loaded(rom, out)
     writer.write_player(_SKIN_TEAM, _SKIN_SLOT, _record(hair_style=0x11))
     decoded = fixture.decode_player_record(
@@ -506,8 +515,27 @@ def test_a_hair_style_the_caller_did_supply_is_still_written(rom, out):
     assert decoded["hair"] == 0x11
 
 
-def test_skipping_the_skin_byte_does_not_skip_the_experience_byte_beside_it(rom, out):
-    """The two skipped bytes are 0x06 and 0x07, between experience and the stats."""
+def test_a_negative_skin_is_floored_at_zero(rom, out):
+    """Upstream's `max(0, ...)`, which the `> 0` guard had made dead."""
+    writer = _loaded(rom, out)
+    writer.write_player(_SKIN_TEAM, _SKIN_SLOT, _record(skin_color=-4))
+    decoded = fixture.decode_player_record(
+        writer.data, fixture.player_offset(_SKIN_TEAM, _SKIN_SLOT)
+    )
+    assert decoded["skin"] == 0
+
+
+def test_a_negative_hair_style_is_floored_at_zero(rom, out):
+    writer = _loaded(rom, out)
+    writer.write_player(_SKIN_TEAM, _SKIN_SLOT, _record(hair_style=-4))
+    decoded = fixture.decode_player_record(
+        writer.data, fixture.player_offset(_SKIN_TEAM, _SKIN_SLOT)
+    )
+    assert decoded["hair"] == 0
+
+
+def test_zeroing_skin_and_hair_does_not_reach_the_bytes_beside_them(rom, out):
+    """The two bytes are 0x06 and 0x07, between experience and the stats."""
     writer = _loaded(rom, out)
     writer.write_player(_SKIN_TEAM, _SKIN_SLOT, _record(experience=13, skin_color=0, hair_style=0))
     decoded = fixture.decode_player_record(
@@ -518,12 +546,12 @@ def test_skipping_the_skin_byte_does_not_skip_the_experience_byte_beside_it(rom,
     assert decoded["university"] == fixture.player_university(_SKIN_TEAM, _SKIN_SLOT)
 
 
-def test_a_whole_mapped_roster_keeps_the_twelve_appearances_the_image_shipped_with(rom, out):
-    """The claim the divergence is for: patched players no longer look identical.
+def test_a_whole_mapped_roster_comes_out_with_one_appearance_for_all_twelve(rom, out):
+    """PINS UPSTREAM FIDELITY DELIBERATELY. This is the defect, and it is kept.
 
     A record straight out of `map_player` carries 0 for both fields. Twelve of
-    them are written over team 4, and the image's own hair styles -- which are
-    twelve distinct values here -- survive it.
+    them are written over team 4, whose image hair styles are twelve distinct
+    values, and all twelve become style 0.
     """
     writer = _loaded(rom, out)
     for slot in range(12):
@@ -532,8 +560,8 @@ def test_a_whole_mapped_roster_keeps_the_twelve_appearances_the_image_shipped_wi
         fixture.decode_player_record(writer.data, fixture.player_offset(4, slot))["hair"]
         for slot in range(12)
     ]
-    assert after == [fixture.player_hair(4, slot) for slot in range(12)]
-    assert len(set(after)) == 12
+    assert after == [0] * 12
+    assert fixture.player_hair(4, 0) != fixture.player_hair(4, 1)
 
 
 def test_the_season_stats_written_are_the_seventeen_zeros_every_mapped_record_carries(rom, out):
