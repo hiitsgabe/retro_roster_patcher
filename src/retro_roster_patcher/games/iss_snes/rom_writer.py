@@ -12,37 +12,34 @@ Player data (abilities, number, hair, special) is a 6-byte interleaved block.
 Kit colors use SNES BGR555 (15-bit, little-endian).
 
 This is not a field writer with a table of offsets. Four things in it are ROM
-hacking, and none of them is reviewable by reading:
+hacking:
 
 **It patches 65816 machine code.** `write_name_tiles` moves the in-game team-name
-tile blobs out of bank $89 and into a free `0xFF` region at 0x17680, and then
-overwrites one byte at each of the ten addresses in `_DISPLACEMENT_PATCH_POINTS`
-so the code that loads them reads bank $82 instead. Those ten addresses are the
-operand bytes of ten instructions in one exact build of the game. **Nothing in
-this package checks the ROM's version**, and no check here could: the bytes being
-overwritten are not read first, so a different revision is patched just as
-willingly and crashes on the team-select screen. `rom_reader.signature_ok` is the
-nearest thing to a guard and it is a pointer-table shape test, not a build test.
+tile blobs out of bank $89 into a free `0xFF` region at 0x17680, then overwrites
+one byte at each of the ten addresses in `_DISPLACEMENT_PATCH_POINTS` so the code
+that loads them reads bank $82 instead. Those addresses are operand bytes of one
+exact build, they are never read before being written, and nothing in this
+package checks the ROM's version, so another revision is patched just as
+willingly and crashes on the team-select screen.
 
-**It compresses.** `_konami_compress_literal` emits the game's own format --
-a 2-byte little-endian total length, then `0x80 | count` control bytes each
+**It compresses.** `_konami_compress_literal` emits the game's own format -- a
+2-byte little-endian total length, then `0x80 | count` control bytes each
 followed by up to 31 literal bytes -- but only the literal command, never a back
-reference. So its output is *larger* than the data the game shipped, which is
-why the tile blobs have to be relocated at all rather than written back in place.
+reference, so its output is *larger* than the data the game shipped. That is why
+the tile blobs are relocated rather than written back in place.
 
 **It rewrites three pointer tables in three different encodings.**
-`_encode_p40000` and `_encode_p17000` both bias the high byte by 0x80, because
-their targets are read through a SNES address with bit 15 set; `_encode_p48000`
-does not, because the flag-tile table stores a raw 16-bit offset from 0x40000.
-The three are not interchangeable and each is used for exactly one table.
+`_encode_p40000` and `_encode_p17000` bias the high byte by 0x80, because their
+targets are read through a SNES address with bit 15 set; `_encode_p48000` does
+not, because the flag-tile table stores a raw 16-bit offset from 0x40000. They
+are not interchangeable; each serves exactly one table.
 
-**It renders a bitmap font.** `_TILE_FONT` is 38 glyphs of hand-written pixels,
-`_render_name_tiles` lays them out proportionally into an 8x32 grid with a
-one-pixel gap it drops when the name is too wide, and `_serialize_2bpp`
-interleaves that into the four 8x8 SNES tiles the game draws. A second, unrelated
-font -- `_char_top_tile` / `_char_bottom_tile` plus `_NAME_CHAR_WIDTHS` -- drives
-the *selection screen* name, which is a display list of tile ids and x offsets
-rather than a bitmap.
+**It renders a bitmap font.** `_TILE_FONT` is hand-written pixels,
+`_render_name_tiles` lays them proportionally into an 8x32 grid with a one-pixel
+gap it drops when the name is too wide, and `_serialize_2bpp` interleaves that
+into four 8x8 SNES tiles. A second, unrelated font -- `_char_top_tile` /
+`_char_bottom_tile` plus `_NAME_CHAR_WIDTHS` -- drives the *selection screen*
+name, a display list of tile ids and x offsets rather than a bitmap.
 """
 
 from __future__ import annotations
@@ -65,7 +62,7 @@ from .models import (
     name_storage_index,
 )
 
-# -- Absolute byte offsets (headerless .sfc) ---------------------------------
+# Offsets below are absolute and headerless.
 
 # Player names: 8 bytes per player, stored in TEAM_NAME_ORDER
 _OFS_PLAYER_NAMES = 0x3B62C
@@ -93,10 +90,9 @@ _OFS_GK_RANGE2 = 0x2F2E7  # GK kit, range 2 (8 teams, 24 bytes each)
 _OUTFIELD_KIT_STRIDE = 32
 _GK_KIT_STRIDE = 24
 
-# Hair/skin colors sit 12 bytes before the kit data in the same blocks.
-# Declared for the record: no method in this class writes them, and the two
-# outfield kit writers stop after 16 of the 32 bytes precisely so they are left
-# alone.
+# Hair/skin colors sit 12 bytes before the kit data in the same blocks. Nothing
+# here writes them: the outfield kit writers stop after 16 of the 32 bytes
+# precisely so these are left alone.
 _OFS_HAIR_SKIN1_RANGE1 = 0x2EA2F  # = 0x2EA3B - 12
 _OFS_HAIR_SKIN1_RANGE2 = 0x2F0DF  # = 0x2F0EB - 12
 _OFS_HAIR_SKIN2_RANGE1 = 0x2ECAF  # = 0x2ECBB - 12
@@ -192,7 +188,7 @@ _DESC_BANK_SNES_BASE = 0x8000
 _OFS_TEAM_NAME_TEXT_PTRS = 0x39DAE  # 2 bytes per team, 27 teams
 _MAX_NAME_TEXT_ADDR = 0x44478  # must not overwrite extra entries at 0x44478+
 
-# -- Kit color team orderings ------------------------------------------------
+# Kit colour team orderings, disjoint from TEAM_ENUM_ORDER.
 _KIT_RANGE1_TEAMS = [
     "Germany",
     "Italy",
@@ -230,28 +226,20 @@ _KIT_RANGE2_TEAMS = [
 _GK_RANGE1_TEAMS = _KIT_RANGE1_TEAMS[:18]
 
 
-# -- Team name text character widths (pixels) --------------------------------
+# Team name text character widths, in pixels.
 _NAME_CHAR_WIDTHS = {"I": 7, ".": 7, "M": 8, "N": 8, "T": 8, "W": 8}
 _NAME_SPACE_WIDTH = 3
 _NAME_DEFAULT_WIDTH = 9
 _MAX_NAME_WIDTH = 70
 
-# -- Shooting/technique value table (3-bit -> odd values 1-15) ---------------
+# Shooting/technique value table: 3-bit index -> odd values 1-15.
 _SHOOTING_VALUES = [1, 3, 5, 7, 9, 11, 13, 15]
 
 
 def _build_char_to_byte() -> dict[str, int]:
     """The ISS font's character-to-byte table.
 
-    DELIBERATE DIVERGENCE, and it moves no byte. Upstream declared an empty
-    module-level dict and filled it by side effect from `_init_encoding()`,
-    called from three places -- `ISSRomWriter.__init__`, `_encode_iss_name` and,
-    in `rom_reader`, a second copy of the same table filled by a second copy of
-    the same function. Two consequences: the table's contents depended on
-    whether anything had happened to call the initialiser yet, so importing
-    `_encode_iss_name` alone and calling it worked only because it re-checked;
-    and the two modules' tables could drift. Built once, here, and returned
-    rather than mutated in place.
+    Build it once and return it; never fill a module-level dict by side effect.
     """
     table: dict[str, int] = {
         " ": 0x00,
@@ -300,7 +288,6 @@ def _rgb_to_bgr555(r: int, g: int, b: int) -> int:
 
 def _shooting_to_rom(value: int) -> int:
     """Map a shooting/technique value (1-15) to the 3-bit ROM index (0-7)."""
-    # Find closest value in the table
     best_idx = 0
     best_dist = abs(_SHOOTING_VALUES[0] - value)
     for i, sv in enumerate(_SHOOTING_VALUES):
@@ -314,54 +301,29 @@ def _shooting_to_rom(value: int) -> int:
 def _speed_to_rom(value: int) -> int:
     """Encode speed value (1-16) to the ROM byte format.
 
-    From SkillData.java:
+    The decoder, from SkillData.java:
       if (b % 0x20 == 0) return b / 0x20 + 1;
       return ((int) b + 1) / 0x20 + 8;
 
-    We need the inverse. Values 1-7 -> multiples of 0x20 (0x00, 0x20, ..., 0xC0).
-    Values 8-16 -> non-multiples: approximate as (value - 8) * 0x20 + some offset.
-    Simplified: clamp to 0x00-0xE0 range in 0x20 steps.
+    KNOWN WRONG AND DELIBERATELY PRESERVED: the low branch stops at 7, so speed 8
+    takes the other branch, where `(8 - 8) * 0x20 - 1` is -1 and `max(0, -1)` is
+    0 -- a multiple of 0x20, which the decoder reads back as 1. The scale's
+    midpoint, and the default every unmeasured player gets, reaches the cartridge
+    as the slowest speed in the game. Do not move the boundary to 8: byte
+    fidelity to an original nothing here has been validated against wins.
 
-    UPSTREAM BEHAVIOUR, KNOWN WRONG, PRESERVED DELIBERATELY: the low branch stops
-    at 7, and speed 8 therefore encodes as 0x00. `clamped <= 7` sends 8 down the
-    *other* branch, where `(8 - 8) * 0x20 - 1` is -1 and `max(0, -1)` is 0. Zero
-    is a multiple of 0x20, so the decoder quoted above takes its first branch and
-    answers 1. The scale's midpoint -- and `ISSPlayerAttributes.speed`'s own
-    default, which is what every player the provider measured nothing for gets --
-    reaches the cartridge as the slowest speed in the game.
-
-    Upstream's own inline comment below says the mapping is `1->0x00, 8->0xE0`,
-    which its code does not do, and reading the decoder's first branch as a
-    bijection `b = (v - 1) * 0x20` puts the boundary at 8 rather than 7: 0xE0 is
-    the largest multiple of 0x20 a byte holds, so 8 is the last value that branch
-    covers and not the first it does not. This port ran the low branch to 8 for a
-    while on exactly that argument, and every value 1-16 then round-tripped.
-
-    Restored to 7 anyway. Speed 8 is the commonest value this mapper produces and
-    0xE0 is a byte no released build of this patcher ever wrote there; nothing in
-    this repository has been validated against a real cartridge, and
-    `SkillData.java` is a third-party transcription this project cannot confirm
-    describes the byte the game reads. Fidelity to the original beats correctness
-    of the data. Do not move the boundary back to 8.
-
-    `max(0, ...)` and `& 0xFF` come back with it. They are upstream's, and the
-    first is load-bearing for exactly the value that reaches the line again: at
-    `clamped == 8` the expression is -1. For 9..16 it runs from 31 to 255 and
-    neither guard can fire.
+    `max(0, ...)` is load-bearing for exactly that value; for 9..16 the
+    expression runs 31..255 and neither guard can fire.
     """
     clamped = max(1, min(16, value))
-    # Simple linear mapping: value 1->0x00, 8->0xE0, 16->0xE0
-    # Based on the decoder, multiples of 0x20 decode to b/0x20+1
-    # So value V -> (V-1)*0x20 for V in 1..7
+    # Decoder: multiples of 0x20 give b/0x20+1, so V -> (V-1)*0x20 for V in 1..7
     if clamped <= 7:
         return (clamped - 1) * 0x20
-    # For 8-16, use non-multiples: ((V-8)*0x20) + some offset
-    # decoder: ((b+1)/0x20) + 8 = V -> b = (V-8)*0x20 - 1
+    # Decoder: ((b+1)/0x20) + 8 = V -> b = (V-8)*0x20 - 1
     return max(0, (clamped - 8) * 0x20 - 1) & 0xFF
 
 
 def _char_top_tile(c: str) -> int | None:
-    """Get the top-half tile ID for a character, or None if no top half."""
     if "A" <= c <= "P":
         return 0xC0 + (ord(c) - ord("A"))
     if "Q" <= c <= "Z":
@@ -372,7 +334,6 @@ def _char_top_tile(c: str) -> int | None:
 
 
 def _char_bottom_tile(c: str) -> int | None:
-    """Get the bottom-half tile ID for a character, or None if no bottom half."""
     if "A" <= c <= "P":
         return 0xD0 + (ord(c) - ord("A"))
     if "Q" <= c <= "Z":
@@ -394,7 +355,6 @@ def _encode_team_name_text(name: str) -> bytes:
     Original ROM ordering: characters right-to-left, F9 (bottom) before F1 (top).
     """
     clean = _to_ascii(name).upper()
-    # Build (char, x_position) list
     chars: list[tuple[str, int, int | None, int | None]] = []
     x = 0
     for c in clean:
@@ -410,16 +370,14 @@ def _encode_team_name_text(name: str) -> bytes:
         x += w
 
     total_width = x
-    # Compress if too wide
     if total_width > _MAX_NAME_WIDTH and total_width > 0:
         scale = _MAX_NAME_WIDTH / total_width
         chars = [(c, int(xp * scale), t, b) for c, xp, t, b in chars]
         total_width = _MAX_NAME_WIDTH
 
-    # Center: shift all x positions
     half = total_width // 2
     entries = []
-    # Characters in reverse order (right-to-left), bottom (F9) before top (F1)
+    # Characters right-to-left, bottom (F9) before top (F1), as the ROM stores.
     for _c, xp, top, bot in reversed(chars):
         x_centered = xp - half
         x_byte = x_centered & 0xFF  # signed to unsigned byte
@@ -439,11 +397,8 @@ def _decode_p40000(b1: int, b2: int) -> int:
     """Decode P40000 pointer bytes to ROM file offset.
 
     The high byte is biased by 0x80 because the SNES address it holds has bit 15
-    set. A `b2` below 0x80 therefore makes this answer an offset *below* 0x40000
-    -- and Python's `|` on a negative left operand keeps it negative, so the
-    result is a negative file offset. `rom_reader.signature_ok` refuses an image
-    whose table contains one; there is no in-band way for this function to
-    report it.
+    set. A `b2` below 0x80 yields a *negative* file offset, which only
+    `rom_reader.signature_ok` can refuse; there is no in-band way to report it.
     """
     return 0x40000 | ((b2 - 0x80) << 8) | b1
 
@@ -451,10 +406,8 @@ def _decode_p40000(b1: int, b2: int) -> int:
 def _encode_p40000(address: int) -> bytes:
     """Encode ROM file offset as P40000 pointer bytes [low, high].
 
-    Valid for addresses in 0x40000..0x47FFF. Above that the biased high byte
-    exceeds 0xFF and `bytes()` raises `ValueError`; `write_team_name_texts` is
-    the only caller and every address it passes is below `_MAX_NAME_TEXT_ADDR`,
-    which is 0x44478.
+    Valid for 0x40000..0x47FFF only: above that the biased high byte exceeds 0xFF
+    and `bytes()` raises `ValueError`.
     """
     raw = address - 0x40000
     b1 = raw & 0xFF
@@ -477,7 +430,6 @@ def _make_shades(r: int, g: int, b: int, count: int) -> list[int]:
 
     shades = []
     if brightness > 22:
-        # Bright color: base is lightest, darken for shadow shades
         for i in range(count):
             t = (count - 1 - i) / (count - 1) * 0.5 if count > 1 else 0
             rv = max(0, round(r5 * (1.0 - t)))
@@ -485,7 +437,6 @@ def _make_shades(r: int, g: int, b: int, count: int) -> list[int]:
             bv = max(0, round(b5 * (1.0 - t)))
             shades.append(rv | (gv << 5) | (bv << 10))
     else:
-        # Dark/medium: base is darkest, lighter shades blend toward white
         for i in range(count):
             t = i / (count - 1) * 0.5 if count > 1 else 0
             rv = min(31, round(r5 + t * (31 - r5)))
@@ -510,18 +461,17 @@ def _rgb_to_predominant(r: int, g: int, b: int) -> int:
     return 1  # Blue
 
 
-# -- In-game team name tile font (5px wide x 8px tall, 2bpp) -----------------
-# 0=TRANSPARENT, 1=COLOR_1 (white stroke)
-# Row 0 and 7 are top/bottom borders (mostly transparent)
+# In-game team name tile font: 5px wide x 8px tall, 2bpp, where 0=TRANSPARENT
+# and 1=COLOR_1 (white stroke). Rows 0 and 7 are the top/bottom borders.
 
 
 def _f(s: str) -> list[list[int]]:
-    """Parse a compact font string into rows of pixel values."""
+    """Parse a `/`-separated compact font string into rows of pixel values."""
     return [[int(c) for c in row] for row in s.strip().split("/")]
 
 
-#: 38 glyphs. `_render_name_tiles` skips any character not present, so the set of
-#: keys is also the set of characters that can reach an in-game name tile.
+#: `_render_name_tiles` skips any character not present, so these keys are also
+#: the characters that can reach an in-game name tile.
 _TILE_FONT = {
     "A": _f("01110/10001/10001/11111/10001/10001"),
     "B": _f("11110/10001/11110/10001/10001/11110"),
@@ -577,7 +527,6 @@ def _render_name_tiles(name: str) -> list[list[int]]:
     Returns list of 8 rows, each a list of 32 ints (0-3).
     """
     clean = _to_ascii(name).upper()
-    # Collect letter bitmaps and widths
     letters = []
     for c in clean:
         glyph = _TILE_FONT.get(c)
@@ -586,33 +535,30 @@ def _render_name_tiles(name: str) -> list[list[int]]:
         w = len(glyph[0]) if glyph else 0
         letters.append((glyph, w))
 
-    # Calculate total width (letters + 1px gap between)
     if not letters:
         letters = [(_TILE_FONT["A"], len(_TILE_FONT["A"][0]))]
+    # 1px gap between letters, dropped when the name does not otherwise fit.
     total_w = sum(w for _, w in letters) + max(0, len(letters) - 1)
 
-    # Scale down if too wide
     gap = 1
     if total_w > _TILE_COLS:
         gap = 0
         total_w = sum(w for _, w in letters)
 
-    # Initialize grid with transparent
     grid = [[_TC_TRANSPARENT] * _TILE_COLS for _ in range(_TILE_ROWS)]
 
-    # Center horizontally
     start_x = max(0, (_TILE_COLS - total_w) // 2)
     x = start_x
 
     for glyph, w in letters:
         if x + w > _TILE_COLS:
             break
-        # Draw shadow background (1px padding around letter area)
+        # Shadow background, 1px padding around the letter area.
         for row in range(_TILE_ROWS):
             for col in range(max(0, x - 1), min(_TILE_COLS, x + w + 1)):
                 if grid[row][col] == _TC_TRANSPARENT:
                     grid[row][col] = _TC_SHADOW
-        # Draw letter strokes (rows 1-6 of the 8-pixel height)
+        # Letter strokes occupy rows 1-6 of the 8-pixel height.
         for gr, glyph_row in enumerate(glyph[:6]):
             row = gr + 1  # offset by 1 for top border
             for gc, pixel in enumerate(glyph_row):
@@ -652,9 +598,9 @@ _KONAMI_MAX_RUN = 31
 def _konami_compress_literal(raw: bytes) -> bytes:
     """Wrap raw data in Konami literal-only compression format.
 
-    Format: [2-byte LE size header] [0x80|count] [data...] ...
-    RAW command: control byte 0x80|count, followed by count literal bytes (max 31).
-    Size header = total compressed stream length including header.
+    Format: [2-byte LE size header] [0x80|count] [data...] ..., where the size
+    header is the total stream length including itself and one RAW command
+    carries at most 31 literal bytes.
 
     Literal-only, so the output is always *longer* than the input: two bytes of
     header plus one control byte per 31 bytes of payload. That is why
@@ -668,7 +614,6 @@ def _konami_compress_literal(raw: bytes) -> bytes:
         out.append(0x80 | chunk)
         out.extend(raw[pos : pos + chunk])
         pos += chunk
-    # Write size header (total length including header)
     total = len(out)
     out[0] = total & 0xFF
     out[1] = (total >> 8) & 0xFF
@@ -709,10 +654,10 @@ def _make_solid_4bpp_tile(color_code: int) -> bytes:
 
     data = bytearray(32)
     for row in range(8):
-        data[row * 2] = bp0  # bitplane 0
-        data[row * 2 + 1] = bp1  # bitplane 1
-        data[16 + row * 2] = bp2  # bitplane 2
-        data[16 + row * 2 + 1] = bp3  # bitplane 3
+        data[row * 2] = bp0
+        data[row * 2 + 1] = bp1
+        data[16 + row * 2] = bp2
+        data[16 + row * 2 + 1] = bp3
     return bytes(data)
 
 
@@ -730,39 +675,25 @@ def _make_flag_half(color_code: int) -> bytes:
     return tile + tile + tile
 
 
-#: Bytes the two compressed flag halves occupy at `_OFS_FLAG_TILE_NEW`.
-#:
-#: Computed by running the compressor over the data it will actually be given,
-#: not transcribed. Both halves are the same length -- one solid colour each --
-#: so the pair is twice one of them.
+#: Bytes the two compressed flag halves occupy at `_OFS_FLAG_TILE_NEW`. Computed
+#: by running the compressor, never transcribed; both halves are one solid colour
+#: and therefore the same length.
 _FLAG_TILE_BLOB_SIZE = 2 * len(_konami_compress_literal(_make_flag_half(_FLAG_COLOR_1)))
 
 
 def _min_patchable_size() -> int:
     """Highest file offset any write in this module reaches, in headerless bytes.
 
-    IMPROVEMENT, with no upstream equivalent, and the reason it exists is that
-    upstream's only size test was a 1 MB floor -- three and a half times more
-    than the writer actually needs, and a guess about which cartridge this is
-    rather than a statement about whether the data fits.
+    Every write below is at a fixed offset into a file opened `r+b`, so seeking
+    past the end *extends* it: a file shorter than this provably cannot be
+    patched, which is why `patcher.py` applies it to `patch` as well.
 
-    This is the other kind of test. Every write below is at a fixed offset, and
-    the file is opened `r+b`, so seeking past the end and writing *extends* the
-    file: handed a 300 KB file the writer produces a 297 KB "patched ROM" made
-    of a hole and a flag. A file shorter than this therefore provably cannot be
-    patched, which is why `patcher.py` applies it to `patch` as well as to
-    `analyze_rom`, where the 1 MB floor guards only the latter.
-
-    Every term is a `max` over this module's own constants rather than a
-    transcribed total, so moving any offset moves this with it. The list is
-    therefore deliberately over-complete: one term dominates all the others
-    today, so deleting any of the rest changes nothing and no test can tell.
-    Mutation testing confirms that -- three dropped terms survive, and they are
-    the only survivors in this package -- and it is the price of a bound that
-    follows an offset when one of them moves. Reads are not
-    included: `write_name_tiles` dereferences the ROM's own pointers into
-    0x40000..0x4FFFF and a short read there answers fewer bytes rather than
-    corrupting anything, and `rom_reader.signature_ok` is what rejects it.
+    Keep every term a `max` over this module's own constants, never a transcribed
+    total, so moving an offset moves this bound with it. The list is deliberately
+    over-complete: one term dominates today, so dropping any other changes
+    nothing and no test can tell. Reads are excluded -- a short read in
+    0x40000..0x4FFFF answers fewer bytes rather than corrupting anything, and
+    `rom_reader.signature_ok` rejects it.
     """
     return max(
         _OFS_PLAYER_NAMES + TOTAL_TEAMS * PLAYERS_PER_TEAM * _PLAYER_NAME_LENGTH,
@@ -795,20 +726,15 @@ MIN_PATCHABLE_SIZE = _min_patchable_size()
 class ISSRomWriter:
     """Copies the ROM to `output_path` and patches the copy in place.
 
-    `__init__` has two side effects -- it `shutil.copy2`s the input over the
-    output and leaves a handle open on `self` -- and both are upstream's.
-    `RomWriter` in `games/we2002` does the same thing. What is new here is
-    `close`, and the context-manager protocol built on it: upstream's only way
-    to release the handle was `finalize`, so any exception between the
-    constructor and it -- and `write_name_tiles` raises one by design -- leaked
-    the descriptor and left a half-written file behind. `patch` uses `with`.
+    `__init__` copies the input over the output and leaves a handle open on
+    `self`. Use `with`: `write_name_tiles` raises by design, and without the
+    context manager that leaks the descriptor and leaves a half-written file.
     """
 
     def __init__(self, rom_path: str, output_path: str, header_offset: int = 0):
         self.output_path = output_path
         self.header_offset = header_offset
 
-        # Copy ROM to output
         shutil.copy2(rom_path, output_path)
         self._f: IO[bytes] | None = open(output_path, "r+b")
 
@@ -826,9 +752,8 @@ class ISSRomWriter:
     def close(self) -> None:
         """Release the output handle if it is still open.
 
-        Idempotent, and `finalize` leaves nothing for it to do -- which is what
-        makes `with ISSRomWriter(...) as w: ...; w.finalize()` correct rather
-        than a double close.
+        Keep it idempotent: `finalize` inside a `with` block would otherwise
+        double-close.
         """
         if self._f is not None:
             self._f.close()
@@ -838,10 +763,8 @@ class ISSRomWriter:
     def _file(self) -> IO[bytes]:
         """The open handle, or a `RomError` naming what happened to it.
 
-        Upstream's methods went straight to `self._f`, which `finalize` sets to
-        `None`; a second write after finalising raised `AttributeError: 'NoneType'
-        object has no attribute 'seek'` from inside the writer, which is outside
-        this library's exception hierarchy.
+        Go through this, never straight to `self._f`: `finalize` sets it to
+        `None` and a later write would raise `AttributeError` instead.
         """
         if self._f is None:
             raise RomError(f"The ISS ROM writer for {self.output_path} is already closed")
@@ -854,8 +777,8 @@ class ISSRomWriter:
     def write_player_names(self, enum_index: int, players: list[ISSPlayerRecord]) -> int:
         """Write player names for a team, and return how many were written.
 
-        Names are stored in TEAM_NAME_ORDER, so we need to convert from
-        enum_index to the name storage index.
+        Names are stored in TEAM_NAME_ORDER, so `enum_index` must be translated
+        by `name_storage_index`.
         """
         base = (
             _OFS_PLAYER_NAMES
@@ -877,10 +800,9 @@ class ISSRomWriter:
           [2] shooting(low) + technique(high)  [3] shirt_number
           [4] stamina [5] hair_style | special_flag
 
-        Returns the number of records written, which is the squad size capped at
-        `PLAYERS_PER_TEAM`. Upstream returned `None`; `PatchResult.players_patched`
-        is defined in `core/models.py` as records that reached the image, and
-        counting the squad handed in would over-report a 22-man list by seven.
+        Returns the records actually written, the squad size capped at
+        `PLAYERS_PER_TEAM`: `PatchResult.players_patched` counts what reached the
+        image, so counting the squad handed in would over-report.
         """
         base = _OFS_PLAYER_DATA + enum_index * PLAYERS_PER_TEAM * _PLAYER_DATA_LENGTH
         written = 0
@@ -894,11 +816,9 @@ class ISSRomWriter:
             # Byte 0: speed
             existing[0] = _speed_to_rom(attrs.speed)
 
-            # Bytes 1-2: shooting + technique
-            # Shooting is stored as a 3-bit value in the data
+            # Bytes 1-2: shooting + technique, 3 bits each, other bits preserved
             shoot_idx = _shooting_to_rom(attrs.shooting)
             tech_idx = _shooting_to_rom(attrs.technique)
-            # Preserve non-ability bits, write ability bits
             existing[1] = (existing[1] & 0xF8) | (shoot_idx & 0x07)
             existing[2] = (existing[2] & 0xF8) | (tech_idx & 0x07)
 
@@ -910,9 +830,8 @@ class ISSRomWriter:
             stamina = max(1, min(16, attrs.stamina))
             existing[4] = (existing[4] & 0xF0) | ((stamina - 1) & 0x0F)
 
-            # Byte 5: hair_style (low nibble) | special (bit 6). The clamp is
-            # `len(HAIR_STYLES) - 1` rather than upstream's literal 10, so adding
-            # a style to that list is one edit and not two.
+            # Byte 5: hair_style (low nibble) | special (bit 6). Clamp against
+            # `len(HAIR_STYLES) - 1`, never a transcribed literal.
             hair = max(0, min(len(HAIR_STYLES) - 1, player.hair_style))
             special_bit = 0x40 if player.is_special else 0x00
             existing[5] = (existing[5] & 0xB0) | special_bit | (hair & 0x0F)
@@ -930,7 +849,6 @@ class ISSRomWriter:
         """
         enum_name = TEAM_ENUM_ORDER[enum_index]
 
-        # Determine which range and position
         if enum_name in _KIT_RANGE1_TEAMS:
             kit1_base = _OFS_KIT1_RANGE1
             kit2_base = _OFS_KIT2_RANGE1
@@ -942,15 +860,12 @@ class ISSRomWriter:
         else:
             return
 
-        # Write home kit (1st kit)
         if team.kit_home:
             self._write_outfield_kit(kit1_base + pos * _OUTFIELD_KIT_STRIDE, team.kit_home)
 
-        # Write away kit (2nd kit)
         if team.kit_away:
             self._write_outfield_kit(kit2_base + pos * _OUTFIELD_KIT_STRIDE, team.kit_away)
 
-        # Write GK kit
         if team.kit_gk:
             if enum_name in _GK_RANGE1_TEAMS:
                 gk_base = _OFS_GK_RANGE1
@@ -1025,20 +940,17 @@ class ISSRomWriter:
     ) -> None:
         """Write simple two-band flag tiles and team colors for all patched teams.
 
-        Creates a simple rectangular flag design (top=primary, bottom=alternate)
-        and writes it once. Points all patched team flag entries to this design.
-        Sets each team's flag palette to its primary/alternate colors.
+        One rectangular design, written once, with every patched team's flag
+        entry pointed at it and its palette set to primary/alternate.
 
         patched_colors: dict of {slot_index: (primary_rgb, alt_rgb)} for teams.
         """
-        # Step 1: Create simple two-band flag tile data
-        # Top half: all COLOR_1 (primary), Bottom half: all COLOR_2 (alternate)
+        # Top half: all COLOR_1 (primary). Bottom half: all COLOR_2 (alternate).
         top_raw = _make_flag_half(_FLAG_COLOR_1)
         bot_raw = _make_flag_half(_FLAG_COLOR_2)
         top_compressed = _konami_compress_literal(top_raw)
         bot_compressed = _konami_compress_literal(bot_raw)
 
-        # Step 2: Write both compressed halves after existing flag data
         top_addr = _OFS_FLAG_TILE_NEW
         bot_addr = top_addr + len(top_compressed)
         self._seek(top_addr)
@@ -1046,19 +958,16 @@ class ISSRomWriter:
         self._seek(bot_addr)
         self._file.write(bot_compressed)
 
-        # Build P48000 pointer entry for our flag (4 bytes: top_ptr + bot_ptr)
+        # P48000 pointer entry: 4 bytes, top_ptr then bot_ptr.
         flag_entry = _encode_p48000(top_addr) + _encode_p48000(bot_addr)
 
-        # Step 3: Update flag pointer table for patched teams
         for slot_index in patched_colors:
             self._seek(_OFS_FLAG_TILE_PTRS + slot_index * _FLAG_TILE_PTR_STRIDE)
             self._file.write(flag_entry)
 
-        # Step 4: Write flag colors for each patched team
         for slot_index, (primary, alt) in patched_colors.items():
             enum_name = TEAM_ENUM_ORDER[slot_index]
 
-            # Find color address via range lookup (step=10)
             if enum_name in _FLAG_COLORS_RANGE1_TEAMS:
                 pos = _FLAG_COLORS_RANGE1_TEAMS.index(enum_name)
                 addr = _OFS_FLAG_COLORS_RANGE1 + pos * _FLAG_COLORS_STEP
@@ -1068,9 +977,8 @@ class ISSRomWriter:
             else:
                 continue
 
-            # 8 bytes: entry0=COLOR_1 (primary), entry1=COLOR_2 (alt),
-            # entry2=COLOR_3, entry3=COLOR_4
-            # Our flag top half uses COLOR_1 (palette 12), bottom uses COLOR_2 (palette 13)
+            # 8 bytes: COLOR_1 (palette 12, our flag's top half), COLOR_2
+            # (palette 13, bottom half), then COLOR_3 and COLOR_4.
             data = bytearray(8)
             struct.pack_into("<H", data, 0, _rgb_to_bgr555(*primary))  # COLOR_1 (top half)
             struct.pack_into("<H", data, 2, _rgb_to_bgr555(*alt))  # COLOR_2 (bottom half)
@@ -1088,7 +996,6 @@ class ISSRomWriter:
 
         patched_names: dict of {slot_index: new_name_str} for teams to update.
         """
-        # Read existing pointer table and data
         self._seek(_OFS_TEAM_NAME_TEXT_PTRS)
         raw_ptrs = self._file.read(TOTAL_TEAMS * 2)
 
@@ -1107,13 +1014,9 @@ class ISSRomWriter:
 
         min_addr = min(orig_addrs)
         budget = _MAX_NAME_TEXT_ADDR - min_addr
-        # DELIBERATE DIVERGENCE: upstream had no guard here. A non-negative
-        # budget is a precondition of the last statement in this method --
-        # `all_data[:budget]` with a negative budget is not a truncation, it is
-        # a slice that drops bytes from the *end* and then writes what is left
-        # at `min_addr`, which is by definition past the ceiling this constant
-        # exists to protect. `rom_reader.signature_ok` refuses such an image
-        # from `analyze`, but `patch --game iss-snes` does not consult it.
+        # Keep this guard: a negative budget makes `all_data[:budget]` below drop
+        # bytes off the *end* and write the rest past the ceiling, and
+        # `patch --game iss-snes` never consults `rom_reader.signature_ok`.
         if budget <= 0:
             raise RomError(
                 f"The team-name-text pointer table of {self.output_path} points to "
@@ -1121,7 +1024,7 @@ class ISSRomWriter:
                 "this is not an ISS ROM, or not one this patcher knows"
             )
 
-        # Build team data blobs -- patched teams get new encoding, others keep original
+        # Patched teams get the new encoding; the rest keep their original blob.
         names_copy = dict(patched_names)
         team_blobs = []
         for i in range(TOTAL_TEAMS):
@@ -1130,9 +1033,8 @@ class ISSRomWriter:
             else:
                 team_blobs.append(orig_data[i])
 
-        # Progressively truncate longest patched names until data fits
+        # Progressively truncate the longest patched names until the data fits.
         while sum(len(b) for b in team_blobs) > budget:
-            # Find the longest patched name we can still shorten
             longest_idx = -1
             longest_len = 0
             for idx in names_copy:
@@ -1144,7 +1046,6 @@ class ISSRomWriter:
             names_copy[longest_idx] = names_copy[longest_idx][:-1]
             team_blobs[longest_idx] = _encode_team_name_text(names_copy[longest_idx])
 
-        # Build final data with pointers
         current_addr = min_addr
         new_pointers = []
         all_data = bytearray()
@@ -1153,43 +1054,17 @@ class ISSRomWriter:
             all_data.extend(blob)
             current_addr += len(blob)
 
-        # Write pointer table
         self._seek(_OFS_TEAM_NAME_TEXT_PTRS)
         for ptr in new_pointers:
             self._file.write(ptr)
 
-        # Write name data (capped at budget for safety).
-        #
-        # INHERITED DEFECT, ported unchanged and PRESERVED after review.
-        #
-        # The shrink loop above gives up -- `longest_idx < 0`, `break` -- once
-        # every patched name is down to three characters. If the total is still
-        # over budget, this slice cuts the tail off in the middle of a blob,
-        # while the pointer table written twelve lines up already names the
-        # addresses all 27 blobs *would* have had. So the run reports success
-        # and the cartridge is left with one truncated display list and a run of
-        # teams whose pointers address bytes this method never wrote. Nothing
-        # signals it: the method returns `None` on every path.
-        #
-        # The floor is not far-fetched arithmetic. Twenty-seven three-character
-        # names encode to 25 bytes each, 675 in all, so any image whose
-        # `min_addr` sits within 675 bytes of `_MAX_NAME_TEXT_ADDR` reaches this
-        # slice with every patched team already at its minimum.
-        #
-        # Not repaired, and the asymmetry with its own sibling is the reason
-        # rather than an oversight. `write_name_tiles`, 60 lines below, faces
-        # the same question -- new blobs that will not fit a bounded region --
-        # and raises `RomError`. It can, because `NAME_TILES_CAPACITY` is a
-        # property of a region *this patcher* creates by displacement, so
-        # "will not fit" is decidable from this repository's own constants. Here
-        # the budget is `_MAX_NAME_TEXT_ADDR - min(orig_addrs)`: half of it is
-        # read out of the image, and whether a genuine ISS cartridge can ever
-        # produce a `min_addr` that tight is exactly the fact no test here can
-        # establish. Raising would convert a cosmetic corruption of the
-        # selection screen into a refusal to patch at all, on an image nobody in
-        # this repository has seen; falling back to the original names would
-        # silently ignore what the operator asked for. Both are guesses, and
-        # `tests/games/iss_snes/test_rom_writer.py` pins what happens instead.
+        # KNOWN DEFECT, PRESERVED: when the shrink loop gives up with every
+        # patched name at three characters and the total still over budget, this
+        # slice cuts a blob in half while the pointer table above already names
+        # every blob's intended address, so some teams end up pointing at bytes
+        # never written and nothing signals it. Unlike `write_name_tiles`, the
+        # budget here is read out of the image, so raising or falling back would
+        # both be guesses about images nobody here has seen.
         self._seek(min_addr)
         self._file.write(bytes(all_data[:budget]))
 
@@ -1212,14 +1087,11 @@ class ISSRomWriter:
 
         patched_names: dict of {slot_index: name_str} for teams to update.
 
-        Call this LAST of the writes that touch 0x48000 and up.
-        `write_flag_tiles_and_colors` writes 204 bytes at 0x48400, and Step 1
-        below reads the original blobs back out of the same bank; whether they
-        overlap depends on where the game's own tile data sits, which no test in
-        this repository can establish. `patcher.patch` preserves upstream's
-        order for exactly that reason.
+        Call this LAST of the writes that touch 0x48000 and up:
+        `write_flag_tiles_and_colors` writes at 0x48400 and the first step below
+        reads the original blobs back out of the same bank.
         """
-        # Step 1: Read original pointer table and compressed data for all 27 teams
+        # Read the original pointer table and compressed data for all 27 teams.
         orig_ptrs = []
         orig_blobs = []
         self._seek(_OFS_NAME_TILES_PTRS)
@@ -1227,18 +1099,17 @@ class ISSRomWriter:
         for i in range(TOTAL_TEAMS):
             b1 = raw_ptrs[i * 2]
             b2 = raw_ptrs[i * 2 + 1]
-            # Original pointers use P48000 format (SNES bank $89):
-            # addr = 0x40000 + raw 16-bit LE pointer
+            # Original pointers are P48000 (SNES bank $89): unbiased raw 16-bit
+            # LE offset from 0x40000.
             addr = 0x40000 + b1 + (b2 << 8)
             orig_ptrs.append(addr)
-            # Read compressed blob (starts with 2-byte LE size)
+            # Each blob starts with its own 2-byte LE size.
             self._seek(addr)
             size_bytes = self._file.read(2)
             blob_size = size_bytes[0] | (size_bytes[1] << 8)
             self._seek(addr)
             orig_blobs.append(self._file.read(blob_size))
 
-        # Step 2: Build new compressed blobs for each team
         new_blobs = []
         for i in range(TOTAL_TEAMS):
             if i in patched_names:
@@ -1248,21 +1119,17 @@ class ISSRomWriter:
             else:
                 new_blobs.append(orig_blobs[i])
 
-        # Step 3: Verify total fits in displaced region
         total_size = sum(len(b) for b in new_blobs)
         if total_size > NAME_TILES_CAPACITY:
-            # DELIBERATE DIVERGENCE: upstream raised a bare `ValueError`, which
-            # is outside this library's exception hierarchy, so a consumer
-            # catching `RetroRosterError` did not catch it. Same condition, same
-            # message content, correct type.
+            # Must stay inside this library's hierarchy: a bare `ValueError`
+            # escapes a consumer catching `RetroRosterError`.
             raise RomError(f"Name tiles too large: {total_size} bytes > {NAME_TILES_CAPACITY}")
 
-        # Step 4: Patch displacement code bytes (0x89 -> 0x82)
+        # Patch the displacement code bytes: bank $89 -> $82.
         for addr in _DISPLACEMENT_PATCH_POINTS:
             self._seek(addr)
             self._file.write(bytes([_DISPLACEMENT_PATCH_BYTE]))
 
-        # Step 5: Write all compressed blobs to displaced region
         current_addr = _NAME_TILES_DISPLACED_BASE
         new_ptrs = []
         for blob in new_blobs:
@@ -1271,42 +1138,32 @@ class ISSRomWriter:
             self._file.write(blob)
             current_addr += len(blob)
 
-        # Step 6: Update pointer table with P17000 pointers
+        # The relocated table is P17000, not P48000 like the one read above.
         self._seek(_OFS_NAME_TILES_PTRS)
         for addr in new_ptrs:
             self._file.write(_encode_p17000(addr))
 
     def write_team_descriptions(self, patched_names: dict[int, str]) -> None:
-        """Replace team description text with the full team name.
+        """Replace the selection screen's description blurb with the team name.
 
-        The team selection screen shows a description blurb for each team.
-        For patched teams, replace it with the real team name centered in
-        the text box (15-char wide lines, plain ASCII).
+        Centred in the text box: 15-char wide lines, plain ASCII.
 
         patched_names: dict of {slot_index: team_name_str}.
         """
         for slot_index, name in patched_names.items():
-            # Read this team's description pointer from the table
             self._seek(_OFS_DESC_PTRS + slot_index * 2)
             raw = self._file.read(2)
             snes_addr = raw[0] | (raw[1] << 8)
-            # LoROM bank $02: ROM offset = 0x10000 + (snes_addr - 0x8000)
-            #
-            # DELIBERATE DIVERGENCE: the bank test is new. The arithmetic
-            # above reduces to `0x8000 + snes_addr`, so a pointer below $8000
-            # -- which is not a bank-$02 pointer at all -- addresses
-            # 0x8000..0xFFFF, one bank low. That range is not empty: it holds
-            # the predominant-colour table at 0x8DB2, the name-tile pointer
-            # table at 0x93CD and the flag-tile pointer table at 0x941A. If a
-            # 0xFD turns up in the 25 bytes read there, upstream wrote 60 bytes
-            # of description text over whichever of them followed. Skipping the
-            # slot leaves its 1994 description in place, which is what an
-            # unpatched team gets.
+            # LoROM bank $02: ROM offset = 0x10000 + (snes_addr - 0x8000), which
+            # reduces to `0x8000 + snes_addr`. Keep this bank test: a pointer
+            # below $8000 addresses 0x8000..0xFFFF instead, where the
+            # predominant-colour table (0x8DB2) and the name-tile (0x93CD) and
+            # flag-tile (0x941A) pointer tables live.
             if snes_addr < _DESC_BANK_SNES_BASE:
                 continue
             rom_addr = _DESC_BANK_BASE + (snes_addr - _DESC_BANK_SNES_BASE)
 
-            # Find the FD control byte that starts the description text
+            # 0xFD is the control byte that starts the description text.
             desc_start = None
             self._seek(rom_addr)
             header = self._file.read(25)
@@ -1317,7 +1174,8 @@ class ISSRomWriter:
             if desc_start is None:
                 continue
 
-            # Find the end of this description block (next FE+formation or FF)
+            # The block ends at the next FF, or at FE followed by a formation
+            # byte (0x24 or 0x2C).
             self._seek(desc_start)
             block = self._file.read(120)
             desc_end = desc_start
@@ -1334,10 +1192,8 @@ class ISSRomWriter:
 
             available = desc_end - desc_start
 
-            # Format the team name centered in 15-char lines
             clean = _to_ascii(name).strip()
             lines = []
-            # Word-wrap the name across lines
             words = clean.split()
             current_line = ""
             for word in words:
@@ -1349,7 +1205,6 @@ class ISSRomWriter:
             if current_line:
                 lines.append(current_line)
 
-            # Center each line and pad to 15 chars
             padded_lines = []
             for line in lines:
                 if len(line) > _DESC_LINE_WIDTH:
@@ -1360,7 +1215,6 @@ class ISSRomWriter:
                 padded_lines.append(" " * pad_left + line + " " * pad_right)
 
             text = "".join(padded_lines)
-            # Pad remaining space with spaces
             if len(text) < available:
                 text += " " * (available - len(text))
             text = text[:available]
@@ -1369,7 +1223,6 @@ class ISSRomWriter:
             self._file.write(text.encode("ascii", errors="replace"))
 
     def finalize(self) -> None:
-        """Flush, sync, and close the output file."""
         if self._f is not None:
             self._f.flush()
             os.fsync(self._f.fileno())
