@@ -104,17 +104,16 @@ def test_no_line_flag_is_listed_twice():
     assert len(set(LINE_FLAGS)) == 64
 
 
-def test_the_third_defence_pair_flags_are_absent():
-    # The inherited defect, pinned rather than fixed. The mapper emits these two
-    # for the fifth and sixth defenceman and `roster_values` drops them.
+def test_the_nhl07_third_pair_flags_are_absent():
+    # There is no third five-on-three unit, so these two names do not exist
+    # here. The source's mapper emitted them for the fifth and sixth defenceman
+    # and `roster_values` dropped both, which is how the third pair was lost.
     assert [f for f in LINE_FLAGS if f in ("33LD", "33RD")] == []
 
 
 def test_the_even_strength_third_pair_flags_are_present():
-    # The other half of the defect's shape, and the reason a fix is a guess
-    # rather than an omission: this game does have a third defence pair, spelled
-    # `L3LD`/`L3RD`, and whether that is where the mapper's third pair belongs
-    # cannot be established from inside this repository.
+    # The other half, and where the third pair goes now: this game does have a
+    # third defence pair and it is spelled `L3LD`/`L3RD`.
     assert [f for f in LINE_FLAGS if f in ("L3LD", "L3RD")] == ["L3LD", "L3RD"]
 
 
@@ -560,19 +559,25 @@ def test_roster_values_leaves_the_other_flags_zero():
 
 
 def test_roster_values_drops_a_flag_the_game_does_not_have():
-    # This is where the third defence pair is lost.
+    # This is where the source's third defence pair was lost. The filter is
+    # unchanged; the mapper no longer feeds it a name the game does not have.
     assert "33LD" not in NHL05PS2RomWriter.roster_values(1, 0, 1, {"33LD": 1})
 
 
-def test_roster_values_drops_the_third_pair_while_keeping_the_first_two():
-    # One call, all six of the mapper's defence flags: four land and two do not.
-    flags = {"31LD": 1, "31RD": 1, "32LD": 1, "32RD": 1, "33LD": 1, "33RD": 1}
+def test_all_six_flags_the_mapper_now_emits_for_defence_survive_the_filter():
+    # One call, all three pairs. The source's six were `31LD`..`33RD` and two of
+    # those six fell out here; these six do not, which is the whole point of the
+    # divergence in `stat_mapper.generate_team_line_flags`.
+    flags = {"L1LD": 1, "L1RD": 1, "L2LD": 1, "L2RD": 1, "L3LD": 1, "L3RD": 1}
     values = NHL05PS2RomWriter.roster_values(1, 0, 1, flags)
-    assert [f for f in flags if values.get(f) == 1] == ["31LD", "31RD", "32LD", "32RD"]
-
-
-def test_the_dropped_flags_are_the_ones_the_mapper_emits_for_the_third_pair():
-    assert fixture.DROPPED_MAPPER_FLAGS == ["33LD", "33RD"]
+    assert [f for f in flags if values.get(f) == 1] == [
+        "L1LD",
+        "L1RD",
+        "L2LD",
+        "L2RD",
+        "L3LD",
+        "L3RD",
+    ]
 
 
 # -- rebuild_and_write -----------------------------------------------------

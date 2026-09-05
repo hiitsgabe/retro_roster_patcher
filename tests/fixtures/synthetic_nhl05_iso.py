@@ -202,8 +202,9 @@ SGAI_RECORD_SIZE = 15  # 16 + 16*6 + 2 = 114 bits
 # test would still pass.
 #
 # `33LD` and `33RD` are absent, exactly as they are absent from the writer's
-# list, and `L3LD`/`L3RD` are present. That is what lets a test show the third
-# defence pair is dropped rather than merely unasserted.
+# list, and `L3LD`/`L3RD` are present. That asymmetry is what lets a test show
+# where the source's `3n` defence spelling went and where the port's `Ln` one
+# goes instead.
 LINE_FLAG_NAMES = [
     "31LD",
     "41LD",
@@ -271,11 +272,20 @@ LINE_FLAG_NAMES = [
     "S5__",
 ]
 
-# Two flags the game has and the mapper never emits, and two the mapper emits
-# and the game does not have. Named here so a test can state the asymmetry
-# rather than restate the lists.
-UNREACHABLE_FLAGS = ["X1__", "X2__", "L3LD", "L3RD"]
-DROPPED_MAPPER_FLAGS = ["33LD", "33RD"]
+# Flags the game has and nothing in the package ever emits, so a patched row
+# carries them cleared. `X1__`/`X2__` have no counterpart in the mapper at all.
+#
+# The six `3n` and `4n` defence slots are here for a different reason: they are
+# where the *source* put this game's first two defence pairs, by copying NHL
+# 07's `3{pair}{side}` spelling into a game whose `3n` family is a five-on-three
+# unit. The port emits `L{pair}{side}` instead, so these must now come back zero
+# from a patch -- which is the assertion that would fail if anyone reverted the
+# divergence in `nhl05_ps2/stat_mapper.py`.
+#
+# `L3LD` and `L3RD` used to be on this list and are deliberately no longer: they
+# are the third pair, and they are now assigned.
+UNREACHABLE_FLAGS = ["X1__", "X2__"]
+SOURCE_DEFENCE_FLAGS = ["31LD", "31RD", "32LD", "32RD"]
 
 #   bits  0.. 5  TEAM   6 bits
 #   bits  6..12  JERS   7 bits

@@ -58,27 +58,30 @@ from .rom_reader import ISO_SECTOR_SIZE, NHL05PS2RomReader
 # Then `G1__`/`G2__` for the goalies and `H`, `S` and `X` units of five, three
 # and two.
 #
-# **`33LD` and `33RD` are absent, and that is a real inherited defect.**
-# `stat_mapper.generate_team_line_flags` emits `31LD`, `31RD`, `32LD`, `32RD`,
-# `33LD` and `33RD` for the three defence pairs -- NHL 07's spelling -- and
-# `roster_values` drops a key this list does not name. So the third defence pair
-# is never assigned on this game. It is **not fixed here**, deliberately, and
-# `tests/games/nhl05_ps2/test_rom_writer.py` pins the behaviour so the decision
-# is visible rather than forgotten:
+# `33LD` and `33RD` are absent because NHL 2005's ROST has no third five-on-three
+# unit. That is not a hole in this list; it was a hole in the *mapper*, and it is
+# now fixed there. See the DELIBERATE DIVERGENCE note on
+# `stat_mapper.generate_team_line_flags`: the source emitted `3nLD`/`3nRD` for
+# the three defence pairs, which is NHL 07's spelling, so pairs one and two were
+# written to the five-on-three units, pair three was dropped by the `flag in
+# LINE_FLAGS` filter in `roster_values`, and `L1LD` through `L3RD` -- this game's
+# actual even-strength pairs -- stayed zero on every patched player. Six flags,
+# not two. The mapper now emits `L{pair}LD`/`L{pair}RD`.
 #
-#   * Adding `33LD`/`33RD` would write nothing. `TDBTable.write_record` skips a
-#     field name the table does not have, and this list is the evidence that
-#     NHL 2005's ROST does not have them.
-#   * Redirecting the third pair to `L3LD`/`L3RD`, which this game does have, is
-#     the fix that would do something -- and it is only right if `L1LD`/`L2LD`
-#     are the first two even-strength pairs, in which case the mapper's
-#     `31LD`/`32LD` are writing the first two pairs to the five-on-three unit
-#     and the defect is four flags wide rather than two.
+# The evidence for that reading is this list's own shape, and it needs no disc.
+# Group the flags by prefix and read off which positions each prefix carries:
+# `3n` is `{C_, LD, RD}`, three skaters; `4n` and `Kn` are four; `Ln` is all
+# five. `31C_` exists, and a defence pair has no centre. NHL 07's list groups the
+# other way -- its `3n` family is `{LD, RD}` and it has no `L*LD` at all -- which
+# is why the same mapper code was right there and wrong here.
+# `games/nhl07_psp/rom_writer.py` carries the other half of the argument and
+# `tests/games/nhl05_ps2/test_rom_writer.py` states both halves as assertions.
 #
-# Choosing between those needs a fact about the disc that this repository cannot
-# establish: no real ISO may enter it, and the list below has never been checked
-# against one. Guessing wrong moves real players onto the wrong special-teams
-# unit, which is worse than dropping two flag bits. Recorded as a follow-up.
+# Still unchecked against a retail disc, and one artefact would settle it
+# outright: a dump of NHL 2005's ROST field-name array. None may enter this
+# repository. What is not in doubt is that the previous behaviour was wrong
+# under *every* reading of `3n`: whatever a `3` unit is, it is not the same
+# situation as the `L` unit the same function puts that pair's forwards on.
 LINE_FLAGS = [
     "31LD",
     "41LD",
@@ -399,10 +402,12 @@ class NHL05PS2RomWriter:
         passed through. `TDBTable.write_record` would ignore it anyway -- an
         unknown field name is silently skipped there -- so this is a second
         guard on the same thing, and it is the one that keeps the value mapping
-        honest for a caller that inspects it. **It is also where this game's
-        third defence pair is lost**, since the mapper emits `33LD`/`33RD` and
-        `LINE_FLAGS` does not name them; the comment on that list argues why
-        that is preserved rather than fixed.
+        honest for a caller that inspects it. It is also where this game's third
+        defence pair *used to be* lost: the source's mapper emitted `33LD` and
+        `33RD`, which this game's ROST does not have, and this filter dropped
+        them silently. The mapper now emits `L3LD`/`L3RD`, which it does have.
+        The filter is unchanged and still drops an unknown key -- the comment on
+        `LINE_FLAGS` carries the argument and the evidence.
 
         Deliberately does NOT write `TEAM` or `INDX`. The record was found by
         those two, and rewriting `INDX` would break the ROST -> PLAY -> SPBT
