@@ -647,19 +647,70 @@ def test_an_empty_roster_never_reaches_the_writer(patcher, rom, tmp_path):
 def test_the_header_is_written_from_the_counts_on_the_record(patcher, rom, tmp_path):
     """Hop three, and the reason the counts ride on the record.
 
-    Slot 1's image says 13 forwards and 8 defencemen. A record cut to 12 and 9
-    must produce a header saying 12 and 9, not the image's 13 and 8, because the
+    Slot 1's image says 13 forwards and 8 defencemen. A record cut to 12 and 7
+    must produce a header saying 12 and 7, not the image's 13 and 8, because the
     line table indexes defencemen from `2 + forwards`.
+
+    Twenty-one players and not ten, so `rom_writer.header_counts` has nothing to
+    clamp and this test still says what it says: 2 + 12 + 7 is 21 and all 21
+    reach the image. Ten would now produce a header of 8 and 0 -- correct, but
+    it would no longer show the record's triple surviving to the ROM.
     """
     out = tmp_path / "out.sfc"
     mapped = MappedRosters(
         game_id="nhl94-snes",
-        teams={BOS_SLOT: _team_record(BOS_SLOT, 10, forwards=12, defencemen=9)},
+        teams={BOS_SLOT: _team_record(BOS_SLOT, 21, forwards=12, defencemen=7)},
     )
     patcher.patch(rom_path=rom, output_path=out, rosters=mapped)
     reader = NHL94SNESRomReader(str(out))
     assert reader.load() is True
-    assert reader.read_team_player_counts(BOS_SLOT) == (2, 12, 9)
+    assert reader.read_team_player_counts(BOS_SLOT) == (2, 12, 7)
+
+
+def test_the_header_does_not_claim_defencemen_the_writer_dropped(patcher, rom, tmp_path):
+    """The filed defect, at the layer where it reaches the ROM.
+
+    The same 23-into-21 overflow `test_players_patched_counts_records_that_
+    reached_the_image` uses. Upstream, and this port until now, wrote the
+    requested 14 and 7; 2 + 14 + 7 is 23 and only 21 records exist.
+    """
+    out = tmp_path / "out.sfc"
+    mapped = MappedRosters(game_id="nhl94-snes", teams={BOS_SLOT: _team_record(BOS_SLOT, 23)})
+    result = patcher.patch(rom_path=rom, output_path=out, rosters=mapped)
+    assert result.players_patched == 21
+    count_byte = out.read_bytes()[fixture.team_base(BOS_SLOT) + fixture.PLAYER_COUNT_OFFSET]
+    assert count_byte == (14 << 4) | 5
+
+
+def test_no_line_slot_names_a_record_the_writer_never_wrote(patcher, rom, tmp_path):
+    """The consequence the header byte alone does not show.
+
+    Under the requested 14 and 7 the table's highest index is 21; 21 records
+    were written, so records 0..20 exist and 21 does not. Asserted as the exact
+    maximum rather than as a bound: `max(...) <= 20` would also pass on a table
+    of all zeroes, which is the failure a zero-filled header would produce.
+    """
+    out = tmp_path / "out.sfc"
+    mapped = MappedRosters(game_id="nhl94-snes", teams={BOS_SLOT: _team_record(BOS_SLOT, 23)})
+    patcher.patch(rom_path=rom, output_path=out, rosters=mapped)
+    base = fixture.team_base(BOS_SLOT) + fixture.LINE_ASSIGN_OFFSET
+    table = out.read_bytes()[base : base + fixture.LINE_COUNT * fixture.LINE_SLOTS]
+    assert max(table) == 20
+
+
+def test_a_provider_short_of_skaters_does_not_get_a_full_teams_header(patcher, rom, tmp_path):
+    """The commoner trigger, and the one the filed defect did not name.
+
+    Nine players against the default 2/14/7 request. Nothing was dropped by the
+    writer -- all nine fit -- but the selection was short, and upstream still
+    wrote 14 and 7. Seven forwards and no defenceman is what exists.
+    """
+    out = tmp_path / "out.sfc"
+    mapped = MappedRosters(game_id="nhl94-snes", teams={BOS_SLOT: _team_record(BOS_SLOT, 9)})
+    result = patcher.patch(rom_path=rom, output_path=out, rosters=mapped)
+    assert result.players_patched == 9
+    count_byte = out.read_bytes()[fixture.team_base(BOS_SLOT) + fixture.PLAYER_COUNT_OFFSET]
+    assert count_byte == (7 << 4) | 0
 
 
 def test_an_out_of_range_slot_index_is_dropped_after_the_json_boundary(patcher, rom, tmp_path):

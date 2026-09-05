@@ -35,6 +35,59 @@ LINE_ASSIGN_OFFSET = 19
 LINE_SLOTS = 7  # G, LD, RD, LW, C, RW, EA
 LINE_COUNT = 8  # SC1, SC2, CHK, PP1, PP2, PK1, PK2, EA
 
+# How many records the line table assumes precede the forwards. `write_team_header`
+# builds every line from `g1 = 0`, `g2 = 1` and `f_base = 2`, so the layout it
+# writes is two goalies and then the forwards, whatever the selection was cut to.
+# Named because `header_counts` has to make the same assumption to stay
+# consistent with it, and because it is where the layout stops being a variable.
+HEADER_GOALIE_SLOTS = 2
+
+
+def header_counts(written: int, num_forwards: int, num_defensemen: int) -> tuple[int, int]:
+    """The `(forwards, defensemen)` a header may claim for `written` records.
+
+    DELIBERATE DIVERGENCE. Upstream -- and this port until now -- wrote the
+    header from the counts the *selection* was cut to, never from the number of
+    records that reached the image. The two disagree whenever the roster was
+    short of the shape asked for, and the header's line table indexes players by
+    absolute position: forwards at `HEADER_GOALIE_SLOTS`, defensemen at
+    `HEADER_GOALIE_SLOTS + forwards`, with `_build_lines` clamping each side to
+    its own last index. So a team that produced 21 records under a 2/14/7
+    request got a header claiming 7 defensemen, `di(5)` resolving to record 21,
+    and a line table naming a record the writer never wrote. The game then reads
+    whatever the zero-fill left there as a player.
+
+    Clamping to the prefix that was actually written keeps the boundary in the
+    same place -- the list really is goalies, then forwards, then defensemen, in
+    that order -- while making `HEADER_GOALIE_SLOTS + forwards + defensemen`
+    equal `written` for any `written >= HEADER_GOALIE_SLOTS`, which is exactly
+    the condition that stops `_build_lines` naming an absent record.
+
+    Byte-identical to the old behaviour whenever nothing was lost, which is
+    every full roster: `written == HEADER_GOALIE_SLOTS + num_forwards +
+    num_defensemen` returns `(num_forwards, num_defensemen)` unchanged.
+
+    Two things this does NOT fix, both out of the filed defect's scope and both
+    pinned by tests rather than left to be rediscovered:
+
+      * `written < HEADER_GOALIE_SLOTS` still yields a line table naming record
+        1, because `_build_lines` clamps a zero-length side to `base - 1`. One
+        record is not a hockey team and `patcher.patch` has no better answer
+        than the one it already gives for zero.
+      * the list's goalie prefix need not be `HEADER_GOALIE_SLOTS` long.
+        `stat_mapper.select_roster` puts fewer than `num_goalies` goalies first
+        when a provider is short of them, and `patcher._resolve_roster_counts`
+        accepts any non-negative goalie count from `RomInfo.extra`, so the
+        prefix can be shorter or longer than two. Either way the forwards do not
+        start where the line table looks for them and the whole table is off by
+        the difference. That is a defect in the selection's shape, not in this
+        arithmetic, and no count passed here can repair it. The clamps do at
+        least stop a long goalie prefix being reported as extra defencemen.
+    """
+    forwards = min(max(written - HEADER_GOALIE_SLOTS, 0), num_forwards)
+    defensemen = min(max(written - HEADER_GOALIE_SLOTS - num_forwards, 0), num_defensemen)
+    return forwards, defensemen
+
 
 def encode_nibble(high: int, low: int) -> int:
     """Encode two nibbles (0-6) into a byte."""
@@ -191,6 +244,12 @@ class NHL94SNESRomWriter:
         Updates byte 17 (player count nibble) and bytes 19-74
         (8 lines x 7 slots) so the game's line display matches
         the G+F+D player order we wrote.
+
+        `num_forwards` and `num_defensemen` are the counts that reached the
+        image, not the counts the selection asked for. `header_counts` is what
+        turns one into the other and carries the argument; callers that pass the
+        requested triple here will write a line table that indexes records the
+        writer never wrote.
         """
         if not self.data or team_index >= TEAM_COUNT:
             return False
@@ -213,8 +272,8 @@ class NHL94SNESRomWriter:
         #   F:  2  .. 2+nf-1    (LW,C,RW per line)
         #   D:  2+nf .. 2+nf+nd-1
         g1, g2 = 0, min(1, 1)
-        f_base = 2
-        d_base = 2 + nf
+        f_base = HEADER_GOALIE_SLOTS
+        d_base = HEADER_GOALIE_SLOTS + nf
 
         # Clamp helper
         def fi(i: int) -> int:
@@ -283,7 +342,42 @@ class NHL94SNESRomWriter:
         return [sc1, sc2, sc3, pp1, pp2, pk1, pk2, ea]
 
     def _write_player_stats(self, player: NHL94PlayerRecord, offset: int) -> int:
-        """Write 8 stat bytes for a player. Returns new offset."""
+        """Write 8 stat bytes for a player. Returns the offset after them.
+
+        INHERITED DEFECT, PRESERVED DELIBERATELY, and the reason is that in this
+        package it cannot fire without something louder firing first.
+
+        The shape is real: on the out-of-range branch this returns `offset`
+        unchanged, which is indistinguishable from success, so
+        `write_team_roster` counts the record and lays the next one down over
+        the same bytes. Fixing that in isolation would change nothing, because
+        of an arithmetic fact about the caller.
+
+        `write_team_roster` only enters the loop body while
+        `end - offset >= 13`, and a name is truncated to `end - offset - 12`, so
+        the offset this is called with is at most `end - 10` and
+        `offset + STATS_SIZE` is at most `end - 2`. The branch above therefore
+        requires `end > len(self.data) + 2` -- a region that runs past the end
+        of the image. And every such region ends in `IndexError`: the zero-fill
+        that closes `write_team_roster` runs `while offset < end` and walks off
+        the image, and `patcher.patch` turns that into a `RomError` before
+        anything reaches disk. Swept 18 610 region shapes that do reach this
+        branch; every one raised, none returned.
+
+        So the two candidate fixes both make things worse, not better:
+
+          * returning a sentinel and breaking the loop leaves the zero-fill to
+            raise anyway -- identical behaviour, one more branch;
+          * clamping `end` to `len(self.data)` in the caller would stop the
+            raise, and that is exactly the outcome `patcher.patch` argues
+            against: it would write a truncated roster into a record chain the
+            ROM itself says is corrupt, and report success.
+
+        `tests/games/nhl94_snes/test_rom_writer.py` pins both halves -- that
+        this branch returns the offset unchanged, and that reaching it through
+        `write_team_roster` raises. If anyone ever does clamp `end`, the second
+        of those fails and this branch becomes live for real.
+        """
         if not self.data or offset + STATS_SIZE > len(self.data):
             return offset
 
