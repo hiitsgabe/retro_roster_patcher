@@ -1,8 +1,5 @@
 """ROM reader for NHL94 SNES patcher.
 
-Reads NHL94 SNES ROM data to understand team/player structure.
-
-References:
   - https://github.com/clandrew/nhl94e (nhl94e editor source)
   - https://cml-a.com/content/2020/11/23/names-and-stats-in-nhl-94/
   - https://forum.nhl94.com/index.php?/topic/13150-snes-nhl94-rom-mapping-project/
@@ -13,9 +10,8 @@ ROM layout (LoROM, 8 Mbit = 1 048 576 bytes):
   - Each team: [2-byte header size][header...][player records...][terminator][strings]
   - Player record: [2-byte LE name length (includes self)][name bytes][8 stat bytes]
 
-The length prefix is LITTLE-endian here. NHL 94 on the Genesis stores the same
-structure big-endian, and the two readers are otherwise close enough to copy
-from one another by mistake.
+The length prefix is LITTLE-endian here; the Genesis build stores the same
+structure big-endian.
 """
 
 import os
@@ -27,36 +23,27 @@ from .models import (
     NHL94TeamSlot,
 )
 
-# File offset of the team pointer table (headerless ROM)
+# Pointer table in a headerless dump
 POINTER_TABLE_FILE_OFFSET = 0xE25E7
 
-# Each pointer entry is 4 bytes (only low 2 used; bank $9C is hardcoded by the game)
+# 4 bytes per entry, only the low 2 used; bank $9C is hardcoded by the game
 POINTER_SIZE = 4
 BANK = 0x9C
 
-# SMC copier header
 SMC_HEADER_SIZE = 512
 
-# Expected ROM sizes.
-#
-# DEFECT, carried over verbatim: neither number is this game's size. NHL '94
-# (SNES) is an 8 Mbit LoROM, so a headerless dump is 1 048 576 bytes and a
-# headered one 1 049 088. These two are 397 KB short, which matters because
-# `validate` bounds the size only from below: a file of 649 728 bytes passes it
-# and then has no bank $9C at all, so `POINTER_TABLE_FILE_OFFSET` is past its
-# end and every pointer read answers None. The constants are left alone -- the
-# rest of this module is a faithful copy and correcting one number here would
-# silently change which files `validate` accepts -- and `patcher.py` refuses
-# such a file in `_pointer_table_fits` instead.
+# Upstream's sizes, known wrong, preserved for byte fidelity. The real 8 Mbit
+# LoROM is 1 048 576 headerless and 1 049 088 headered; these are 397 KB short, so
+# `validate` accepts a file with no bank $9C at all. `patcher._pointer_table_fits`
+# rejects it instead. Do not "fix" the numbers here.
 ROM_SIZE_NO_HEADER = 649728  # 0x9EC00
-ROM_SIZE_WITH_HEADER = 650240  # 0x9EE00 - with 512-byte SMC header
+ROM_SIZE_WITH_HEADER = 650240  # 0x9EE00
 
-# Stats bytes per player (jersey + 7 attribute bytes)
+# jersey + 7 attribute bytes
 STATS_SIZE = 8
 
-# Byte offset within team data for the player count nibble
-# High nibble = number of forwards, low nibble = number of defensemen.
-# Goalies are always 2 (not encoded).
+# Team-data byte 17: high nibble forwards, low nibble defencemen.
+# Goalies are always 2 and are not encoded.
 PLAYER_COUNT_OFFSET = 17
 
 
@@ -68,8 +55,6 @@ def snes_to_file_offset(rom_addr: int) -> int:
 
 
 class NHL94SNESRomReader:
-    """Reads and parses NHL94 SNES ROM data."""
-
     def __init__(self, rom_path: str):
         self.rom_path = rom_path
         self.data: bytearray | None = None
@@ -77,7 +62,6 @@ class NHL94SNESRomReader:
         self.header_offset: int = 0
 
     def load(self) -> bool:
-        """Load ROM file into memory."""
         if not os.path.exists(self.rom_path):
             return False
 
@@ -91,10 +75,7 @@ class NHL94SNESRomReader:
             return False
 
     def _detect_header(self) -> None:
-        """Detect 512-byte SMC copier header.
-
-        A headered ROM has size % 0x8000 == 512.
-        """
+        """A headered dump has size % 0x8000 == 512."""
         if not self.data:
             return
         if len(self.data) % 0x8000 == SMC_HEADER_SIZE:
@@ -105,22 +86,19 @@ class NHL94SNESRomReader:
             self.header_offset = 0
 
     def validate(self) -> bool:
-        """Validate that this is an NHL94 SNES ROM."""
         if not self.data:
             return False
 
         size = len(self.data)
-        # Accept standard sizes and also expanded ROMs (up to 4 MB)
         if size == ROM_SIZE_NO_HEADER or size == ROM_SIZE_WITH_HEADER:
             return True
-        # Also accept expanded ROMs (nhl94e expands to 4 MB)
+        # nhl94e expands the image to 4 MB
         stripped = size - self.header_offset
         if stripped >= ROM_SIZE_NO_HEADER:
             return True
         return False
 
     def get_info(self) -> NHL94RomInfo:
-        """Get ROM information and team slots."""
         if not self.data:
             return NHL94RomInfo(
                 path=self.rom_path,
@@ -142,14 +120,9 @@ class NHL94SNESRomReader:
         )
 
     def _ptr_table_offset(self) -> int:
-        """Get file offset of pointer table."""
         return self.header_offset + POINTER_TABLE_FILE_OFFSET
 
     def _read_team_pointer(self, team_index: int) -> int | None:
-        """Read team data file offset from pointer table.
-
-        Returns file offset (accounting for header), or None if invalid.
-        """
         if not self.data or team_index >= TEAM_COUNT:
             return None
 
@@ -163,17 +136,10 @@ class NHL94SNESRomReader:
         high = self.data[ptr_off + 1]
         rom_addr = (BANK << 16) | (high << 8) | low
 
-        # Convert SNES address to file offset and add header
         return self.header_offset + snes_to_file_offset(rom_addr)
 
     def read_team_player_counts(self, team_index: int) -> tuple[int, int, int]:
-        """Read G/F/D counts from team header byte 17.
-
-        Byte 17 of team data: high nibble = forwards,
-        low nibble = defensemen.  Goalies are always 2.
-
-        Returns: (num_goalies, num_forwards, num_defensemen)
-        """
+        """(goalies, forwards, defencemen) from team-data byte 17."""
         if not self.data or team_index >= TEAM_COUNT:
             return (2, 14, 7)
 
@@ -189,14 +155,12 @@ class NHL94SNESRomReader:
         num_forwards = (count_byte >> 4) & 0x0F
         num_defensemen = count_byte & 0x0F
 
-        # Sanity check - if values look wrong, use defaults
         if num_forwards < 3 or num_defensemen < 2:
             return (2, 14, 7)
 
         return (2, num_forwards, num_defensemen)
 
     def _read_team_slots(self) -> list[NHL94TeamSlot]:
-        """Read team information from ROM."""
         slots: list[NHL94TeamSlot] = []
         if not self.data:
             return slots
@@ -220,11 +184,7 @@ class NHL94SNESRomReader:
         return slots
 
     def _read_length_prefixed_string(self, offset: int) -> tuple[str, int]:
-        """Read a 2-byte LE length-prefixed string.
-
-        The length value includes the 2 length bytes themselves.
-        Returns (string, total_bytes_consumed).
-        """
+        """Read a 2-byte LE length-prefixed string. The length includes itself."""
         assert self.data is not None
         if offset + 2 > len(self.data):
             return "", 0
@@ -249,11 +209,8 @@ class NHL94SNESRomReader:
             return "", 0
 
     def _skip_team_header(self, team_data_offset: int) -> int:
-        """Skip team header to reach player records.
-
-        First 2 bytes of team data = header size (LE).
-        Player records start at team_data_offset + header_size.
-        """
+        """The first 2 bytes of team data are the header size (LE); the player
+        records start just past it."""
         assert self.data is not None
         if team_data_offset + 2 > len(self.data):
             return team_data_offset
@@ -262,29 +219,21 @@ class NHL94SNESRomReader:
         return team_data_offset + header_size
 
     def _read_team_city(self, team_data_offset: int) -> str:
-        """Read team city string (first string after player data)."""
+        """The city is the first string after the player records."""
         assert self.data is not None
-        # Skip header
         offset = self._skip_team_header(team_data_offset)
 
-        # Skip all player records to reach team strings
         while offset < len(self.data) - 1:
             length = self.data[offset] | (self.data[offset + 1] << 8)
-            if length < 3:  # Terminator (0x0200 or 0x0000)
-                offset += 2  # Skip terminator
+            if length < 3:  # terminator, 0x0200 or 0x0000
+                offset += 2
                 break
-            # Skip name + 8 stat bytes
             offset += length + STATS_SIZE
 
-        # First string after players is the city name
         city, _ = self._read_length_prefixed_string(offset)
         return city
 
     def read_team_roster(self, team_index: int) -> tuple[list[str], list[bytes]]:
-        """Read player names and stat bytes for a team.
-
-        Returns: (names, stat_bytes_list)
-        """
         if not self.data or team_index >= TEAM_COUNT:
             return [], []
 
@@ -292,18 +241,14 @@ class NHL94SNESRomReader:
         if file_off is None:
             return [], []
 
-        # Skip team header to reach player data
         offset = self._skip_team_header(file_off)
 
         names: list[str] = []
         stat_bytes: list[bytes] = []
 
         while offset < len(self.data) - 1:
-            # Read 2-byte name length
             length = self.data[offset] | (self.data[offset + 1] << 8)
-
-            # Check for terminator
-            if length < 3:
+            if length < 3:  # terminator
                 break
 
             str_len = length - 2
@@ -312,7 +257,6 @@ class NHL94SNESRomReader:
             if str_start + str_len > len(self.data):
                 break
 
-            # Read name
             try:
                 name = (
                     bytes(self.data[str_start : str_start + str_len])
@@ -323,9 +267,8 @@ class NHL94SNESRomReader:
             except Exception:
                 names.append("")
 
-            offset += length  # Advance past name (length includes the 2 length bytes)
+            offset += length  # length includes the 2 length bytes
 
-            # Read 8 stat bytes
             if offset + STATS_SIZE > len(self.data):
                 break
 
