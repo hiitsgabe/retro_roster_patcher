@@ -260,18 +260,19 @@ META_OFF_TEXT_COLOR = 0x4D  # Text color
 class NBALive95PlayerRecord:
     """Complete player record ready to write to ROM (93 bytes).
 
-    `skin_color` and `hair_style` are INHERITED DEFECTS, carried over
-    deliberately. Nothing ever sets either: `stat_mapper.map_player` builds this
-    record without them, so both stay 0, and `rom_writer.write_player` writes
-    both over the ROM's own values. Every patched player therefore ends up with
-    the same skin tone and the same hair, and the variety the 1994 image shipped
-    with is destroyed rather than merely not improved. Neither could be fixed
-    faithfully here anyway -- ESPN publishes no such attribute -- so the honest
-    repairs are to stop writing the two bytes or to leave them alone; both change
-    the output image and belong in their own commit with their own test.
+    `skin_color` and `hair_style` have no producer and are not expected to get
+    one: `stat_mapper.map_player` builds this record without them and ESPN
+    publishes no such attribute. 0 is therefore what every mapped record carries,
+    and it means "not supplied" rather than "tone 0, style 0".
+    `rom_writer.write_player` reads it that way and leaves the image's own byte
+    alone, which is a DELIBERATE DIVERGENCE from upstream and from this port
+    until now; the argument is at the line there. A direct caller of
+    `write_player` may still set either field to a positive value and have it
+    written.
 
-    `season_stats` defaults to 17 zeros and stays that way for the same reason:
-    see `stat_mapper.NBALive95StatMapper.map_player`.
+    `season_stats` defaults to 17 zeros and those zeros *are* written, which is
+    the opposite call on a field of the same shape. See
+    `stat_mapper.NBALive95StatMapper.map_player` for why the two differ.
     """
 
     name_last: str = "PLAYER"
