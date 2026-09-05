@@ -4,13 +4,11 @@
     -> overwrite them inside `db.viv` where they already sit -> write `db.viv`
     back into the image at its original LBA
 
-The archive is patched **in place** rather than rebuilt. `formats.ea_tdb`
-offers both, and `bigf_replace` -- which reassembles the directory and so moves
-every offset after the replaced file -- is not what this game can use: the disc
-has one allocation for `db.viv` and everything the game seeks to inside it is
-addressed by an offset the directory records. `bigf_replace_inplace` keeps every
-offset and zero-pads the slack, which is why a re-compressed table is only ever
-allowed to get *smaller*.
+Patch the archive in place; never use `bigf_replace`, which reassembles the
+directory and so moves every offset after the replaced file. The disc has one
+allocation for `db.viv` and the game seeks inside it by recorded offset.
+`bigf_replace_inplace` keeps every offset and zero-pads the slack, so a
+recompressed table may only get *smaller*.
 
 Two size checks follow from that, at two different layers, and both matter:
 
@@ -18,8 +16,6 @@ Two size checks follow from that, at two different layers, and both matter:
     `db.viv` -- `bigf_replace_inplace`'s own bound;
   * the resulting `db.viv` must fit the sector gap before the next file on the
     ISO -- `find_db_viv_location`'s `max_size`.
-
-The source honoured the second and ignored the first; see `rebuild_and_write`.
 """
 
 from __future__ import annotations
@@ -40,13 +36,9 @@ from .models import (
 from .rom_reader import ISO_SECTOR_SIZE, NHL07PSPRomReader
 
 # Every single-bit line-assignment flag in a ROST record, and the complete set:
-# `write_roster_values` zeroes all of them before setting the ones a player has,
-# so a flag missing from this list would keep whatever the 2006 roster left
-# there and put a retired player on the power play.
-#
-# The three defence pairs are `31LD`/`31RD` through `33LD`/`33RD` and not
-# `L1LD`-style, which is the naming the four forward lines use. That is the
-# TDB's own spelling, not a transcription slip.
+# `roster_values` zeroes all of them before setting the ones a player has, so a
+# flag missing from this list keeps whatever the 2006 roster left there and puts
+# a retired player on the power play.
 #
 #   L1C_ .. L4RW   four forward lines, centre / left wing / right wing
 #   31LD .. 33RD   three defence pairs, left and right
@@ -54,41 +46,10 @@ from .rom_reader import ISO_SECTOR_SIZE, NHL07PSPRomReader
 #   H1__ .. H5__   the power-play unit
 #   S1__ .. S5__   the penalty-kill unit
 #
-# NOT A PORT REGRESSION -- nothing was dropped in the migration. The source's
-# list is these same thirty names in this same order, all thirty distinct, with
-# no `L1LD` and no repeat of `31LD`; the only edit is that its inline
-# `# Note: "31LD" not "L1LD" in TDB` is spelled out here instead. `L1LD` occurs
-# exactly once in the whole source tree and it is in a different game's writer,
-# `nhl05_ps2_patcher/rom_writer.py`. There is no flag to restore.
-#
-# The evidence that `31LD` is a defence *pair* here and not a transcription of
-# `L1LD` is the shape of the two lists, and it does not need a real ROST dump.
-# Group either game's flags by prefix and read off which position suffixes each
-# prefix carries. NHL 05's sixty-four:
-#
-#   L1..L4  C_ LW RW   and  L1..L3  LD RD      even strength: 4 lines, 3 pairs
-#   P1,P2   C_ LW RW   LD RD                   five skaters
-#   K1,K2   C_ LW      LD RD                   four skaters
-#   41,42   C_ LW      LD RD                   four skaters
-#   31,32   C_         LD RD                   three skaters
-#
-# `31C_` exists there. A defence pair has no centre, so on NHL 05 a `3n` prefix
-# is a three-skater strength unit and the even-strength pairs are `L1LD`-style.
-# NHL 07's thirty group the other way:
-#
-#   L1..L4  C_ LW RW   and no L*LD or L*RD at all
-#   31,32,33           LD RD                   two slots each, no centre
-#
-# No `31C_`, exactly two slots per number, three of them, and no other defence
-# flag anywhere in the list -- so on this game `3n` is defence pair *n*, and if
-# it were not, NHL 07 could not assign a defence pair at all. Same prefix, two
-# different meanings, one per game. `stat_mapper.generate_team_line_flags` emits
-# `3{pair}{side}` and that is correct here; `games/nhl05_ps2/rom_writer.py`
-# carries the other half of this argument, where the same emission is wrong.
-#
-# Still unverified against a real disc, and one thing would settle it outright:
-# a dump of the ROST table's field-name array from a retail NHL 07 (PSP) UMD. No
-# such file may enter this repository, so the reasoning above is what there is.
+# `31LD` and not `L1LD`: on this game a `3n` prefix is defence pair *n*, and the
+# list carries no other defence flag. On `games/nhl05_ps2` the same `3n` prefix
+# is a three-skater strength unit -- it has `31C_`, which a pair cannot -- and
+# the pairs there are `L1LD`-style. Do not harmonise the two lists.
 LINE_FLAGS = [
     "L1C_",
     "L2C_",
@@ -122,18 +83,11 @@ LINE_FLAGS = [
     "S5__",
 ]
 
-# How much of a progress bar each phase of a patch owns, as fractions of the
-# whole. Copying the image is by far the slowest step on real hardware -- a UMD
-# image is hundreds of megabytes -- and recompressing three TDBs is the next.
+# Progress-bar spans, contiguous and monotonic, ending at 1.0:
 #
 #   0.00 .. 0.30   copy_iso
 #   0.30 .. 0.60   patcher.patch, writing records
 #   0.60 .. 1.00   rebuild_and_write, recompressing and writing back
-#
-# IMPROVEMENT: the source's three spans were 0.0-0.3, 0.35-0.60 and *0.3*-0.7,
-# so a progress bar ran forwards to 60%, jumped back to 30%, and finished at
-# 70% having reported "Complete". These three are contiguous and monotonic and
-# the last one ends at 1.0.
 PROGRESS_COPY_END = 0.3
 PROGRESS_RECORDS_END = 0.6
 PROGRESS_COMPRESS_END = 0.95
@@ -143,9 +97,7 @@ class NHL07PSPRomWriter:
     """Copies an ISO, edits the TDBs inside its `db.viv`, and writes it back.
 
     The instance holds the *output* image, not the input: `copy_iso` makes the
-    copy and `load` then opens that copy, so every subsequent read and every
-    write is against the file the user will keep. Nothing here mutates the
-    source ISO.
+    copy and `load` opens that copy. Nothing here mutates the source ISO.
     """
 
     def __init__(self, iso_path: str, output_path: str) -> None:
@@ -157,20 +109,14 @@ class NHL07PSPRomWriter:
     def copy_iso(self, on_progress: Callable[[float, str], None] | None = None) -> None:
         """Copy the source ISO to the output path, reporting progress.
 
-        4 MB at a time, because the whole image does not fit in a handheld's
-        memory: the two applications this library was extracted for run on
-        Batocera handhelds and on Android.
+        4 MB at a time: the whole image does not fit in a handheld's memory.
 
-        `fsync` before returning, deliberately. The next step reopens the same
-        path `r+b` and seeks into it, and on the SD cards these devices boot from
-        an unflushed 700 MB write is a real way to read back a hole.
+        `fsync` before returning. The next step reopens the same path `r+b` and
+        seeks into it, and on the SD cards these devices boot from an unflushed
+        700 MB write is a real way to read back a hole.
 
-        DELIBERATE DIVERGENCE: the source caught every exception and returned
-        `False`, which its caller turned into the message "Failed to copy ISO
-        file" with the actual `errno` discarded -- a full card, a read-only
-        mount and a vanished source all read the same. `OSError` now propagates
-        and `patch` converts it through `errors.as_rom_error`, which names the
-        file the OS complained about.
+        Let `OSError` propagate; `patch` converts it through
+        `errors.as_rom_error`, which names the file the OS complained about.
         """
         src_size = os.path.getsize(self.iso_path)
         output_dir = os.path.dirname(self.output_path)
@@ -198,54 +144,37 @@ class NHL07PSPRomWriter:
     def db_viv(self) -> bytes | None:
         """The output ISO's `db.viv` as `load` found it, before any edit.
 
-        The edits live in the parsed `TDBFile` objects, not here:
-        `rebuild_and_write` copies these bytes and patches the recompressed
-        tables into the copy. So a caller reading this after a write still sees
-        the archive exactly as it was on the disc, which is what
-        `patcher._archive_spelling` wants -- it is asking for names, and the
-        names do not change.
+        The edits live in the parsed `TDBFile` objects, not here, so a caller
+        reading this after a write still sees the archive as it was on the disc.
+        `patcher._archive_spelling` depends on that: it asks for member names,
+        and the names do not change.
         """
         return self._db_viv
 
     def load(self) -> bool:
-        """Open the copied ISO and cache its `db.viv`.
-
-        False when the copy has no `db.viv`, which after a successful `copy_iso`
-        of a validated source means the copy is not what was copied.
-        """
+        """Open the copied ISO and cache its `db.viv`."""
         self.reader = NHL07PSPRomReader(self.output_path)
         if not self.reader.load():
             return False
         self._db_viv = self.reader.get_db_viv()
         return self._db_viv is not None
 
-    # -- record writes ------------------------------------------------------
-
     def write_player_bio(self, tdb: TDBFile, record_idx: int, player: NHL07PlayerRecord) -> None:
         """Update one SPBT record's name, number, hand, team and position.
 
-        A table this TDB does not have, or an index past its allocation, is a
-        no-op rather than an error: the same player is written to the master TDB
-        and to `nhlbioatt.tdb`, and the second of those need not have the same
-        capacity as the first.
+        A missing table, or an index past its allocation, is a no-op rather than
+        an error: the same player is written to the master TDB and to
+        `nhlbioatt.tdb`, which need not have the same capacity.
 
-        `WEIG` and `HEIG` are each written only when positive, so a provider
-        that reports no weight leaves the disc's own value alone rather than
-        flattening the player to zero pounds.
+        Write `WEIG` and `HEIG` only when positive, so a provider that reports
+        no weight leaves the disc's own value alone rather than flattening the
+        player to zero pounds.
 
-        UPSTREAM BEHAVIOUR, KNOWN WRONG, PRESERVED DELIBERATELY -- `HEIG` is
-        written, and it is always 16. `stat_mapper.map_player` derives the
-        height from `getattr(player, "height", 0)` against a `Player` that has
-        no `height` attribute in either the old models or this library's, so
-        that expression is `0` for every player who ever passes through it, the
-        `if player_height > 0` branch never runs, and `NHL07PlayerRecord.height`
-        keeps its default. **Every patched player is written at the same
-        5'10"**, overwriting whatever the disc knew, and the disc's own
-        per-player heights are lost. It would be one line to stop writing the
-        field, and one more to give `sports.models.Player` a real height -- but
-        this port's output has never been checked against a retail UMD, and a
-        byte sequence the source did not write is a risk on hardware that no
-        improvement to the data justifies. So the constant stands.
+        Upstream behaviour, known wrong, preserved deliberately: `HEIG` is
+        written and it is always 16, about 5'10", because
+        `stat_mapper.map_player` reads a `Player.height` that does not exist.
+        Every patched player overwrites the disc's per-player height with that
+        one value.
         """
         spbt = tdb.get_table("SPBT")
         if spbt is None or record_idx >= spbt.capacity:
@@ -275,11 +204,9 @@ class NHL07PSPRomWriter:
     ) -> None:
         """Update one SPAI record from a skater's 22 ratings.
 
-        `INDX` is written only for a positive `player_id`. Zero means "leave the
-        record's identity alone", which is what every call in this package
-        wants: the record was found *by* its `INDX`, so rewriting it with the
-        same value is at best a no-op and at worst -- if the caller passed the
-        wrong id -- detaches the attributes from the bio.
+        Write `INDX` only for a positive `player_id`: the record was found *by*
+        its `INDX`, and rewriting it with a wrong id detaches the attributes
+        from the bio.
         """
         spai = tdb.get_table("SPAI")
         if spai is None or record_idx >= spai.capacity:
@@ -363,19 +290,12 @@ class NHL07PSPRomWriter:
     ) -> dict[str, object]:
         """The value mapping for one ROST record: jersey, captaincy, lines.
 
-        **Every** flag in `LINE_FLAGS` is set, to zero unless `line_flags` names
-        it, because a record is being reused rather than created: whatever line
-        its previous occupant played on is still in those bits.
+        Set *every* flag in `LINE_FLAGS`, to zero unless `line_flags` names it:
+        the record is reused, so its previous occupant's line is still in those
+        bits. Drop a key that is not a known flag.
 
-        A key in `line_flags` that is not a known flag is dropped rather than
-        passed through. `TDBTable.write_record` would ignore it anyway -- an
-        unknown field name is silently skipped there -- so this is a second
-        guard on the same thing, and it is the one that keeps the value mapping
-        honest for a caller that inspects it.
-
-        Deliberately does NOT write `TEAM` or `INDX`. The record was found by
-        those two, and rewriting `INDX` would break the ROST -> PLAY -> SPBT
-        chain that located it.
+        Do not write `TEAM` or `INDX`. The record was found by those two, and
+        rewriting `INDX` breaks the ROST -> PLAY -> SPBT chain that located it.
         """
         values: dict[str, object] = {
             "JERS": jersey,
@@ -390,8 +310,6 @@ class NHL07PSPRomWriter:
                     values[flag] = val
         return values
 
-    # -- writing back -------------------------------------------------------
-
     def rebuild_and_write(
         self,
         modified_tdbs: Mapping[str, TDBFile],
@@ -402,23 +320,10 @@ class NHL07PSPRomWriter:
         `modified_tdbs` is keyed by the archive's *own* spelling of each member,
         which the caller reads out of `bigf_parse` -- see `patcher.py`.
 
-        DELIBERATE DIVERGENCE, twice over:
-
-        1. **`bigf_replace_inplace`'s return value is checked.** The source
-           discarded it, under a comment reasoning that a `.tdb` too large for
-           its slot could be skipped because "the master TDB has all tables so
-           split TDBs can stay unchanged". Nothing in this repository can check
-           that claim, and it is a claim about which file the game reads at run
-           time. What is certain is the failure mode it produced: a table's
-           edits silently dropped, `db.viv` written back with two of its three
-           TDBs disagreeing about the same roster, and `PatchResult` still
-           returned as a success. That is the "success with zero work" report
-           this project has now found in four patchers. It raises.
-        2. **Failures raise `RomError` rather than returning `False` with the
-           message on `self._last_error`.** The source stashed a message and a
-           formatted traceback on the instance and its caller fished them out
-           with `getattr(..., "unknown")`, so a failure whose cause was not one
-           of the two anticipated ones reported the string `unknown`.
+        Never discard `bigf_replace_inplace`'s return value: a table that does
+        not fit its slot would be silently skipped, leaving `db.viv` with its
+        three TDBs disagreeing about the same roster and the patch reported as a
+        success. Raise instead.
 
         Raises:
             RomError: a recompressed TDB does not fit its slot inside `db.viv`;
@@ -449,9 +354,8 @@ class NHL07PSPRomWriter:
         if on_progress is not None:
             on_progress(PROGRESS_COMPRESS_END, "Writing db.viv to ISO...")
 
-        # A second reader over the same output file. The one `load` built has
-        # already cached `db.viv`'s *contents*; what is wanted here is where it
-        # sits, which nothing cached.
+        # A second reader over the same output file: `load`'s cached `db.viv`'s
+        # contents, and what is wanted here is where it sits.
         reader_for_loc = NHL07PSPRomReader(self.output_path)
         reader_for_loc.load()
         db_lba, db_orig_size, db_max_size = reader_for_loc.find_db_viv_location()

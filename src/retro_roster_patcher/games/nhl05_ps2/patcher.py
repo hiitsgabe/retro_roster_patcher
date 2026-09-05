@@ -1,50 +1,32 @@
 """NHL 2005 (PS2) on the unified Patcher interface.
 
-The translation layer between the ported reader/writer/mapper and the contracts
-in `core.patcher`. Four things about this game are worth reading before the code.
+Every write addresses a named TDB record field, never a byte offset: a mistyped
+four-character field name is silently ignored by `TDBTable.write_record` and a
+wrong record index overwrites a different real player. Neither crashes.
 
-**It patches named database records, not byte offsets.** There is not one
-hardcoded player address in the package. Every write is
-`table.write_record(idx, {"FNME": ..., "SACC": ...})` against four-character
-field names whose widths and bit offsets come out of the file's own headers. So
-the failure modes are different: a mistyped field name is silently ignored by
-`TDBTable.write_record`, and a wrong record index writes a real player over a
-different real player. Neither shows up as a crash.
-
-**Records are reached through a four-hop chain, and only the last hop is a
-position.** For a team slot `t`:
+A team slot's records are reached through a four-hop chain, and only the last
+hop is a position. For a team slot `t`:
 
     ROST rows whose TEAM is t  ->  a list of ROST record positions
     ROST[i]["INDX"]            ->  a PLAY record's INDX value
     PLAY[...]["ID__"]          ->  a player id
     SPBT / SPAI / SGAI         ->  the record whose INDX is that player id
 
-Nothing in that chain is the identity function. `patch` builds three
-`INDX -> position` maps to walk it, and a slot is classified as a goalie slot by
-whether its player id has an SGAI entry -- not by what the disc's bio says the
-position is -- because the attributes have to go to a table that has a row for
+Classify a slot as a goalie slot by whether its player id has an SGAI entry, not
+by the position in the disc's bio: the attributes need a table with a row for
 him.
 
-**There is only one mirror, and it is ROST.** `DB.VIV` holds `nhl2005.tdb`, the
-master, and `nhlrost.tdb`, a second copy of ROST alone. `games/nhl07_psp` has a
-third member, `nhlbioatt.tdb`, mirroring SPBT/SPAI/SGAI, and every bio and
-attribute write there happens twice. Here each happens once. A port that copied
-NHL 07's `_MirrorTables` wholesale would carry a `bioatt` field that is always
-`None` and a pair of mirrored writes that never run.
+There is only one mirror, and it is ROST. `DB.VIV` holds `nhl2005.tdb`, the
+master, and `nhlrost.tdb`, a second copy of ROST alone. Do not copy
+`games/nhl07_psp`'s `_MirrorTables`: this game has no `nhlbioatt.tdb`, so bio and
+attribute writes happen once each.
 
-**`analyze_rom` and `patch` do not apply the same checks**, deliberately, and
-`_db_viv_extent_fits` versus `NHL05PS2RomReader.validate` is the split. See
-`analyze_rom`.
+`analyze_rom` and `patch` deliberately do not apply the same checks; do not
+harmonise them. See `analyze_rom`.
 
-**No compressed-image check, unlike `games/nhl07_psp`.** That game refuses
-`.cso`/`.zso`/`.jso`/`.dax` by magic number because its upstream ROM-finder
-configuration advertised `.cso` against a reader with no CSO support. Measured
-for this game: the same front end configures NHL 2005 with
-`file_extensions=[".iso", ".zip"]` and nothing else, so there is no advertised
-capability to be honest about. A compressed image handed here is a file with no
-PVD, which `NHL05PS2RomReader.load` answers with False and `analyze_rom` reports
-as `is_valid=False` -- the correct answer for "not this game". Adding the check
-anyway would mean shipping a comment justifying it that is false.
+There is no compressed-image check, unlike `games/nhl07_psp`: a compressed image
+handed here is a file with no PVD, which `NHL05PS2RomReader.load` answers with
+False.
 """
 
 from __future__ import annotations
@@ -101,45 +83,19 @@ def _db_viv_extent(reader: NHL05PS2RomReader) -> tuple[int, int]:
 def _db_viv_extent_fits(rom_path: Path, reader: NHL05PS2RomReader) -> bool:
     """Does the whole of `DB.VIV` lie inside the file?
 
-    This is the **arithmetic bound**, and unlike `NHL05PS2RomReader.validate` it
-    guards `analyze_rom` *and* `patch`. The difference is what kind of claim each
-    makes. `validate` guesses at meaning -- "an archive holding a file called
-    `nhl2005.tdb` that decompresses to a TDB is probably NHL 2005" -- and a wrong
-    guess costs a user auto-detection, which `patch --game nhl05-ps2` routes
-    around. This is arithmetic on numbers the file states about itself, and a
-    file that fails it provably cannot be patched, so exempting `patch` would
-    preserve exactly the failure the check exists to kill.
-
-    The arithmetic, explicitly. The ISO 9660 directory record for `DB.VIV`
-    declares an extent LBA and a length in bytes. Mode 1 sectors are 2048 bytes
-    with no header, so the archive occupies
+    The ISO 9660 directory record for `DB.VIV` declares an extent LBA and a
+    length in bytes. Mode 1 sectors are 2048 bytes with no header, so the
+    archive occupies
 
         [ lba * 2048 , lba * 2048 + size )
 
-    and the file must be at least `lba * 2048 + size` bytes long. A 5 000-sector
-    LBA with a 40 000-byte archive needs 10 240 000 + 40 000 = 10 280 000 bytes.
+    and the file must be at least `lba * 2048 + size` bytes long.
 
-    What goes wrong without it is a silent-corruption path that runs the entire
-    length of the stack, and every layer of it is *documented* to stay silent:
-
-        `_extract_db_viv` does `f.read(size)` and gets fewer bytes, silently;
-        `bigf_parse` trusts the file count and manufactures entries out of what
-        it can reach -- `formats/ea_tdb.py`, inherited defect 1;
-        `bigf_extract` slices past the end and returns a short RefPack stream;
-        `refpack_decompress` returns short for a truncated stream and never
-        pads -- inherited contract 3;
-        `TDBFile._parse_table` takes a short `_raw_data` without complaint;
-        `TDBFile.serialize` then **shrinks its own output**, moving every later
-        table's offset -- inherited contract 2.
-
-    The result is an archive that recompresses smaller, fits every size check
-    below it, is written to the disc, and boots to a corrupted database. And
-    `PatchResult` would report it as a success with a full count of teams
-    patched. Refusing at the top is the only place in that chain where the fact
-    is still visible.
-
-    None of this can be checked against a real disc; no ISO may enter this
-    repository. The numbers come from the image's own directory record.
+    Keep this guarding both `analyze_rom` and `patch`: every layer below --
+    `_extract_db_viv`, `bigf_parse`, `bigf_extract`, `refpack_decompress`,
+    `TDBFile` -- accepts a truncated archive silently and `TDBFile.serialize`
+    then shrinks its own output, so a short read boots to a corrupted database
+    that `PatchResult` reports as a success.
     """
     start, end = _db_viv_extent(reader)
     if end == 0:
@@ -150,24 +106,10 @@ def _db_viv_extent_fits(rom_path: Path, reader: NHL05PS2RomReader) -> bool:
 def _live_records(table: TDBTable) -> range:
     """The record positions of `table` that are both live and allocated.
 
-    **This is the bound `formats/ea_tdb.py` hands to its consumers.** That
-    module deliberately never checks `currentRecords` against `maxRecords`:
-    clamping would make `serialize` write back a count it never read and break
-    the round-trip property the format layer is tested on, and raising would
-    refuse a whole disc over one header word. So the fact travels and the policy
-    is the consumer's, and every loop in this package that walks a table's
-    records goes through here.
-
-    Without it, a disc whose header overstates its own live count hands
-    `range(num_records)` an `IndexError` from `read_record`. The source absorbed
-    that with a per-record `except Exception: continue`, which dropped every
-    record past the allocation silently and would have dropped any other error
-    with them.
-
-    `TDBTable.find_record` and `find_records` iterate `num_records` unbounded
-    and are therefore not used anywhere in this package, for the same reason.
-    The source used `rost.find_records("TEAM", team_idx)` and that is the one
-    call this replaces.
+    `formats/ea_tdb.py` never clamps `currentRecords` to `maxRecords`, so a disc
+    whose header overstates its live count raises `IndexError` from
+    `read_record`. Walk every table through here; `TDBTable.find_record` and
+    `find_records` iterate `num_records` unbounded and must not be used.
     """
     return range(min(table.num_records, table.capacity))
 
@@ -175,10 +117,9 @@ def _live_records(table: TDBTable) -> range:
 def _index_map(table: TDBTable) -> dict[int, int]:
     """`{INDX value: record position}` over one table's live records.
 
-    Positive `INDX` values only, which is the source's filter: zero is what an
-    unused row holds, and mapping it would make every unused row in the table
-    look like the same player. Later records win a tie, also the source's
-    behaviour, and it matters because nothing guarantees `INDX` is unique.
+    Positive `INDX` only: zero is what an unused row holds, and mapping it would
+    make every unused row look like the same player. `INDX` is not guaranteed
+    unique, and later records win a tie.
     """
     result: dict[int, int] = {}
     for i in _live_records(table):
@@ -191,14 +132,11 @@ def _index_map(table: TDBTable) -> dict[int, int]:
 def _play_id_by_indx(table: TDBTable) -> dict[int, int]:
     """`{PLAY.INDX: PLAY.ID__}`, the middle hop of the record chain.
 
-    Unlike `_index_map` this does **not** drop `INDX` of zero, because the
-    source did not: a PLAY row is looked up by a ROST row's `INDX`, and if both
-    are zero the source paired them. A row whose `ID__` is zero is then dropped
-    downstream anyway, by `_index_map`'s positive filter on SPBT.
-
-    A table with no `INDX` field at all collapses to the single key -1, which is
-    the source's `rec.get("INDX", -1)` and is unreachable from a ROST row --
-    `INDX` is unsigned there, so no ROST row can name it.
+    Unlike `_index_map` this keeps `INDX` of zero: a ROST row whose `INDX` is
+    zero pairs with it, and a resulting `ID__` of zero is dropped downstream by
+    `_index_map`'s positive filter on SPBT. A table with no `INDX` field
+    collapses to the key -1, which no ROST row can name because `INDX` is
+    unsigned there.
     """
     result: dict[int, int] = {}
     for i in _live_records(table):
@@ -214,9 +152,8 @@ def _play_id_by_indx(table: TDBTable) -> dict[int, int]:
 class _RosterSlot:
     """One ROST row this patcher may write, and everything it points at.
 
-    `spai_index` and `sgai_index` are both optional and at most one is normally
-    set: a player with an SGAI row is a goalie, and that is how
-    `_classify_slots` decides which pool the row belongs to.
+    A player with an SGAI row is a goalie; at most one of `spai_index` and
+    `sgai_index` is normally set.
     """
 
     rost_index: int
@@ -228,12 +165,7 @@ class _RosterSlot:
 
 @dataclass(frozen=True)
 class _MasterTables:
-    """The master TDB's tables, plus the three lookups built from them once.
-
-    Built once per patch rather than once per team: `_index_map` reads every
-    live record of SPBT, SPAI and SGAI, which on a real disc is a few thousand
-    records each, and there are 30 teams.
-    """
+    """The master TDB's tables, plus the three lookups built from them once."""
 
     tdb: TDBFile
     rost: TDBTable
@@ -246,11 +178,9 @@ class _MasterTables:
     def of(cls, tdb: TDBFile) -> _MasterTables:
         """Read the tables out of a master TDB, or say which are missing.
 
-        SPBT, ROST and PLAY are required -- they are the three hops of the
-        chain, and without any one of them no player can be located. SPAI and
-        SGAI are not: a disc missing SGAI can still have its bios and lines
-        rewritten, and every attribute write is guarded by the index being
-        found.
+        SPBT, ROST and PLAY are the three hops of the chain and are required.
+        SPAI and SGAI are not: a disc missing them can still have its bios and
+        lines rewritten.
         """
         spbt = tdb.get_table("SPBT")
         rost = tdb.get_table("ROST")
@@ -287,14 +217,8 @@ class _MasterTables:
 class NHL05PS2Patcher(Patcher):
     """Teams map to ROM slots by abbreviation, so no manual mapping step.
 
-    `requires_slot_mapping=False` follows the source, which has no mapping step
-    and no way to express one: `map_rosters_to_nhl05` looked every fetched team
-    up in `MODERN_NHL_TO_NHL05` and dropped the ones with no entry. That is the
-    same shape as `nhl94-genesis` and `nhl07-psp` and unlike `iss-snes`, which
-    needed a mapping because its 27 slots are national teams that no club
-    abbreviation names. All 30 slots this game patches are real NHL clubs with
-    real abbreviations, and the mapping table already carries both providers'
-    spellings of each.
+    All 30 patchable slots are real NHL clubs with real abbreviations, and
+    `MODERN_NHL_TO_NHL05` carries both providers' spellings of each.
 
     Providers: `espn` for the current season, `nhl` for seasons back to 1993.
     """
@@ -315,50 +239,24 @@ class NHL05PS2Patcher(Patcher):
             on_partial=on_partial,
         )
         self.mapper = NHL05StatMapper()
-        # Eagerly, and both clients create their cache directory from their own
-        # constructor, so constructing this patcher can raise `StorageError`.
-        # Nothing here reaches the network.
-        #
-        # `Any` for the same reason `nhl94_genesis` needs it: of the three
-        # methods `fetch` calls, only `get_nhl_teams` has one signature on both
-        # clients. `get_hockey_squad` takes a team id on ESPN and an
-        # abbreviation on the NHL API, and `get_hockey_team_leaders` splits the
-        # same way, so no single type describes both and calling the wrong
-        # branch is a runtime bug rather than a mypy error. Both branches are
-        # pinned by tests.
+        # `Any`: `get_hockey_squad` takes a team id on ESPN and an abbreviation
+        # on the NHL API, and `get_hockey_team_leaders` splits the same way, so
+        # no single type describes both clients.
         if self.provider == "nhl":
             self.api: Any = NhlApiClient(str(self.cache_dir), on_status, transport=transport)
         else:
             self.api = EspnClient(str(self.cache_dir), on_status, transport=transport)
 
-    # -- analyze ------------------------------------------------------------
-
     def analyze_rom(self, rom_path: Path) -> RomInfo:
         """Inspect an ISO and list its team slots.
 
-        Two checks, and they guard different sets of entry points on purpose.
-
-        `NHL05PS2RomReader.validate(deep=True)` is a **heuristic**: `DB.VIV` is a
-        BIGF, it holds `nhl2005.tdb`, and that decompresses to something whose
-        magic is `DB\\x00\\x08`. It guards this method and NOT `patch`.
-
-        That split needs a different argument here from the one
-        `games/nhl07_psp` makes, because that game's deep check names a *mirror*
-        the patch does not need, and this one names the master TDB the patch
-        cannot do without. So "a false negative costs only auto-detection" is not
-        the whole reason. The rest of it is that `patch` reaches the same fact by
-        a better route: `_parse_tdbs` looks the master up by name and, when it is
-        absent, raises with the archive's actual file list in the message.
-        Refusing earlier on the heuristic would replace that with "not a valid
-        NHL 2005 PS2 ISO", and it would additionally refuse a genuine disc whose
-        master TDB is stored in a way `validate` does not anticipate -- stored
-        uncompressed under a compression this repository has not seen, say --
-        while `patch` would have read it perfectly well.
-        `tests/games/nhl05_ps2/test_patcher.py` pins the asymmetry so nobody
-        harmonises it later.
-
-        `_db_viv_extent_fits` is an **arithmetic bound** and guards both. Its
-        docstring has the arithmetic and the silent-corruption path it stops.
+        `NHL05PS2RomReader.validate(deep=True)` is a heuristic -- `DB.VIV` is a
+        BIGF, holds `nhl2005.tdb`, and that decompresses to magic `DB\\x00\\x08`
+        -- and must keep guarding this method and NOT `patch`: `patch` reaches
+        the same fact through `_parse_tdbs`, which names the archive's actual
+        file list in its error, and it still reads a genuine disc whose master
+        TDB is stored in a way `validate` does not anticipate.
+        `_db_viv_extent_fits` is arithmetic and guards both.
 
         Raises:
             RomError: the file is missing or unreadable.
@@ -368,9 +266,8 @@ class NHL05PS2Patcher(Patcher):
             loaded = reader.load()
             size = os.path.getsize(rom_path)
             if not loaded:
-                # Readable, and not this game: too small to be an ISO, no PVD,
-                # or no `/DB/DB.VIV`. `analyze` probes every registered patcher
-                # against one image, so this must not raise.
+                # `analyze` probes every registered patcher against one image,
+                # so a file that is simply not this game must not raise.
                 return RomInfo(
                     path=str(rom_path),
                     size=size,
@@ -389,11 +286,7 @@ class NHL05PS2Patcher(Patcher):
             slots=[
                 RomSlot(
                     index=slot.index,
-                    # Read out of the disc's own STEA table, so two NHL 2005
-                    # ISOs with different rosters render differently. Empty when
-                    # STEA had no name for the slot, in which case the reader
-                    # has already substituted the constant -- see
-                    # `_read_team_slots`.
+                    # Read out of the disc's own STEA table.
                     current_name=slot.name,
                     display_name=(
                         NHL05_TEAM_NAMES[slot.index]
@@ -401,20 +294,13 @@ class NHL05PS2Patcher(Patcher):
                         else f"Slot {slot.index}"
                     ),
                 )
-                # The reader has already dropped every STEA record whose `INDX`
-                # is past the club slots, so this list is the 30 the patcher can
-                # write and no more.
                 for slot in info.team_slots
             ],
-            # ROM-derived and unreachable once the reader is gone. Both are
-            # JSON-serialisable, per `core/models.py`.
             extra={
                 "db_viv_size": len(reader.get_db_viv() or b""),
                 "team_slot_count": len(info.team_slots),
             },
         )
-
-    # -- fetch --------------------------------------------------------------
 
     def fetch(
         self,
@@ -442,28 +328,17 @@ class NHL05PS2Patcher(Patcher):
                 players = self.api.get_hockey_squad(team.code, season)
                 leaders = self.api.get_hockey_team_leaders(team.code, season)
             else:
-                # DELIBERATE DIVERGENCE: the source called both of these with no
-                # season on the ESPN branch. Neither omission was harmless and
-                # they were not the same omission. The squad endpoint has no
-                # season in its URL but does have one in its cache key, so
-                # without it the first season ever fetched was served forever;
-                # the leaders endpoint takes the season as a URL path segment,
-                # so its default meant a `--season 2024` run asked ESPN for a
-                # different year's statistics and stapled them to the squad.
+                # Pass `season` to both: the squad endpoint has no season in its
+                # URL but does have one in its cache key, and the leaders
+                # endpoint takes the season as a URL path segment.
                 players = self.api.get_hockey_squad(team.id, season)
                 leaders = self.api.get_hockey_team_leaders(team.id, season)
             rosters.append(
                 TeamRoster(
                     team=team,
                     players=players or [],
-                    # DELIBERATE DIVERGENCE: the source left these on
-                    # `self.team_stats`, an instance side channel written by
-                    # `fetch_rosters` and read by `map_rosters_to_nhl05` through
-                    # `getattr(self, "team_stats", {})` -- so calling the two out
-                    # of order, or in two processes with a rosters file between
-                    # them, silently downgraded every player to position
-                    # defaults instead of failing. In `extra` the whole result
-                    # round-trips through JSON.
+                    # Carry leaders in `extra`, never on an instance attribute:
+                    # the whole result has to round-trip through JSON.
                     extra={"leaders": leaders or {}},
                 )
             )
@@ -487,8 +362,6 @@ class NHL05PS2Patcher(Patcher):
             teams=rosters,
         )
 
-    # -- map ----------------------------------------------------------------
-
     def map_rosters(
         self,
         data: LeagueData,
@@ -498,14 +371,10 @@ class NHL05PS2Patcher(Patcher):
 
         Sparse: a key exists only for a slot some fetched team mapped to.
 
-        **Slots are bounded by `PATCHABLE_SLOT_COUNT`, which is 30**, where
-        `games/nhl07_psp` bounds by 32. The source wrote `slot >= 30` here and
-        `slot >= 32` there, and it is not a slip: the reader drops every STEA
-        record past `INDX` 29 as well, so `analyze` and `patch` agree on the same
-        30 slots. What it does mean is that `MODERN_NHL_TO_NHL05`'s `SEA` and
-        `VGK` entries -- which point at the two All-Star sides -- are dead:
-        Seattle and Vegas are fetched, mapped to slots 30 and 31, and dropped
-        here. `models.PATCHABLE_SLOT_COUNT` argues why that is preserved.
+        Bound slots by `PATCHABLE_SLOT_COUNT`, 30, not by 32 as
+        `games/nhl07_psp` does: the reader drops every STEA record past `INDX`
+        29, so `analyze` and `patch` agree on the same 30 slots. Seattle and
+        Vegas map to slots 30 and 31 and are dropped here.
         """
         self.check_slot_mapping(slot_mapping)
         teams: dict[int, list[NHL05PlayerRecord]] = {}
@@ -520,30 +389,15 @@ class NHL05PS2Patcher(Patcher):
                 for player in selected
             ]
 
-            # DELIBERATE DIVERGENCE. `MODERN_NHL_TO_NHL05` collapses 39 codes
-            # onto 32 slots -- `LA`/`LAK`, `NJ`/`NJD`, `SJ`/`SJS`, `TB`/`TBL`,
-            # `PHX`/`ARI`/`UTA` and `ATL`/`WPG` -- so two entries in
-            # `data.teams` can name one slot. The source assigned
-            # `teams[slot] = nhl05_players` unconditionally. It got away with it
-            # because its own `fetch_rosters` kept a dict keyed by team code and
-            # stored a team only `if players:`, so an empty roster could never
-            # reach the mapping step; that is the sort of protection that
-            # survives exactly until someone calls `map_rosters` on a rosters
-            # file. Without this guard an empty alias arriving second wipes the
-            # populated record, `patch` skips the slot, and the run reports
-            # success with `teams_patched` short by one and the 2004 roster
-            # still on the disc.
-            #
-            # An empty roster that collides with nothing still takes the slot:
-            # the mapped result keeps showing which slots a provider team
-            # matched, and `patch` is what keeps the empty list away from the
-            # writer.
+            # `MODERN_NHL_TO_NHL05` collapses 39 codes onto 32 slots --
+            # `LA`/`LAK`, `NJ`/`NJD`, `SJ`/`SJS`, `TB`/`TBL`, `PHX`/`ARI`/`UTA`
+            # and `ATL`/`WPG` -- so an empty alias arriving second must not wipe
+            # a populated record. An empty roster colliding with nothing still
+            # takes the slot; `patch` keeps it away from the writer.
             if not records and teams.get(slot):
                 continue
             teams[slot] = records
         return MappedRosters(game_id=self.game_id, teams=teams)
-
-    # -- patch --------------------------------------------------------------
 
     def patch(
         self,
@@ -562,10 +416,6 @@ class NHL05PS2Patcher(Patcher):
                 small to hold the rebuilt archive.
             MappingError: `rosters` was produced by a different patcher.
         """
-        # First, ahead of every other guard and ahead of the first status
-        # message: it is the one check that costs no I/O, and the failure it
-        # prevents is the writer choking on another game's record type with an
-        # exception outside this library's hierarchy.
         rosters.require_game(self.game_id)
 
         with as_rom_error(rom_path):
@@ -574,7 +424,7 @@ class NHL05PS2Patcher(Patcher):
             if not source.load():
                 raise RomError(f"Not a valid NHL 2005 PS2 ISO: {rom_path}")
             # The arithmetic bound, and NOT `validate(deep=True)`: see
-            # `analyze_rom` for why only one of the two reaches this method.
+            # `analyze_rom`.
             if not _db_viv_extent_fits(rom_path, source):
                 start, end = _db_viv_extent(source)
                 raise RomError(
@@ -596,11 +446,10 @@ class NHL05PS2Patcher(Patcher):
             self.status("Parsing TDB tables...")
             master_tdb, roster_tdb = self._parse_tdbs(writer)
             tables = _MasterTables.of(master_tdb)
-            # The ROST mirror, held as a table rather than a file because it is
-            # the only write that needs a capacity check here:
-            # `TDBTable.write_record` raises `IndexError` past the allocation,
-            # while `write_player_bio` and its two siblings each test
-            # `record_idx >= table.capacity` themselves and return.
+            # The ROST mirror, held as a table because its write is the only one
+            # needing a capacity check here: `TDBTable.write_record` raises
+            # `IndexError` past the allocation, while `write_player_bio` and its
+            # two siblings test `record_idx >= table.capacity` themselves.
             mirror_rost = roster_tdb.get_table("ROST") if roster_tdb is not None else None
 
             self.status("Writing rosters...")
@@ -620,16 +469,11 @@ class NHL05PS2Patcher(Patcher):
             players_patched=players_patched,
         )
 
-    # -- patch helpers ------------------------------------------------------
-
     def _parse_tdbs(self, writer: NHL05PS2RomWriter) -> tuple[TDBFile, TDBFile | None]:
         """The master TDB and its one optional mirror.
 
-        Only the master is required. `nhlrost.tdb` holds a second copy of a
-        table the master already has, so a disc without it is patchable; a disc
-        without `nhl2005.tdb` is not, and the error names what the archive does
-        hold, because "master TDB not found" on its own leaves a user with no way
-        to tell a wrong disc from a wrong constant.
+        `nhlrost.tdb` holds a second copy of a table the master already has, so a
+        disc without it is still patchable; a disc without `nhl2005.tdb` is not.
         """
         reader = writer.reader
         if reader is None:
@@ -649,19 +493,9 @@ class NHL05PS2Patcher(Patcher):
     ) -> dict[str, TDBFile]:
         """Map each modified TDB to the name the archive itself uses for it.
 
-        **This is not load-bearing, and the migration plan says it is.** The
-        plan records `bigf_replace`'s case bug -- it folds case to select the
-        member and then checks membership case-sensitively -- and originally
-        stated that both NHL patchers work around it by reading the archive's own
-        spelling first. Measured in Phase 4a and again here: this game never
-        calls `bigf_replace`. It calls `bigf_replace_inplace`, which selects
-        case-insensitively and needs no workaround, and the source *imported*
-        `bigf_replace` without ever using it. That unused import is not carried
-        over.
-
-        Kept anyway, and only for this: the keys of the returned mapping are
-        what `rebuild_and_write` puts in its progress messages, and a message
-        about `DB.VIV` should name the file as the disc spells it.
+        The keys become `rebuild_and_write`'s progress messages, so a message
+        about `DB.VIV` names the file as the disc spells it. The case fold is not
+        load-bearing: `bigf_replace_inplace` already selects case-insensitively.
         """
         entries = bigf_parse(writer.db_viv or b"")
         names = {TDB_MASTER: TDB_MASTER, TDB_ROSTER: TDB_ROSTER}
@@ -685,11 +519,8 @@ class NHL05PS2Patcher(Patcher):
     ) -> tuple[int, int]:
         """Write every mapped slot, returning (teams patched, players patched).
 
-        The slot range is re-checked here as well as in `map_rosters`, because
-        the keys come from a plain dict that may have crossed a JSON boundary
-        since. An out-of-range slot would find no ROST records and write
-        nothing, so the guard costs nothing to hold and the alternative is a
-        number in `teams_patched` for a team that does not exist.
+        Re-check the slot range here as well as in `map_rosters`: the keys come
+        from a plain dict that may have crossed a JSON boundary since.
         """
         targets = sorted(
             slot
@@ -709,12 +540,7 @@ class NHL05PS2Patcher(Patcher):
                 )
             written = self._write_team(writer, slot, players, tables, mirror_rost)
             players_patched += written
-            # DELIBERATE DIVERGENCE: the source incremented `teams_patched` for
-            # every slot it looked at, including one whose ROST rows it could
-            # not match to a single player. `core/models.py` defines
-            # `teams_patched` as slots something reached the ROM for, and for
-            # this game the only thing written per slot is player records -- so
-            # a slot that placed none of them did not get patched.
+            # A slot that placed no player record did not get patched.
             if written > 0:
                 teams_patched += 1
 
@@ -731,14 +557,9 @@ class NHL05PS2Patcher(Patcher):
         """Write one team's players into the rows the disc already has for it.
 
         Records are never created, only overwritten. The disc's own ROST rows
-        for this team decide how many players it can hold and which of them are
-        goalies, and a goalie is placed only in a row whose existing occupant
-        has an SGAI record -- otherwise his save ratings would have nowhere to
-        go. So a team the disc carried with two goalies takes exactly two,
-        however many the provider returned, and the twenty-fifth player of a
-        twenty-three-row team is dropped.
-
-        Returns the number of players written, which is
+        decide how many players a team holds and which are goalies; a goalie may
+        only take a row whose occupant has an SGAI record, or his save ratings
+        have nowhere to go. Returns
         `min(goalies, goalie rows) + min(skaters, skater rows)`.
         """
         team_rows, goalie_slots, skater_slots = self._classify_slots(slot, tables)
@@ -750,10 +571,8 @@ class NHL05PS2Patcher(Patcher):
         ):
             pairs.extend(zip(pool, available, strict=False))
 
-        # Flags are generated for the players that actually got a row, in the
-        # order they were paired: goalies first, then skaters. Generating them
-        # from `players` instead would number the lines from a roster that
-        # includes people who were never written.
+        # From the paired players, not `players`: line numbering must not count
+        # anyone who was never written.
         all_line_flags = self.mapper.generate_team_line_flags([p for p, _ in pairs])
 
         used: set[int] = set()
@@ -762,10 +581,9 @@ class NHL05PS2Patcher(Patcher):
             self._write_player(writer, player, roster_slot, tables)
 
             line_flags = all_line_flags[position] if position < len(all_line_flags) else {}
-            # The first paired player is captain and the next two are
-            # alternates. That is position in the *paired* list, and goalies
-            # come first, so the starting goalie wears the C. Unusual on a real
-            # team, and what the source did.
+            # CAPT: 2 is the captain, 1 an alternate, 0 neither. Position in the
+            # paired list, where goalies come first, so the starting goalie
+            # wears the C.
             values = writer.roster_values(
                 jersey=player.jersey_number,
                 captain=2 if position == 0 else (1 if position in (1, 2) else 0),
@@ -775,10 +593,9 @@ class NHL05PS2Patcher(Patcher):
             tables.rost.write_record(roster_slot.rost_index, values)
             self._mirror_rost(mirror_rost, roster_slot.rost_index, values)
 
-        # Every remaining row of this team is undressed, so a 2004 player cannot
-        # take the ice beside a 2025 one. `team_rows` and not the two classified
-        # lists: a row whose chain to a bio is broken could not be written, but
-        # it is still one of this team's rows and the game would still dress it.
+        # DRES 0 on every remaining row, so a stale player cannot take the ice.
+        # `team_rows` and not the classified lists: a row whose chain to a bio is
+        # broken is still one of this team's rows and the game would dress it.
         for rost_index in team_rows:
             if rost_index in used:
                 continue
@@ -789,14 +606,7 @@ class NHL05PS2Patcher(Patcher):
 
     @staticmethod
     def _mirror_rost(mirror_rost: TDBTable | None, index: int, values: dict[str, object]) -> None:
-        """Mirror one ROST write into `nhlrost.tdb`, if there is room for it.
-
-        The source re-fetched `roster_tdb.get_table("ROST")` inside the write
-        loop, once per player and again per undressed row, having already
-        fetched it before the loop and tested the fetched value's capacity.
-        `TDBFile.get_table` returns the same object every time, so those were
-        no-ops; they are gone.
-        """
+        """Mirror one ROST write into `nhlrost.tdb`, if there is room for it."""
         if mirror_rost is not None and index < mirror_rost.capacity:
             mirror_rost.write_record(index, values)
 
@@ -806,15 +616,12 @@ class NHL05PS2Patcher(Patcher):
     ) -> tuple[list[int], list[_RosterSlot], list[_RosterSlot]]:
         """This team's ROST rows: all of them, then the goalie and skater rows.
 
-        A row reaches one of the two classified lists only if its `INDX` names a
-        PLAY record and that record's `ID__` names an SPBT record. A row that
-        fails either is still in the first list, because it is still this team's
-        row and still has to be undressed.
+        A row reaches a classified list only if its `INDX` names a PLAY record
+        and that record's `ID__` names an SPBT record. A row that fails either is
+        still in the first list, because it still has to be undressed.
 
-        `TDBTable.find_records` would answer the first list and is deliberately
-        not used: it iterates `num_records` without bounding it by `capacity`,
-        which `formats/ea_tdb.py` documents as the caller's job. See
-        `_live_records`.
+        Do not swap in `TDBTable.find_records`: it iterates `num_records`
+        unbounded by `capacity`. See `_live_records`.
         """
         team_rows: list[int] = []
         goalie_slots: list[_RosterSlot] = []
@@ -860,12 +667,11 @@ class NHL05PS2Patcher(Patcher):
         """Write one player's bio and attributes into the master TDB.
 
         Once each, not twice: this game's `DB.VIV` has no `nhlbioatt.tdb`, so
-        SPBT, SPAI and SGAI exist only in the master. `games/nhl07_psp` writes
-        each of these three a second time.
+        SPBT, SPAI and SGAI exist only in the master.
 
         No capacity check here: `write_player_bio`, `write_skater_attrs` and
-        `write_goalie_attrs` each test the index against the table's own
-        capacity and return without writing.
+        `write_goalie_attrs` each test the index against the table's capacity and
+        return without writing.
         """
         writer.write_player_bio(tables.tdb, roster_slot.bio_index, player)
 

@@ -2,26 +2,20 @@
 
     ISO -> seek(DATABASE_BIG_LBA * 2048) -> 19 RefPack streams -> 19 CSV tables
 
-**No ISO 9660 walk.** `models.DATABASE_BIG_LBA` says where the file is and the
-reader seeks there. `formats/iso9660.py` exists and is used by the two NHL disc
-games; this one does not need it and does not import it. See `models` for why
-that is deliberate rather than an omission.
+No ISO 9660 walk: `models.DATABASE_BIG_LBA` says where the file is and the
+reader seeks there. Do not import `formats/iso9660.py` here; see `models`.
 
-Three things about the parse are worth knowing before reading the code.
+A record's id is not its position. Records are keyed by a nine-hex-digit id and
+`record_order` keeps the sequence separately, because the game's own indices
+into these tables are positional even though the links between tables are not.
 
-**A record's id is not its position.** Records are keyed by a nine-hex-digit id
-and `record_order` keeps the sequence separately, because rewriting a table has
-to preserve the order the disc had -- the game's own indices into these tables
-are positional even though the links between tables are not.
+The header line is skipped by shape, not by position: a section's first line
+names its columns, every later line starts with a hex id, and
+`_looks_like_record_id` is the test.
 
-**The header line is skipped by shape, not by position.** A section's first line
-names its columns; every later line starts with a hex id. `_looks_like_record_id`
-is the test, and it is why a column name containing a space or a non-hex
-character cannot be mistaken for a record.
-
-**Values are not stripped.** `"0 "` is field 0 holding the empty string, which
-is different from field 0 being absent, and the split is on the *first* space
-only so a value containing spaces survives.
+Values are not stripped. `"0 "` is field 0 holding the empty string, which is
+different from field 0 being absent, and the split is on the *first* space only
+so a value containing spaces survives.
 """
 
 from __future__ import annotations
@@ -54,13 +48,11 @@ REFPACK_MAGIC = b"\x10\xfb"
 # What section 0 begins with instead. 0xC0 sets the "decompressed size is three
 # bytes and there is a compressed size too" flag, which `refpack_decompress`
 # does not implement; `decompress_section` replaces those two bytes with
-# `10 FB` and passes byte 2 onwards through unchanged. **So the fixup assumes
-# the 0xC0 header is the same five bytes as the 0x10 one**, and if 0xC0 really
-# introduces a compressed-size word ahead of the decompressed size, bytes 2-4
-# are that word and the size the decompressor then reads is the wrong number.
-# Nothing here drops them; an earlier draft of this comment said the rewrite
-# did, and it does not. Carried over from the source unverified, because no
-# disc may enter this repository to check which header a real section 0 has.
+# `10 FB` and passes byte 2 onwards through unchanged, so the fixup assumes the
+# 0xC0 header is the same five bytes as the 0x10 one. If 0xC0 really introduces
+# a compressed-size word ahead of the decompressed size, bytes 2-4 are that word
+# and the size the decompressor reads is wrong. Unverified: no disc may enter
+# this repository to check which header a real section 0 has.
 COMPACT_SECTION_FLAG = 0xC0
 
 # The two byte values `validate` accepts at offset 0.
@@ -82,10 +74,9 @@ Table = dict[str, dict[int, str]]
 def _looks_like_record_id(text: str) -> bool:
     """Is `text` a record id rather than the first column of a header line?
 
-    Nine lower-case hex digits is what the disc uses, but the source's test was
-    "at least five characters, all of them hex, no spaces" and that is kept: a
-    shorter id is not something this repository can rule out, and rejecting one
-    would silently drop a whole record.
+    The disc uses nine lower-case hex digits, but the test is the looser "at
+    least five characters, all of them hex": a shorter id is not something this
+    repository can rule out, and rejecting one would silently drop a record.
     """
     if len(text) < 5:
         return False
@@ -99,17 +90,14 @@ def _parse_record_body(parts: list[str]) -> dict[int, str]:
     first space so a value may contain spaces; the value is *not* stripped, so
     `"0 "` records column 0 as the empty string rather than dropping it.
 
-    A part that is blank after stripping is skipped -- that is the empty string
-    the trailing `,;` leaves -- and so is a part with no space in it at all, and
-    one whose column number is not an integer.
+    A blank part is skipped -- that is what the trailing `,;` leaves -- and so
+    is a part with no space in it, and one whose column number is not an integer.
     """
     fields: dict[int, str] = {}
     for part in parts:
-        # PROVEN EQUIVALENT under mutation, and kept. Nothing blank can survive
-        # the two guards below either: `""` and `"\t"` have no space and hit
-        # `space_idx < 0`, and `" "` splits to `int("")`, which is the
-        # `ValueError`. Kept because "a blank part is not a column" is the fact,
-        # and reaching it through an integer parse that happens to fail is not.
+        # Redundant with the two guards below, and kept: "a blank part is not a
+        # column" is the fact, and reaching it through an integer parse that
+        # happens to fail is not.
         if not part.strip():
             continue
         space_idx = part.find(" ")
@@ -129,13 +117,6 @@ class MVPPSPRomReader:
     Construction touches nothing. `load()` reads the 386 977 bytes of
     `database.big` into memory and every other method answers from that, so the
     file handle is never held between calls.
-
-    Seven accessors from the source are gone -- `get_team_roster`,
-    `get_player_attribs`, `get_player_lr_attribs`, `get_pitch_attribs`,
-    `get_existing_player_hashes`, `get_existing_team_hashes` and the writer's
-    `remove_player_record`. None had a caller anywhere in the source package or
-    the application above it, and each was a second spelling of an item lookup
-    in `records`. Dropping them is a labelled change; see the package docstring.
     """
 
     def __init__(self, iso_path: str) -> None:
@@ -149,24 +130,17 @@ class MVPPSPRomReader:
         # table name -> record ids in the order the disc holds them
         self.record_order: dict[str, list[str]] = {}
 
-    # -- loading ------------------------------------------------------------
-
     def load(self) -> bool:
         """Read `database.big` out of the image.
 
         False, without raising, for a file that does not exist, cannot be read,
-        or is shorter than the extent. The last of those is the same
-        condition `patcher._database_big_extent_fits` checks explicitly, and the
-        duplication is deliberate: this method answers one question with one
-        boolean for four different reasons, so the patcher needs a separate
-        check to tell a user *which* reason applies.
+        or is shorter than the extent. `patcher._database_big_extent_fits`
+        checks the last of those again on purpose: one boolean for four reasons
+        cannot tell a user *which* reason applies.
 
-        A short read is refused rather than accepted, and that closes the
-        silent-corruption path before it starts: `refpack_decompress` returns
-        short for a truncated stream and never pads
-        (`formats/ea_tdb.py`, inherited contract 3), so a partial
-        `database.big` would rebuild every later section from a truncated table
-        and report success.
+        Never accept a short read: `refpack_decompress` returns short for a
+        truncated stream and never pads, so a partial `database.big` would
+        rebuild every later section from a truncated table and report success.
         """
         if not os.path.exists(self.iso_path):
             return False
@@ -176,15 +150,9 @@ class MVPPSPRomReader:
                 f.seek(offset)
                 data = f.read(DATABASE_BIG_SIZE)
         except OSError:
-            # DELIBERATE DIVERGENCE: `except Exception` upstream, one of five in
-            # the source package -- two in `rom_writer.py`, around the ISO copy
-            # and around the write-back, and three in `rom_reader.py`: here,
-            # around the decompress loop, and around an `os.path.getsize`. (Its
-            # other `except` clauses are one `except ValueError` guarding an
-            # `int()` and four `except StopIteration` used as control flow, and
-            # none of those swallows an error.) Narrowed to `OSError`, which is
-            # what a seek or a read can raise; anything else here is a bug in
-            # this module and must not be reported as "not this game".
+            # `OSError` and not `Exception`: a seek or a read raises `OSError`,
+            # and anything else here is a bug in this module that must not be
+            # reported as "not this game".
             return False
         if len(data) < DATABASE_BIG_SIZE:
             return False
@@ -192,19 +160,14 @@ class MVPPSPRomReader:
         self.database_big_offset = offset
         return True
 
-    # -- validation ---------------------------------------------------------
-
     def validate(self) -> bool:
         """Does the loaded blob look like this game's `database.big`?
 
         Three bytes: offset 0 is 0x10 or 0xC0, and offsets 324-325 are 0x10 0xFB.
-        That is the source's check and it is kept as the cheap gate, but it is
-        **not** what `analyze_rom` decides on by itself -- see `validate_deep`.
+        The cheap gate only; `analyze_rom` decides on `validate_deep`.
 
-        The source guarded these reads with `len(...) < 5` and `> 326` tests
-        that `load` makes unreachable: `load` refuses anything that did not
-        yield all 386 977 bytes. The guards are gone and the precondition is
-        stated instead.
+        The reads are unguarded because `load` refuses anything that did not
+        yield all 386 977 bytes.
         """
         data = self.database_big
         if data is None:
@@ -216,30 +179,15 @@ class MVPPSPRomReader:
     def validate_deep(self) -> bool:
         """`validate`, and then: does the `team` table hold MVP Baseball's teams?
 
-        **This is a heuristic and it guards `analyze_rom` only.** What makes it
-        one is that it is a claim about meaning -- "a table whose record ids
-        include `00b87d5f5` is MVP Baseball's team table" -- rather than
-        arithmetic about sizes. A false positive would make this patcher claim
-        an unrelated 700 MB image, which costs a user every ISO they own; a
-        false negative costs only auto-detection, because `patch --game mvp-psp`
-        routes around `analyze_rom` entirely.
+        A heuristic, and it guards `analyze_rom` only. `validate`'s three bytes
+        -- a byte in `{0x10, 0xC0}`, then 0x10 0xFB -- separate this game from
+        noise and not from its siblings: on other EA PSP discs of the era a
+        RefPack stream at a sector boundary is the house format, not a
+        coincidence. The team ids do separate it, being this database's own
+        primary keys.
 
-        Why the shallow check is not enough on its own. It is three bytes at
-        three fixed offsets inside a file that must already be at least 686 MB
-        long: a byte in `{0x10, 0xC0}`, then 0x10, then 0xFB. Against arbitrary
-        content that is about one image in eight million, which sounds
-        sufficient and is not the population that matters. The population that
-        matters is *other EA PSP discs of the same era built by the same
-        tooling*, where a RefPack stream at a sector boundary is not a
-        coincidence at all -- it is the house format. Those three bytes
-        distinguish this game from noise and do nothing to distinguish it from
-        its siblings. The team ids do: they are this database's own primary
-        keys.
-
-        One match is enough, not thirty. A disc modified by a previous patcher,
-        or a regional variant that dropped a club, should still be recognised;
-        thirty-of-thirty would turn a heuristic into an equality test on data
-        this repository cannot verify.
+        One match is enough, not thirty: a disc a previous patcher touched, or a
+        regional variant that dropped a club, must still be recognised.
         """
         if not self.validate():
             return False
@@ -249,8 +197,6 @@ class MVPPSPRomReader:
             self.parse_all()
         team_ids = self.records.get("team", {})
         return any(team_hash in team_ids for team_hash in TEAM_HASHES.values())
-
-    # -- decompression ------------------------------------------------------
 
     def decompress_section(self, offset: int) -> bytes | None:
         """Decompress the RefPack stream that starts at `offset`.
@@ -266,11 +212,9 @@ class MVPPSPRomReader:
         data = self.database_big
         if data is None:
             return None
-        # PROVEN EQUIVALENT under mutation, and kept. `>` instead of `>=` leaves
-        # `offset == len(data)` to fall through, where `data[offset:]` is empty
-        # and `len(raw) < 2` returns the same None one step later. Kept because
-        # "the offset is not in the blob" is a different statement from "there
-        # were not two bytes there", and this one is the true one.
+        # Redundant with `len(raw) < 2` below, and kept: "the offset is not in
+        # the blob" is a different statement from "there were not two bytes
+        # there", and this one is the true one.
         if offset >= len(data):
             return None
 
@@ -287,38 +231,22 @@ class MVPPSPRomReader:
         """Decompress every section named in `SECTION_MAP`.
 
         A section whose bytes are not a RefPack stream is left out of
-        `self.sections` and the rest are still read. That is the source's
-        behaviour and it is right here for a reason the source did not give: the
-        writer only rewrites sections it has a header for, so a table that could
-        not be read is a table that will not be written, and one unreadable
-        statistics table must not cost a user the roster patch.
+        `self.sections` and the rest are still read: the writer only rewrites
+        sections it has a header for, so one unreadable statistics table must
+        not cost a user the roster patch.
 
-        DELIBERATE DIVERGENCE: the source wrapped this loop body in
-        `except Exception: pass`. That handler could not fire **from this
-        loop**, and the qualifier matters. `decompress_section` does not raise
-        for anything it rejects itself, but it can raise from underneath:
-        `refpack_decompress` refuses a stream shorter than five bytes as well as
-        one with no `0x10 0xFB` header, and `decompress_section` checks only the
-        two header bytes, so a two-, three- or four-byte stream reaches the
-        decompressor and raises `EaTdbError`. What makes it unreachable here is
-        arithmetic rather than the check: this loop only ever passes offsets
-        from `SECTION_MAP`, the last of which is 385 608 in a blob of 386 977,
-        so the shortest slice this loop can produce is 1369 bytes. The handler
-        therefore caught nothing, and would have hidden any genuine bug in the
-        decompressor if one appeared. It is removed rather than narrowed,
-        because narrowing it would leave a reader believing a failure mode
-        exists here that does not.
-
-        `tests/games/mvp_psp/test_rom_reader.py` pins both halves: a two-byte
-        stream raises out of `decompress_section`, and every section of a real
-        blob decompresses.
+        Deliberately unguarded, where upstream wrapped the loop body in
+        `except Exception: pass`. `decompress_section` can raise from
+        underneath -- `refpack_decompress` refuses a stream shorter than five
+        bytes and only the two header bytes are checked here -- but this loop
+        passes offsets from `SECTION_MAP`, the last of which is 385 608 in a
+        blob of 386 977, so its shortest slice is 1369 bytes. Do not restore the
+        handler: it caught nothing and would hide a real decompressor bug.
         """
         for offset, name in SECTION_MAP:
             data = self.decompress_section(offset)
             if data:
                 self.sections[name] = data
-
-    # -- parsing ------------------------------------------------------------
 
     def parse_csv_section(self, name: str) -> Table:
         """Parse one decompressed section into `{record id: {column: value}}`.
@@ -328,13 +256,10 @@ class MVPPSPRomReader:
         reordering it.
 
         An id that appears twice keeps its **last** field set and appears
-        **twice** in the order, so rebuilding the table emits two rows holding
-        that last set. Both halves are the source's behaviour and both are
-        preserved: the row count of a table the game may index positionally
-        stays what the disc had, and nothing in this package can tell a genuine
-        duplicate from a collision in the disc's own key space, so silently
-        dropping one would be a decision made in the dark. Pinned by a test, on
-        a fixture whose duplicate carries different values in its two rows.
+        **twice** in the order, so rebuilding emits two rows holding that last
+        set. Preserve both halves: the row count of a table the game may index
+        positionally stays what the disc had, and nothing here can tell a
+        genuine duplicate from a collision in the disc's own key space.
         """
         data = self.sections.get(name)
         if data is None:
@@ -349,12 +274,8 @@ class MVPPSPRomReader:
             line = line.strip()
             if not line:
                 continue
-            # PROVEN EQUIVALENT under mutation, and kept. A line with no comma
-            # cannot survive the two guards below whatever this one does: it
-            # splits to a single part, so `_parse_record_body` is handed an
-            # empty list and `if not fields` drops it -- and if the line is not
-            # a hex id it is dropped one step earlier. Kept because it is the
-            # cheap test and it names the shape a record has.
+            # Redundant with the two guards below, and kept: it is the cheap
+            # test and it names the shape a record has.
             if "," not in line:
                 continue
             parts = line.split(",")
@@ -376,17 +297,13 @@ class MVPPSPRomReader:
             if name in self.sections:
                 self.records[name] = self.parse_csv_section(name)
 
-    # -- reporting ----------------------------------------------------------
-
     def get_info(self, *, deep: bool = False) -> MVPRomInfo:
         """Describe the loaded image.
 
         `deep` chooses which check decides `is_valid`: `validate_deep`, the
-        heuristic, or `validate`, the three-byte header test. It does **not**
-        decide whether the sections are read -- a valid disc is decompressed and
-        parsed either way, because that is where the team slots come from, and
-        that is the source's behaviour. `analyze_rom` passes `deep=True`;
-        nothing else does.
+        heuristic, or `validate`, the three-byte header test. It does not decide
+        whether the sections are read -- a valid disc is decompressed and parsed
+        either way, because that is where the team slots come from.
         """
         data = self.database_big
         if data is None:
@@ -420,16 +337,11 @@ class MVPPSPRomReader:
     def _read_team_slots(self) -> list[MVPTeamSlot]:
         """The 30 team slots, with the roster count and first player the disc has.
 
-        Slot order comes from `MVP_TEAM_ABBREVS`. The source indexed
-        `list(TEAM_HASHES.keys())` by slot number here and again in
-        `patcher.py`, relying on dict insertion order in two files with nothing
-        asserting they agreed; `models.MVP_TEAM_ABBREVS` is the single ordering
-        now.
+        Slot order comes from `MVP_TEAM_ABBREVS`. Never index `TEAM_HASHES` by
+        slot number: that relies on dict insertion order agreeing across files.
 
-        "First player" is the first roster row the disc lists for the team,
-        which is a dict iteration order and therefore the section's own order --
-        not a batting order. It is a label for a UI, not a fact about the
-        lineup.
+        "First player" is the first roster row the disc lists for the team, so
+        it is the section's own order and not a batting order.
         """
         roster_records = self.records.get("roster", {})
         attrib_records = self.records.get("attrib", {})

@@ -1,52 +1,37 @@
 """Constants and record types for MVP Baseball (PSP, ULUS-10012).
 
-**This game's database is CSV text inside compressed sections**, which is a
-third patching model and not the two the rest of this library uses. It is
-neither byte offsets into a cartridge (`games/nhl94_genesis`) nor named
-bit-packed records in a TDB (`games/nhl05_ps2`). A record here is a line of
-ASCII:
+This game's database is CSV text inside compressed sections. A record is a line
+of ASCII:
 
     00b87d5f5,0 Vladimir,1 Guerrero,2 27,22 61,;\\r\\n
 
 -- a nine-hex-digit id, then `fieldnum value` pairs separated by commas,
 terminated by `,;` and a CRLF. Tables link to each other by those ids: a
 `roster` row names a team id and a player id, and the player id is what the
-`attrib`, `lrattrib_rhp`, `lrattrib_lhp` and `pitchattrib` tables key on. So the
-field-number constants below are not addresses; they are column names, and a
-wrong one writes a real column of a real record with the wrong meaning rather
-than crashing.
+`attrib`, `lrattrib_rhp`, `lrattrib_lhp` and `pitchattrib` tables key on. The
+field-number constants below are column names, not addresses, so a wrong one
+writes a real column of a real record with the wrong meaning rather than
+crashing.
 
-**`database.big` is 19 sections, not 18.** The source's own docstring said 18 in
-three places and `SECTION_MAP` has nineteen entries; the count was simply wrong
-and it is corrected here. Each section is an independent RefPack stream at a
-fixed offset, and the space between one offset and the next is that section's
-whole allocation -- there is no length word anywhere, so a section that
-recompresses larger than its allocation cannot be stored at all. `rom_writer`
-raises rather than silently keeping the original; see `MVPPSPRomWriter`.
+`database.big` is 19 sections. Each is an independent RefPack stream at a fixed
+offset, and the space between one offset and the next is that section's whole
+allocation -- there is no length word anywhere, so a section that recompresses
+larger than its allocation cannot be stored at all. `rom_writer` raises rather
+than silently keeping the original; see `MVPPSPRomWriter`.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-# ──────────────────────────────────────────────────────────────
-# Where database.big lives
-# ──────────────────────────────────────────────────────────────
+# Where `database.big` lives: a hardcoded LBA, and that is the whole of this
+# game's ISO 9660 interaction -- two `seek(DATABASE_BIG_LBA * ISO_SECTOR_SIZE)`
+# calls, no primary volume descriptor, no directory traversal. Do not wire this
+# package to `formats/iso9660.py`: it would refuse a valid image whose PVD it
+# could not parse, over a file it never needed the PVD to find.
 #
-# A hardcoded LBA, and that is the whole of this game's ISO 9660 interaction:
-# two `seek(DATABASE_BIG_LBA * ISO_SECTOR_SIZE)` calls, no primary volume
-# descriptor, no directory traversal, no path resolution.
-#
-# **So this package deliberately does not use `formats/iso9660.py`**, which
-# `games/nhl05_ps2` and `games/nhl07_psp` both do. What it shares with them is
-# the integer 2048 and nothing else, and wiring it to the shared walker would
-# invent a dependency the game does not have -- and would make this patcher
-# refuse a valid image whose PVD it could not parse, over a file it never needed
-# the PVD to find.
-#
-# The three numbers have never been checked against a real disc; no ISO may
-# enter this repository. They are the source's, carried over unverified, and the
-# arithmetic they imply is pinned in `patcher._database_big_extent_fits`.
+# The three numbers are carried over unverified; the arithmetic they imply is
+# pinned in `patcher._database_big_extent_fits`.
 DATABASE_BIG_LBA = 334832
 DATABASE_BIG_SIZE = 386977
 ISO_SECTOR_SIZE = 2048
@@ -55,31 +40,19 @@ ISO_SECTOR_SIZE = 2048
 def database_big_extent() -> tuple[int, int]:
     """(first byte, last byte + 1) of `database.big` within the image.
 
-    **A function rather than two module constants, and the reason is testing.**
-    `DATABASE_BIG_LBA` puts the blob 685 MB into the file, so any test that
-    exercises the copy-and-write path against a real-sized image would move 686
-    MB of real bytes per case -- and a sparse file does not help, because
-    `MVPPSPRomWriter.copy_iso` reads it and writes what it read. Reading the LBA
-    here, at call time, from this module's own global is what lets a test shrink
-    the whole stack coherently with one `monkeypatch.setattr`: the reader, the
-    writer and the patcher then all agree, where three separately imported
-    constants could be patched into disagreement and pass.
+    A function and not two module constants: reading `DATABASE_BIG_LBA` at call
+    time from this module's own global lets one `monkeypatch.setattr` shrink the
+    reader, the writer and the patcher coherently. Three separately imported
+    constants could be patched into disagreement and still pass.
 
-    The three numbers are the source's, carried over unverified. No disc may
-    enter this repository to check them, and `tests/games/mvp_psp` pins the
-    arithmetic they imply -- `[685735936, 686122913)` -- against the unpatched
-    constants, on sparse files that are never copied.
+    Unpatched, the extent is `[685735936, 686122913)`.
     """
     start = DATABASE_BIG_LBA * ISO_SECTOR_SIZE
     return start, start + DATABASE_BIG_SIZE
 
 
-# ──────────────────────────────────────────────────────────────
-# The section table
-# ──────────────────────────────────────────────────────────────
-
-# `(offset within database.big, table name)`, ascending. Nineteen entries.
-# Offsets are the source's and are likewise unverified against a real disc.
+# `(offset within database.big, table name)`, ascending. Nineteen entries,
+# carried over unverified against a real disc.
 SECTION_MAP: tuple[tuple[int, str], ...] = (
     (0, "attrib_compact"),
     (324, "attrib"),
@@ -113,10 +86,8 @@ def _section_allocations() -> dict[str, tuple[int, int]]:
     """`{name: (offset, allocation)}` derived from `SECTION_MAP` alone.
 
     A section's allocation is the distance to the next section's offset, and the
-    last section's is the distance to the end of `database.big`. Derived here so
-    the writer does not re-derive it by index arithmetic on a list, which is
-    what the source did and what made the "is this the last one" branch easy to
-    get wrong.
+    last section's is the distance to the end of `database.big`. Derive it here;
+    never re-derive it by index arithmetic at a call site.
     """
     result: dict[str, tuple[int, int]] = {}
     for i, (offset, name) in enumerate(SECTION_MAP):
@@ -127,34 +98,20 @@ def _section_allocations() -> dict[str, tuple[int, int]]:
 
 SECTION_ALLOCATIONS = _section_allocations()
 
-# The tables this patcher rewrites. **Four, not the seven the source listed.**
-#
-# The source's `WRITABLE_TABLES` named `attrib`, `lrattrib_rhp`,
-# `lrattrib_lhp`, `pitchattrib`, `roster`, `team` and `teamstat`, was never read
-# by anything, and disagreed with the code: nothing in the package ever wrote
-# `team` or `teamstat`. Dropping the constant and naming what is actually
-# written is a labelled change to a table -- see the package docstring.
-#
-# `roster` is rebuilt wholesale and the other four are merged into per record,
-# so this tuple is a documentation aid and a test anchor rather than a control
-# flow input; `rom_writer` writes whatever `update_*` marked modified.
+# The tables this patcher rewrites. `roster` is rebuilt wholesale and the other
+# four are merged into per record. Not a control-flow input: `rom_writer` writes
+# whatever `update_*` marked modified.
 PLAYER_TABLES: tuple[str, ...] = ("attrib", "lrattrib_rhp", "lrattrib_lhp", "pitchattrib")
 ROSTER_TABLE = "roster"
 MODIFIED_TABLES: tuple[str, ...] = (*PLAYER_TABLES, ROSTER_TABLE)
 
-# The first section. It is the only one the patcher never rewrites, and that is
-# an inherited defect rather than a decision -- see `rom_writer`.
+# The first section, and the only one the patcher never rewrites -- an inherited
+# defect rather than a decision. See `rom_writer`.
 COMPACT_ATTRIB_TABLE = "attrib_compact"
 
-# ──────────────────────────────────────────────────────────────
-# CSV field numbers
-# ──────────────────────────────────────────────────────────────
-#
-# Column numbers within each table, from the section's own header line. The ones
-# no code below writes are kept because together they are the only description
-# of this file format that exists anywhere in the project, and a future field
-# that needs writing is a constant away rather than a re-derivation from a disc
-# nobody may commit.
+# Column numbers within each table, from the section's own header line. Keep the
+# ones no code writes: together they are the only description of this format
+# anywhere in the project.
 
 ATTRIB_FIRST_NAME = 0
 ATTRIB_LAST_NAME = 1
@@ -205,10 +162,10 @@ LR_FB = 17  # not written
 LR_LD = 18  # not written
 LR_GB = 19  # not written
 
-# `pitchattrib`. **Pitch 1 is asymmetric with pitches 2-5**: it is always a
-# fastball, so it has no type column and occupies four columns where every later
-# pitch occupies five. That is why `PA_PITCH2_TYPE` is the base of the repeating
-# block and pitch 1 is addressed by its own three constants.
+# `pitchattrib`. Pitch 1 is asymmetric with pitches 2-5: it is always a fastball,
+# so it has no type column and occupies four columns where every later pitch
+# occupies five. `PA_PITCH2_TYPE` is therefore the base of the repeating block
+# and pitch 1 is addressed by its own three constants.
 PA_FIRST_NAME = 0
 PA_LAST_NAME = 1
 PA_STAMINA = 2
@@ -231,9 +188,8 @@ PA_PITCH_MOVEMENT_OFFSET = 1
 PA_PITCH_CONTROL_OFFSET = 3
 PA_PITCH_VELOCITY_OFFSET = 4
 
-# How many of a pitcher's arsenal reach the repeating block. The source sliced
-# `player.pitches[1:4]`, so at most three pitches after the fastball, which
-# leaves columns 23-27 (pitch 5) untouched on every player.
+# How many of a pitcher's arsenal reach the repeating block: at most three after
+# the fastball, so columns 23-27 (pitch 5) are untouched on every player.
 MAX_EXTRA_PITCHES = 3
 
 # `roster`. Four (position, batting order) pairs, because the game stores a
@@ -256,10 +212,6 @@ TEAM_LEAGUE = 1
 TEAM_DIVISION = 2
 TEAM_ARTID = 3
 
-# ──────────────────────────────────────────────────────────────
-# Position encoding
-# ──────────────────────────────────────────────────────────────
-
 ATTRIB_POS_PITCHER = 0  # a starter
 ATTRIB_POS_C = 1
 ATTRIB_POS_1B = 2
@@ -271,11 +223,9 @@ ATTRIB_POS_CF = 7
 ATTRIB_POS_RF = 8
 ATTRIB_POS_RELIEVER = 10  # RP / CP / MR / SU / LR all collapse here
 
-# Position string -> `attrib` column 5. **`DH` maps to 2 (first base) and `OF`
-# to 7 (centre field)**, both the source's, and both lossy in a way worth
-# stating: the game has no designated-hitter position code, so a DH is stored as
-# a first baseman and will be offered at first base by the game's own lineup
-# screen.
+# Position string -> `attrib` column 5. The game has no designated-hitter code,
+# so `DH` maps to 2, first base, and is offered at first base by the game's own
+# lineup screen; `OF` maps to 7, centre field.
 POS_STRING_TO_NUM: dict[str, int] = {
     "P": ATTRIB_POS_PITCHER,
     "SP": ATTRIB_POS_PITCHER,
@@ -303,12 +253,8 @@ POS_STRING_TO_NUM: dict[str, int] = {
 }
 
 # What `_build_attrib_fields` writes for a position string the table above does
-# not name. 7 is centre field, the source's fallback.
+# not name. 7 is centre field.
 DEFAULT_POS_NUM = ATTRIB_POS_CF
-
-# ──────────────────────────────────────────────────────────────
-# Roster shape
-# ──────────────────────────────────────────────────────────────
 
 BATTERS_PER_TEAM = 15
 STARTERS_PER_TEAM = 5
@@ -322,12 +268,11 @@ TEAM_COUNT = 30
 # and slot + 1 is the batting order the game stores.
 LINEUP_POSITIONS: tuple[str, ...] = ("C", "1B", "2B", "SS", "3B", "LF", "CF", "RF", "DH")
 
-# **`_select_position_players` fills positions in a different order from the one
-# the lineup is written in**, and that is the source's behaviour, preserved.
-# `LINEUP_POSITIONS` puts SS third and 3B fifth; selection asks for 3B before
-# SS. The consequence is that a player who qualifies at both is taken as a third
-# baseman and then batted third, in the slot labelled SS. Faithful, and named
-# here so it is visible rather than buried in two literals that look alike.
+# `_select_position_players` fills positions in a different order from the one
+# the lineup is written in: `LINEUP_POSITIONS` puts SS third and 3B fifth, and
+# selection asks for 3B before SS, so a player who qualifies at both is taken as
+# a third baseman and then batted third, in the slot labelled SS. Preserved
+# deliberately; do not collapse the two tuples into one.
 SELECTION_POSITIONS: tuple[str, ...] = ("C", "1B", "2B", "3B", "SS", "LF", "CF", "RF", "DH")
 
 # Bench batters get this, and it is the game's own code for "not in the lineup".
@@ -336,28 +281,17 @@ BENCH_POSITION = "B"
 # Rotation slots 15-19 and bullpen slots 20-24.
 ROTATION_POSITIONS: tuple[str, ...] = ("SP1", "SP2", "SP3", "SP4", "SP5")
 
-# **Two `MR` entries and no fifth distinct role.** The source wrote
-# `["CP", "SU", "MR", "MR", "LR"]`, so the third and fourth relievers are both
-# middle relief. Preserved: the game accepts duplicates here, and inventing a
-# fifth role would change which pitcher the CPU warms up.
+# Two `MR` entries and no fifth distinct role: the third and fourth relievers are
+# both middle relief. Preserved -- the game accepts duplicates here, and a fifth
+# role would change which pitcher the CPU warms up.
 BULLPEN_POSITIONS: tuple[str, ...] = ("CP", "SU", "MR", "MR", "LR")
 
 # What a player not in the batting order stores in the order column.
 NOT_IN_LINEUP = -1
 
-# ──────────────────────────────────────────────────────────────
-# Teams
-# ──────────────────────────────────────────────────────────────
-
-# Slot index -> game abbreviation. **This tuple is the single source of the
-# slot ordering.** The source carried the same ordering three times -- as the
-# insertion order of `TEAM_HASHES`, as the insertion order of the byte-identical
-# duplicate `TEAM_ABBREV_TO_HASH`, and as the values of `MVP_ABBREV_TO_INDEX` --
-# and then two files, `patcher.py:160` and `rom_reader.py:250`, indexed
-# `list(TEAM_HASHES.keys())` by slot number, relying on dict insertion order
-# with nothing asserting the three agreed. They did agree; that was luck, and
-# reordering the hash table would have silently given every team another team's
-# roster.
+# Slot index -> game abbreviation, and the single source of the slot ordering.
+# Never index `TEAM_HASHES` by slot number: relying on that dict's insertion
+# order means reordering it silently gives every team another team's roster.
 MVP_TEAM_ABBREVS: tuple[str, ...] = (
     "ANA",
     "OAK",
@@ -428,21 +362,17 @@ MVP_TEAM_ORDER: tuple[str, ...] = (
 # Derived, not written out again.
 MVP_ABBREV_TO_INDEX: dict[str, int] = {code: i for i, code in enumerate(MVP_TEAM_ABBREVS)}
 
-# **Slots 0-13 are the American League and 14-29 the National.** The source
-# wrote the boundary inline as `team_index < 14` with no explanation, which
-# reads like an arbitrary constant and is not: `MVP_TEAM_ABBREVS` is ordered AL
-# first, and the 2005 leagues were 14 clubs and 16. The number is checked
-# against that ordering by a test rather than left to agree by accident.
+# Slots 0-13 are the American League and 14-29 the National: `MVP_TEAM_ABBREVS`
+# is ordered AL first, and the 2005 leagues were 14 clubs and 16.
 #
-# What it decides is which of the four (position, order) column pairs in a
-# `roster` row carries the real batting order: an AL club bats its lineup in the
-# AL columns and stores -1 in the NL ones, because the NL had no designated
-# hitter in 2005 and the game keeps a separate lineup for each rule.
+# It decides which of the four (position, order) column pairs in a `roster` row
+# carries the real batting order: an AL club bats its lineup in the AL columns
+# and stores -1 in the NL ones, because the NL had no designated hitter in 2005
+# and the game keeps a separate lineup for each rule.
 AL_SLOT_COUNT = 14
 
 # Game abbreviation -> the nine-hex-digit id the `team` table keys on. Carried
-# over unverified: these came out of a real disc that cannot enter this
-# repository, and nothing here can confirm them.
+# over unverified; nothing here can confirm them.
 TEAM_HASHES: dict[str, str] = {
     "ANA": "00b87d5f5",
     "OAK": "00b880fe0",
@@ -518,10 +448,6 @@ MODERN_MLB_TO_MVP: dict[str, str] = {
     "PHI": "PHI",
 }
 
-# ──────────────────────────────────────────────────────────────
-# Record types
-# ──────────────────────────────────────────────────────────────
-
 # Every rating in this game is on 0-99. There is no other scale in the package.
 ATTR_MIN = 0
 ATTR_MAX = 99
@@ -536,14 +462,7 @@ PITCH_CHANGEUP = 4
 
 @dataclass(frozen=True)
 class MVPPitch:
-    """One entry in a pitcher's arsenal.
-
-    A frozen dataclass where the source used `dict[str, int]` with four keys and
-    read them back through `.get(key, 50)`. The defaults were unreachable --
-    `_default_pitches` is the only producer and always sets all four -- so
-    naming the fields loses nothing and makes a typo a type error instead of a
-    silent 50.
-    """
+    """One entry in a pitcher's arsenal."""
 
     type: int
     movement: int
@@ -555,14 +474,12 @@ class MVPPitch:
 class MVPPlayerRecord:
     """One player, ready to be written into four CSV tables.
 
-    `hash_id` is empty until `patch` assigns one out of the disc's own pool: the
-    mapper cannot know it, because which id a player gets depends on what the
-    disc already holds. Everything else comes from the provider and the mapper.
+    `hash_id` is empty until `patch` assigns one out of the disc's own pool:
+    which id a player gets depends on what the disc already holds.
 
-    UPSTREAM BEHAVIOUR, KNOWN WRONG, PRESERVED DELIBERATELY -- neither `height`
-    nor `weight` has a producer. Nothing in this package, and nothing in the
-    source package it came from, ever assigns either, so every player written to
-    a disc is 6'0" and 190 lb. Both are written unconditionally; see
+    Upstream behaviour, known wrong, preserved deliberately: neither `height`
+    nor `weight` has a producer, so every player written to a disc is 6'0" and
+    190 lb. Both are written unconditionally; see
     `patcher._build_attrib_fields`.
     """
 

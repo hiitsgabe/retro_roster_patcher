@@ -14,14 +14,11 @@ The five tables this package touches, and how they chain:
           rather than in SPAI is what makes his slot a goalie slot
     STEA  the team table, read for `RomSlot.current_name` and nothing else
 
-**None of the field names or widths below has ever been checked against a
-retail disc**, here or upstream; no real ISO may enter this repository. They are
-transcribed from the source package.
+The field names and widths below are transcribed from the source package and
+have never been checked against a retail disc.
 
-References:
-  - Game id on the disc: ULUS10131 (US). Nothing reads it -- see
-    `rom_reader.NHL07PSPRomReader.validate` for what the signature check
-    actually looks at, and `patcher` for why.
+Game id on the disc: ULUS10131 (US). Nothing reads it; see
+`rom_reader.NHL07PSPRomReader.validate` for what the signature check looks at.
 """
 
 from __future__ import annotations
@@ -66,60 +63,55 @@ NHL07_TEAM_INDEX = {
     31: "WES",
 }
 
-# Modern NHL abbreviation -> STEA INDX, for matching a fetched roster to a slot.
-# Both providers' spellings are here, which is why this maps 39 codes onto 32
-# slots: ESPN says `LA`, `NJ`, `SJ` and `TB` where the NHL API says `LAK`,
-# `NJD`, `SJS` and `TBL`. Six further codes are relocations or expansions that
-# reuse an ancestor's slot. **Collapsing 39 keys onto 32 values means two
-# fetched teams can name one slot**, which `NHL07PSPPatcher.map_rosters` has to
-# guard; the comment there says what goes wrong without it.
+# Modern NHL abbreviation -> STEA INDX. 39 codes onto 32 slots: ESPN says `LA`,
+# `NJ`, `SJ` and `TB` where the NHL API says `LAK`, `NJD`, `SJS` and `TBL`, and
+# six further codes are relocations reusing an ancestor's slot. Two fetched teams
+# can therefore name one slot, which `NHL07PSPPatcher.map_rosters` must guard.
 MODERN_NHL_TO_NHL07 = {
-    "ANA": 0,  # Anaheim Ducks
-    "ATL": 1,  # Atlanta Thrashers (now WPG)
-    "BOS": 2,  # Boston Bruins
-    "BUF": 3,  # Buffalo Sabres
-    "CGY": 4,  # Calgary Flames
-    "CAR": 5,  # Carolina Hurricanes
-    "CHI": 6,  # Chicago Blackhawks
-    "COL": 7,  # Colorado Avalanche
-    "CBJ": 8,  # Columbus Blue Jackets
-    "DAL": 9,  # Dallas Stars
-    "DET": 10,  # Detroit Red Wings
-    "EDM": 11,  # Edmonton Oilers
-    "FLA": 12,  # Florida Panthers
-    "LAK": 13,  # Los Angeles Kings
-    "LA": 13,  # ESPN abbreviation
-    "MIN": 14,  # Minnesota Wild
-    "MTL": 15,  # Montreal Canadiens
-    "NSH": 16,  # Nashville Predators
-    "NJD": 17,  # New Jersey Devils
-    "NJ": 17,  # ESPN abbreviation
-    "NYI": 18,  # New York Islanders
-    "NYR": 19,  # New York Rangers
-    "OTT": 20,  # Ottawa Senators
-    "PHI": 21,  # Philadelphia Flyers
-    "PHX": 22,  # Phoenix Coyotes (now UTA)
-    "ARI": 22,  # Arizona Coyotes (became UTA)
-    "UTA": 22,  # Utah Hockey Club -> use Phoenix slot
-    "PIT": 23,  # Pittsburgh Penguins
-    "STL": 24,  # St. Louis Blues
-    "SJS": 25,  # San Jose Sharks
-    "SJ": 25,  # ESPN abbreviation
-    "TBL": 26,  # Tampa Bay Lightning
-    "TB": 26,  # ESPN abbreviation
-    "TOR": 27,  # Toronto Maple Leafs
-    "VAN": 28,  # Vancouver Canucks
-    "WSH": 29,  # Washington Capitals
+    "ANA": 0,
+    "ATL": 1,
+    "BOS": 2,
+    "BUF": 3,
+    "CGY": 4,
+    "CAR": 5,
+    "CHI": 6,
+    "COL": 7,
+    "CBJ": 8,
+    "DAL": 9,
+    "DET": 10,
+    "EDM": 11,
+    "FLA": 12,
+    "LAK": 13,
+    "LA": 13,
+    "MIN": 14,
+    "MTL": 15,
+    "NSH": 16,
+    "NJD": 17,
+    "NJ": 17,
+    "NYI": 18,
+    "NYR": 19,
+    "OTT": 20,
+    "PHI": 21,
+    "PHX": 22,
+    "ARI": 22,
+    "UTA": 22,
+    "PIT": 23,
+    "STL": 24,
+    "SJS": 25,
+    "SJ": 25,
+    "TBL": 26,
+    "TB": 26,
+    "TOR": 27,
+    "VAN": 28,
+    "WSH": 29,
     # Expansion and relocation, mapped to the closest slot.
-    "WPG": 1,  # Winnipeg Jets -> use Atlanta slot
-    "VGK": 31,  # Vegas -> use the WES All-Star slot
-    "SEA": 30,  # Seattle -> use the EAS All-Star slot
+    "WPG": 1,
+    "VGK": 31,
+    "SEA": 30,
 }
 
-# Display names by team index, used for `RomSlot.display_name` and for progress
-# messages. Distinct across all 32 entries, which `RomSlot.display_name`
-# requires: a slot-picking UI lists this field and two identical rows leave the
-# user unable to tell them apart.
+# Display names by team index. Keep all 32 distinct: a slot-picking UI lists this
+# field and identical rows are indistinguishable.
 NHL07_TEAM_NAMES = [
     "Anaheim",  # 0
     "Atlanta",  # 1
@@ -155,20 +147,16 @@ NHL07_TEAM_NAMES = [
     "West All-Star",  # 31
 ]
 
-# The NHL clubs alone. `TEAM_COUNT` bounds the fallback slot list the reader
-# builds when it cannot read STEA, so the two All-Star slots are absent from
-# that list -- but they are NOT excluded from patching: `MODERN_NHL_TO_NHL07`
-# routes Seattle and Vegas to 30 and 31, and `map_rosters` bounds slots by
-# `len(NHL07_TEAM_NAMES)` rather than by this.
+# The NHL clubs alone, bounding only the fallback slot list the reader builds
+# when it cannot read STEA. The two All-Star slots are absent from that list but
+# are still patchable; bound patching by `SLOT_COUNT`, never by this.
 TEAM_COUNT = 30
 
-# The number of ROM slots a mapped roster may name at all. Every index in
-# `MODERN_NHL_TO_NHL07` is below it, and `map_rosters` re-checks because those
-# keys can cross a JSON boundary before `patch` sees them.
+# The number of ROM slots a mapped roster may name at all.
 SLOT_COUNT = len(NHL07_TEAM_NAMES)
 
-# TDB POS_ field code -> position string. The reverse direction is what the
-# writer uses; a position the game does not know maps to 0, a centre.
+# TDB POS_ field code -> position string. A position the game does not know maps
+# to 0, a centre.
 POSITION_MAP = {
     0: "C",
     1: "LW",
@@ -178,20 +166,16 @@ POSITION_MAP = {
 }
 POSITION_REVERSE = {v: k for k, v in POSITION_MAP.items()}
 
-# The three TDB members of `db.viv`, spelled as the source spells them. Every
-# lookup through them is case-insensitive (`bigf_extract` folds case), and the
-# one place the archive's own spelling is needed -- writing back -- reads it out
-# of `bigf_parse`, because `bigf_replace_inplace` selects case-insensitively.
+# The three TDB members of `db.viv`. Lookups through them fold case
+# (`bigf_extract`, `bigf_replace_inplace`), so these spellings need not match the
+# archive's.
 TDB_MASTER = "nhl2007.tdb"
 TDB_BIOATT = "nhlbioatt.tdb"
 TDB_ROSTER = "nhlrost.tdb"
 
-# The longest name that survives a write to SPBT's `FNME` or `LNME`. The field
-# is 20 bytes and `TDBTable.write_record` NUL-pads whatever it is given to fill
-# it, so a 20-character name would leave no terminator; 19 is the last length
-# that does. Both the mapper and the writer truncate to it -- the mapper so the
-# caller sees what will be written, the writer so a record built by hand cannot
-# get past it.
+# The longest name that survives a write to SPBT's `FNME` or `LNME`. The field is
+# 20 bytes and `TDBTable.write_record` NUL-pads to fill it, so 20 characters
+# would leave no terminator.
 NAME_FIELD_CHARS = 19
 
 
@@ -199,10 +183,9 @@ NAME_FIELD_CHARS = 19
 class NHL07SkaterAttributes:
     """Skater ratings on NHL 07's 0-63 scale, one six-bit TDB field each.
 
-    `fighting` is the exception: `FIGH` is two bits, so 0-3, and the default of
-    1 is what an unrated skater gets. Every other default is 30, the middle of
-    the six-bit range; `stat_mapper.SKATER_DEFAULTS` overrides them per position
-    and is what actually reaches a record.
+    `FIGH` is the exception at two bits, so 0-3. Every other default is 30, the
+    middle of the six-bit range; `stat_mapper.SKATER_DEFAULTS` overrides them per
+    position.
     """
 
     balance: int = 30  # BALA
@@ -260,19 +243,14 @@ class NHL07GoalieAttributes:
 class NHL07PlayerRecord:
     """One player, reduced to what the three TDB tables take.
 
-    Exactly one of `skater_attrs` and `goalie_attrs` is ever set, and which one
-    follows `is_goalie`. Both are `None` by default rather than a shared default
-    object: a dataclass field defaulting to a mutable instance is one object for
-    every record ever built, and two of the migrated games shipped that bug.
+    Exactly one of `skater_attrs` and `goalie_attrs` is set, following
+    `is_goalie`. Both default to `None` and must not default to a shared mutable
+    instance.
 
-    UPSTREAM BEHAVIOUR, KNOWN WRONG, PRESERVED DELIBERATELY -- `height` is the
-    encoded five-bit `HEIG` and nothing ever sets it to anything but this
-    default, because `stat_mapper.map_player` derives it from a `Player.height`
-    that no provider model in this library has. Every patched player is
-    therefore written at 16, about 5'10". That is what the source wrote onto a
-    disc and it is what this port writes, because a byte sequence this code has
-    never had validated against real hardware is not worth improving on. See
-    `rom_writer.NHL07PSPRomWriter.write_player_bio`.
+    Upstream behaviour, known wrong, preserved deliberately: `height` is the
+    encoded five-bit `HEIG` and nothing ever overrides this default, because
+    `stat_mapper.map_player` derives it from a `Player.height` no provider model
+    here has. Every patched player is written at 16, about 5'10".
     """
 
     first_name: str = ""
@@ -293,10 +271,9 @@ class NHL07PlayerRecord:
 class NHL07TeamSlot:
     """One team slot as the reader found it in STEA, or as a fallback name.
 
-    `name` comes from the disc when STEA has a `NAME` or `CITY` string for the
-    slot, and from `NHL07_TEAM_NAMES` when it does not; `index` is STEA's own
-    `INDX` value rather than the record's position, because the two need not
-    agree.
+    `name` comes from STEA's `NAME` or `CITY` when present, else from
+    `NHL07_TEAM_NAMES`. `index` is STEA's own `INDX` value, not the record's
+    position: the two need not agree.
     """
 
     index: int
@@ -308,8 +285,7 @@ class NHL07TeamSlot:
 class NHL07RomInfo:
     """What the reader learned about one ISO.
 
-    Internal to this package: `NHL07PSPPatcher.analyze_rom` translates it into
-    the library's `RomInfo`. `size` is the ISO's size on disk, not `db.viv`'s.
+    `size` is the ISO's size on disk, not `db.viv`'s.
     """
 
     path: str

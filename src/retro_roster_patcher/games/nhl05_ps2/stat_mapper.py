@@ -1,32 +1,13 @@
 """Turn provider roster and stat data into NHL 2005's 0-63 attribute scale.
 
-**This module and `games/nhl07_psp/stat_mapper.py` are the same arithmetic.**
-Measured: the two source files differ in the class and dataclass names, the
-game's year in seven docstrings, and one number -- the name truncation width,
-15 here and 19 there. Every formula, every scaling window and all 39 position
-default values are identical.
-
-They are *not* shared, and that is deliberate rather than an oversight. What
-would be shared is a mapper parameterised on a name width and returning one of
-two unrelated pairs of dataclasses, and the two games would then be coupled
-through a module neither of them owns: a change made for NHL 2005's six-bit
-`FACE` field would silently reach NHL 07's. The precedent in this library is
-that a format is shared when it is a format (`formats/ea_tdb.py`,
-`formats/iso9660.py`) and a *policy* is not. These numbers are a policy -- one
-person's guess in 2024 at what a 40-goal season is worth on a 0-63 scale -- and
-`games/mvp_psp` will have a third, different one for baseball.
+This module and `games/nhl07_psp/stat_mapper.py` are the same arithmetic, and
+they stay unshared on purpose: these numbers are a rating policy, not a format,
+and a change made for one game must not reach the other. The one number that
+already differs is the name truncation width, 15 here against 19 there.
 
 The formulas, the scaling windows and the position defaults are transcribed
-unchanged, including the places where they are visibly rough, because changing
-them changes every rating on every patched disc and there is no reference to
-check a change against; the audit that accompanies this migration asserts
-value-identical output against the source over 4 000 mapped players, 600 roster
-selections and 800 line-flag assignments.
-
-There is no exception. The two that used to be here -- normalising a `SV%`
-reported as a percentage, and a defence-pair spelling of `L{pair}{side}` -- have
-both been taken back out; `_map_goalie_stats` and `generate_team_line_flags`
-carry the arguments and the labels.
+unchanged, including where they are visibly rough: changing them changes every
+rating on every patched disc and there is no reference to check against.
 """
 
 from __future__ import annotations
@@ -48,8 +29,8 @@ ATTR_MIN = 0
 ATTR_MAX = 63
 
 # How many players a mapped roster holds. An NHL team dresses 20 and carries
-# scratches; 25 is what the source asked for, so a larger number would simply be
-# truncated by however many ROST rows the disc gives a team in `patcher.patch`.
+# scratches; anything larger is truncated by however many ROST rows the disc
+# gives a team in `patcher.patch`.
 MAX_PLAYERS = 25
 
 # The shape `select_roster` builds towards: two goalies, four forward lines of
@@ -69,9 +50,9 @@ DEFENCE_PAIRS = 3
 SPECIAL_TEAMS_UNIT = 5
 
 # Per-position starting points, used whole when a player has no stats and as the
-# base for several derived ratings when he does. A frozen dict of dataclass
-# instances would still be one shared object per position, so every read of these
-# goes through `dataclasses.replace` -- see `_defaults_for`.
+# base for several derived ratings when he does. Copied, not shared: every read
+# goes through `dataclasses.replace`, so the module constant never reaches a
+# record. See `_defaults_for`.
 SKATER_DEFAULTS = {
     "C": NHL05SkaterAttributes(
         balance=35,
@@ -197,28 +178,27 @@ GOALIE_DEFAULTS = NHL05GoalieAttributes(
     stick_low=35,
 )
 
-# Default weight in pounds for a player the provider reports nothing for. 190 lb
-# is about the 2004 league average. Written to `WEIG` as raw pounds.
+# Default weight in pounds, about the 2004 league average. Written to `WEIG` as
+# raw pounds.
 DEFAULT_WEIGHT = 190
 
-# UPSTREAM BEHAVIOUR, KNOWN WRONG, PRESERVED DELIBERATELY -- the encoded `HEIG`
-# every player gets, because the branch below that would compute another one
-# cannot run. 16 is about 5'10". See `map_player`.
+# The encoded `HEIG` every player gets, about 5'10". Upstream behaviour, known
+# wrong, preserved deliberately: the branch that would compute another one cannot
+# run. See `map_player`.
 DEFAULT_HEIGHT = 16
 
 # `HEIG` is five bits and encodes inches above `HEIGHT_BASE_INCHES`, so the
-# scale runs 5'6" to 8'1". Only reachable from a `Player` with a `height`, and
-# there is none.
+# scale runs 5'6" to 8'1".
 HEIGHT_BASE_INCHES = 66
 HEIGHT_MAX = 31
 
-# Default jersey number for a player without one. 1 is a goalie's number and is
-# handed to skaters too; the disc's own number is overwritten either way.
+# Default jersey number. 1 is a goalie's number and is handed to skaters too; the
+# disc's own number is overwritten either way.
 DEFAULT_JERSEY = 1
 
-# `HAND`: 0 is left, 1 is right, and right is the default. A provider that
-# reports nothing therefore makes every player right-handed rather than leaving
-# the disc's value, because `HAND` is always written.
+# `HAND`: 0 is left, 1 is right, and right is the default. `HAND` is always
+# written, so a provider that reports nothing makes every player right-handed
+# rather than leaving the disc's value.
 HAND_LEFT = 0
 HAND_RIGHT = 1
 
@@ -243,12 +223,9 @@ def _scale(value: float, low: float, high: float) -> int:
 def _stat(stats: dict, *names: str, default: float = 0.0) -> float:
     """The first of `names` present and non-zero in `stats`, as a float.
 
-    `or` rather than `in`, matching the source: a stat reported as `0`, as `""`
-    or as `None` all fall through to the next name and finally to `default`.
-    That makes a genuine zero indistinguishable from an absent stat, which for
-    every caller below is the intended reading -- a skater with no recorded
-    shots and a skater the provider has no shot data for both get the position
-    default rather than a rating of zero.
+    `or` rather than `in`: a stat reported as `0`, `""` or `None` falls through
+    to the next name and finally to `default`, so a genuine zero and an absent
+    stat both take the position default rather than a rating of zero.
     """
     for name in names:
         value = stats.get(name)
@@ -260,10 +237,8 @@ def _stat(stats: dict, *names: str, default: float = 0.0) -> float:
 def _defaults_for(position: str) -> NHL05SkaterAttributes:
     """A fresh copy of one position's defaults.
 
-    `dataclasses.replace` with no changes, so the caller can never be handed the
-    module-level instance itself. Handing that object out is how two of the
-    migrated games ended up with one attribute record shared by every player on
-    every team, where a single later mutation rewrote the whole league.
+    Copied, not shared: the module-level instance must not reach a record, or one
+    later mutation rewrites every player on every team.
     """
     base = SKATER_DEFAULTS.get(position, SKATER_DEFAULTS[DEFAULT_POSITION])
     return replace(base)
@@ -280,14 +255,9 @@ class NHL05StatMapper:
     ) -> NHL05PlayerRecord:
         """Build one `NHL05PlayerRecord` from a provider `Player`.
 
-        The name is split on the *first* space only, so "Pierre-Luc Dubois"
-        keeps its surname whole and "Ryan Nugent-Hopkins" does too, while
-        "Jean-Sebastien Van Der Meer" would put everything after the first space
-        in `LNME` and lose the tail to the 15-character field -- which is four
-        characters shorter than NHL 07's, so a name that survives there is
-        cut here. Both fields are
-        truncated here as well as in the writer; the writer's truncation is the
-        one that protects the record and this one is what the caller sees.
+        The name is split on the *first* space only, so everything after it goes
+        to `LNME` and the tail past 15 characters is lost -- four characters
+        shorter than NHL 07's field, so a name that survives there is cut here.
 
         `stats` empty or absent is not an error: it selects the position
         defaults, which is what a player with no games played gets.
@@ -307,14 +277,10 @@ class NHL05StatMapper:
 
         weight = int(player.weight) if player.weight > 0 else DEFAULT_WEIGHT
 
-        # UPSTREAM BEHAVIOUR, KNOWN WRONG, PRESERVED DELIBERATELY. `Player` has
-        # no `height` -- not in this library's models and not in the ones the
-        # source read -- so `getattr` always answers its default, the branch
-        # never runs, and every record leaves here at `DEFAULT_HEIGHT`. The
-        # writer then stamps that one constant over the disc's own per-player
-        # heights. Kept as dead code rather than deleted along with the write,
-        # because the write is what the source put on a disc and this port's
-        # output has never been checked against real hardware.
+        # Upstream behaviour, known wrong, preserved deliberately: `Player` has
+        # no `height`, so this branch never runs and every record leaves at
+        # `DEFAULT_HEIGHT`, which the writer stamps over the disc's own heights.
+        # Do not delete the dead branch and do not stop writing `HEIG`.
         height = DEFAULT_HEIGHT
         player_height = getattr(player, "height", 0) or 0
         if player_height > 0:
@@ -366,11 +332,8 @@ class NHL05StatMapper:
         goal_rating = _scale(g, 0, 40)
         assist_rating = _scale(a, 0, 55)
 
-        # Shooting percentage, and 10% assumed for a player with no shots
-        # recorded -- roughly league average, so he is neither rewarded nor
-        # punished for the missing stat. `max(shots, 1)` guards the division
-        # separately; with `shots` zero the ternary has already taken the other
-        # branch, so the guard is unreachable and is kept as the source had it.
+        # Shooting percentage, and 10% -- roughly league average -- assumed for a
+        # player with no shots recorded.
         shoot_pct = (g / max(shots, 1)) * 100 if shots > 0 else 10
         accuracy_rating = _scale(shoot_pct, 5, 20)
 
@@ -409,32 +372,19 @@ class NHL05StatMapper:
     def _map_goalie_stats(self, stats: dict) -> NHL05GoalieAttributes:
         """Derive 17 goalie ratings from a season line.
 
-        `SV%` scales over 0.880 to 0.930, which is the whole practical range of
-        NHL save percentages, and it drives ten of the seventeen. `GAA` is
-        inverted -- 3.5 minus the average, over a 1.5 window -- so a lower
-        average is a higher rating. Wins add a flat bonus of up to 10, capped at
-        40 wins.
+        `SV%` scales over 0.880 to 0.930, the whole practical range of NHL save
+        percentages, and it drives ten of the seventeen. `GAA` is inverted --
+        3.5 minus the average, over a 1.5 window -- so a lower average is a
+        higher rating. Wins add a flat bonus of up to 10, capped at 40 wins.
 
-        UPSTREAM BEHAVIOUR, KNOWN WRONG, PRESERVED DELIBERATELY -- `SV%` is read
+        Upstream behaviour, known wrong, preserved deliberately: `SV%` is read
         as a bare float against a window written as a fraction, so a line
-        reporting `91.2` rather than `0.912` saturates `_scale` and takes the
-        ceiling on **ten** of these seventeen, not eight: the eight the window
-        obviously drives, plus `intensity` and `potential`, which are
-        `save_rating` minus five plus the win bonus and `save_rating` plus the
-        win bonus. Nor are they all 63 -- three have a constant subtracted, so a
-        saturated goalie reads 63/61/60. `games/nhl07_psp/stat_mapper.py` carries
-        the long form, including why `select_roster`'s goalie key reads it the
-        same bare way. The identical revert in both games, because this module is
-        that one with the type names substituted and a guard in one and not the
-        other would be a game-shaped trap.
+        reporting `91.2` rather than `0.912` saturates ten of the seventeen
+        ratings. Do not add the comparison against 1.0 here alone; a guard in one
+        of the two games and not the other would be a game-shaped trap.
 
-        INHERITED DEFECT, PRESERVED DELIBERATELY: `toughness`, `fighting` and
-        `passing` are constants, written from no stat at all and equal to
-        `GOALIE_DEFAULTS`', so a goalie the provider has no line for and a
-        Vezina winner come out equal on all three. Not fixed, and
-        `games/nhl07_psp/stat_mapper.py` carries the reason: there is no goalie
-        toughness input to fix it from, and inventing a derivation would be new
-        behaviour dressed as a bug fix.
+        `toughness`, `fighting` and `passing` are constants: no provider here
+        supplies a goalie input for them, so do not invent a derivation.
         """
         svp = _stat(stats, "SV%")
         gaa = _stat(stats, "GAA", default=3.0)
@@ -472,33 +422,27 @@ class NHL05StatMapper:
     ) -> list[Player]:
         """Pick and order a roster: goalies, then forwards, then defence.
 
-        The order is what `generate_team_line_flags` and `patcher.patch` both
-        read afterwards, so it is part of the contract and not a presentation
-        choice. Within each group players are sorted by production -- points for
-        a skater, save percentage for a goalie -- highest first, so the first
-        centre taken is the first-line centre.
+        `generate_team_line_flags` and `patcher.patch` both read this order, so
+        it is part of the contract. Within each group players sort by production
+        -- points for a skater, save percentage for a goalie -- highest first.
 
-        Forwards are built line by line rather than by taking the top 14: the
-        best centre, best left wing and best right wing form line one, and so on
-        for four lines, and only then are the remaining forwards appended by
-        points. Taking the top 14 outright would put four centres on line one.
+        Build forwards line by line rather than by taking the top 14: best
+        centre, best left wing and best right wing form line one, and so on for
+        four lines, then the rest by points. Taking the top 14 outright would put
+        four centres on line one.
 
-        `sort_key` reads `stats` by the player's id as a *string*, because both
-        providers key their leaders payload that way.
+        `sort_key` reads `stats` by the player's id as a *string*: both providers
+        key their leaders payload that way.
         """
         stats = stats or {}
 
         def sort_key(p: Player) -> float:
             ps = stats.get(str(p.id), {})
             if p.position == "G":
-                # Scaled by 1000 only so goalies sort against each other on a
-                # number of the same magnitude as a points total; nothing reads
-                # the value itself.
-                #
-                # UPSTREAM BEHAVIOUR, KNOWN WRONG, PRESERVED DELIBERATELY -- the
-                # bare `SV%` again, so a roster file mixing the two conventions
-                # sorts a `91.2` goalie above a `0.930` one and starts the worse
-                # of the two. See `_map_goalie_stats`.
+                # Scaled by 1000 only so goalies sort on a number of the same
+                # magnitude as a points total; nothing reads the value itself.
+                # The bare `SV%` again: a roster file mixing the two conventions
+                # starts the worse goalie. See `_map_goalie_stats`.
                 return _stat(ps, "SV%") * 1000
             return _stat(ps, "PTS")
 
@@ -518,9 +462,7 @@ class NHL05StatMapper:
                     forwards.append(pool[i])
 
         # `id()` and not the player's own id: two `Player` objects for the same
-        # person would be two entries in `players` and both belong in the pool
-        # exactly once each, which is what object identity answers. The source
-        # did the same.
+        # person are two entries in `players` and each belongs in the pool once.
         used = {id(p) for p in forwards}
         extras = sorted(
             [p for p in centers + left_wings + right_wings if id(p) not in used],
@@ -532,10 +474,8 @@ class NHL05StatMapper:
 
         selected = goalies[:GOALIES_PER_TEAM] + forwards + defensemen[:DEFENCEMEN_PER_TEAM]
 
-        # Anything left -- a player whose position string is none of the five,
-        # or a sixth defenceman past the seven -- fills the remaining slots by
-        # production. This is the only way a player with an unrecognised
-        # position reaches a record at all.
+        # Anything left -- an unrecognised position, or a defenceman past the
+        # seven -- fills the remaining slots by production.
         all_used = {id(p) for p in selected}
         leftover = sorted([p for p in players if id(p) not in all_used], key=sort_key, reverse=True)
         remaining = max_players - len(selected)
@@ -554,47 +494,25 @@ class NHL05StatMapper:
     ) -> list[dict[str, int]]:
         """One flag dict per player, in the order the players were given.
 
-        Lines are built from natural positions first and gaps are filled with
-        spare centres, which is why a team of nine centres and no wingers still
-        ices four complete forward lines. A winger is never moved to centre --
-        the pools are consumed left to right and only `c_pool` is drawn on twice
-        -- so a team with no centres at all ices four lines with no centre.
+        Lines come from natural positions first and gaps are filled with spare
+        centres. A winger is never moved to centre, so a team with no centres
+        ices four lines with no centre.
 
         The power play takes line one's forwards and the top defence pair; the
         penalty kill takes line two's forwards and the next pair. `H1__`-`H5__`
-        and `S1__`-`S5__` are five slots each and both are filled positionally,
-        so a team short of defencemen gets a four-man power play rather than a
+        and `S1__`-`S5__` are five slots each and both fill positionally, so a
+        team short of defencemen gets a four-man power play rather than a
         forward in a defenceman's slot.
 
         A player who reaches none of those groups gets an empty dict, which
-        `rom_writer.roster_values` turns into all sixty-four flags zeroed -- a
-        dressed scratch, not a player left on whatever line the disc had him on.
+        `rom_writer.roster_values` turns into all sixty-four flags zeroed.
 
-        UPSTREAM BEHAVIOUR, KNOWN WRONG, PRESERVED DELIBERATELY -- the defence
-        pairs are emitted as `3{pair}{side}`, `31LD` through `33RD`, which is
-        **NHL 07's spelling and not this game's**. This whole module is a copy of
-        NHL 07's with the type names substituted, and on NHL 07 `3n` really is
-        defence pair *n*. On NHL 2005 it is not, and every patched player loses
-        three ways:
-
-          * pairs one and two go to `31LD`/`31RD` and `32LD`/`32RD`, which on
-            this game are the two **five-on-three** units, so a defenceman is
-            marked for a situation he was not picked for;
-          * pair three goes to `33LD`/`33RD`, which this game's ROST does not
-            have at all, so `rom_writer.roster_values` drops it;
-          * `L1LD` through `L3RD`, the pairs the game actually ices at even
-            strength, are zeroed by the `for flag in LINE_FLAGS` loop and never
-            set -- so **a patched team has no even-strength defence pairing
-            whatsoever**.
-
-        The fix is one character, `L` for `3`, and it was in this file. It is out
-        again. The premise is sound -- `rom_writer.LINE_FLAGS` shows `31C_`
-        exists on this game and a defence pair has no centre, and NHL 07's list
-        has no `L*LD` at all -- but sound is not the same as verified, and only a
-        field-name dump from a retail DVD would settle which flag the game reads.
-        None may enter this repository. Until one does, the port writes the bits
-        the source wrote: six line-assignment bits per ROST row, on any team with
-        defencemen, and nothing else in the record moves.
+        Upstream behaviour, known wrong, preserved deliberately: the defence
+        pairs are emitted as `3{pair}{side}`, which is NHL 07's spelling. On this
+        game `31`/`32` are five-on-three units, `33LD`/`33RD` do not exist, and
+        the even-strength pairs `L1LD` through `L3RD` are left zero, so a patched
+        team has no even-strength pairing. Do not change the `3` to an `L`
+        without a field-name dump from a retail DVD.
         """
         result: list[dict[str, int]] = [{} for _ in players]
 
@@ -632,19 +550,13 @@ class NHL05StatMapper:
         for di, (idx, _) in enumerate(defense[: DEFENCE_PAIRS * 2]):
             pair = di // 2 + 1
             side = "LD" if di % 2 == 0 else "RD"
-            # UPSTREAM BEHAVIOUR, KNOWN WRONG, PRESERVED DELIBERATELY: `3`, not
-            # `L`. This is NHL 07's spelling; it puts this game's first two pairs
-            # on the five-on-three units, drops the third, and leaves the
-            # even-strength pairs zero. The docstring above carries the evidence
-            # and why it is not enough to act on.
+            # `3`, not `L`: NHL 07's spelling, kept deliberately. See above.
             result[idx][f"3{pair}{side}"] = 1
             d_line_indices.append(idx)
 
-        # Three forwards and two defencemen, and `fwd_line_indices` holds them
-        # in the order they were assigned, so [:3] is line one and [3:6] is line
-        # two -- but only when line one was complete. A team missing a right
-        # wing puts line two's centre in the third power-play slot, because the
-        # list is positional and not keyed by line.
+        # Three forwards and two defencemen. `fwd_line_indices` is positional and
+        # not keyed by line, so [:3] is line one only when line one was complete;
+        # a team missing a right wing puts line two's centre in the third slot.
         pp_candidates = fwd_line_indices[:3] + d_line_indices[:2]
         for hi, idx in enumerate(pp_candidates[:SPECIAL_TEAMS_UNIT]):
             result[idx][f"H{hi + 1}__"] = 1
