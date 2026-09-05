@@ -233,13 +233,17 @@ def player_university(team: int, slot: int) -> int:
 
 
 def player_skin(team: int, slot: int) -> int:
-    """1-3, never 0. `map_player` never sets skin, so every patched record gets
-    a 0 written over whatever was here; a filler of 0 would hide that."""
+    """1-3, never 0. `map_player` never sets skin, so every patched record
+    arrives at the writer carrying 0; against a filler of 0 there would be no
+    telling "the writer left this byte alone" -- which is what it now does --
+    from "the writer wrote the record's zero", which is what it used to do."""
     return 1 + slot % 3
 
 
 def player_hair(team: int, slot: int) -> int:
-    """1-0x26, never 0, for the same reason as `player_skin`."""
+    """1-0x26, never 0, for the same reason as `player_skin`. Varies with the
+    team as well as the slot, so a whole patched roster's twelve styles are
+    twelve distinct values."""
     return 1 + (team + slot) % 0x26
 
 

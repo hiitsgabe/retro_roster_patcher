@@ -394,7 +394,12 @@ def test_a_mapped_record_carries_no_season_stats_of_its_own(mapper):
 
 
 def test_a_mapped_record_carries_no_appearance_at_all(mapper):
-    """INHERITED DEFECT, pinned: every patched player gets the same skin and hair."""
+    """ESPN publishes neither, so both stay at the "not supplied" default.
+
+    `rom_writer.write_player` reads that 0 as "not supplied" and leaves the
+    image's own byte alone; it used to write it, and every patched player came
+    out with the same skin and the same hair.
+    """
     record = mapper.map_player(_player(), {"PTS": 30.0})
     assert record.skin_color == 0
     assert record.hair_style == 0

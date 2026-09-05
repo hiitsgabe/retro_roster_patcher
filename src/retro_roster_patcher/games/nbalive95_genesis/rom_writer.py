@@ -197,8 +197,36 @@ class NBALive95RomWriter:
         d[off + OFF_HEIGHT] = max(0, min(255, player.height_inches))
         d[off + OFF_WEIGHT] = max(0, min(255, player.weight_lbs - 100))
         d[off + OFF_EXPERIENCE] = max(0, min(255, player.experience))
-        d[off + OFF_SKIN] = max(0, min(3, player.skin_color))
-        d[off + OFF_HAIR] = max(0, min(0x26, player.hair_style))
+
+        # DELIBERATE DIVERGENCE -- **skin and hair are written only when the
+        # caller supplied one.** Upstream wrote both unconditionally, and nothing
+        # in this package sets either: `stat_mapper.map_player` builds the record
+        # without them, so both arrived here as `NBALive95PlayerRecord`'s default
+        # of 0 for all 324 patched players. The effect was that **every patched
+        # player got the same skin tone and the same hair**, laid over whatever
+        # variety the 1994 image shipped with. 0 is not a "no value" code in
+        # either field -- it is a real tone and a real style out of 4 and 39 --
+        # so writing it was an assertion about a player's appearance made from
+        # nothing.
+        #
+        # ESPN publishes neither attribute and no provider here can fill them,
+        # so there is nothing to write; leaving the byte alone keeps the image's
+        # own per-player value, which is strictly more information than one
+        # constant. `games/nhl05_ps2` (`HEIG`), `games/nhl07_psp` and
+        # `games/mvp_psp` (height, weight) made the same call on the same shape
+        # of field. The `> 0` test rather than an unconditional skip is
+        # `mvp_psp`'s weight pattern: it costs the ability to write a 0
+        # deliberately, which no caller does and which is the exact value that
+        # caused the damage, and it keeps the two record fields usable by a
+        # direct caller of `write_player` if a producer ever appears.
+        #
+        # This is NOT the same call as `season_stats` two blocks down, which
+        # keeps writing its zeros; see `stat_mapper.map_player` for why zero is
+        # the right answer for a counting-stat block and the wrong one here.
+        if player.skin_color > 0:
+            d[off + OFF_SKIN] = min(3, player.skin_color)
+        if player.hair_style > 0:
+            d[off + OFF_HAIR] = min(0x26, player.hair_style)
 
         # Season stats (17 x 2-byte BE)
         for i in range(STAT_COUNT):
