@@ -62,6 +62,7 @@ from .models import (
     ATTRIB_DURABILITY,
     ATTRIB_FIELDING,
     ATTRIB_FIRST_NAME,
+    ATTRIB_HEIGHT,
     ATTRIB_JERSEY,
     ATTRIB_LAST_NAME,
     ATTRIB_PLATE_DISCIPLINE,
@@ -717,16 +718,19 @@ class MVPPSPPatcher(Patcher):
     def _build_attrib_fields(player: MVPPlayerRecord) -> dict[int, str]:
         """The `attrib` columns this patcher sets. Everything else is merged through.
 
-        DELIBERATE DIVERGENCE -- **height is not written at all**, where the
-        source wrote column 9 from `MVPPlayerRecord.height` for every player.
-        Nothing ever set that field, so it kept its default of 72 and all 750
-        patched players were written at exactly 6'0", overwriting whatever
-        heights the disc knew. `sports.models.Player` has no `height` field at
-        all, for any provider to fill, so there is nothing to write; omitting
-        the column leaves the disc's own per-player values, which is strictly
-        more information than one constant. `games/nhl05_ps2` and
-        `games/nhl07_psp` made the same call on the same field for the same
-        reason.
+        UPSTREAM BEHAVIOUR, KNOWN WRONG, PRESERVED DELIBERATELY -- **height is
+        written unconditionally**, column 9, from a `MVPPlayerRecord.height`
+        that nothing ever sets. It keeps its default of 72, so all 750 patched
+        players are written at exactly 6'0", over whatever heights the disc
+        knew. `sports.models.Player` has no `height` field at all, for any
+        provider to fill, so there is nothing better to write and never was.
+
+        Dropping the column would leave the disc's own per-player values, which
+        is strictly more information. It is not dropped: this port's output has
+        never been checked against a retail UMD, and a byte the source did not
+        write is a hardware risk that a truer biography does not buy off.
+        `games/nhl05_ps2` and `games/nhl07_psp` write the same constant into
+        `HEIG` for the same reason.
 
         DELIBERATE DIVERGENCE -- **weight is written only when the provider
         supplied one**, where the source wrote it unconditionally from a field
@@ -752,6 +756,7 @@ class MVPPSPPatcher(Patcher):
             ATTRIB_PRIMARY_POS: str(
                 POS_STRING_TO_NUM.get(player.primary_position, DEFAULT_POS_NUM)
             ),
+            ATTRIB_HEIGHT: str(player.height),
             ATTRIB_PLATE_DISCIPLINE: str(player.plate_discipline),
             ATTRIB_BUNTING: str(player.bunting),
             ATTRIB_STEALING_AGGRESSIVE: str(player.stealing),
