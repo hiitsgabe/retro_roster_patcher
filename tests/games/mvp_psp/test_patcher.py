@@ -42,20 +42,28 @@ from retro_roster_patcher.games.mvp_psp.models import (
     ATTRIB_LAST_NAME,
     ATTRIB_PRIMARY_POS,
     ATTRIB_SALARY,
+    ATTRIB_SECONDARY_POS,
     ATTRIB_SPEED,
     ATTRIB_WEIGHT,
     BULLPEN_POSITIONS,
+    HASH_ID_CHARS,
     LINEUP_POSITIONS,
     LR_CONTACT,
     LR_FIRST_NAME,
+    LR_POWER,
     LR_SPRAY_UL,
+    MAX_EXTRA_PITCHES,
     MVP_TEAM_ABBREVS,
     MVP_TEAM_ORDER,
     NOT_IN_LINEUP,
     PA_PITCH1_VELOCITY,
     PA_PITCH2_TYPE,
+    PA_PITCH_STRIDE,
     PA_PITCHER_DELIVERY,
     PA_STAMINA,
+    PITCH_CHANGEUP,
+    PITCH_FASTBALL,
+    PITCH_SLIDER,
     ROSTER_LH_AL_ORDER,
     ROSTER_LH_NL_ORDER,
     ROSTER_PLAYERID,
@@ -1025,6 +1033,28 @@ def test_a_patched_player_keeps_the_discs_salary(tmp_path):
     assert after[changed[0]][ATTRIB_SALARY] == before[changed[0]][ATTRIB_SALARY]
 
 
+def test_a_patched_player_keeps_the_discs_second_position(tmp_path):
+    # `_build_attrib_fields` writes column 6 only when the mapper produced a
+    # second position, and it never does -- `MVPPlayerRecord.secondary_position`
+    # has no producer. The guard is there because writing an empty string erases
+    # the disc's own value and leaves the player unable to be moved in the
+    # field, and until the fixture carried a value in that column there was
+    # nothing for it to protect: `if player.secondary_position` could be
+    # loosened to `is not None` and every test still passed.
+    source = write_iso(tmp_path, DISC)
+    patcher = make_patcher(tmp_path)
+    rosters = patcher.map_rosters(league(squads={1: full_squad(1000)}))
+    patcher.patch(rom_path=source, output_path=tmp_path / "out.iso", rosters=rosters)
+    before = fixture.parse_table(
+        fixture.decompress_section_at(
+            fixture.read_database_big(source.read_bytes(), lba=fixture.SMALL_LBA), "attrib"
+        )
+    )
+    after = patched_table(tmp_path / "out.iso", "attrib")
+    changed = [pid for pid, cols in after.items() if cols.get(ATTRIB_LAST_NAME) == "Family1000"]
+    assert after[changed[0]][ATTRIB_SECONDARY_POS] == before[changed[0]][ATTRIB_SECONDARY_POS]
+
+
 def test_a_patched_split_record_keeps_the_discs_spray_chart(tmp_path):
     _, out = patch_one(tmp_path, {1: full_squad(1000)})
     table = patched_table(out, "lrattrib_rhp")
@@ -1078,6 +1108,43 @@ def test_the_highest_numbered_row_the_disc_had_still_names_its_own_player(tmp_pa
     assert row[ROSTER_PLAYERID] == fixture.player_id(last_team, last_slot)
 
 
+def test_the_new_rows_take_the_ids_that_follow_the_highest_the_disc_held(tmp_path):
+    # The ids themselves, consecutively, from `max(old_roster) + 1`. Nothing
+    # else in the file looks at a new row's id at all, so the counter could
+    # start one low or step by two unremarked.
+    _, out = patch_one(tmp_path, {1: full_squad(1000)})
+    highest = int(fixture.roster_row_id(DISC.teams - 1, DISC.players_per_team - 1), 16)
+    assert sorted(int(rid, 16) for rid in roster_rows(out, 0)) == [
+        highest + 1 + i for i in range(len(FULL_SQUAD_POSITIONS))
+    ]
+
+
+def test_the_counter_counts_the_rows_the_patch_drops_as_well(tmp_path):
+    # `max(...)` runs over `old_roster` -- every row the disc held -- and not
+    # over the rows this patch keeps, and patching the *last* club is what
+    # separates the two: its rows carry the highest ids on the disc and they
+    # are exactly the ones being dropped. A counter built from the survivors
+    # restarts inside a range the disc has already used.
+    patcher = make_patcher(tmp_path)
+    mapped = patcher.map_rosters(league(squads={1: full_squad(1000)}))
+    patcher.patch(
+        rom_path=write_iso(tmp_path, DISC),
+        output_path=tmp_path / "out.iso",
+        rosters=MappedRosters(game_id=mapped.game_id, teams={TEAM_COUNT - 1: mapped.teams[0]}),
+    )
+    highest = int(fixture.roster_row_id(DISC.teams - 1, DISC.players_per_team - 1), 16)
+    written = roster_rows(tmp_path / "out.iso", TEAM_COUNT - 1)
+    assert min(int(rid, 16) for rid in written) == highest + 1
+
+
+def test_every_new_roster_row_id_is_a_nine_character_id(tmp_path):
+    # Hexadecimal and `HASH_ID_CHARS` wide, like every id the disc holds.
+    # Formatting the counter as decimal instead yields eleven digit characters,
+    # which `_looks_like_record_id` happily accepts as an id of the wrong shape.
+    _, out = patch_one(tmp_path, {1: full_squad(1000)})
+    assert {len(rid) for rid in roster_rows(out, 0)} == {HASH_ID_CHARS}
+
+
 def test_every_new_roster_row_names_a_player_the_patch_wrote(tmp_path):
     _, out = patch_one(tmp_path, {1: full_squad(1000)})
     attrib = patched_table(out, "attrib")
@@ -1105,6 +1172,22 @@ def test_a_patched_players_position_code_reaches_the_disc(tmp_path):
     assert written[0][ATTRIB_PRIMARY_POS] == "1"
 
 
+def test_an_unmapped_primary_position_falls_back_to_centre_field():
+    # Unreachable through `map_rosters`: `normalize_position` only ever returns
+    # keys of `POS_STRING_TO_NUM`, and `map_pitcher` sets `SP` or `RP`, which
+    # are keys too. So only a hand-built record reaches the fallback, and until
+    # one did, the fallback could be anything -- 0, which files the player as a
+    # starting pitcher, survived the suite.
+    fields = MVPPSPPatcher._build_attrib_fields(MVPPlayerRecord(primary_position="QB"))
+    assert fields[ATTRIB_PRIMARY_POS] == "7"
+
+
+def test_the_progress_bar_gives_the_copy_its_last_tenth():
+    # Read back through the constant everywhere else, so the number itself is
+    # only stated here.
+    assert PROGRESS_RECORDS_END == 0.9
+
+
 def test_a_patched_players_speed_reaches_the_disc(tmp_path):
     # A catcher with no statistics takes the catcher default of 35, so this
     # would not pass on a patcher that wrote the record's own 50.
@@ -1121,6 +1204,43 @@ def test_a_patched_batters_contact_reaches_the_split_table(tmp_path):
     table = patched_table(out, "lrattrib_rhp")
     written = [c for c in table.values() if c.get(LR_FIRST_NAME) == "Given1000"]
     assert written[0][LR_CONTACT] == "55"
+
+
+# A batter with no statistics takes his position's default for both splits, and
+# a pitcher takes the same pair for both, so on the squads above
+# `lrattrib_rhp` and `lrattrib_lhp` hold identical numbers -- and swapping the
+# two tables, or swapping the two ratings inside `_build_lr_attrib_fields`,
+# survived every one of them. Zero over zero. These give one batter statistics,
+# which is the only thing in the mapper that makes the two sides differ: the
+# left-hand column is five points below the right.
+#
+# `full_squad`'s player 1001 rather than 1000, because `make_player` gives every
+# fifth id a switch hitter's `bats`, and a switch hitter's two splits are
+# averaged back together.
+
+LR_SPLIT_LEADERS = {1: {"1001": {"AVG": 0.330, "OBP": 0.420, "SLG": 0.600, "HR": 45}}}
+
+
+def _lr_split(tmp_path, table_name):
+    _, out = patch_one(tmp_path, {1: full_squad(1000)}, LR_SPLIT_LEADERS)
+    table = patched_table(out, table_name)
+    return [c for c in table.values() if c.get(LR_FIRST_NAME) == "Given1001"][0]
+
+
+def test_the_right_handed_split_table_holds_the_right_handed_contact(tmp_path):
+    assert _lr_split(tmp_path, "lrattrib_rhp")[LR_CONTACT] == "99"
+
+
+def test_the_left_handed_split_table_holds_the_left_handed_contact(tmp_path):
+    assert _lr_split(tmp_path, "lrattrib_lhp")[LR_CONTACT] == "94"
+
+
+def test_the_right_handed_split_table_holds_the_right_handed_power(tmp_path):
+    assert _lr_split(tmp_path, "lrattrib_rhp")[LR_POWER] == "99"
+
+
+def test_the_left_handed_split_table_holds_the_left_handed_power(tmp_path):
+    assert _lr_split(tmp_path, "lrattrib_lhp")[LR_POWER] == "94"
 
 
 def test_a_patched_starters_stamina_reaches_the_pitching_table(tmp_path):
@@ -1306,6 +1426,36 @@ def test_a_starters_second_pitch_reaches_the_repeating_block(tmp_path):
     table = patched_table(out, "pitchattrib")
     written = [c for c in table.values() if c.get(ATTRIB_FIRST_NAME) == f"Given{squad[15].id}"]
     assert PA_PITCH2_TYPE in written[0]
+
+
+# Membership alone does not say *which* pitch landed there. Pitch 1 is the
+# asymmetric one -- always a fastball, four columns, no type column of its own
+# -- so the repeating block starts at the arsenal's *second* entry, and slicing
+# it from the first instead puts a fastball in the slider's type column and
+# survived the test above.
+
+
+def _starter_pitch_record(tmp_path):
+    squad = full_squad(1000)
+    _, out = patch_one(tmp_path, {1: squad})
+    table = patched_table(out, "pitchattrib")
+    return [c for c in table.values() if c.get(ATTRIB_FIRST_NAME) == f"Given{squad[15].id}"][0]
+
+
+def test_the_first_entry_of_the_repeating_block_is_the_slider(tmp_path):
+    assert _starter_pitch_record(tmp_path)[PA_PITCH2_TYPE] == str(PITCH_SLIDER)
+
+
+def test_the_second_entry_of_the_repeating_block_is_the_changeup(tmp_path):
+    record = _starter_pitch_record(tmp_path)
+    assert record[PA_PITCH2_TYPE + PA_PITCH_STRIDE] == str(PITCH_CHANGEUP)
+
+
+def test_the_fastball_never_reaches_a_type_column(tmp_path):
+    # Its own columns are 4, 6 and 7, and column 8 is the first type column.
+    record = _starter_pitch_record(tmp_path)
+    types = {record[PA_PITCH2_TYPE + i * PA_PITCH_STRIDE] for i in range(MAX_EXTRA_PITCHES - 1)}
+    assert str(PITCH_FASTBALL) not in types
 
 
 def test_a_batter_gets_no_pitching_record_of_his_own(tmp_path):

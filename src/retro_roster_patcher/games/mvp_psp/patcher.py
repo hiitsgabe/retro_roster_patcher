@@ -475,6 +475,14 @@ class MVPPSPPatcher(Patcher):
         teams: dict[int, list[MVPPlayerRecord]] = {}
         for roster in data.teams:
             slot = self.mapper.get_team_slot(roster.team.code)
+            # The range half of this is PROVEN EQUIVALENT under mutation, and
+            # kept. `get_team_slot` answers `MVP_ABBREV_TO_INDEX.get(...)`, and
+            # that dict is built by enumerating the thirty entries of
+            # `MVP_TEAM_ABBREVS`, so a non-None slot is already in `[0, 30)`.
+            # Kept because `_write_all_teams` has to make the same test for real
+            # -- its keys come from a plain dict that may have crossed a JSON
+            # boundary -- and the two reading alike is worth more than deleting
+            # the one that cannot fire.
             if slot is None or not 0 <= slot < TEAM_COUNT:
                 continue
 

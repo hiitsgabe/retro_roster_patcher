@@ -357,6 +357,11 @@ DECLARED_NUMBERS = {
     "HASH_ID_CHARS": 9,
     "AL_SLOT_COUNT": 14,
     "NOT_IN_LINEUP": -1,
+    # 7 is centre field. `_build_attrib_fields` reaches it only for a position
+    # string `POS_STRING_TO_NUM` does not name, which `map_rosters` cannot
+    # produce, so nothing else says which code it is; 0 would file the player
+    # as a starting pitcher.
+    "DEFAULT_POS_NUM": 7,
 }
 
 
@@ -630,6 +635,18 @@ def test_the_rotation_has_one_entry_per_starter():
 
 def test_the_bullpen_has_one_entry_per_reliever():
     assert len(BULLPEN_POSITIONS) == RELIEVERS_PER_TEAM
+
+
+def test_the_bullpen_roles_are_in_the_order_the_source_wrote_them():
+    # Slot 20 is the closer and slot 24 the long reliever, and every test that
+    # reads the bullpen back reads it through this tuple -- so exchanging two of
+    # its entries changed nothing and would change which pitcher the CPU warms
+    # up. This is the order, written out.
+    assert BULLPEN_POSITIONS == ("CP", "SU", "MR", "MR", "LR")
+
+
+def test_the_rotation_slots_are_in_the_order_the_source_wrote_them():
+    assert ROTATION_POSITIONS == ("SP1", "SP2", "SP3", "SP4", "SP5")
 
 
 def test_the_bullpen_names_middle_relief_twice():
