@@ -1,4 +1,9 @@
-"""Konami AFS archive handler for WE2002 game assets."""
+"""Konami AFS archive handler for WE2002 game assets.
+
+Layout: magic "AFS" + NUL at 0, u32 file count at 4, then a TOC of u32 offset +
+u32 size per entry from 8. Header and every entry are padded to a 2048-byte CD
+sector.
+"""
 
 import os
 import struct
@@ -20,7 +25,6 @@ class AfsHandler:
             self._parse()
 
     def _parse(self):
-        """Parse the AFS header and TOC."""
         if len(self._raw) < 8:
             return
         magic = self._raw[:4]
@@ -34,25 +38,20 @@ class AfsHandler:
             self._entries.append(AfsEntry(index=i, offset=offset, size=size))
 
     def list_entries(self) -> list[AfsEntry]:
-        """Return all file entries in the archive."""
         return list(self._entries)
 
     def extract_entry(self, index: int) -> bytes:
-        """Extract file data for the given entry index."""
         if index < 0 or index >= len(self._entries):
             raise IndexError(f"AFS entry index {index} out of range")
         entry = self._entries[index]
         return self._raw[entry.offset : entry.offset + entry.size]
 
     def replace_entry(self, index: int, data: bytes):
-        """Replace an entry's data in this handler's in-memory copy.
+        """Replace an entry's data in the in-memory copy only.
 
-        "In place" means within the entry's own extent — the replacement must
-        fit in the original size and the remainder is zero-padded, so no offset
-        in the TOC moves. It does NOT mean the file on disk: `self.afs_path` is
-        read once in the constructor and never written. `rebuild` is the only
-        method here that writes anything, and it writes to a path the caller
-        names. A caller that wants this change persisted has to call `rebuild`.
+        The replacement is written inside the entry's own extent and zero-padded
+        to the original size, so no TOC offset moves. Nothing reaches disk until
+        the caller runs `rebuild`.
         """
         if index < 0 or index >= len(self._entries):
             raise IndexError(f"AFS entry index {index} out of range")
@@ -62,7 +61,6 @@ class AfsHandler:
                 f"New data ({len(data)} bytes) exceeds original entry size "
                 f"({entry.size} bytes). Use rebuild() for larger replacements."
             )
-        # Overwrite within the entry's extent, then pad with zeros
         raw_list = bytearray(self._raw)
         raw_list[entry.offset : entry.offset + entry.size] = data + b"\x00" * (
             entry.size - len(data)
@@ -70,16 +68,14 @@ class AfsHandler:
         self._raw = bytes(raw_list)
 
     def rebuild(self, output_path: str, replacements: dict | None = None):
-        """Rebuild the AFS archive, optionally with replaced entry data.
+        """Rebuild the archive into `output_path`.
 
-        Args:
-            output_path: Path to write the new AFS file.
-            replacements: Optional dict of {index: new_data_bytes}.
+        `replacements` maps entry index to new data and may grow an entry, since
+        every offset is recomputed.
         """
         if replacements is None:
             replacements = {}
 
-        # Collect all entry data (with replacements)
         entry_data_list = []
         for entry in self._entries:
             if entry.index in replacements:
@@ -87,9 +83,7 @@ class AfsHandler:
             else:
                 entry_data_list.append(self._raw[entry.offset : entry.offset + entry.size])
 
-        # Compute new offsets (pad each to sector boundary)
         header_size = 8 + len(self._entries) * 8
-        # Pad header to sector boundary
         header_padded_size = (
             (header_size + self.SECTOR_SIZE - 1) // self.SECTOR_SIZE
         ) * self.SECTOR_SIZE
@@ -103,18 +97,13 @@ class AfsHandler:
             ) * self.SECTOR_SIZE
             current_offset += padded_size
 
-        # Build the new archive
         output = bytearray()
-        # Magic + count
         output += self.AFS_MAGIC
         output += struct.pack("<I", len(self._entries))
-        # TOC
         for i, _entry in enumerate(self._entries):
             new_size = len(entry_data_list[i])
             output += struct.pack("<II", new_offsets[i], new_size)
-        # Pad header
         output += b"\x00" * (header_padded_size - len(output))
-        # Entry data
         for data in entry_data_list:
             output += data
             padded_size = (

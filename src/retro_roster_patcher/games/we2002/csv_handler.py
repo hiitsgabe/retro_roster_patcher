@@ -29,7 +29,6 @@ COLUMNS = [
     "agg",
 ]
 
-# Position code to name mapping
 _POS_NAMES = {0: "GK", 1: "DF", 2: "MF", 3: "FW"}
 _POS_CODES = {"GK": 0, "DF": 1, "MF": 2, "FW": 3}
 
@@ -37,18 +36,10 @@ _POS_CODES = {"GK": 0, "DF": 1, "MF": 2, "FW": 3}
 def _int_or(row: dict, key: str, default: int) -> int:
     """Read an integer column, falling back to `default` when it is absent.
 
-    A CSV a person edited can be missing a value in three different ways and
-    `dict.get`'s default only covered the first:
-
-      * the header never named the column, so `csv.DictReader` produces no key;
-      * the header named it but the row stopped short, so `DictReader` fills the
-        key with `restval`, which is `None`, and `int(None)` raised `TypeError`;
-      * the cell is there and empty, which is what a spreadsheet writes for a
-        blank, and `int("")` raised `ValueError`.
-
-    A value that is present and unreadable — `high` in a numeric column — is
-    still an error. Defaulting that to 5 would hide a typo behind a plausible
-    rating.
+    Absent covers all three shapes a hand-edited CSV produces: no key, `None`
+    from a short row, and the empty cell a spreadsheet writes. A present but
+    unparseable value must still raise — defaulting it would hide a typo behind
+    a plausible rating.
     """
     value = row.get(key)
     if value is None or value == "":
@@ -57,21 +48,13 @@ def _int_or(row: dict, key: str, default: int) -> int:
 
 
 class CsvHandler:
-    """Export/import roster data as CSV for manual editing."""
-
     def export_league(
         self,
         league_name: str,
         team_records: list[tuple[str, list[WEPlayerRecord]]],
         path: str,
     ):
-        """Export full league data to CSV.
-
-        Args:
-            league_name: Name of the league (for reference only).
-            team_records: List of (team_name, [WEPlayerRecord]) tuples.
-            path: Output CSV file path.
-        """
+        """Export full league data to CSV. `league_name` is reference only."""
         with open(path, "w", newline="") as f:
             writer = csv.DictWriter(f, fieldnames=COLUMNS)
             writer.writeheader()
@@ -103,14 +86,7 @@ class CsvHandler:
                     )
 
     def import_league(self, path: str) -> list[tuple[str, list[WEPlayerRecord]]]:
-        """Import league data from CSV.
-
-        Args:
-            path: Input CSV file path.
-
-        Returns:
-            List of (team_name, [WEPlayerRecord]) tuples.
-        """
+        """Import league data from CSV, grouped into (team_name, players)."""
         teams: dict[str, list[WEPlayerRecord]] = {}
         with open(path, newline="") as f:
             reader = csv.DictReader(f)

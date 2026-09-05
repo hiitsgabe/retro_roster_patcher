@@ -1,44 +1,23 @@
 """Winning Eleven 2002 (PlayStation) on the unified Patcher interface.
 
-This module is the translation layer between the ported reader/writer/mapper and
-the contracts in `core.patcher`. The port is a faithful copy of an upstream that
-had no tests, and every offset, encoder, truncation rule and padding byte in it
-stays that way — a differential audit found the two trees produce byte-identical
-images. What has been allowed to diverge is narrow and is called out at each
-site: a return value the upstream did not have, a correction to a comment the
-upstream got wrong, and two defects the upstream also had. None of them moves a
-byte.
+`RomWriter` behaviours this module has to work around:
 
-The places the ported code breaks one of `core.patcher`'s contracts are worked
-around here rather than fixed there, with one exception, noted below:
+  * `write_team` writes no players at all unless handed a `players=` list.
+  * `write_team` writes only as many players as the slot has room for — 14
+    places for slots 0-17, 15 for slots 18-31 — and returns the count it
+    actually wrote, so never count `len(record.players)` as patched.
+  * `write_team` returns silently for a slot outside 0..31; bound every slot by
+    `MAX_ML_SLOTS` before handing it over.
+  * `write_team` only queues its 3D-jersey TEX patch; `flush_tex_patches` is
+    what applies them, and must be called before the writer goes out of scope.
+  * `finalize` returns `None`, so the output file is the only evidence of a
+    write.
 
-  * `RomWriter.write_team` writes no players at all unless it is handed a
-    `players=` list, so `patch` always passes one. Counting players without
-    passing them would report a patch that never happened.
-  * `RomWriter.write_team` writes only as many players as the slot has room for
-    — 14 places for slots 0-17, 15 for slots 18-31 — and drops the rest. That
-    one is fixed in the writer rather than worked around here: it now returns
-    the number it actually wrote, and `patch` accumulates that. The alternative
-    was to re-derive the capacity rule here from a private helper, which would
-    have put two copies of it in the tree.
-  * `RomWriter.write_team` returns silently for any slot outside 0..31, so both
-    `map_rosters` and `patch` bound their slots by `MAX_ML_SLOTS`.
-  * `RomWriter.finalize` has `pass` for a body and returns `None`, so there is
-    nothing to check in its return value. `patch` checks that the output file
-    exists instead.
-  * `RomWriter.write_team` only *queues* its 3D-jersey TEX patch, on instance
-    state. `flush_tex_patches` is the one thing that applies them, so `patch`
-    calls it; without that they go out of scope with the writer.
+`verify_patches` is deliberately not called: it returns a human-readable report
+and `PatchResult` has nowhere to put one.
 
-`RomWriter.verify_patches` is deliberately not called. It re-reads the original
-ROM in full and returns a human-readable report string, and `PatchResult` has
-nowhere to put one; upstream stored it on the patcher as a side effect. It stays
-available for a caller that wants it.
-
-WE2002 also carries its own `SlotMapping(real_team, slot_index, slot_name,
-nat_index)` in `models.py`. Nothing here uses it: the public `SlotMapping` is
-JSON-serialisable and the ROM-facing one is not, and the national slots that
-`nat_index` addresses are out of scope for v0.1.
+The `SlotMapping` in `models.py` is the ROM-facing one and is unused here; only
+the JSON-serialisable `core.models` one crosses this interface.
 """
 
 from __future__ import annotations
@@ -70,21 +49,17 @@ from .rom_writer import RomWriter
 from .stat_mapper import StatMapper
 from .translations.we2002 import LANGUAGE_CODES, LANGUAGES, ensure_ppf
 
-# The ROM has two team tables: 32 Master League slots and 63 national slots
-# (`_SQUADRE_ML` and `_SQUADRE_NAZ` in `rom_writer.py`). `slot_index` here means
-# a Master League slot, because that is the table `RomWriter.write_team` writes
-# and the only one `RomReader.read_team_slots` reports. The national table is
-# reachable only through `write_nat_team`, which needs an index the public
-# `SlotMapping` has no field for; it is out of scope for v0.1.
+# The ROM has two team tables: 32 Master League slots and 63 national slots.
+# `slot_index` always means a Master League slot; the national table is reachable
+# only through `write_nat_team`, which the public `SlotMapping` cannot address.
 MAX_ML_SLOTS = 32
 
 
 def _parse_hex_colour(value: str) -> tuple[int, int, int] | None:
     """Read a `RRGGBB` or `#RRGGBB` provider colour, or `None` if it is neither.
 
-    Anything else — an empty string, a three-digit shorthand, a colour name —
-    returns `None`, so the record keeps its own default rather than a kit built
-    from half a value.
+    Three-digit shorthand and colour names are `None` too, so the record keeps
+    its own default rather than a kit built from half a value.
     """
     text = value.lstrip("#")
     if len(text) != 6:
@@ -106,40 +81,22 @@ class WE2002Patcher(Patcher):
     """Soccer ROMs have fixed, unnamed team slots.
 
     There is no code to match a real team against, so the caller must supply an
-    explicit slot mapping. `default_slot_mapping` produces the sequential one the
-    old UI used, as a starting point.
+    explicit slot mapping; `default_slot_mapping` is a sequential starting point.
 
-    The only provider is `espn`, which needs no credential. It offers no
-    historical seasons here — its roster endpoint serves the current squad
-    whatever season is asked for — so `fetch`'s `season` reaches the statistics
-    documents and the cache keys rather than the squad.
+    ESPN's roster endpoint serves the current squad whatever season is asked
+    for, so `fetch`'s `season` reaches the statistics documents and the cache
+    keys, not the squad.
 
     League ids are ESPN's: `--league-id 2001` is the Premier League. ESPN's own
-    identifiers are the string codes `eng.1` and `esp.1`, but `ESPN_LEAGUES` has
-    always carried an integer id per code and `EspnClient` translates
-    internally, so `--league-id` stays `type=int`. An id ESPN does not know
-    yields `ApiError("League ... not found")`.
+    identifiers are string codes (`eng.1`, `esp.1`); `ESPN_LEAGUES` carries an
+    integer per code and `EspnClient` translates, so `--league-id` stays an int.
     """
 
     #: Language codes `patch` accepts in `options["language"]`, in menu order.
     #:
-    #: Declared on the class so a caller can ask *before* calling. `patch`
-    #: validates `options["language"]` itself and raises `CapabilityError` for a
-    #: code outside this set, but that is too late for the two callers that
-    #: matter: a UI has to offer the choice before it has anything to patch, and
-    #: `cli.commands._patch_options` has to tell a `--language` on NHL94 apart
-    #: from a `--language` here, which no amount of inspecting `patch` can do —
-    #: its signature ends in `**options`, so it accepts every keyword and honours
-    #: two.
-    #:
-    #: Not a `@register` capability. `PatcherInfo` is the registry's public
-    #: description of a patcher and it crosses the IPC boundary in `list`'s
-    #: payload, so a field there is a surface change. A plain class attribute is
-    #: the same duck-typed boundary check `build_patcher` already applies to
-    #: `--assets-dir`, and absent means "ships no translations". `PatcherInfo` is
-    #: the right long-term home — that dataclass documents itself as driving
-    #: "which arguments to prompt for" — and moving it there is a surface change
-    #: to make deliberately, not as a side effect of adding a CLI flag.
+    #: Keep it a plain class attribute, not a `@register` capability: callers
+    #: must be able to ask before calling `patch`, and absent means "ships no
+    #: translations".
     languages: tuple[str, ...] = tuple(LANGUAGE_CODES)
 
     def __init__(
@@ -158,33 +115,20 @@ class WE2002Patcher(Patcher):
             on_status=on_status,
             on_partial=on_partial,
         )
-        # Read-only, user-supplied, optional. Holds the community translation
-        # `w202-english.ppf`, which this project does not redistribute.
+        # User-supplied, read-only: holds the community `w202-english.ppf`.
         self.assets_dir = Path(assets_dir) if assets_dir is not None else None
         self.mapper = StatMapper()
-        # One provider, so this could be typed `EspnClient`. It stays `Any`
-        # because the tests substitute a stand-in that implements the four
-        # methods `fetch` calls and nothing else, which is the seam that lets
-        # `fetch`'s per-team error handling be exercised without a client at
-        # all. `EspnClient` creates its cache directory from its own
-        # constructor, so there is none to create here.
+        # Keep it `Any`: tests substitute a stand-in implementing only the
+        # methods `fetch` calls.
         self.api: Any = EspnClient(str(self.cache_dir), on_status, transport=transport)
-
-    # -- analyze ------------------------------------------------------------
 
     def analyze_rom(self, rom_path: Path) -> RomInfo:
         # `RomReader.__init__` tolerates a missing file and reports size 0, so
-        # this check is what turns "not there" into the `RomError` the interface
-        # promises. A readable file that is not this game is not an error:
-        # `validate_rom` rejects anything under 100 MB and `get_rom_info` then
-        # reports no slots and `is_valid=False`.
+        # this check is what raises the `RomError` the interface promises.
         if not Path(rom_path).exists():
             raise RomError(f"ROM not found: {rom_path}")
-        # `validate_rom` is size-only, so any file of 100 MB or more reaches
-        # `read_slot_palettes`, which opens it. Without this the `PermissionError`
-        # from a ROM on a yanked mount or with the read bit off walked out of
-        # `analyze_rom`, past `cmd_analyze`'s `except RomError` and past `main`,
-        # while the NHL94 sibling answered the same file with a clean `RomError`.
+        # `validate_rom` is size-only, so any file of 100 MB or more gets opened
+        # here; keep the wrapper so an unreadable one still leaves as `RomError`.
         with as_rom_error(rom_path):
             info = RomReader(str(rom_path)).get_rom_info()
         return RomInfo(
@@ -196,21 +140,14 @@ class WE2002Patcher(Patcher):
                 RomSlot(
                     index=slot.index,
                     current_name=slot.current_name,
-                    # The group plus the slot's 1-based number, not the bare
-                    # group. `RomSlot.display_name` must be distinct across a
-                    # ROM's slots because it is what a slot-picking UI lists,
-                    # and `league_group` is "Master League" for all 32 of them —
-                    # forwarding it gave a consumer one string thirty-two times.
-                    # This game is the one that *requires* a slot mapping, so it
-                    # is precisely the one whose slots a UI has to render.
+                    # Must stay distinct per slot: `league_group` is "Master
+                    # League" for all 32, so the number has to be in the name.
                     display_name=f"{slot.league_group} Slot {slot.index + 1}",
                 )
                 for slot in info.team_slots
             ],
             extra={"version": info.version},
         )
-
-    # -- fetch --------------------------------------------------------------
 
     def fetch(
         self,
@@ -246,42 +183,21 @@ class WE2002Patcher(Patcher):
         for i, team in enumerate(teams):
             if on_progress is not None:
                 on_progress(0.1 + 0.8 * (i / len(teams)), f"Fetching {team.name}...")
-            # A league fetch is dozens of requests and one of them failing must
-            # not cost the other dozens: the team keeps its place in the list,
-            # carries the reason on `TeamRoster.error`, and the fetch goes on.
-            # Everything below `map_rosters` tolerates a team with no players.
-            #
-            # The roster is built empty and filled in, rather than mutating the
-            # skeleton published above: that skeleton is a snapshot a caller may
-            # still be rendering, and writing through it would change what it
-            # already handed over.
+            # One failed team must not cost the rest of the league: it keeps its
+            # place and carries the reason on `TeamRoster.error`. Build a fresh
+            # roster rather than mutating the published skeleton, which a caller
+            # may still be rendering.
             roster = TeamRoster(team=team)
             try:
-                # The squad first, because that is the order upstream used and
-                # the order that matters under a rate limiter — whichever call
-                # goes second is the one that gets throttled, and losing the
-                # squad costs the whole team where losing the stats does not.
-                # ESPN's squad endpoint takes no season — it serves the squad as
-                # it stands today — so `season` here reaches the cache key and
-                # nothing else. Without it the key is the team id alone, which
-                # never changes, so the first fetch of a team froze its squad on
-                # disk and every later season replayed it and reported success.
-                #
-                # `league_code` is ESPN's third parameter and is not given here:
-                # the client resolves it from the team list `get_teams` cached
-                # three lines up, which is what `_find_league_code_for_team`
-                # exists for.
+                # Squad first: it is one request, stats are one per athlete
+                # (~25 a team), and under a rate limiter the second call is the
+                # one that gets throttled. ESPN's squad endpoint ignores
+                # `season`, which here only varies the cache key — drop it and
+                # the first fetch of a team freezes its squad on disk forever.
                 roster.players = self.api.get_squad(team.id, season)
                 try:
-                    # `get_player_stats` returns a list, re-keyed by player id
-                    # because that is the shape `map_team_with_league_context`
-                    # reads. Stats are optional: `map_player` falls back to
-                    # position and age for a player who has none, so this
-                    # failure costs ratings and not the team.
-                    #
-                    # ESPN answers this with one request per athlete — about 25 a
-                    # team — so the squad, a single request, is both the cheap
-                    # call and the indispensable one. That is why it goes first.
+                    # Stats are optional: `map_player` falls back to position and
+                    # age, so this failure costs ratings and not the team.
                     stats = self.api.get_player_stats(team.id, season)
                     roster.player_stats = {ps.player_id: ps for ps in stats}
                 except Exception:
@@ -289,12 +205,9 @@ class WE2002Patcher(Patcher):
                         f"{team.name}: stats unavailable, ratings will use position defaults"
                     )
             except Exception as exc:
-                # As broad as upstream's, and deliberately so — a provider can
-                # fail in ways this module has no list of. `TransportLeak` is a
-                # `BaseException` precisely so the network guard still escapes
-                # this. Two arms above this one used to name API-Football's
-                # rate-limit and quota errors; ESPN meters neither, so with that
-                # provider gone this is the only arm a failed squad reaches.
+                # Deliberately broad: a provider can fail in ways this module has
+                # no list of. `TransportLeak` is a `BaseException` so the network
+                # guard still escapes this.
                 roster.error = f"Failed to load squad: {exc}"
                 self.status(f"{team.name}: {roster.error}")
             rosters.append(roster)
@@ -303,25 +216,21 @@ class WE2002Patcher(Patcher):
             on_progress(1.0, "Complete")
         return LeagueData(league=league, teams=rosters)
 
-    # -- map ----------------------------------------------------------------
-
     def map_rosters(
         self,
         data: LeagueData,
         slot_mapping: list[SlotMapping] | None = None,
     ) -> MappedRosters:
         self.check_slot_mapping(slot_mapping)
-        # This class declares `requires_slot_mapping`, so `check_slot_mapping`
-        # has already refused an absent or empty mapping. The rebinding is what
-        # narrows `list | None` for the type checker, not a fallback.
+        # Narrows `list | None` for the type checker; `check_slot_mapping` has
+        # already refused an absent or empty mapping.
         entries = slot_mapping or []
 
         by_id = {roster.team.id: roster for roster in data.teams}
         teams: dict[int, WETeamRecord] = {}
         for entry in entries:
-            # `RomWriter.write_team` returns without writing for a slot outside
-            # this range, so accepting one here would report a patch that never
-            # reached the ROM.
+            # `write_team` returns without writing for a slot outside this
+            # range, so accepting one would report a patch that never happened.
             if not 0 <= entry.slot_index < MAX_ML_SLOTS:
                 raise MappingError(
                     f"Slot {entry.slot_index} is outside the WE2002 range 0..{MAX_ML_SLOTS - 1}"
@@ -333,14 +242,11 @@ class WE2002Patcher(Patcher):
                     f"which is not in the fetched league data"
                 )
             # The whole league, not just this team: percentiles are normalised
-            # league-wide, and passing one roster would rate every player against
-            # his own team-mates only.
+            # league-wide.
             record = self.mapper.map_team_with_league_context(roster, data.teams)
             self._apply_kit_colours(record, roster.team)
             teams[entry.slot_index] = record
         return MappedRosters(game_id=self.game_id, teams=teams)
-
-    # -- patch --------------------------------------------------------------
 
     def patch(
         self,
@@ -351,9 +257,8 @@ class WE2002Patcher(Patcher):
         on_progress: ProgressFn | None = None,
         **options: Any,
     ) -> PatchResult:
-        # First, ahead of every other guard: it is the one check that costs no
-        # I/O, and the failure it prevents is the writer choking on another
-        # game's record type with an exception outside this library's hierarchy.
+        # Must come before every other guard: it is the only check that costs no
+        # I/O, and it stops the writer choking on another game's record type.
         rosters.require_game(self.game_id)
         language = options.get("language", "en")
         if language not in LANGUAGES:
@@ -362,23 +267,16 @@ class WE2002Patcher(Patcher):
             )
         if not Path(rom_path).exists():
             raise RomError(f"ROM not found: {rom_path}")
-        # `analyze_rom` has always published this predicate; `patch` did not
-        # apply it. Every write below is an absolute seek into a 700 MB image,
-        # and seeking past the end of a short file extends it, so a 4 KB input
-        # came back as a 12 MB "patched ISO" holding nothing but the patch. This
-        # is stricter than upstream, which validated nothing here — it is not a
-        # restored guard, it is a new one.
+        # Every write below is an absolute seek into a 700 MB image, and seeking
+        # past the end of a short file extends it: without this a 4 KB input
+        # comes back as a 12 MB "patched ISO" holding nothing but the patch.
         if not RomReader(str(rom_path)).validate_rom():
             raise RomError(f"Too small to be a WE2002 ROM, or not a WE2002 ROM: {rom_path}")
 
-        # Everything from here down reads the input ROM or writes the output
-        # one, and `Patcher.patch` promises `RomError` on any write failure.
-        # `RomWriter.__init__` `shutil.copy2`s the input, and `validate_rom`
-        # above is size-only, so an unreadable 700 MB image passed every guard
-        # and then raised `PermissionError` out of the whole CLI, ending the
-        # NDJSON stream after three `status` events with no terminal one.
-        # Only `OSError` is converted: `_apply_translation` already catches its
-        # own, and anything else from the writer is a bug in the writer.
+        # `Patcher.patch` promises `RomError` on any write failure, and
+        # `validate_rom` above is size-only, so an unreadable image reaches the
+        # writer's `shutil.copy2`. Only `OSError` is converted; anything else
+        # from the writer is a bug in the writer.
         with as_rom_error(rom_path):
             self.status("Preparing ROM...")
             # The constructor copies the ROM to `output_path`, so the file the
@@ -386,12 +284,9 @@ class WE2002Patcher(Patcher):
             writer = RomWriter(str(rom_path), str(output_path))
             self._apply_translation(output_path, language, on_progress)
 
-            # The range is re-checked here even though `map_rosters` refuses an
-            # out-of-range slot: `teams` is a plain dict, and a caller may hand
-            # `patch` a `MappedRosters` it built itself. `RomWriter.write_team`
-            # returns silently for a slot outside 0..31, so an unchecked one would
-            # be counted as patched without reaching the ROM. Sorted so the writes
-            # go out in slot order regardless of the mapping's insertion order.
+            # Re-check the range even though `map_rosters` does: a caller may
+            # hand `patch` a `MappedRosters` it built itself. Sorted so writes go
+            # out in slot order regardless of insertion order.
             slots = sorted(slot for slot in rosters.teams if 0 <= slot < MAX_ML_SLOTS)
 
             teams_patched = 0
@@ -400,32 +295,26 @@ class WE2002Patcher(Patcher):
                 record = rosters.teams[slot]
                 if on_progress is not None:
                     on_progress(0.05 + 0.9 * (i / len(slots)), f"Writing slot {slot}...")
-                # `players=` is not optional in practice: without it `write_team`
-                # writes names, kits and the flag, and no players at all.
-                #
-                # The whole list goes over, and the count comes back: the writer's
-                # loop is bounded by the slot's ROM capacity (14 or 15 places), so a
-                # 22-man squad in slot 0 leaves eight records on the floor.
-                # `len(record.players)` would report all 22 as patched.
+                # Pass the whole list and count what comes back: the writer's
+                # loop is bounded by the slot's ROM capacity (14 or 15 places),
+                # so a 22-man squad leaves records on the floor.
                 written = writer.write_team(slot, record, players=record.players, include_flag=True)
-                # Unconditional, unlike NHL94, and `PatchResult` documents why:
-                # `write_team` writes the names, abbreviations, force bars, kit
-                # colours and flag before it looks at `players`, so an in-range
-                # slot has changed the ROM even when the squad is empty. A slot
-                # out of range never gets here — it was filtered above.
+                # Unconditional: `write_team` writes names, abbreviations, force
+                # bars, kit colours and flag before it looks at `players`, so an
+                # in-range slot has changed the ROM even with an empty squad.
                 teams_patched += 1
                 players_patched += written
 
-            # Every `write_team` above queued a 3D-jersey TEX patch. Without this
-            # they are all discarded when the writer goes out of scope.
+            # Every `write_team` above queued a 3D-jersey TEX patch; without this
+            # they are discarded when the writer goes out of scope.
             writer.flush_tex_patches()
 
             if on_progress is not None:
                 on_progress(1.0, "Saving patched ROM...")
             self.status("Saving patched ROM...")
             writer.finalize()
-            # `finalize` returns `None`, so the output file itself is the only
-            # evidence available that anything was written.
+            # `finalize` returns `None`, so the output file is the only evidence
+            # that anything was written.
             if not Path(output_path).exists():
                 raise RomError(f"Failed to write patched ROM to {output_path}")
 
@@ -435,15 +324,10 @@ class WE2002Patcher(Patcher):
             players_patched=players_patched,
         )
 
-    # -- extras -------------------------------------------------------------
-
     def default_slot_mapping(self, data: LeagueData) -> list[SlotMapping]:
         """Sequential mapping: team 0 to slot 0, team 1 to slot 1, and so on.
 
-        Teams beyond the Master League slot count are dropped. Upstream gave them
-        a sentinel slot index of 32, which `RomWriter.write_team` then discarded
-        without writing anything; there are 32 slots either way, and a mapping
-        that stops at 32 says so where a sentinel did not.
+        Teams beyond the 32 Master League slots are dropped.
         """
         return [
             SlotMapping(slot_index=i, team_id=roster.team.id, team_name=roster.team.name)
@@ -455,19 +339,12 @@ class WE2002Patcher(Patcher):
     def _apply_kit_colours(record: WETeamRecord, team: Team) -> None:
         """Copy the provider's team colours onto the ROM record.
 
-        `kit_home` and `kit_away` are what reach the image: they fill the maglia
-        palette that drives the 2D menu preview and the 3D shorts, the flag
-        palette, and — `kit_home` alone — the 3D jersey TEX patch. No writer path
-        reads `kit_third` today.
-
-        A colour the provider did not supply leaves the record's own default in
-        place rather than overwriting it with black. `kit_third` is the one
-        exception, because it is not a provider value at all: upstream assigned
-        it from `kit_home` unconditionally and so does this, so the accent
-        matches the shirt whether or not a provider colour arrived. Mirroring it
-        only inside the `home is not None` branch left the two disagreeing —
-        white shirt, black accent — in exactly the case where nothing had chosen
-        either.
+        `kit_home` and `kit_away` fill the maglia palette (2D menu preview and
+        3D shorts) and the flag palette; `kit_home` alone drives the 3D jersey
+        TEX patch. A colour the provider did not supply must leave the record's
+        default in place. `kit_third` is never a provider value: mirror it from
+        `kit_home` unconditionally, or a defaulted record gets a white shirt
+        with a black accent.
         """
         home = _parse_hex_colour(team.color)
         if home is not None:
@@ -485,50 +362,21 @@ class WE2002Patcher(Patcher):
     ) -> None:
         """Apply the translation PPF, degrading to Japanese menus on failure.
 
-        Two patches can end up here and they are applied differently, which is
-        upstream's arrangement restored:
+        Two patches can arrive here and must be applied differently:
 
-          * the community full translation, `w202-english.ppf`, if the operator
-            put one in `--assets-dir`. It is applied **as it stands**, with
-            validation skipped. It is a PPF2 or PPF3 built against one specific
-            dump, so its stored file size and its 1 024-byte block at 0x9320 do
-            not match every good image, and refusing on that would refuse the
-            patch on a disc it would have translated correctly;
-          * otherwise the generated one — the packaged English PPF1, or a
-            language generated into `cache_dir` — applied **with** validation.
-            Validation is a no-op on a PPF1 patch, which has no stored size and
-            no block to check, so today this costs nothing and asserts nothing.
-            It is upstream's call shape, and it is what would speak up if a
-            generator ever emitted PPF2.
+          * the community full translation `w202-english.ppf`, applied as it
+            stands with validation skipped. It is a PPF2 or PPF3 built against
+            one specific dump, so its stored size and its 1024-byte block at
+            0x9320 will not match every good image;
+          * otherwise the generated patch — the packaged English PPF1, or a
+            language generated into `cache_dir` — applied with validation.
 
-        The port merged the two instead: it always called `ensure_ppf`, which
-        with a community file present builds a *third* patch — the generated
-        team names with the community menu records merged in — and applied that
-        with validation skipped. Merging is arguably better, and it is a patch
-        file no released build of this patcher ever applied to a disc. Nothing
-        here has been validated against a real ISO, so the original's bytes go
-        back in. Fidelity to the original beats correctness of the data.
-
-        A failed translation is cosmetic; the roster patch under it is the point.
-        The original code swallowed every exception here; this narrows that to
-        the four this call can actually raise, and reports rather than hides
-        them. That narrowing is kept — it changes no byte of a patch that works.
-
-        `MissingAssetError` is what `ensure_ppf` raises when the packaged
-        English PPF is not in the installation — it is a `RetroRosterError`, not
-        an `OSError`, so it needs naming separately. `PPFError` covers a patch
-        file this applier cannot read, including a community file that is not a
-        PPF at all, and `OSError` covers one it cannot open.
-
-        `ValueError` comes from further in. If a non-English language is asked
-        for and `assets_dir` holds a `w202-english.ppf` that is not PPF2 — a
-        PPF1 or PPF3 community patch, or a truncated download — then
-        `translations.we2002.menu_records`'s `_parse_ppf2` raises a bare
-        `ValueError("Not a PPF2 file: ...")` while `ensure_ppf` is merging that
-        language's menu records. Unnamed here, a wrong file in a directory this
-        code only reads aborted `patch` before a single roster byte was written.
-        English no longer reaches that path when the community file is present,
-        because it is applied directly; every other language still does.
+        A failed translation is cosmetic; the roster patch under it is the point,
+        so failures are reported and swallowed. `MissingAssetError` covers a
+        missing packaged PPF, `PPFError` a patch file that cannot be read,
+        `OSError` one that cannot be opened, and `ValueError` the bare raise from
+        `menu_records._parse_ppf2` when a non-English language merges menu
+        records out of a community file that is not PPF2.
         """
         name = LANGUAGES[language]
         if on_progress is not None:
@@ -555,11 +403,9 @@ class WE2002Patcher(Patcher):
     def _community_ppf(self, language: str) -> Path | None:
         """The operator's own `w202-english.ppf`, if there is one to apply here.
 
-        English only, which is upstream's rule and is the honest one: the file
-        is an English full translation, and for Spanish, French or Portuguese
-        the generator reads its *menu records* out of it and writes the rest
-        itself. Applying it whole for those would produce English menus under a
-        Spanish request.
+        English only: the file is a full English translation, and for the other
+        languages the generator reads only its menu records. Applying it whole
+        would give English menus under a Spanish request.
 
         `is_file` rather than `exists`, so a directory of that name is "no
         community patch" instead of an `IsADirectoryError` inside `apply_ppf`.

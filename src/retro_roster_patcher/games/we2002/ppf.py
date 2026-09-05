@@ -1,24 +1,10 @@
 """PPF (PlayStation Patch Format) applier for PS1 BIN images.
 
-Applies PPF1, PPF2 and PPF3. `apply_ppf` dispatches on the magic: PPF2 and PPF3
-match on their first four bytes, PPF1 on all five of `PPF10`, and anything else
-raises `PPFError`. That asymmetry is deliberate — see the tests — because one of
-the two production calls passes `skip_validation=True`, which leaves the magic
-as the only thing between a wrong file and an in-place write into the output
-ISO.
-
-Both calls are in `patcher._apply_translation`, and they are the two halves of
-the choice upstream made:
-
-  * a community `w202-english.ppf` an operator supplies through `assets_dir`,
-    which this project does not redistribute. It is typically PPF2 or PPF3 and
-    is applied unvalidated, because it was built against one dump and its stored
-    size and 0x9320 block need not match a different good image;
-  * otherwise a patch this project generated, which always carries the `PPF10`
-    magic, applied with validation — a no-op on PPF1, which has neither a stored
-    size nor a block to check.
-
-`get_ppf_info` reads all three formats and applies none of them.
+Applies PPF1, PPF2 and PPF3. PPF2 and PPF3 are matched on their first four
+bytes, PPF1 on all five of `PPF10`. Keep the magic check strict: a community
+`w202-english.ppf` supplied through `assets_dir` is applied with
+`skip_validation=True` (its stored size and 0x9320 block belong to a different
+dump), so the magic is the only guard left before an in-place write.
 
 Reference implementation: github.com/sahlberg/pop-fe/blob/master/ppf.py
 PPF3 spec: github.com/meunierd/ppf/blob/master/ppfdev/PPF3.txt
@@ -33,32 +19,18 @@ from ...core.errors import RomError
 class PPFError(RomError):
     """Raised when a PPF patch cannot be applied.
 
-    A `RomError` rather than a bare `RetroRosterError`: every failure below
-    leaves the target image either untouched or half-patched, and the one
-    production caller — `patcher._apply_translation` — runs inside
-    `WE2002Patcher.patch`, whose interface docstring promises `RomError` on any
-    write failure. A `RetroRosterError` would satisfy `main` while still making
-    that promise false.
+    Must stay a `RomError`: `WE2002Patcher.patch` promises `RomError` on any
+    write failure.
     """
 
     pass
 
 
 def apply_ppf(bin_path: str, ppf_path: str, skip_validation: bool = False) -> str:
-    """Apply a PPF patch directly to a BIN file (modifies in-place).
+    """Apply a PPF patch in-place to `bin_path` and return its description.
 
-    Args:
-        bin_path: Path to the BIN file to patch.
-        ppf_path: Path to the .ppf patch file.
-        skip_validation: If True, skip PPF2/PPF3 size and block validation.
-            Use for trusted/bundled patches that should apply regardless of
-            the exact ROM dump variant.
-
-    Returns:
-        Description string from the PPF header.
-
-    Raises:
-        PPFError: If the patch format is unsupported or validation fails.
+    `skip_validation` drops the PPF2/PPF3 size and 0x9320 block checks, for
+    patches that should apply regardless of the exact ROM dump variant.
     """
     with open(ppf_path, "rb") as f:
         patch = f.read()
@@ -76,7 +48,10 @@ def apply_ppf(bin_path: str, ppf_path: str, skip_validation: bool = False) -> st
 
 
 def _apply_ppf1(bin_path: str, buf: bytes) -> str:
-    """Apply PPF 1.0 patch."""
+    """PPF1: 50-byte description at 6, records from 56.
+
+    Record = u32 offset, u8 count, `count` patch bytes.
+    """
     description = buf[6:56].decode("ascii", errors="replace").rstrip("\x00")
 
     data = buf[56:]
@@ -94,7 +69,8 @@ def _apply_ppf1(bin_path: str, buf: bytes) -> str:
 
 
 def _apply_ppf2(bin_path: str, buf: bytes, skip_validation: bool = False) -> str:
-    """Apply PPF 2.0 patch."""
+    """PPF2: u32 image size at 56, 1024-byte copy of the image at 0x9320 from
+    60, records from 1084 (u32 offset, u8 count, `count` patch bytes)."""
     description = buf[6:56].decode("ascii", errors="replace").rstrip("\x00")
 
     # Strip FILE_ID.DIZ if present
@@ -103,7 +79,6 @@ def _apply_ppf2(bin_path: str, buf: bytes, skip_validation: bool = False) -> str
         buf = buf[: -(idlen + 38)]
 
     if not skip_validation:
-        # Validate file size
         expected_size = struct.unpack_from("<I", buf, 56)[0]
         actual_size = os.path.getsize(bin_path)
         if actual_size != expected_size:
@@ -112,14 +87,12 @@ def _apply_ppf2(bin_path: str, buf: bytes, skip_validation: bool = False) -> str
                 f"ROM is {actual_size:,} bytes"
             )
 
-        # Validate block at offset 0x9320
         with open(bin_path, "rb") as f:
             f.seek(0x9320)
             block = f.read(1024)
         if buf[60 : 60 + 1024] != block:
             raise PPFError("Validation failed — PPF patch is for a different ROM dump")
 
-    # Apply patch records (start at offset 1084)
     data = buf[1084:]
     with open(bin_path, "r+b") as f:
         while len(data) >= 5:
@@ -135,7 +108,12 @@ def _apply_ppf2(bin_path: str, buf: bytes, skip_validation: bool = False) -> str
 
 
 def _apply_ppf3(bin_path: str, buf: bytes, skip_validation: bool = False) -> str:
-    """Apply PPF 3.0 patch."""
+    """PPF3: encoding method at 5, blockcheck flag at 57, undo flag at 58.
+
+    Records start at 1084 when blockcheck is set (the 1024-byte 0x9320 copy sits
+    at 60), otherwise at 60. Record = u64 offset, u8 count, `count` patch bytes,
+    then `count` bytes of original data when undo is set.
+    """
     description = buf[6:56].decode("ascii", errors="replace").rstrip("\x00")
 
     method = buf[5]
@@ -150,7 +128,6 @@ def _apply_ppf3(bin_path: str, buf: bytes, skip_validation: bool = False) -> str
         idlen = struct.unpack_from("<H", buf, len(buf) - 2)[0]
         buf = buf[: -(idlen + 38)]
 
-    # Validate block at 0x9320 if blockcheck enabled (unless skipping)
     if blockcheck and not skip_validation:
         with open(bin_path, "rb") as f:
             f.seek(0x9320)
@@ -163,7 +140,6 @@ def _apply_ppf3(bin_path: str, buf: bytes, skip_validation: bool = False) -> str
     else:
         data = buf[60:]
 
-    # Apply patch records
     with open(bin_path, "r+b") as f:
         while len(data) >= 9:
             offset = struct.unpack_from("<Q", data, 0)[0]

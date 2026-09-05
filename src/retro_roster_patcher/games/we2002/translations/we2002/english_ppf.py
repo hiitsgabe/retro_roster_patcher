@@ -1,23 +1,12 @@
 """Built-in English translation PPF for WE2002 (SLPM-87056).
 
-Generates a PPF1 patch that writes English team names to the Kanji
-(2-byte encoded) name section of the ROM.  The original game stores
-Japanese katakana names at OFS_NOMI_SQK; this patch replaces them
-with the English equivalents using the game's own 2-byte encoding.
-
-The PPF covers all 95 teams (63 national/allstar + 32 Master League).
-When the patcher runs, ML kanji names are then overwritten again by
-the ROM writer with actual team names from the API.
-
-Team names and encoding sourced from WE2002-editor-2.0 (edDlg.cpp).
+Generates a PPF1 patch that rewrites the game's own 2-byte encoded team name
+section at OFS_NOMI_SQK for all 95 teams (63 national/allstar + 32 Master
+League). The ROM writer later overwrites the 32 ML names with API team names.
 """
 
 import os
 import struct
-
-# ---------------------------------------------------------------------------
-# ROM offsets for the Kanji team name section
-# ---------------------------------------------------------------------------
 
 _OFS_NOMI_SQK = 2_002_316  # Kanji names start (ML reverse, then nationals reverse)
 _OFS_NOMI_SQK1 = 2_003_928  # Sector boundary continuation (national i=58 split)
@@ -122,7 +111,6 @@ _LUN_NOMIK = [
 ]
 
 # English team names — indices 0-62 = national/allstar, 63-94 = ML teams
-# (from nomi_squadre[120] in edDlg.cpp)
 _TEAM_NAMES = [
     # National teams (0-53)
     "Ireland",
@@ -226,10 +214,10 @@ _TEAM_NAMES = [
 
 
 def _ascii_to_kanji(text: str, char_budget: int) -> bytes:
-    """Convert ASCII text to WE2002 2-byte encoding.
+    """Convert ASCII to the WE2002 2-byte encoding.
 
-    Matches the asciitokanji() function from edDlg.cpp.
-    char_budget is lun_nomik[idx]; output is char_budget * 2 bytes.
+    `char_budget` is lun_nomik[idx]; the result is always char_budget * 2 bytes
+    and the last character position is reserved for the null terminator.
     """
     buf = bytearray(char_budget * 2)
     max_chars = char_budget - 1  # last position is null terminator
@@ -255,7 +243,6 @@ def _ascii_to_kanji(text: str, char_budget: int) -> bytes:
             buf[i * 2] = 0x82
             buf[i * 2 + 1] = 0x80
 
-    # Null terminator at end
     term = min(len(text), max_chars)
     buf[term * 2] = 0x00
     buf[term * 2 + 1] = 0x00
@@ -264,11 +251,8 @@ def _ascii_to_kanji(text: str, char_budget: int) -> bytes:
 
 
 def _titlecase_name(name: str, max_chars: int) -> str:
-    """Convert name to titlecase and truncate.
-
-    The C++ editor stores nomek as: first char uppercase, rest lowercase,
-    truncated to lun_nomik[idx]-1 characters.
-    """
+    """First character uppercase, rest lowercase, truncated to
+    lun_nomik[idx] - 1 characters."""
     if not name:
         return ""
     result = name[0].upper() + name[1:].lower() if len(name) > 1 else name.upper()
@@ -276,17 +260,11 @@ def _titlecase_name(name: str, max_chars: int) -> str:
 
 
 def _build_kanji_records() -> list:
-    """Build list of (offset, data) tuples for the kanji name section.
-
-    Returns records suitable for PPF generation. Each record is
-    (absolute_offset, bytes_data).
-    """
     records = []
     pos = _OFS_NOMI_SQK
 
-    # --- ML teams: squad_ml[31] first, squad_ml[0] last ---
+    # ML names are stored in reverse: squad_ml[31] first, squad_ml[0] last.
     for i in range(32):
-        # C++ loop: for(i=0;i<32;i++) write squad_ml[31-i] with lun_nomik[94-i]
         team_idx = 94 - i  # index into _TEAM_NAMES and _LUN_NOMIK
         budget = _LUN_NOMIK[team_idx]
         name = _TEAM_NAMES[team_idx] if team_idx < len(_TEAM_NAMES) else ""
@@ -295,7 +273,7 @@ def _build_kanji_records() -> list:
         records.append((pos, data))
         pos += budget * 2
 
-    # --- National/allstar teams: squad_nazall[62] first, squad_nazall[0] last ---
+    # Nationals are also reversed: squad_nazall[62] first, squad_nazall[0] last.
     for i in range(63):
         team_idx = 62 - i  # index into _TEAM_NAMES and _LUN_NOMIK
         budget = _LUN_NOMIK[team_idx]
@@ -304,8 +282,8 @@ def _build_kanji_records() -> list:
         data = _ascii_to_kanji(kanji_name, budget)
 
         if i == 58:
-            # Sector boundary: write first 4 bytes at current pos,
-            # then remaining bytes at OFS_NOMI_SQK1
+            # i == 58 straddles a sector boundary: 4 bytes here, rest at
+            # _OFS_NOMI_SQK1.
             records.append((pos, data[:4]))
             records.append((_OFS_NOMI_SQK1, data[4:]))
             pos = _OFS_NOMI_SQK1 + len(data[4:])
@@ -319,25 +297,17 @@ def _build_kanji_records() -> list:
 def _make_ppf1(description: str, records: list) -> bytes:
     """Generate a PPF1 format patch from (offset, data) records.
 
-    PPF1 format:
-      Header: b"PPF10" + 1 byte encoding + 50 bytes description
-      Records: 4-byte LE offset + 1-byte count + data (max 255 per record)
+    Header: b"PPF10" + u8 encoding + 50-byte description.
+    Record: u32 LE offset + u8 count + `count` bytes, so 255 is the format's
+    hard per-record limit and longer data must be split across consecutive
+    offsets.
     """
-    # Header
     buf = bytearray()
     buf.extend(b"PPF10")
     buf.append(0x00)  # encoding method
     desc_bytes = description.encode("ascii", errors="replace")[:50]
     buf.extend(desc_bytes.ljust(50, b"\x00"))
 
-    # A PPF1 record carries its length in a single byte, so 255 is the format's
-    # hard limit and anything longer has to become several records at
-    # consecutive offsets. No caller in this package reaches that: the kanji
-    # records are `_LUN_NOMIK[i] * 2` bytes and the widest entry is 14, so 28
-    # bytes is the largest, and the community records come from a PPF2 parser
-    # that reads its own count from one byte. The split therefore does not fire
-    # today; it is kept because `bytearray.append` raises `ValueError` above 255
-    # and this is a general PPF1 writer, not a kanji-only one.
     for offset, data in records:
         remaining = data
         cur_offset = offset
@@ -355,8 +325,8 @@ def _make_ppf1(description: str, records: list) -> bytes:
 def generate_english_ppf(assets_dir: str = "") -> bytes:
     """Generate the built-in English translation PPF for WE2002.
 
-    If assets_dir contains the community English PPF, its records are
-    included so the fallback PPF is as comprehensive as the community one.
+    A community English PPF in `assets_dir` also supplies the menu strings,
+    which are otherwise left in Japanese.
     """
     records = _build_kanji_records()
     if assets_dir:
