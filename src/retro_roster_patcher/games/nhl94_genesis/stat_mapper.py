@@ -1,9 +1,5 @@
-"""Stat mapping for NHL94 Genesis patcher.
-
-Maps NHL player stats from ESPN/NHL API to NHL94's 0-6 attribute scale.
-Uses real season stats (G, A, PTS, +/-, PIM, etc.) when available,
-with position-based defaults as fallback.
-"""
+"""Maps NHL season stats onto NHL94's 0-6 attribute scale, falling back to
+position defaults when a player has no stat line."""
 
 import dataclasses
 
@@ -94,7 +90,7 @@ def _clamp(val: int, lo: int = 0, hi: int = 6) -> int:
 
 
 def _scale(value: float, low: float, high: float) -> int:
-    """Map a value within [low, high] to 0-6 scale."""
+    """Map a value within [low, high] onto the game's 0-6 scale."""
     if high <= low:
         return 3
     ratio = (value - low) / (high - low)
@@ -102,39 +98,30 @@ def _scale(value: float, low: float, high: float) -> int:
 
 
 class NHL94GenStatMapper:
-    """Maps NHL API player data to NHL94 Genesis ROM attributes."""
-
     def map_player(
         self,
         player: Player,
         team_abbrev: str,
         stats: dict | None = None,
     ) -> NHL94GenPlayerRecord:
-        """Map an ESPN/NHL API Player to NHL94 Genesis player record."""
         pos = player.position.upper() if player.position else "C"
         is_goalie = pos == "G"
 
         if stats:
             attrs = self._map_stats(stats, pos, is_goalie)
         else:
-            # Copied, not shared. `NHL94GenPlayerRecord.attributes` is public API
-            # and `NHL94GenPlayerAttributes` is a plain mutable dataclass, so
-            # handing out the module constant would make every record for a
-            # position the same object as every other one *and* as the default
-            # itself: one caller assignment would rewrite the defaults for the
-            # rest of the process. `_map_stats` already builds a fresh instance.
+            # Copied, not shared: `attributes` is public and mutable, so the module
+            # constant must not be handed out.
             attrs = dataclasses.replace(POSITION_DEFAULTS.get(pos, POSITION_DEFAULTS["C"]))
 
         jersey = player.number or 1
 
-        # Weight from API data, default 196 lbs
         if player.weight > 0:
             weight_class = self._map_weight(int(player.weight))
         else:
-            weight_class = 7
+            weight_class = 7  # 196 lbs
 
-        # Handedness
-        hand = 0  # L
+        hand = 0  # 0=L, 1=R
         if player.handedness == "R":
             hand = 1
 
@@ -149,11 +136,10 @@ class NHL94GenStatMapper:
         )
 
     def _map_stats(self, stats: dict, pos: str, is_goalie: bool) -> NHL94GenPlayerAttributes:
-        """Map real NHL stats to NHL94 attributes.
+        """Per-season stat ranges used for scaling:
 
-        Stat ranges for scaling (per-season):
-          G: 0-50, A: 0-70, PTS: 0-120, +/-: -30..+40
-          PIM: 0-120, SV%: .880-.930, GAA: 2.0-3.5
+        G: 0-50, A: 0-70, PTS: 0-120, +/-: -30..+40
+        PIM: 0-120, SV%: .880-.930, GAA: 2.0-3.5
         """
         g = float(stats.get("G", 0) or 0)
         a = float(stats.get("A", 0) or 0)
@@ -162,14 +148,9 @@ class NHL94GenStatMapper:
         pim = float(stats.get("PIM", 0) or 0)
 
         if is_goalie:
-            # UPSTREAM BEHAVIOUR, KNOWN WRONG, PRESERVED DELIBERATELY: `SV%`
-            # is read as a bare float against a fraction window, so a line
-            # reporting `91.2` instead of `0.912` saturates `agility` at 6, the
-            # top of this game's scale. All four NHL ports read it this way --
-            # `games/nhl07_psp` and `games/nhl05_ps2` briefly normalised it and
-            # no longer do, where it drives ten ratings rather than one. A units
-            # guard is a byte the source did not write, and nothing here has
-            # been checked against a real cartridge.
+            # Upstream's behaviour, known wrong, preserved for byte fidelity: `SV%` is
+            # read as a bare float against a fraction window, so a feed reporting `91.2`
+            # rather than `0.912` saturates `agility` at 6. Do not add a units guard.
             svp = float(stats.get("SV%", 0) or 0)
             gaa = float(stats.get("GAA", 3.0) or 3.0)
             return NHL94GenPlayerAttributes(
@@ -187,7 +168,6 @@ class NHL94GenStatMapper:
                 aggression=1,
             )
 
-        # Skater attributes
         off_rating = _scale(pts, 0, 90)
         base = POSITION_DEFAULTS.get(pos, POSITION_DEFAULTS["C"])
 
@@ -212,16 +192,15 @@ class NHL94GenStatMapper:
         stats: dict | None = None,
         max_players: int = 23,
     ) -> list[Player]:
-        """Build NHL94 roster with proper line structure.
+        """Player order is what sets the starting lines:
 
-        NHL94 player order determines starting lines:
-          F1-F3 = Line 1 (C, LW, RW)
-          F4-F6 = Line 2
-          F7-F9 = Line 3
-          F10-F12 = Line 4
-          F13-F14 = Extra forwards
-          D1-D2 = Pair 1  ...  D7 = Extra D
-          G1 = Starter, G2 = Backup
+        F1-F3 = Line 1 (C, LW, RW)
+        F4-F6 = Line 2
+        F7-F9 = Line 3
+        F10-F12 = Line 4
+        F13-F14 = Extra forwards
+        D1-D2 = Pair 1  ...  D7 = Extra D
+        G1 = Starter, G2 = Backup
         """
         stats = stats or {}
 
@@ -258,7 +237,7 @@ class NHL94GenStatMapper:
             reverse=True,
         )
 
-        # Build 4 forward lines: C, LW, RW per line
+        # four forward lines, C/LW/RW each
         forwards = []
         for i in range(4):
             c = centers[i] if i < len(centers) else None
@@ -268,7 +247,6 @@ class NHL94GenStatMapper:
                 if p is not None:
                     forwards.append(p)
 
-        # Fill remaining forward slots
         used = set(id(p) for p in forwards)
         extras = sorted(
             [p for p in centers + left_wings + right_wings if id(p) not in used],
@@ -278,16 +256,12 @@ class NHL94GenStatMapper:
         forwards.extend(extras)
         forwards = forwards[:14]
 
-        # Defense: sorted by points, take 7
         defense = defensemen[:7]
-
-        # Goalies: sorted by SV%, take 2
         goalies = goalies[:2]
 
-        # ROM order: goalies first, then forwards, then defense
+        # ROM order: goalies, then forwards, then defence
         selected = goalies + forwards + defense
 
-        # Fill remaining slots
         all_used = set(id(p) for p in selected)
         leftover = sorted(
             [p for p in players if id(p) not in all_used],
@@ -301,13 +275,9 @@ class NHL94GenStatMapper:
         return selected[:max_players]
 
     def _map_weight(self, weight_pounds: int) -> int:
-        """Map real weight (lbs) to 0-14 weight class.
-
-        Formula: class = (weight - 140) / 8, clamped 0-14.
-        """
+        """Weight class = (lbs - 140) / 8, clamped to 0-14."""
         weight_class = (weight_pounds - 140) // 8
         return max(0, min(14, weight_class))
 
     def get_team_slot(self, team_abbrev: str) -> int | None:
-        """Get NHL94 Genesis ROM slot for a modern NHL team."""
         return MODERN_NHL_TO_NHL94_GEN.get(team_abbrev.upper())

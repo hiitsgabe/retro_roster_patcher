@@ -1,31 +1,4 @@
-"""NHL 94 (Sega Genesis) on the unified Patcher interface.
-
-This module is the translation layer between the ported reader/writer/mapper —
-which are a faithful copy of an untested upstream and stay that way — and the
-contracts in `core.patcher`. Every place the ported code breaks one of those
-contracts is worked around here rather than fixed there:
-
-  * `NHL94GenesisRomReader.validate` dereferences only pointer 0 while
-    `get_info` walks all 26, so a readable file can validate and then raise
-    `IndexError`. `analyze_rom` catches it and answers `is_valid=False`, because
-    `retro-roster analyze` probes every registered patcher against one ROM and a
-    file that is not this game must not raise.
-  * `NHL94GenesisRomWriter.write_team_roster` documents a `-1` error return but
-    raises `IndexError` on a malformed image by the two routes pinned in
-    `test_rom_writer.py`: the zero fill past the end of a region the reader
-    over-measured (`test_a_roster_region_that_runs_past_the_end_of_the_file_raises`)
-    and the name write that follows a stats write the writer's own bounds guard
-    refused (`test_a_team_block_at_the_end_of_the_file_lets_stats_scribble_past_it`).
-    Cited by name rather than by line number, which nothing keeps current.
-    `patch` catches those and raises `RomError`, which is what its contract
-    promises.
-
-The original orchestrator returned `dict[str, list[Player]]` from its fetch step
-and left team leader stats on `self.team_stats` as a side effect. Here `fetch`
-returns a `LeagueData` with the leaders in `TeamRoster.extra["leaders"]`, so the
-whole result is JSON-serialisable and `fetch` and `map_rosters` can run in
-separate processes with a file between them.
-"""
+"""NHL 94 (Sega Genesis) on the unified Patcher interface."""
 
 from __future__ import annotations
 
@@ -54,16 +27,10 @@ from .rom_reader import NHL94GenesisRomReader
 from .rom_writer import NHL94GenesisRomWriter
 from .stat_mapper import NHL94GenStatMapper
 
-# How many players `select_roster` is asked for: two goalies, four forward lines
-# plus two spares, and seven defencemen. It is a selection cap, not a capacity —
-# how many of them survive is decided by the ROM. `write_team_roster` patches
-# in place inside whatever the existing record chain occupies and spends
-# `2 + len(name) + 8` bytes per player, so a 452-byte region holds 23 players
-# only if their names average nine characters. Real names arrive as
-# "First Last" and `map_player` keeps 14 of them, which fits 19. The overflow is
-# dropped silently by the writer and the last surviving name is truncated;
-# `write_team_header` is then told the real count so the lines table only ever
-# indexes players that were actually written.
+# Two goalies, four forward lines plus two spares, seven defencemen. A selection
+# cap, not a capacity: the writer spends `2 + len(name) + 8` bytes per player
+# inside the existing record chain, so a 452-byte region fits roughly 19 of the
+# 14-character names `map_player` produces. The overflow is dropped silently.
 MAX_PLAYERS_PER_SLOT = 23
 
 
@@ -77,7 +44,6 @@ MAX_PLAYERS_PER_SLOT = 23
 class NHL94GenesisPatcher(Patcher):
     """Teams map to ROM slots by three-letter code, so no manual mapping step.
 
-    Providers: `espn` for the current season, `nhl` for seasons back to 1993.
     Only the `nhl` provider honours `fetch`'s `season`; ESPN's roster endpoint
     serves the current squad and nothing else.
     """
@@ -98,19 +64,8 @@ class NHL94GenesisPatcher(Patcher):
             on_partial=on_partial,
         )
         self.mapper = NHL94GenStatMapper()
-        # Both clients `os.makedirs(cache_dir, exist_ok=True)` in their own
-        # constructors, so there is nothing to do here. Constructing the client
-        # eagerly is what keeps `analyze_rom` free of a lazily-built API object.
-        #
-        # `Any` rather than a union or a Protocol, and it is the one loose
-        # annotation in this tree: of the three methods `fetch` calls on the
-        # client, only `get_nhl_teams` has the same signature on both. The other
-        # two disagree — `get_hockey_squad(team_id)` against
-        # `get_hockey_squad(team_abbrev, season)`, and `get_hockey_team_leaders`
-        # split the same way — so no single type describes both.
-        # The cost is real: calling the wrong client's method is a runtime bug
-        # here rather than a mypy error, which is why `fetch` branches on
-        # `self.provider` and both branches are pinned by tests.
+        # `Any`: the two clients take different arguments for squad and leaders, so
+        # no single type describes both.
         if self.provider == "nhl":
             self.api: Any = NhlApiClient(str(self.cache_dir), on_status, transport=transport)
         else:
@@ -126,12 +81,8 @@ class NHL94GenesisPatcher(Patcher):
         try:
             info = reader.get_info()
         except IndexError:
-            # `validate` bounds-checks pointer 0 and nothing else, so *any* of
-            # the 26 pointers — pointer 0 included — landing in the last five
-            # bytes of the file reaches here: `_read_team_slots` dereferences
-            # every one of them through `_read_team_city`, which reads a 16-bit
-            # word at `team_base + 4`. That is a file which is not this game, not
-            # an unreadable one, so it is reported rather than raised.
+            # `validate` bounds-checks pointer 0 only, so any of the other 25 landing
+            # near the end of the file reaches here. Not this game, so report it.
             return RomInfo(
                 path=str(rom_path),
                 size=size,
@@ -167,9 +118,8 @@ class NHL94GenesisPatcher(Patcher):
         if not teams:
             raise ApiError("The provider returned no NHL teams")
 
-        # Only teams that exist as a slot in the 1994 ROM are worth fetching:
-        # the expansion teams cost a network round trip and are then discarded
-        # by `map_rosters`.
+        # Expansion teams have no 1994 slot; fetching them costs a round trip for
+        # a roster `map_rosters` discards.
         mapped = [t for t in teams if self.mapper.get_team_slot(t.code) is not None]
         if not mapped:
             raise ApiError("No fetched team matches an NHL94 Genesis ROM slot")
@@ -182,14 +132,8 @@ class NHL94GenesisPatcher(Patcher):
                 players = self.api.get_hockey_squad(team.code, season)
                 leaders = self.api.get_hockey_team_leaders(team.code, season)
             else:
-                # ESPN honours neither: the roster endpoint has no season, and
-                # `get_hockey_team_leaders` defaults to a hard-coded year. Both
-                # got the season anyway, and for two different reasons. The
-                # roster's is the cache key, which without it never changed and
-                # so served the first season ever fetched forever. The leaders'
-                # is the request itself — the season is a path segment, so the
-                # default meant a `--season 2024` run asked ESPN for a different
-                # year's stats and stapled them to the squad.
+                # ESPN's roster endpoint ignores the season, but it is still passed:
+                # it is the cache key there, and a path segment for the leaders.
                 players = self.api.get_hockey_squad(team.id, season)
                 leaders = self.api.get_hockey_team_leaders(team.id, season)
             rosters.append(
@@ -202,12 +146,7 @@ class NHL94GenesisPatcher(Patcher):
 
         if on_progress is not None:
             on_progress(1.0, "Complete")
-        # Every field but `season` is synthesised: this game has no league
-        # endpoint. `country` and `country_code` are distinct fields — "USA" and
-        # "US" — and `teams_count` counts the rosters actually built, which is the
-        # slot-mapped subset of what the provider returned, not `len(teams)`.
-        # `League` defaults all five, so leaving any of them out is a silent ""
-        # or 0 in the emitted fetch JSON rather than a construction error.
+        # No league endpoint for this game, so every field but `season` is synthesised.
         return LeagueData(
             league=League(
                 id=0,
@@ -242,21 +181,9 @@ class NHL94GenesisPatcher(Patcher):
                 self.mapper.map_player(player, roster.team.code, leaders.get(str(player.id), {}))
                 for player in selected
             ]
-            # `MODERN_NHL_TO_NHL94_GEN` maps 30 codes onto 26 slots: LAK/LA,
-            # NJD/NJ, SJS/SJ and TBL/TB each reach one slot, so two entries in
-            # `data.teams` can target the same one. The original kept its rosters
-            # in a dict keyed by team code and only stored a team whose squad was
-            # non-empty, so an empty roster could never displace anything; here
-            # the slot is assigned directly, and without this an empty alias
-            # arriving second would wipe the populated one. `filled_slots()` would
-            # then drop the slot, so `patch` would leave the 1994 roster, count
-            # byte, goalie byte and line table in place and still report success
-            # with `teams_patched` short by one.
-            #
-            # An empty roster that collides with nothing still takes the slot: the
-            # serialised `MappedRosters` keeps showing which slots a provider team
-            # matched, and `filled_slots()` is what keeps the empty list away from
-            # `write_team_roster`, which would zero-fill the region.
+            # `MODERN_NHL_TO_NHL94_GEN` maps 30 codes onto 26 slots — LAK/LA, NJD/NJ,
+            # SJS/SJ and TBL/TB alias — so an empty roster arriving second must not
+            # wipe the populated one that already took the slot.
             if not records and teams.get(slot):
                 continue
             teams[slot] = records
@@ -273,10 +200,6 @@ class NHL94GenesisPatcher(Patcher):
         on_progress: ProgressFn | None = None,
         **options: Any,
     ) -> PatchResult:
-        # First, ahead of every other guard and ahead of the first status
-        # message: it is the one check that costs no I/O, and the failure it
-        # prevents is the writer choking on another game's record type with an
-        # exception outside this library's hierarchy.
         rosters.require_game(self.game_id)
         self.status("Validating ROM...")
         reader = NHL94GenesisRomReader(str(rom_path))
@@ -284,13 +207,6 @@ class NHL94GenesisPatcher(Patcher):
             raise RomError(f"Not a valid NHL94 Genesis ROM: {rom_path}")
 
         self.status("Initializing ROM writer...")
-        # The image is read from disk twice — once above, once by the writer's
-        # own internal reader — so exactly one whole copy of the file is
-        # redundant I/O per patch: 1 MB at `ROM_SIZE_STANDARD`, and more for the
-        # expanded images `validate` accepts, since it bounds the size only from
-        # below. Kept deliberately: it is what lets "not this game" fail before
-        # any writer state exists, and the writer owns its reader for its whole
-        # lifetime.
         writer = NHL94GenesisRomWriter(str(rom_path), str(output_path))
         if not writer.load():
             raise RomError(f"Failed to load ROM for writing: {rom_path}")
@@ -298,17 +214,10 @@ class NHL94GenesisPatcher(Patcher):
         # Without this the game refuses to boot an edited cartridge.
         writer.disable_checksum()
 
-        # `filled_slots()` is the model's own definition of "slots that received
-        # players", and the truthiness matters on its own: an empty list reaching
-        # `write_team_roster` zero-fills the whole region it was going to patch,
-        # erasing a team's roster while this method still reports success.
-        #
-        # The range is then re-checked, because those keys come from a plain dict
-        # that may have crossed a JSON boundary since `map_rosters` built it. The
-        # reader bounds-checks only `team_index >= TEAM_COUNT`, so a negative key
-        # reads the four bytes *preceding* the pointer table and treats whatever
-        # is there as a team pointer: the stray write lands wherever that word
-        # points, which is anywhere in the image, not near offset 0.
+        # An empty list would make `write_team_roster` zero-fill the region it was
+        # going to patch. The range is re-checked because the reader guards only
+        # `team_index >= TEAM_COUNT`: a negative key reads the four bytes before the
+        # pointer table and writes wherever that word happens to point.
         targets = [slot for slot in rosters.filled_slots() if 0 <= slot < TEAM_COUNT]
 
         teams_patched = 0
@@ -320,25 +229,14 @@ class NHL94GenesisPatcher(Patcher):
             try:
                 written = writer.write_team_roster(slot, players)
                 if written <= 0:
-                    # -1 is the writer's documented error return; 0 means the
-                    # region it found was too small for even one record. Either
-                    # way nothing reached the image, so nothing is counted and
-                    # the header — which would index a lines table into players
-                    # that do not exist — is not written either.
-                    #
-                    # WE2002 counts an empty slot where this game does not, and
-                    # `PatchResult` documents why: this game writes nothing per
-                    # slot but the player records, so with none written the slot
-                    # is untouched.
+                    # -1 is an error, 0 a region too small for one record. Either way
+                    # nothing reached the image, so skip the header too — its lines
+                    # table would index players that do not exist.
                     continue
                 writer.write_team_header(slot, players, actual_count=written)
             except IndexError as exc:
-                # `write_team_roster` promises -1 on error and delivers an
-                # IndexError instead whenever the record chain it is patching
-                # runs past the end of the image. Abort rather than skip the
-                # slot: the partial write is already in the writer's buffer, so
-                # carrying on would finalize a damaged ROM under a success
-                # return. Nothing has been written to disk at this point.
+                # A record chain running past the end of the image. Abort rather than
+                # skip: the partial write is already in the writer's buffer.
                 raise RomError(
                     f"Corrupt team block at slot {slot} in {rom_path}: "
                     f"the roster region runs past the end of the image"

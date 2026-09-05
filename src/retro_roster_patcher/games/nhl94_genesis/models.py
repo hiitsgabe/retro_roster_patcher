@@ -1,17 +1,14 @@
 """Data models for the NHL94 Genesis patcher.
 
-NHL 94 Genesis has 26 teams (all NHL teams from 1993-94 season).
-Each team block is ~1024 bytes containing color palettes, team attributes,
-player/goalie counts, line assignments, and player records.
+26 teams, the 1993-94 NHL. Each team block is ~1024 bytes: colour palettes, team
+attributes, player/goalie counts, line assignments, then the player records.
 
-References:
   - https://forum.nhl94.com/index.php?/topic/26353-how-to-manually-edit-the-team-player-data-nhl-94/
   - https://nhl94.com/html/editing/edit_bin.php
 """
 
 from dataclasses import dataclass, field
 
-# Re-export shared sports models
 from ...sports.models import (  # noqa: F401
     League,
     LeagueData,
@@ -21,8 +18,7 @@ from ...sports.models import (  # noqa: F401
     TeamRoster,
 )
 
-# Team order in the original NHL 94 Genesis ROM (26 teams)
-# Pointer table at 0x030E, 4 bytes per entry
+# Team order in the original ROM. Pointer table at 0x030E, 4 bytes per entry.
 NHL94_GEN_TEAM_ORDER = [
     "Anaheim",  # 0  - Mighty Ducks of Anaheim
     "Boston",  # 1
@@ -52,40 +48,39 @@ NHL94_GEN_TEAM_ORDER = [
     "Winnipeg",  # 25 - now Winnipeg Jets (returned 2011)
 ]
 
-# Modern NHL team abbreviation → NHL94 Genesis ROM slot index.
-# Includes ESPN abbreviation variants.
-# Excludes expansion teams not in NHL94: CBJ, MIN, NSH, SEA, UTA, VGK.
+# Modern NHL team abbreviation → ROM slot index, ESPN variants included.
+# Excludes expansion teams absent from NHL94: CBJ, MIN, NSH, SEA, UTA, VGK.
 MODERN_NHL_TO_NHL94_GEN = {
-    "ANA": 0,  # Anaheim Ducks
-    "BOS": 1,  # Boston Bruins
-    "BUF": 2,  # Buffalo Sabres
-    "CGY": 3,  # Calgary Flames
-    "CHI": 4,  # Chicago Blackhawks
-    "DAL": 5,  # Dallas Stars
-    "DET": 6,  # Detroit Red Wings
-    "EDM": 7,  # Edmonton Oilers
-    "FLA": 8,  # Florida Panthers
-    "CAR": 9,  # Carolina Hurricanes (was Hartford)
-    "LAK": 10,  # Los Angeles Kings
+    "ANA": 0,
+    "BOS": 1,
+    "BUF": 2,
+    "CGY": 3,
+    "CHI": 4,
+    "DAL": 5,
+    "DET": 6,
+    "EDM": 7,
+    "FLA": 8,
+    "CAR": 9,  # was Hartford
+    "LAK": 10,
     "LA": 10,  # ESPN abbreviation
-    "MTL": 11,  # Montreal Canadiens
-    "NJD": 12,  # New Jersey Devils
+    "MTL": 11,
+    "NJD": 12,
     "NJ": 12,  # ESPN abbreviation
-    "NYI": 13,  # New York Islanders
-    "NYR": 14,  # New York Rangers
-    "OTT": 15,  # Ottawa Senators
-    "PHI": 16,  # Philadelphia Flyers
-    "PIT": 17,  # Pittsburgh Penguins
-    "COL": 18,  # Colorado Avalanche (was Quebec)
-    "SJS": 19,  # San Jose Sharks
+    "NYI": 13,
+    "NYR": 14,
+    "OTT": 15,
+    "PHI": 16,
+    "PIT": 17,
+    "COL": 18,  # was Quebec
+    "SJS": 19,
     "SJ": 19,  # ESPN abbreviation
-    "STL": 20,  # St. Louis Blues
-    "TBL": 21,  # Tampa Bay Lightning
+    "STL": 20,
+    "TBL": 21,
     "TB": 21,  # ESPN abbreviation
-    "TOR": 22,  # Toronto Maple Leafs
-    "VAN": 23,  # Vancouver Canucks
-    "WSH": 24,  # Washington Capitals
-    "WPG": 25,  # Winnipeg Jets
+    "TOR": 22,
+    "VAN": 23,
+    "WSH": 24,
+    "WPG": 25,
 }
 
 TEAM_COUNT = 26
@@ -116,13 +111,12 @@ class NHL94GenPlayerAttributes:
 
 @dataclass
 class NHL94GenPlayerRecord:
-    """Complete player record ready to write to ROM.
+    """A player record as the ROM stores it.
 
-    In the ROM, each player record is:
-      [2 bytes] name length (LE, includes itself)
-      [N bytes] player name (ASCII)
-      [1 byte]  jersey number (BCD: high=tens, low=ones)
-      [7 bytes] 14 attributes packed as nibbles
+    [2 bytes] name length (LE, includes itself)
+    [N bytes] player name (ASCII)
+    [1 byte]  jersey number (BCD: high=tens, low=ones)
+    [7 bytes] 14 attributes packed as nibbles
     """
 
     name: str
@@ -136,8 +130,6 @@ class NHL94GenPlayerRecord:
 
 @dataclass
 class NHL94GenTeamRecord:
-    """Complete team record ready to write to ROM."""
-
     index: int  # 0-25
     name: str
     city: str
@@ -147,17 +139,13 @@ class NHL94GenTeamRecord:
 
 @dataclass
 class NHL94GenTeamSlot:
-    """An existing team slot read from the ROM."""
-
     index: int
-    current_name: str  # City name read from ROM
-    display_name: str  # Name from NHL94_GEN_TEAM_ORDER
+    current_name: str  # city name read from the ROM
+    display_name: str  # name from NHL94_GEN_TEAM_ORDER
 
 
 @dataclass
 class NHL94GenRomInfo:
-    """Information about a loaded NHL94 Genesis ROM."""
-
     path: str
     size: int
     team_slots: list[NHL94GenTeamSlot] = field(default_factory=list)
@@ -166,8 +154,6 @@ class NHL94GenRomInfo:
 
 @dataclass
 class NHL94GenSlotMapping:
-    """Maps a modern NHL team to an NHL94 Genesis ROM slot."""
-
     team: Team
     slot_index: int
     slot_name: str
