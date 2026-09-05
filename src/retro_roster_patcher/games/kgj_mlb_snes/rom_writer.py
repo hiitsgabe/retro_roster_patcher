@@ -250,19 +250,22 @@ class KGJRomWriter:
 
         Returns number of players written.
 
-        DELIBERATE DIVERGENCE: upstream set `player.roster_type` here, from the
-        slot index, on the caller's own record objects -- so a writer call
-        mutated a list the caller still held. `MappedRosters` may be serialised,
-        reloaded and handed to `patch` more than once under this library's
-        architecture, and a writer that edits its input makes the second call's
-        result depend on the first. `patcher.map_rosters` stamps `roster_type`
-        when it builds each record instead, and this method only reads the field.
+        DELIBERATE DIVERGENCE, in who sets `roster_type` and not in what it is
+        set to. Upstream assigned the field here, on the caller's own record
+        objects, so a writer call mutated a list the caller still held.
+        `MappedRosters` may be serialised, reloaded and handed to `patch` more
+        than once under this library's architecture, and a writer that edits its
+        input makes the second call's result depend on the first.
+        `patcher.map_rosters` stamps `roster_type` when it builds each record
+        instead, and this method only reads the field.
 
-        Not from the same boundaries, either: it takes the nibble from the group
-        `stat_mapper.select_roster_groups` put the player in, so that on a
-        roster short of fifteen non-pitchers the nibble at byte 0x19 still
-        agrees with the record layout `write_player` picks from `is_pitcher`.
-        See `patcher._roster_types_for_groups`.
+        The value is upstream's: `patcher._roster_type_for_slot` takes it from
+        the slot index, from the same `BATTERS_PER_TEAM` / `STARTERS_PER_TEAM`
+        boundaries this method used, and the records reach `write_player` in the
+        same order. That is wrong on a roster short of fifteen non-pitchers --
+        the nibble at byte 0x19 then disagrees with the record layout
+        `write_player` picks from `is_pitcher` -- and it is preserved
+        deliberately; the argument is at `_roster_type_for_slot`.
         """
         if not self.data or team_index >= TEAM_COUNT:
             return -1

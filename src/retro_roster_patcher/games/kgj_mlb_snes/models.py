@@ -110,11 +110,12 @@ RELIEVERS_PER_TEAM = 5
 
 # Roster-type nibble written into the high half of record byte 0x19. The reader
 # decodes the same byte back: 3 = batter, 1 = starting pitcher, 0 = relief
-# pitcher. Upstream chose between them purely from the slot index, in
-# `KGJRomWriter.write_team_roster`; `patcher.map_rosters` stamps each record with
-# one instead, taken from the group `select_roster_groups` put the player in.
-# `rom_writer.write_team_roster` says why the stamping moved and
-# `patcher._roster_types_for_groups` says why the slot index is not the source.
+# pitcher. Which one a record gets is decided from the slot index alone, as
+# upstream decided it -- see `patcher._roster_type_for_slot` for why that is
+# wrong on a short roster and kept anyway. The only thing that moved is who
+# stamps the field: `patcher.map_rosters` rather than
+# `KGJRomWriter.write_team_roster`, which did it on the caller's own objects.
+# `rom_writer.write_team_roster` says why.
 ROSTER_TYPE_BATTER = 0x30
 ROSTER_TYPE_STARTER = 0x10
 ROSTER_TYPE_RELIEVER = 0x00
@@ -291,11 +292,12 @@ class KGJPlayerRecord:
 
     # Roster type. 0x30=batter, 0x10=starter, 0x00=reliever.
     #
-    # DELIBERATE DIVERGENCE from upstream in who sets it. Upstream's
-    # `KGJRomWriter.write_team_roster` assigned this field on the caller's own
-    # objects from the slot index, mutating records the caller still held.
-    # `patcher.map_rosters` stamps it instead, so the record is complete the
-    # moment it is built and the writer only reads it.
+    # DELIBERATE DIVERGENCE from upstream in who sets it, not in its value.
+    # Upstream's `KGJRomWriter.write_team_roster` assigned this field on the
+    # caller's own objects, mutating records the caller still held.
+    # `patcher.map_rosters` stamps it instead -- from the same slot index, with
+    # the same boundaries -- so the record is complete the moment it is built
+    # and the writer only reads it.
     roster_type: int = ROSTER_TYPE_BATTER
 
 
