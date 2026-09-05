@@ -159,15 +159,28 @@ def _database_big_extent_fits(rom_path: Path) -> bool:
     short image never reaches the decompressor at all, and it refused it
     upstream too.
 
-    What the explicit bound buys instead is a *reason*. `load` answers one
-    boolean for four different facts -- the file is gone, the file is
-    unreadable, the file is too short, or something raised -- and both entry
-    points have to say something to a user about which. With this check
-    `analyze_rom` can report an image that is simply not large enough to be a
-    PSP UMD separately from one that is the wrong game, and `patch` raises with
-    both numbers in the message rather than "Failed to load MVP Baseball PSP
-    ISO". It is not redundant ceremony, and it is not load-bearing against
-    corruption; it is a diagnosis.
+    What the explicit bound buys instead is a *reason*, and it buys it in
+    exactly one of the two callers. `load` answers one boolean for four
+    different facts -- the file is gone, the file is unreadable, the file is too
+    short, or something raised -- and `patch` has to say which. With this check
+    it raises naming both numbers rather than "Failed to load MVP Baseball PSP
+    ISO"; without it a user with a truncated download is told their disc is the
+    wrong game. That is not redundant ceremony, and it is not load-bearing
+    against corruption; it is a diagnosis.
+
+    **In `analyze_rom` it is measurably redundant, and that is stated here
+    rather than implied away.** Mutation testing deleted the
+    `or not _database_big_extent_fits(rom_path)` clause from `analyze_rom` and
+    the whole suite stayed green, which is correct and not a coverage gap:
+    `load` only answers True after reading `DATABASE_BIG_SIZE` bytes starting at
+    the extent's own offset, so `load() is True` already implies the file
+    reaches `end`, and both branches of that `if` return the identical
+    `RomInfo(is_valid=False)` anyway. An earlier draft of this docstring claimed
+    `analyze_rom` could report the two cases apart. It cannot -- there is no
+    field in `RomInfo` where the difference would land. The clause is kept
+    because `analyze` probes every registered patcher against one file and the
+    arithmetic bound is the statement of what this game needs, but it decides
+    nothing there today.
 
     The bound that *is* load-bearing against silent corruption in this game is
     a different one, and it is in the writer: a rebuilt section must fit its

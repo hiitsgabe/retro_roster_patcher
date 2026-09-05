@@ -246,6 +246,13 @@ class MVPPSPRomWriter:
         for _, name in SECTION_MAP:
             if name not in self._modified_tables:
                 continue
+            # PROVEN EQUIVALENT under mutation, and kept. `if False` here
+            # changes nothing: `_rebuild_section_bytes` reads the same
+            # dictionary with `.get`, answers None for a name it has no header
+            # for, and `if not compressed` below then does the same `continue`.
+            # It is kept because it says at the top of the loop which sections
+            # are candidates, where the other reads as "the rebuild produced
+            # nothing" -- a different fact that happens to share an outcome.
             if name not in self.section_headers:
                 continue
             if self._skip_compact_attrib(name):
@@ -325,6 +332,13 @@ class MVPPSPRomWriter:
             RomError: nothing was loaded, or a section does not fit.
             OSError: the copy or the write failed; the caller wraps it.
         """
+        # PROVEN EQUIVALENT under mutation, and kept. `rebuild_database_big`
+        # makes the same test on the same attribute one line later and raises a
+        # `RomError` carrying the identical message, so no observation --
+        # not the type, not the text, not the fact that nothing was written --
+        # can tell this check from its absence. It is kept because `finalize`
+        # copies a several-hundred-megabyte image, and stating the precondition
+        # where the method begins is worth one redundant comparison.
         if self.reader.database_big is None:
             raise RomError("database.big was never loaded")
 

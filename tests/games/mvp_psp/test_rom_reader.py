@@ -28,6 +28,7 @@ import pytest
 
 from retro_roster_patcher.formats.ea_tdb import EaTdbError, refpack_compress
 from retro_roster_patcher.games.mvp_psp import models as mvp_models
+from retro_roster_patcher.games.mvp_psp import rom_reader as mvp_rom_reader
 from retro_roster_patcher.games.mvp_psp.models import (
     ATTRIB_FIRST_NAME,
     ATTRIB_SECTION_OFFSET,
@@ -244,6 +245,33 @@ def test_a_file_that_cannot_be_read_answers_false(tmp_path):
     finally:
         os.chmod(path, 0o644)
     assert answer is False
+
+
+def test_a_path_the_operating_system_cannot_accept_answers_false(tmp_path):
+    # `os.path.exists` is not merely a fast path for `open`. Every other way of
+    # not having a file raises `FileNotFoundError`, which is an `OSError` and
+    # which the handler below turns into the same False -- so deleting the
+    # `exists` check survived the suite. A path holding a NUL byte is the case
+    # that separates them: `os.path.exists` answers False for it and `open`
+    # raises `ValueError`, which is not an `OSError` and would travel out of
+    # `load` past the handler, out of `analyze_rom`, and out of the CLI.
+    assert MVPPSPRomReader("no\x00such.iso").load() is False
+
+
+def test_a_failure_that_is_not_an_os_error_travels(tmp_path, monkeypatch):
+    """DELIBERATE DIVERGENCE, pinned: `except OSError`, not `except Exception`.
+
+    The source caught everything here, so a bug inside this method reached the
+    user as "this is not MVP Baseball". The three tests above cover the
+    `OSError` side -- a missing file, a directory, an unreadable file -- and all
+    three answer False either way, which is why the narrowing survived until
+    something raised through it. `f.seek` refuses a string with a `TypeError`,
+    and a `TypeError` here is this module's bug and not the user's disc.
+    """
+    path = write_iso(tmp_path)
+    monkeypatch.setattr(mvp_rom_reader, "database_big_extent", lambda: ("not an offset", 0))
+    with pytest.raises(TypeError):
+        MVPPSPRomReader(str(path)).load()
 
 
 def test_a_load_at_a_different_lba_reads_a_different_place(tmp_path, monkeypatch):
