@@ -405,11 +405,12 @@ class NHL05PS2RomWriter:
         unknown field name is silently skipped there -- so this is a second
         guard on the same thing, and it is the one that keeps the value mapping
         honest for a caller that inspects it. It is also where this game's third
-        defence pair *used to be* lost: the source's mapper emitted `33LD` and
-        `33RD`, which this game's ROST does not have, and this filter dropped
-        them silently. The mapper now emits `L3LD`/`L3RD`, which it does have.
-        The filter is unchanged and still drops an unknown key -- the comment on
-        `LINE_FLAGS` carries the argument and the evidence.
+        defence pair is lost: `stat_mapper.generate_team_line_flags` emits
+        `33LD` and `33RD`, which this game's ROST does not have, and this filter
+        drops them silently. That is upstream's behaviour, known wrong and
+        preserved deliberately -- the filter is right, the spelling is not, and
+        the comment on `LINE_FLAGS` carries the argument and the evidence for
+        why it stands anyway.
 
         Deliberately does NOT write `TEAM` or `INDX`. The record was found by
         those two, and rewriting `INDX` would break the ROST -> PLAY -> SPBT
