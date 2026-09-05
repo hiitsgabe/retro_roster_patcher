@@ -485,34 +485,65 @@ class WE2002Patcher(Patcher):
     ) -> None:
         """Apply the translation PPF, degrading to Japanese menus on failure.
 
+        Two patches can end up here and they are applied differently, which is
+        upstream's arrangement restored:
+
+          * the community full translation, `w202-english.ppf`, if the operator
+            put one in `--assets-dir`. It is applied **as it stands**, with
+            validation skipped. It is a PPF2 or PPF3 built against one specific
+            dump, so its stored file size and its 1 024-byte block at 0x9320 do
+            not match every good image, and refusing on that would refuse the
+            patch on a disc it would have translated correctly;
+          * otherwise the generated one — the packaged English PPF1, or a
+            language generated into `cache_dir` — applied **with** validation.
+            Validation is a no-op on a PPF1 patch, which has no stored size and
+            no block to check, so today this costs nothing and asserts nothing.
+            It is upstream's call shape, and it is what would speak up if a
+            generator ever emitted PPF2.
+
+        The port merged the two instead: it always called `ensure_ppf`, which
+        with a community file present builds a *third* patch — the generated
+        team names with the community menu records merged in — and applied that
+        with validation skipped. Merging is arguably better, and it is a patch
+        file no released build of this patcher ever applied to a disc. Nothing
+        here has been validated against a real ISO, so the original's bytes go
+        back in. Fidelity to the original beats correctness of the data.
+
         A failed translation is cosmetic; the roster patch under it is the point.
         The original code swallowed every exception here; this narrows that to
         the four this call can actually raise, and reports rather than hides
-        them.
+        them. That narrowing is kept — it changes no byte of a patch that works.
 
         `MissingAssetError` is what `ensure_ppf` raises when the packaged
         English PPF is not in the installation — it is a `RetroRosterError`, not
         an `OSError`, so it needs naming separately. `PPFError` covers a patch
-        file this applier cannot read, and `OSError` covers one it cannot open.
+        file this applier cannot read, including a community file that is not a
+        PPF at all, and `OSError` covers one it cannot open.
 
-        `ValueError` comes from further in. If `assets_dir` holds a file named
-        `w202-english.ppf` that is not PPF2 — a PPF1 or PPF3 community patch, or
-        a truncated download — then `translations.we2002.menu_records`'s
-        `_parse_ppf2` raises a bare `ValueError("Not a PPF2 file: ...")` while
-        `ensure_ppf` is still building the merged patch. Unnamed here, a wrong
-        file in a directory this code only reads aborted `patch` before a single
-        roster byte was written.
+        `ValueError` comes from further in. If a non-English language is asked
+        for and `assets_dir` holds a `w202-english.ppf` that is not PPF2 — a
+        PPF1 or PPF3 community patch, or a truncated download — then
+        `translations.we2002.menu_records`'s `_parse_ppf2` raises a bare
+        `ValueError("Not a PPF2 file: ...")` while `ensure_ppf` is merging that
+        language's menu records. Unnamed here, a wrong file in a directory this
+        code only reads aborted `patch` before a single roster byte was written.
+        English no longer reaches that path when the community file is present,
+        because it is applied directly; every other language still does.
         """
         name = LANGUAGES[language]
         if on_progress is not None:
             on_progress(0.02, f"Applying {name} translation...")
         try:
-            ppf_path = ensure_ppf(
-                str(self.cache_dir / "translations"),
-                language,
-                assets_dir=str(self.assets_dir) if self.assets_dir is not None else "",
-            )
-            apply_ppf(str(output_path), ppf_path, skip_validation=True)
+            community = self._community_ppf(language)
+            if community is not None:
+                apply_ppf(str(output_path), str(community), skip_validation=True)
+            else:
+                ppf_path = ensure_ppf(
+                    str(self.cache_dir / "translations"),
+                    language,
+                    assets_dir=str(self.assets_dir) if self.assets_dir is not None else "",
+                )
+                apply_ppf(str(output_path), ppf_path)
         except (MissingAssetError, PPFError, OSError, ValueError) as exc:
             self.status(f"{name} translation skipped: {exc}")
             if on_progress is not None:
@@ -520,3 +551,20 @@ class WE2002Patcher(Patcher):
             return
         if on_progress is not None:
             on_progress(0.05, f"{name} translation applied")
+
+    def _community_ppf(self, language: str) -> Path | None:
+        """The operator's own `w202-english.ppf`, if there is one to apply here.
+
+        English only, which is upstream's rule and is the honest one: the file
+        is an English full translation, and for Spanish, French or Portuguese
+        the generator reads its *menu records* out of it and writes the rest
+        itself. Applying it whole for those would produce English menus under a
+        Spanish request.
+
+        `is_file` rather than `exists`, so a directory of that name is "no
+        community patch" instead of an `IsADirectoryError` inside `apply_ppf`.
+        """
+        if language != "en" or self.assets_dir is None:
+            return None
+        candidate = self.assets_dir / "w202-english.ppf"
+        return candidate if candidate.is_file() else None
