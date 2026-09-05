@@ -194,23 +194,27 @@ class NHL94SNESRomWriter:
 
             # Truncate name to fit.
             #
-            # DELIBERATE DIVERGENCE: an empty name encodes a length word of 2,
-            # and both `read_team_roster` and `_get_team_player_region` stop at
-            # any length below 3. Upstream would write it, hiding every record
-            # after it behind a terminator while still reporting them all
-            # written. One placeholder byte keeps the length word at 3 and the
-            # record chain intact.
+            # UPSTREAM BEHAVIOUR, KNOWN WRONG, PRESERVED DELIBERATELY: an empty
+            # name encodes a length word of 2, and both `read_team_roster` and
+            # `_get_team_player_region` treat any length below 3 as the
+            # end-of-roster terminator. Written mid-roster it therefore buries
+            # the real terminator inside the roster: every record after it
+            # becomes unreachable, the region re-measures short, and this method
+            # still counts and returns every player it wrote. Writing one
+            # placeholder byte would keep the length word at 3 and the chain
+            # intact, and this port did that for a while.
             #
-            # The Genesis sibling made the same change and it has since been
-            # reverted: `games/nhl94_genesis/rom_writer.py` writes the empty name
-            # upstream's way again, and says there why byte fidelity to an
-            # unvalidated original outranks a reachable roster tail. This one has
-            # not been reverted, and the two are inconsistent. It is flagged
-            # rather than reverted here because the revert ledger adjudicated
-            # only the Genesis site; changing this one is a byte-level decision
-            # that belongs to whoever owns that ledger, not to this comment.
+            # It is written the upstream way again, and for the same reason the
+            # Genesis sibling gives at `games/nhl94_genesis/rom_writer.py`: the
+            # placeholder is a byte sequence no released build of this patcher
+            # ever produced, nothing in this repository has been validated
+            # against a real dump, and a record layout the game has never been
+            # fed is a crash risk on hardware that outweighs an unreachable tail
+            # of a roster. Fidelity to the original beats correctness of the
+            # data. The two ports agree again; do not re-add the `or b"?"` to
+            # either.
             name = player.name[:max_name_for_record]
-            name_bytes = name.encode("ascii", errors="replace") or b"?"
+            name_bytes = name.encode("ascii", errors="replace")
             name_len = len(name_bytes)
 
             # Write 2-byte LE length (includes the 2 length bytes)

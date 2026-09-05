@@ -337,22 +337,41 @@ def test_a_name_too_long_for_the_remaining_space_is_truncated(tmp_path):
     assert names == ["Fourteen Ch00", "Fou"]
 
 
-def test_an_empty_name_is_written_as_a_placeholder_byte(tmp_path):
-    """DELIBERATE DIVERGENCE: upstream wrote a length word of 2 here.
+def test_an_empty_name_is_written_as_a_length_word_the_reader_reads_as_the_end(tmp_path):
+    """PINS UPSTREAM FIDELITY DELIBERATELY. Do not "fix" this back.
 
-    Both `read_team_roster` and `_get_team_player_region` stop below 3, so the
-    record would have been the end of the roster and every player after it
-    invisible -- while the writer still counted them. One `?` keeps the chain
-    intact. Two records are written and two are read back; upstream's answer to
-    the same input was two written and none read back.
+    An empty name encodes a length word of exactly 2, and both
+    `read_team_roster` and `_get_team_player_region` treat any length below 3 as
+    the end of the roster. Written first it buries the terminator at the head of
+    the roster: the writer reports two records written and the reader sees none.
+    Writing one `?` byte keeps the chain intact and this port did that for a
+    while; it writes upstream's bytes again for the reason given at the line,
+    which is the reason `games/nhl94_genesis/rom_writer.py` gives for the
+    identical site. The two ports agree again.
     """
     writer = _writer(tmp_path)
     records = _records(2)
     records[0].name = ""
+    # The writer still counts both, which is the half of the defect that reaches
+    # the caller: `PatchResult.players_patched` overstates the roster.
+    assert writer.write_team_roster(5, records) == 2
+    assert writer.finalize() is True
+    names, stats = _finalized_reader(writer).read_team_roster(5)
+    assert names == []
+    assert stats == []
+
+
+def test_a_one_character_name_is_still_read_back(tmp_path):
+    """Length word 3 is the low edge of the reader's `length < 3` test and an
+    empty name falls one below it, so a one-character name is the shortest
+    record that must not be read as the end of the roster."""
+    writer = _writer(tmp_path)
+    records = _records(2)
+    records[0].name = "X"
     assert writer.write_team_roster(5, records) == 2
     assert writer.finalize() is True
     names, _ = _finalized_reader(writer).read_team_roster(5)
-    assert names == ["?", "Fourteen Char01"]
+    assert names == ["X", "Fourteen Char01"]
 
 
 def test_a_non_ascii_name_is_replaced_rather_than_raising(tmp_path):
