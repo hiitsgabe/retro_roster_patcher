@@ -1179,9 +1179,13 @@ def test_patch_writes_every_slot_with_its_players_then_flushes_then_finalises(
     # Slots ascending regardless of the mapping's order; players handed over
     # explicitly, because `write_team` writes none without them; the TEX flush
     # before finalisation, because queued 3D-jersey patches are dropped otherwise.
+    #
+    # `skip_validation=False`: this patcher has no `assets_dir`, so the patch
+    # applied is the generated one, and upstream validated that one. Only a
+    # community `w202-english.ppf` is applied unvalidated.
     assert log == [
         ("open", str(rom), str(out)),
-        ("apply_ppf", True),
+        ("apply_ppf", False),
         ("write_team", 0, "Team 0", 11, True),
         ("write_team", 5, "Team 1", 11, True),
         ("flush_tex_patches",),
@@ -1442,6 +1446,133 @@ def test_a_missing_translation_asset_is_reported_and_the_patch_continues(tmp_pat
     assert log[-2:] == [("flush_tex_patches",), ("finalize",)]
 
 
+def _record_applies(monkeypatch):
+    """Record every `(ppf_path, skip_validation)` the patcher applies."""
+    applied = []
+
+    def _apply(bin_path, ppf_path, skip_validation=False):
+        applied.append((str(ppf_path), skip_validation))
+        return "fake description"
+
+    monkeypatch.setattr(patcher_module, "apply_ppf", _apply)
+    return applied
+
+
+def test_a_community_ppf_is_applied_as_it_stands_and_unvalidated(tmp_path, monkeypatch):
+    """PINS UPSTREAM FIDELITY DELIBERATELY.
+
+    Upstream applied the operator's own `w202-english.ppf` directly, with
+    validation skipped, and never generated anything for English when one was
+    present. This port merged instead: it always called `ensure_ppf`, which with
+    a community file present builds a third patch -- the generated team names
+    with the community *menu records* merged in -- and applied that.
+
+    Merging is arguably the better patch. It is also a patch file no released
+    build of this patcher ever wrote to a disc, and nothing here has been
+    validated against a real ISO, so the original's bytes go back. Measured
+    against upstream's own branch on a synthetic ISO: 1 370 bytes differed
+    before, 0 after.
+
+    Validation is skipped because a community full translation is built against
+    one specific dump; its stored size and its block at 0x9320 will not match
+    every good image, and refusing on that refuses a patch that would have
+    worked.
+    """
+    assets = tmp_path / "assets"
+    assets.mkdir()
+    community = assets / "w202-english.ppf"
+    community.write_bytes(b"PPF20" + bytes(64))
+    p = _make_patcher(tmp_path, assets_dir=assets)
+    monkeypatch.setattr(patcher_module, "RomWriter", _fake_writer_class([]))
+    monkeypatch.setattr(
+        patcher_module, "ensure_ppf", lambda *a, **kw: pytest.fail("generated a patch instead")
+    )
+    applied = _record_applies(monkeypatch)
+
+    p.patch(
+        rom_path=_valid_rom(tmp_path),
+        output_path=tmp_path / "out.bin",
+        rosters=MappedRosters(game_id="we2002"),
+    )
+
+    assert applied == [(str(community), True)]
+
+
+def test_the_generated_ppf_is_validated(tmp_path, monkeypatch):
+    """PINS UPSTREAM FIDELITY DELIBERATELY.
+
+    Upstream passed no `skip_validation` on the generated patch, so it defaulted
+    to False. Every generator in this tree emits PPF1, which carries neither a
+    stored file size nor the 0x9320 block, and `apply_ppf` checks neither for
+    that format -- so today this asserts nothing about any image and moves no
+    byte. It is upstream's call shape, and it is what would speak up if a
+    generator ever emitted PPF2.
+    """
+    p = _make_patcher(tmp_path)
+    monkeypatch.setattr(patcher_module, "RomWriter", _fake_writer_class([]))
+    monkeypatch.setattr(patcher_module, "ensure_ppf", lambda *a, **kw: str(tmp_path / "gen.ppf"))
+    applied = _record_applies(monkeypatch)
+
+    p.patch(
+        rom_path=_valid_rom(tmp_path),
+        output_path=tmp_path / "out.bin",
+        rosters=MappedRosters(game_id="we2002"),
+    )
+
+    assert applied == [(str(tmp_path / "gen.ppf"), False)]
+
+
+def test_a_community_ppf_is_not_applied_whole_for_another_language(tmp_path, monkeypatch):
+    # The file is an English full translation. Applying it for a Spanish request
+    # would give Spanish-requested menus in English; the generator reads only its
+    # menu records and writes the rest itself, which is upstream's rule too.
+    assets = tmp_path / "assets"
+    assets.mkdir()
+    (assets / "w202-english.ppf").write_bytes(b"PPF20" + bytes(64))
+    p = _make_patcher(tmp_path, assets_dir=assets)
+    monkeypatch.setattr(patcher_module, "RomWriter", _fake_writer_class([]))
+    monkeypatch.setattr(patcher_module, "ensure_ppf", lambda *a, **kw: str(tmp_path / "es.ppf"))
+    applied = _record_applies(monkeypatch)
+
+    p.patch(
+        rom_path=_valid_rom(tmp_path),
+        output_path=tmp_path / "out.bin",
+        rosters=MappedRosters(game_id="we2002"),
+        language="es",
+    )
+
+    assert applied == [(str(tmp_path / "es.ppf"), False)]
+
+
+def test_a_directory_named_like_the_community_ppf_is_not_a_community_ppf(tmp_path, monkeypatch):
+    # `is_file`, not `exists`. A directory of that name would otherwise reach
+    # `apply_ppf`'s `open` and raise `IsADirectoryError` -- caught, so the run
+    # survives, but the generated patch that should have been applied never is
+    # and the ISO ships with Japanese menus under a silent "skipped".
+    assets = tmp_path / "assets"
+    (assets / "w202-english.ppf").mkdir(parents=True)
+    p = _make_patcher(tmp_path, assets_dir=assets)
+    monkeypatch.setattr(patcher_module, "RomWriter", _fake_writer_class([]))
+    monkeypatch.setattr(patcher_module, "ensure_ppf", lambda *a, **kw: str(tmp_path / "gen.ppf"))
+    applied = _record_applies(monkeypatch)
+
+    p.patch(
+        rom_path=_valid_rom(tmp_path),
+        output_path=tmp_path / "out.bin",
+        rosters=MappedRosters(game_id="we2002"),
+    )
+
+    assert applied == [(str(tmp_path / "gen.ppf"), False)]
+
+
+def test_no_assets_dir_means_no_community_ppf(tmp_path, monkeypatch):
+    # `--assets-dir` is optional and the community patch is not redistributed
+    # here, so this is the shipped default path.
+    p = _make_patcher(tmp_path)
+    assert p.assets_dir is None
+    assert p._community_ppf("en") is None
+
+
 def test_a_broken_patch_file_is_reported_and_the_patch_continues(tmp_path, monkeypatch):
     status = []
     p = _make_patcher(tmp_path, on_status=status.append)
@@ -1503,8 +1634,14 @@ def test_a_community_file_that_is_not_ppf2_is_reported_and_the_patch_continues(
     # `menu_records._parse_ppf2` raises a bare `ValueError` for it, and nothing
     # between there and here converts it. `ensure_ppf` is deliberately not
     # stubbed, so this drives the real chain that reaches that raise:
-    # `translations.we2002.ensure_ppf` sees a community file and hands off to
-    # `english_ppf.ensure_ppf`, which asks `get_menu_records` to parse it.
+    # `translations.we2002.ensure_ppf` hands off to `spanish_ppf.ensure_ppf`,
+    # which asks `get_menu_records` to parse the community file for its menus.
+    #
+    # Spanish and not English, and that is the point of the parameter: English
+    # with a community file present no longer touches `ensure_ppf` at all — the
+    # community patch is applied as it stands, which is what upstream did. Every
+    # other language still reads it for its menu records and still reaches this
+    # raise, so the clause naming `ValueError` is still load-bearing.
     #
     # The bytes below are this project's own; no community patch is in the tree.
     status = []
@@ -1524,14 +1661,14 @@ def test_a_community_file_that_is_not_ppf2_is_reported_and_the_patch_continues(
     mapped = p.map_rosters(data, slot_mapping=[SlotMapping(slot_index=0, team_id=100)])
     rom = _valid_rom(tmp_path)
 
-    result = p.patch(rom_path=rom, output_path=tmp_path / "out.bin", rosters=mapped)
+    result = p.patch(rom_path=rom, output_path=tmp_path / "out.bin", rosters=mapped, language="es")
 
     # The roster patch under the translation is the point, so it still happens.
     assert result.teams_patched == 1
     assert result.players_patched == 11
     assert status == [
         "Preparing ROM...",
-        f"English translation skipped: Not a PPF2 file: {community}",
+        f"Spanish translation skipped: Not a PPF2 file: {community}",
         "Saving patched ROM...",
     ]
     assert log[-2:] == [("flush_tex_patches",), ("finalize",)]

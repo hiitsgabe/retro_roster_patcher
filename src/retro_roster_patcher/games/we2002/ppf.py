@@ -2,15 +2,23 @@
 
 Applies PPF1, PPF2 and PPF3. `apply_ppf` dispatches on the magic: PPF2 and PPF3
 match on their first four bytes, PPF1 on all five of `PPF10`, and anything else
-raises `PPFError`. That asymmetry is deliberate — see the tests — because the
-one production call passes `skip_validation=True`, which leaves the magic as the
-only thing between a wrong file and an in-place write into the output ISO.
+raises `PPFError`. That asymmetry is deliberate — see the tests — because one of
+the two production calls passes `skip_validation=True`, which leaves the magic
+as the only thing between a wrong file and an in-place write into the output
+ISO.
 
-In-product only PPF1 is ever applied: the sole call site is
-`patcher._apply_translation`, and every patch this project generates carries the
-`PPF10` magic. PPF2 and PPF3 exist here for externally supplied patches — a
-community translation a user drops into `assets_dir`, which this project does
-not redistribute — and for `get_ppf_info` to report on.
+Both calls are in `patcher._apply_translation`, and they are the two halves of
+the choice upstream made:
+
+  * a community `w202-english.ppf` an operator supplies through `assets_dir`,
+    which this project does not redistribute. It is typically PPF2 or PPF3 and
+    is applied unvalidated, because it was built against one dump and its stored
+    size and 0x9320 block need not match a different good image;
+  * otherwise a patch this project generated, which always carries the `PPF10`
+    magic, applied with validation — a no-op on PPF1, which has neither a stored
+    size nor a block to check.
+
+`get_ppf_info` reads all three formats and applies none of them.
 
 Reference implementation: github.com/sahlberg/pop-fe/blob/master/ppf.py
 PPF3 spec: github.com/meunierd/ppf/blob/master/ppfdev/PPF3.txt

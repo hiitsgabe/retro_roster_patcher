@@ -8,11 +8,12 @@ that is actually there rather than the behaviour that was assumed.
 Every patch and every target here is synthetic and built in-test. No community
 PPF and no disc image is in this repository or reachable from these tests.
 
-All three formats are covered, not just the one the product applies: in-product
-only PPF1 is ever applied, but `apply_ppf` will take a PPF2 or PPF3 a user
-supplies through `assets_dir`, and it does so with `skip_validation=True`, so a
-wrong record stride there writes chosen bytes at chosen offsets into the output
-ISO.
+All three formats are covered, and all three are reachable in product. Every
+patch this project generates is PPF1 and is applied with validation on; a
+community `w202-english.ppf` an operator drops into `assets_dir` is applied as
+it stands with `skip_validation=True`, and those are typically PPF2 or PPF3. So
+a wrong record stride in a supplied file writes chosen bytes at chosen offsets
+into the output ISO with only the magic in the way.
 
 One mutant in this file's subject is EQUIVALENT and deliberately not covered:
 `_apply_ppf2`'s `while len(data) >= 5` versus `>= 6`. They differ only on a
