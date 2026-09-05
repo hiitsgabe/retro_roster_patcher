@@ -551,15 +551,42 @@ def test_the_season_stats_written_are_the_seventeen_zeros_every_mapped_record_ca
     assert after["season_stats"] == [0] * 17
 
 
-def test_a_season_stat_the_game_cannot_hold_raises_rather_than_being_clamped(rom, out):
-    """Every other numeric field is clamped; this one is packed unchecked.
+def test_a_season_stat_the_game_cannot_hold_is_clamped_like_every_other_field(rom, out):
+    """DELIBERATE DIVERGENCE: this used to raise `struct.error` out of a `bool`.
 
-    Inherited, and unreachable from `map_player`, which always supplies zeros.
-    Pinned so a future change that starts supplying real stats finds out here.
+    Unreachable from `map_player`, which supplies zeros; clamped so that the day
+    something supplies real numbers is not two problems at once.
     """
     writer = _loaded(rom, out)
-    with pytest.raises(struct.error):
-        writer.write_player(4, 2, _record(season_stats=[70000] * 17))
+    assert writer.write_player(4, 2, _record(season_stats=[70000] * 17)) is True
+    decoded = fixture.decode_player_record(writer.data, fixture.player_offset(4, 2))
+    assert decoded["season_stats"] == [0xFFFF] * 17
+
+
+def test_a_negative_season_stat_clamps_to_zero_rather_than_wrapping(rom, out):
+    writer = _loaded(rom, out)
+    assert writer.write_player(4, 2, _record(season_stats=[-3] * 17)) is True
+    decoded = fixture.decode_player_record(writer.data, fixture.player_offset(4, 2))
+    assert decoded["season_stats"] == [0] * 17
+
+
+def test_a_season_stat_at_the_top_of_the_field_is_written_and_not_clamped_down(rom, out):
+    """65 535 and 65 536 either side of the boundary, so the clamp is a
+    boundary and not a ceiling applied to everything."""
+    writer = _loaded(rom, out)
+    stats = [0xFFFF, 0x10000] + [7] * 15
+    writer.write_player(4, 2, _record(season_stats=stats))
+    decoded = fixture.decode_player_record(writer.data, fixture.player_offset(4, 2))
+    assert decoded["season_stats"] == [0xFFFF, 0xFFFF] + [7] * 15
+
+
+def test_the_seventeen_stats_land_in_seventeen_distinct_slots(rom, out):
+    """A clamp applied to the wrong index would collapse the block, and the
+    fixture's own line is non-zero, so this cannot pass on leftovers."""
+    writer = _loaded(rom, out)
+    writer.write_player(4, 2, _record(season_stats=list(range(100, 117))))
+    decoded = fixture.decode_player_record(writer.data, fixture.player_offset(4, 2))
+    assert decoded["season_stats"] == list(range(100, 117))
 
 
 def test_the_byte_the_writer_calls_unknown_two_is_zeroed(rom, out):

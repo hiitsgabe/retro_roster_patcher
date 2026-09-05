@@ -277,9 +277,24 @@ class NBALive95RomWriter:
             d[off + OFF_HAIR] = min(0x26, player.hair_style)
 
         # Season stats (17 x 2-byte BE)
+        #
+        # DELIBERATE DIVERGENCE: the clamp is new. Upstream packed this value
+        # straight into a `>H`, alone among this method's eight numeric fields
+        # -- jersey, position, height, weight, experience, skin, hair and the 16
+        # ratings are all clamped -- so a stat above 65 535 or below 0 came out
+        # of a `bool`-returning writer as a `struct.error`, which is outside this
+        # library's exception hierarchy and reaches `patch`'s caller uncaught.
+        #
+        # Not reachable today: `stat_mapper.map_player` supplies 17 zeros and
+        # says why. It becomes reachable the moment anything starts supplying
+        # real numbers, and a season point total is a plausible thing to overrun
+        # a 16-bit field with. Clamping now rather than later is what keeps that
+        # future change from being two problems at once; it costs nothing while
+        # the values are zeros, and it is the same answer the other eight fields
+        # already give to an out-of-range number.
         for i in range(STAT_COUNT):
             stat_val = player.season_stats[i] if i < len(player.season_stats) else 0
-            struct.pack_into(">H", d, off + OFF_STATS + i * 2, stat_val)
+            struct.pack_into(">H", d, off + OFF_STATS + i * 2, max(0, min(0xFFFF, stat_val)))
 
         d[off + OFF_UNKNOWN2] = 0x00
 
