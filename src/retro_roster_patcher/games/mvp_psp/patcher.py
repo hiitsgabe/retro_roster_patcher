@@ -206,11 +206,27 @@ class _HashPool:
     no innings -- and it is counted as `crossed`.
 
     Tier 3, synthesis: both pools are empty and an id is manufactured from the
-    team and player index. **It can collide with a real id**, and that is not
-    hypothetical: the pattern is `00` + two hex digits of team + five of player
-    index + `ff`, and a disc id such as `00b87d5ff` has exactly that shape. A
-    collision means the synthesised player overwrites a real record. Counted as
-    `synthesised`.
+    team and player index. Counted as `synthesised`.
+
+    **The migration brief said a synthesised id may collide with a real one.
+    Measured: it cannot.** The pattern is `00`, two hex digits of team index,
+    five of player index, then `ff` -- which is **eleven** characters, where
+    every id this repository has ever seen is nine. All thirty of
+    `models.TEAM_HASHES` are nine, `models.HASH_ID_CHARS` records it, and the
+    generated ids in `tests/fixtures/synthetic_mvp_iso.py` are nine for the
+    same reason. Two synthesised ids cannot collide with each other either: the
+    (team, player index) pair is unique within a run, thirty teams fit two hex
+    digits and twenty-five players fit five.
+
+    What tier 3 actually costs is the opposite of a collision. The id matches
+    nothing anywhere, so the player has no row in any of the eight statistics
+    tables and no career history at all -- which is arguably *better* than tier
+    2, where he inherits somebody else's. Neither is good, and both are
+    reported.
+
+    None of this can be checked against a real disc. If a retail `attrib` table
+    holds eleven-character ids, the collision the brief describes is back; the
+    claim above is a claim about what is in this repository.
     """
 
     def __init__(self, attrib_ids: list[str], pitcher_ids: set[str]) -> None:
