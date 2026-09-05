@@ -365,6 +365,44 @@ def test_the_tail_of_an_edited_sections_allocation_is_zeroed(tmp_path):
     assert set(rebuilt[stream_end : offset + allocation]) == {0}
 
 
+# The test above cannot see the zero-fill. The fixture already pads each
+# section to its allocation with zeros, and an edit that changes one name
+# leaves the rebuilt stream about as long as the one it replaced, so the slack
+# it checks was zero before anything was written -- zero over zero, and
+# deleting the fill survived it. These three shrink a section to a header line
+# and look at the window the old stream used to occupy.
+
+
+def _shrunk_teamstat(tmp_path):
+    """(writer, offset, the disc's own stream length, the rebuilt one)."""
+    writer = make_writer(tmp_path)
+    offset, _ = SECTION_ALLOCATIONS["teamstat"]
+    before = writer._rebuild_section_bytes("teamstat")
+    writer.update_records("teamstat", {})
+    after = writer._rebuild_section_bytes("teamstat")
+    return writer, offset, len(before), len(after)
+
+
+def test_shrinking_a_section_is_what_makes_the_fill_visible(tmp_path):
+    # The premise. Without it the two below could both be zero over zero again.
+    writer, offset, before, after = _shrunk_teamstat(tmp_path)
+    original = writer.reader.database_big
+    assert (set(original[offset + after : offset + before]) == {0}) is False
+
+
+def test_the_window_the_old_stream_held_is_zeroed(tmp_path):
+    writer, offset, before, after = _shrunk_teamstat(tmp_path)
+    rebuilt = writer.rebuild_database_big()
+    assert set(rebuilt[offset + after : offset + before]) == {0}
+
+
+def test_the_rest_of_the_shrunken_sections_allocation_is_zeroed(tmp_path):
+    writer, offset, _before, after = _shrunk_teamstat(tmp_path)
+    _, allocation = SECTION_ALLOCATIONS["teamstat"]
+    rebuilt = writer.rebuild_database_big()
+    assert set(rebuilt[offset + after : offset + allocation]) == {0}
+
+
 def test_a_section_nothing_staged_is_not_rebuilt(tmp_path):
     writer = make_writer(tmp_path)
     original = writer.reader.database_big

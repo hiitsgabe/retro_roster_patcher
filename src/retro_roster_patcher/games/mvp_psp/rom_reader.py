@@ -53,12 +53,14 @@ REFPACK_MAGIC = b"\x10\xfb"
 
 # What section 0 begins with instead. 0xC0 sets the "decompressed size is three
 # bytes and there is a compressed size too" flag, which `refpack_decompress`
-# does not implement; `decompress_section` rewrites the two-byte header and
-# leaves the rest of the stream alone. That works because the extra header word
-# 0xC0 would introduce sits in bytes 2-4, which the rewrite drops -- so the
-# fixup is only correct if the real header is five bytes either way. Carried
-# over from the source unverified; no disc may enter this repository to check
-# it.
+# does not implement; `decompress_section` replaces those two bytes with
+# `10 FB` and passes byte 2 onwards through unchanged. **So the fixup assumes
+# the 0xC0 header is the same five bytes as the 0x10 one**, and if 0xC0 really
+# introduces a compressed-size word ahead of the decompressed size, bytes 2-4
+# are that word and the size the decompressor then reads is the wrong number.
+# Nothing here drops them; an earlier draft of this comment said the rewrite
+# did, and it does not. Carried over from the source unverified, because no
+# disc may enter this repository to check which header a real section 0 has.
 COMPACT_SECTION_FLAG = 0xC0
 
 # The two byte values `validate` accepts at offset 0.
@@ -103,6 +105,11 @@ def _parse_record_body(parts: list[str]) -> dict[int, str]:
     """
     fields: dict[int, str] = {}
     for part in parts:
+        # PROVEN EQUIVALENT under mutation, and kept. Nothing blank can survive
+        # the two guards below either: `""` and `"\t"` have no space and hit
+        # `space_idx < 0`, and `" "` splits to `int("")`, which is the
+        # `ValueError`. Kept because "a blank part is not a column" is the fact,
+        # and reaching it through an integer parse that happens to fail is not.
         if not part.strip():
             continue
         space_idx = part.find(" ")
@@ -254,6 +261,11 @@ class MVPPSPRomReader:
         data = self.database_big
         if data is None:
             return None
+        # PROVEN EQUIVALENT under mutation, and kept. `>` instead of `>=` leaves
+        # `offset == len(data)` to fall through, where `data[offset:]` is empty
+        # and `len(raw) < 2` returns the same None one step later. Kept because
+        # "the offset is not in the blob" is a different statement from "there
+        # were not two bytes there", and this one is the true one.
         if offset >= len(data):
             return None
 
@@ -277,15 +289,24 @@ class MVPPSPRomReader:
         statistics table must not cost a user the roster patch.
 
         DELIBERATE DIVERGENCE: the source wrapped this loop body in
-        `except Exception: pass`. That handler could not fire.
-        `decompress_section` returns None rather than raising for every input it
-        rejects, and the one function it calls that raises at all --
-        `refpack_decompress`, on a missing `0x10 0xFB` header -- is only reached
-        after `decompress_section` has checked those two bytes itself. So the
-        handler caught nothing and would have hidden any genuine bug in the
+        `except Exception: pass`. That handler could not fire **from this
+        loop**, and the qualifier matters. `decompress_section` does not raise
+        for anything it rejects itself, but it can raise from underneath:
+        `refpack_decompress` refuses a stream shorter than five bytes as well as
+        one with no `0x10 0xFB` header, and `decompress_section` checks only the
+        two header bytes, so a two-, three- or four-byte stream reaches the
+        decompressor and raises `EaTdbError`. What makes it unreachable here is
+        arithmetic rather than the check: this loop only ever passes offsets
+        from `SECTION_MAP`, the last of which is 385 608 in a blob of 386 977,
+        so the shortest slice this loop can produce is 1369 bytes. The handler
+        therefore caught nothing, and would have hidden any genuine bug in the
         decompressor if one appeared. It is removed rather than narrowed,
         because narrowing it would leave a reader believing a failure mode
         exists here that does not.
+
+        `tests/games/mvp_psp/test_rom_reader.py` pins both halves: a two-byte
+        stream raises out of `decompress_section`, and every section of a real
+        blob decompresses.
         """
         for offset, name in SECTION_MAP:
             data = self.decompress_section(offset)

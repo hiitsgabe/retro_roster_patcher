@@ -429,6 +429,20 @@ def test_an_offset_one_byte_before_the_end_answers_none(tmp_path):
     assert loaded(tmp_path).decompress_section(DATABASE_BIG_SIZE - 1) is None
 
 
+def test_a_first_section_flagged_with_neither_byte_is_refused(tmp_path):
+    # The fixup is `offset == 0 AND the flag is 0xC0`, and the second half of
+    # that is what this pins. Dropping it survived every test here, because for
+    # a section already flagged 0x10 the rewrite puts back the two bytes it
+    # replaced and is a no-op -- so the only way to see the guard is a first
+    # section flagged with neither byte, which must be refused rather than
+    # forced into a header it does not have.
+    reader = loaded(tmp_path)
+    blob = bytearray(reader.database_big)
+    blob[0] = 0x42
+    reader.database_big = bytes(blob)
+    assert reader.decompress_section(0) is None
+
+
 def test_an_unloaded_reader_decompresses_nothing(tmp_path):
     assert MVPPSPRomReader(str(write_iso(tmp_path))).decompress_section(0) is None
 
@@ -447,6 +461,18 @@ def test_the_compact_flag_fixup_only_applies_at_offset_zero(tmp_path):
 def test_a_truncated_refpack_stream_raises_from_the_format_layer(tmp_path):
     reader = loaded(tmp_path)
     reader.database_big = REFPACK_MAGIC + b"\x00\x00"
+    with pytest.raises(EaTdbError):
+        reader.decompress_section(0)
+
+
+def test_a_section_of_exactly_two_bytes_reaches_the_decompressor(tmp_path):
+    # The `len(raw) < 2` floor is about what `raw[:2]` can be compared against,
+    # not about what `refpack_decompress` can read. Two bytes clear the floor,
+    # match the magic, and arrive at a decompressor that needs five, so this is
+    # the smallest input that raises rather than answering None. Raising the
+    # floor to three would answer None here instead, and nothing said so.
+    reader = loaded(tmp_path)
+    reader.database_big = REFPACK_MAGIC
     with pytest.raises(EaTdbError):
         reader.decompress_section(0)
 
@@ -574,6 +600,30 @@ def test_a_line_with_no_comma_is_dropped():
     reader = MVPPSPRomReader("/nonexistent")
     reader.sections["t"] = b"a,b;\r\n00b87d5f5;\r\n"
     assert reader.parse_csv_section("t") == {}
+
+
+def test_an_id_with_a_trailing_space_is_still_a_record():
+    # `parts[0].strip()`, and the line has already been stripped, so the only
+    # whitespace this can remove is *inside* the line -- between the id and the
+    # first comma. Without the strip the id holds a space,
+    # `_looks_like_record_id` refuses it and the whole record is dropped
+    # silently, which is not a thing to do to a disc over one byte of padding.
+    reader = MVPPSPRomReader("/nonexistent")
+    reader.sections["t"] = b"a,b;\r\n00b87d5f5 ,0 x,;\r\n"
+    assert reader.parse_csv_section("t") == {"00b87d5f5": {0: "x"}}
+
+
+def test_an_all_decimal_id_does_not_become_a_column_of_its_own_record():
+    # The body starts at `parts[1:]`, and this is the record that shows it.
+    # An id is hex, so it is usually not a decimal integer and
+    # `_parse_record_body` would throw it away on the `int()` -- which is why
+    # feeding it the id survived mutation. An id of digits alone, with the
+    # padding space the test above allows, parses: column 123456789 holding the
+    # empty string, invented out of the record's own key and written straight
+    # back into the table on the next rebuild.
+    reader = MVPPSPRomReader("/nonexistent")
+    reader.sections["t"] = b"a,b;\r\n123456789 ,0 x,;\r\n"
+    assert reader.parse_csv_section("t") == {"123456789": {0: "x"}}
 
 
 def test_a_record_terminated_without_a_crlf_is_still_read():
