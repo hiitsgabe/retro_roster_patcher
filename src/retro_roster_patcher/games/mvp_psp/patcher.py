@@ -376,6 +376,13 @@ class MVPPSPPatcher(Patcher):
                 for slot in info.team_slots
             ],
             extra={
+                # PROVEN EQUIVALENT under mutation: `len(reader.records)` is the
+                # same number for any state reachable from here, because
+                # `parse_all` fills `records` for exactly the names
+                # `decompress_all` put in `sections` and nothing else on this
+                # path adds to either. `sections` is the one asked for because
+                # it is the count of streams that decompressed, which is what a
+                # user comparing two discs wants.
                 "sections_read": len(reader.sections),
                 "attrib_records": len(reader.records.get("attrib", {})),
             },
