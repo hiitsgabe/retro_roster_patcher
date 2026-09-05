@@ -43,7 +43,7 @@ from .games import nhl94_genesis as _nhl94_genesis  # noqa: E402,F401
 from .games import nhl94_snes as _nhl94_snes  # noqa: E402,F401
 from .games import we2002 as _we2002  # noqa: E402,F401
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 
 __all__ = [
     "ApiError",
