@@ -31,6 +31,7 @@ from retro_roster_patcher.games.nhl07_psp.stat_mapper import (
     NHL07StatMapper,
     _clamp,
     _defaults_for,
+    _save_percentage,
     _scale,
     _stat,
 )
@@ -531,16 +532,118 @@ def test_the_alternative_wins_key_is_read():
     assert MAPPER.map_player(player(position="G"), "BOS", {"Wins": 20}).goalie_attrs.speed == 30
 
 
+def test_a_save_percentage_below_one_is_read_as_a_fraction():
+    assert _save_percentage({"SV%": 0.912}) == 0.912
+
+
+def test_a_save_percentage_above_one_is_read_as_a_percentage():
+    assert _save_percentage({"SV%": 91.2}) == 0.912
+
+
+def test_a_perfect_game_reads_as_one_under_either_convention():
+    # The boundary, both sides. 1.0 is a fraction -- reading it as 1% would be
+    # absurd -- and 100.0 is the same season written the other way.
+    assert [_save_percentage({"SV%": 1.0}), _save_percentage({"SV%": 100.0})] == [1.0, 1.0]
+
+
+def test_an_absent_save_percentage_is_still_zero():
+    assert _save_percentage({}) == 0.0
+
+
+def test_a_percentage_save_line_would_have_saturated_the_scale():
+    # The behaviour being diverged from, stated with the module's own `_scale`
+    # so the fix below is a difference and not a claim.
+    assert _scale(91.2, 0.880, 0.930) == 63
+
+
+def test_a_percentage_save_line_now_lands_where_the_fraction_does():
+    # 0.912 is 64% of the way up a 0.880-0.930 window, so 40 of 63.
+    attrs = MAPPER.map_player(player(position="G"), "BOS", {"SV%": 91.2}).goalie_attrs
+    assert [
+        attrs.rebound_ctrl,
+        attrs.agility,
+        attrs.five_hole,
+        attrs.glove_high,
+        attrs.glove_low,
+    ] == [40, 40, 40, 40, 40]
+
+
+def test_the_three_offset_save_ratings_move_with_it_too():
+    # The other three of the eight `SV%` drives, each at its own offset. Under
+    # the source all eight were 63 and indistinguishable.
+    attrs = MAPPER.map_player(player(position="G"), "BOS", {"SV%": 91.2}).goalie_attrs
+    assert [attrs.shot_recovery, attrs.stick_high, attrs.stick_low] == [37, 38, 38]
+
+
+def test_the_two_conventions_produce_the_same_goalie():
+    # Same season, two ways of writing it, one record. Not vacuous: the previous
+    # two tests fix the actual numbers, so this cannot be satisfied by a mapper
+    # that returns a constant.
+    percent = MAPPER.map_player(player(position="G"), "BOS", {"SV%": 91.2}).goalie_attrs
+    fraction = MAPPER.map_player(player(position="G"), "BOS", {"SV%": 0.912}).goalie_attrs
+    assert percent == fraction
+
+
+def test_goalies_reported_in_percentages_still_sort_best_first():
+    # `select_roster` reads `SV%` too. Dividing by 100 is monotonic, so no
+    # ordering moves -- but only because both readings go through one function.
+    goalies = [player(pid=1, position="G"), player(pid=2, position="G")]
+    stats = {"1": {"SV%": 88.0}, "2": {"SV%": 92.0}}
+    assert [p.id for p in MAPPER.select_roster(goalies, stats)] == [2, 1]
+
+
+def test_a_file_that_mixes_the_two_conventions_still_starts_the_better_goalie():
+    """Why the sort key goes through the conversion and not through `_stat`.
+
+    Within one convention the two are interchangeable, since dividing by 100 is
+    monotonic. Across two they are not: `91.2` scores 91 200 against `0.930`'s
+    930, so the source's key puts the .912 goalie ahead of the .930 one. A
+    hand-assembled `--rosters` file is exactly where that mixture appears.
+    """
+    goalies = [player(pid=1, position="G"), player(pid=2, position="G")]
+    stats = {"1": {"SV%": 91.2}, "2": {"SV%": 0.930}}
+    assert [p.id for p in MAPPER.select_roster(goalies, stats)] == [2, 1]
+
+
 def test_a_goalie_never_fights():
     assert MAPPER.map_player(player(position="G"), "BOS", {"SV%": 0.9}).goalie_attrs.fighting == 0
 
 
 def test_a_goalies_toughness_is_a_constant():
-    # Written from no stat at all, which is the source's behaviour: every
-    # patched goalie has the same toughness whatever his season looked like.
+    # INHERITED DEFECT, PRESERVED. Written from no stat at all, which is the
+    # source's behaviour: every patched goalie has the same toughness whatever
+    # his season looked like. Not fixed because there is nothing to fix it from
+    # -- no provider here reports a goalie toughness input and inventing a
+    # derivation would be new behaviour dressed as a bug fix. `_map_goalie_stats`
+    # carries the argument.
     a = MAPPER.map_player(player(position="G"), "BOS", {"SV%": 0.93, "W": 60}).goalie_attrs
     b = MAPPER.map_player(player(position="G"), "BOS", {"SV%": 0.87, "W": 0}).goalie_attrs
     assert a.toughness == b.toughness
+
+
+def test_a_goalies_toughness_is_the_one_the_defaults_give_him():
+    # And the constant is `GOALIE_DEFAULTS`', so a goalie the provider has no
+    # line for and a Vezina winner come out equal on it. Stated against the
+    # defaults rather than against `25`, so the two cannot drift apart silently.
+    attrs = MAPPER.map_player(player(position="G"), "BOS", {"SV%": 0.93, "W": 60}).goalie_attrs
+    assert attrs.toughness == GOALIE_DEFAULTS.toughness
+
+
+def test_three_goalie_ratings_are_written_from_no_stat_at_all():
+    """The defect's real width: toughness is one of three, not one of one.
+
+    Every key `_map_goalie_stats` reads, set to values that move each of the
+    other fourteen ratings off its default. These three do not move, and the
+    list is asserted whole so a fourth constant appearing here fails rather than
+    passing unnoticed.
+    """
+    attrs = MAPPER.map_player(
+        player(position="G"), "BOS", {"SV%": 0.93, "GAA": 1.0, "W": 60}
+    ).goalie_attrs
+    unmoved = [
+        name for name, value in vars(attrs).items() if value == getattr(GOALIE_DEFAULTS, name)
+    ]
+    assert unmoved == ["toughness", "fighting", "passing"]
 
 
 def test_the_two_goalies_do_differ_elsewhere():

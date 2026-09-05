@@ -42,6 +42,7 @@ from retro_roster_patcher.games.nhl05_ps2.stat_mapper import (
     NHL05StatMapper,
     _clamp,
     _defaults_for,
+    _save_percentage,
     _scale,
     _stat,
 )
@@ -465,10 +466,11 @@ def test_a_save_percentage_at_the_bottom_bottoms_out():
     assert goalie(**{"SV%": 0.880}).rebound_ctrl == 0
 
 
-def test_a_percentage_reported_as_a_whole_number_saturates_too():
-    # The inherited roughness, pinned: `91.2` and `0.999` are indistinguishable
-    # to this scale, and nothing here can tell which convention arrived.
-    assert goalie(**{"SV%": 91.2}).rebound_ctrl == 63
+def test_a_percentage_reported_as_a_whole_number_no_longer_saturates():
+    # THE DIVERGENCE. This used to assert 63: `91.2` and `0.999` were
+    # indistinguishable to the scale and every goalie came out maximal.
+    # `_save_percentage` converts, and `0.912` is 40 of 63.
+    assert goalie(**{"SV%": 91.2}).rebound_ctrl == 40
 
 
 def test_shot_recovery_is_three_below_the_save_rating():
@@ -495,8 +497,69 @@ def test_four_wins_is_one_point_of_bonus():
     assert goalie(W=4).endurance == 36
 
 
+def test_a_save_percentage_below_one_is_read_as_a_fraction():
+    assert _save_percentage({"SV%": 0.912}) == 0.912
+
+
+def test_a_save_percentage_above_one_is_read_as_a_percentage():
+    assert _save_percentage({"SV%": 91.2}) == 0.912
+
+
+def test_a_perfect_game_reads_as_one_under_either_convention():
+    assert [_save_percentage({"SV%": 1.0}), _save_percentage({"SV%": 100.0})] == [1.0, 1.0]
+
+
+def test_an_absent_save_percentage_is_still_zero():
+    assert _save_percentage({}) == 0.0
+
+
+def test_a_percentage_save_line_would_have_saturated_the_scale():
+    # The behaviour being diverged from, in the module's own `_scale`.
+    assert _scale(91.2, 0.880, 0.930) == 63
+
+
+def test_a_percentage_save_line_now_lands_where_the_fraction_does():
+    # 0.912 is 64% of the way up a 0.880-0.930 window, so 40 of 63.
+    attrs = goalie(**{"SV%": 91.2})
+    assert [
+        attrs.rebound_ctrl,
+        attrs.agility,
+        attrs.five_hole,
+        attrs.glove_high,
+        attrs.glove_low,
+    ] == [40, 40, 40, 40, 40]
+
+
+def test_the_two_conventions_produce_the_same_goalie():
+    assert goalie(**{"SV%": 91.2}) == goalie(**{"SV%": 0.912})
+
+
+def test_a_file_that_mixes_the_two_conventions_still_starts_the_better_goalie():
+    # Why `select_roster`'s goalie key goes through `_save_percentage`: within
+    # one convention the two keys agree, across two they do not. `91.2` scores
+    # 91 200 against `0.930`'s 930 through `_stat`.
+    goalies = [player(id=1, position="G"), player(id=2, position="G")]
+    stats = {"1": {"SV%": 91.2}, "2": {"SV%": 0.930}}
+    assert [p.id for p in MAPPER.select_roster(goalies, stats)] == [2, 1]
+
+
 def test_a_goalies_toughness_is_a_constant():
+    # INHERITED DEFECT, PRESERVED. Written from no stat at all;
+    # `games/nhl07_psp/stat_mapper.py` carries the reason it is not fixed.
     assert goalie(**{"SV%": 0.930}).toughness == 25
+
+
+def test_a_goalies_toughness_is_the_one_the_defaults_give_him():
+    assert goalie(**{"SV%": 0.930}).toughness == GOALIE_DEFAULTS.toughness
+
+
+def test_three_goalie_ratings_are_written_from_no_stat_at_all():
+    # The defect's real width. Every key `_map_goalie_stats` reads, set so that
+    # each of the other fourteen ratings moves off its default; these three do
+    # not, and the list is asserted whole so a fourth would fail here.
+    attrs = goalie(**{"SV%": 0.93, "GAA": 1.0, "W": 60})
+    unmoved = [n for n, v in vars(attrs).items() if v == getattr(GOALIE_DEFAULTS, n)]
+    assert unmoved == ["toughness", "fighting", "passing"]
 
 
 def test_a_goalie_never_fights():

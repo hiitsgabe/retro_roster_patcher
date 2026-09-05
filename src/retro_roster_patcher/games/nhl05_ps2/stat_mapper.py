@@ -16,15 +16,17 @@ that a format is shared when it is a format (`formats/ea_tdb.py`,
 person's guess in 2024 at what a 40-goal season is worth on a 0-63 scale -- and
 `games/mvp_psp` will have a third, different one for baseball.
 
-Everything here is a **faithful port**. The formulas, the scaling windows and
-the position defaults are transcribed unchanged, including the places where they
-are visibly rough -- `_map_goalie_stats` reads `SV%` as a bare float, so a
-provider that reports `91.2` rather than `0.912` saturates every save rating at
-63, and nothing here can tell which convention a provider used. They are kept
-because changing them changes every rating on every patched disc and there is no
-reference to check a change against; the audit that accompanies this migration
-asserts value-identical output against the source over 4 000 mapped players,
-600 roster selections and 800 line-flag assignments.
+The formulas, the scaling windows and the position defaults are transcribed
+unchanged, including the places where they are visibly rough, because changing
+them changes every rating on every patched disc and there is no reference to
+check a change against; the audit that accompanies this migration asserts
+value-identical output against the source over 4 000 mapped players, 600 roster
+selections and 800 line-flag assignments.
+
+Two exceptions, both labelled where they live: `_save_percentage`, and the
+defence-pair spelling in `generate_team_line_flags`. The audit still holds for
+the first -- every input it ran on reports `SV%` as a fraction, which
+`_save_percentage` leaves alone.
 """
 
 from __future__ import annotations
@@ -243,6 +245,46 @@ def _stat(stats: dict, *names: str, default: float = 0.0) -> float:
     return default
 
 
+#: The largest `SV%` that can be a fraction. A goalie cannot stop more shots
+#: than he faces, so anything above this is a percentage and not a rate.
+SAVE_PCT_FRACTION_MAX = 1.0
+
+#: What a percentage has to be divided by to become the fraction the scaling
+#: windows are written in.
+SAVE_PCT_PER_CENT = 100.0
+
+
+def _save_percentage(stats: dict) -> float:
+    """`SV%` as a fraction, whichever convention the provider reported it in.
+
+    DELIBERATE DIVERGENCE, and the identical one `games/nhl07_psp` carries --
+    this module is that one with the type names substituted, so a guard in one
+    and not the other would be a game-shaped trap. The source read `SV%` as a
+    bare float against a window of 0.880 to 0.930, so a line reporting `91.2`
+    instead of `0.912` saturated `_scale` and gave the goalie 63 for all eight
+    of the ratings save percentage drives. Every goalie came out identical and
+    maximal and nothing reported it.
+
+    Reachable: `cli` `patch --rosters` reads a whole `LeagueData` out of a JSON
+    file the operator supplies, `extra["leaders"]` included, and human-facing
+    sources of hockey statistics overwhelmingly print `91.2`.
+
+    A unit conversion and not a guess -- a save percentage expressed as a
+    fraction cannot exceed 1.0, because a goalie cannot save more shots than he
+    faces. `1.0` itself stays a fraction, a perfect game.
+
+    BYTE-IDENTITY: unchanged for any provider reporting fractions, which is
+    every input in this repository. `games/nhl07_psp/stat_mapper.py` carries the
+    long form of the argument, including why `select_roster`'s goalie sort key
+    goes through this too: within one convention it moves nothing, across two it
+    decides which goalie starts.
+    """
+    svp = _stat(stats, "SV%")
+    if svp > SAVE_PCT_FRACTION_MAX:
+        return svp / SAVE_PCT_PER_CENT
+    return svp
+
+
 def _defaults_for(position: str) -> NHL05SkaterAttributes:
     """A fresh copy of one position's defaults.
 
@@ -387,13 +429,18 @@ class NHL05StatMapper:
         average is a higher rating. Wins add a flat bonus of up to 10, capped at
         40 wins.
 
-        The `SV%` window assumes the provider reports a fraction. One reporting
-        a percentage saturates every one of those eight at 63, and nothing here
-        detects which convention arrived. Carried over from the source
-        unchanged; changing it would need a real provider response to test
-        against.
+        The `SV%` window is a fraction. A provider reporting a percentage used
+        to saturate all eight at 63; `_save_percentage` now converts.
+
+        INHERITED DEFECT, PRESERVED DELIBERATELY: `toughness`, `fighting` and
+        `passing` are constants, written from no stat at all and equal to
+        `GOALIE_DEFAULTS`', so a goalie the provider has no line for and a
+        Vezina winner come out equal on all three. Not fixed, and
+        `games/nhl07_psp/stat_mapper.py` carries the reason: there is no goalie
+        toughness input to fix it from, and inventing a derivation would be new
+        behaviour dressed as a bug fix.
         """
-        svp = _stat(stats, "SV%")
+        svp = _save_percentage(stats)
         gaa = _stat(stats, "GAA", default=3.0)
         wins = _stat(stats, "W", "Wins")
 
@@ -450,8 +497,10 @@ class NHL05StatMapper:
             if p.position == "G":
                 # Scaled by 1000 only so goalies sort against each other on a
                 # number of the same magnitude as a points total; nothing reads
-                # the value itself.
-                return _stat(ps, "SV%") * 1000
+                # the value itself. Through `_save_percentage` rather than
+                # `_stat` so the module reads one field one way; no ordering can
+                # change, since dividing by 100 is monotonic.
+                return _save_percentage(ps) * 1000
             return _stat(ps, "PTS")
 
         def by_position(code: str) -> list[Player]:
