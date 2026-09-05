@@ -1,0 +1,60 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  # The tag is the only thing that triggers a release, and a tag can be pushed
+  # from a branch that never ran `ci`. Rebuild and retest here rather than
+  # trusting that it did.
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install build pytest
+
+      # The tag and the packaged version must agree. Publishing v0.2.0 from a
+      # tree still declaring 0.1.0 uploads a file no tag points at, and PyPI
+      # will not let that filename be replaced.
+      - name: Check the tag matches the declared version
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          declared=$(python -c "import tomllib,pathlib;print(tomllib.loads(pathlib.Path('pyproject.toml').read_text())['project']['version'])")
+          echo "tag=$tag declared=$declared"
+          test "$tag" = "$declared"
+
+      - run: python -m build
+      - run: pip install dist/*.whl
+
+      # Same reasoning as ci.yml's wheel job: `addopts` deselects the packaging
+      # marker, so without `-m packaging` this collects five tests, deselects
+      # all five and exits 5.
+      - run: cd /tmp && python -m pytest "$GITHUB_WORKSPACE/tests/test_packaging.py" -m packaging -v
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      # Mints the short-lived OIDC token a Trusted Publisher exchanges for an
+      # upload token. No API token is stored in this repository.
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1

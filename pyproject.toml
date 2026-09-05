@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "retro-roster-patcher"
-version = "0.1.0.dev0"
+version = "0.1.0"
 description = "Patch real-world sports rosters into retro game ROMs"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -14,10 +14,13 @@ authors = [{ name = "hiitsgabe" }]
 keywords = ["rom", "patcher", "retro", "sports", "roster"]
 classifiers = [
     "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Topic :: Games/Entertainment",
+    "Typing :: Typed",
 ]
 dependencies = []
 
@@ -30,6 +33,8 @@ retro-roster = "retro_roster_patcher.cli.__main__:main"
 
 [project.urls]
 Homepage = "https://github.com/hiitsgabe/retro_roster_patcher"
+Repository = "https://github.com/hiitsgabe/retro_roster_patcher"
+Issues = "https://github.com/hiitsgabe/retro_roster_patcher/issues"
 
 [tool.setuptools.packages.find]
 where = ["src"]
