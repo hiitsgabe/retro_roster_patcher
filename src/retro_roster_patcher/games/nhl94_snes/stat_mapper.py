@@ -173,6 +173,15 @@ class NHL94StatMapper:
         pim = float(stats.get("PIM", 0) or 0)
 
         if is_goalie:
+            # UNGUARDED, and knowingly so: `SV%` is read as a bare float against
+            # a fraction window, so a line reporting `91.2` instead of `0.912`
+            # saturates `agility` at 6, the top of this game's scale.
+            # `games/nhl07_psp/stat_mapper.py`'s `_save_percentage` closes
+            # exactly this on the EA TDB games, where
+            # save percentage drives eight ratings instead of one. Not carried
+            # here: this mapper has a different shape, a different scale and its
+            # own follow-up item, and a units guard applied to some NHL games
+            # and not others is worse than one applied to none.
             svp = float(stats.get("SV%", 0) or 0)
             gaa = float(stats.get("GAA", 3.0) or 3.0)
             return NHL94PlayerAttributes(
