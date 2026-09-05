@@ -275,6 +275,13 @@ def _attrib_columns(team: int, slot: int) -> list[tuple[int, str]]:
     Column 43 (birthday) and column 39 (salary) are here and are never written
     by the patcher, so they are the two that prove the merge preserves what it
     was not asked about.
+
+    Column 6, the second position, is here for a narrower reason.
+    `_build_attrib_fields` writes it only when the mapper produced one, which it
+    never does, and writing an empty string instead would erase the disc's own
+    value and leave the player unable to be moved in the field. Without a
+    disc-side value there is nothing for that guard to protect and dropping it
+    was invisible.
     """
     return [
         (mvp_models.ATTRIB_FIRST_NAME, f"Disc{team:02d}"),
@@ -283,6 +290,7 @@ def _attrib_columns(team: int, slot: int) -> list[tuple[int, str]]:
         (mvp_models.ATTRIB_BATS, str(slot % 3)),
         (mvp_models.ATTRIB_THROWS, str(slot % 2)),
         (mvp_models.ATTRIB_PRIMARY_POS, str(slot % 9)),
+        (mvp_models.ATTRIB_SECONDARY_POS, str((slot + 4) % 9)),
         (mvp_models.ATTRIB_HEIGHT, str(68 + (team + slot) % 11)),
         (mvp_models.ATTRIB_WEIGHT, str(150 + (team * 3 + slot * 7) % 91)),
         (mvp_models.ATTRIB_SPEED, str((team + slot) % 100)),
