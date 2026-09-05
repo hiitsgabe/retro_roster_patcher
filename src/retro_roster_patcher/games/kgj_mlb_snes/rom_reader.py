@@ -1,24 +1,15 @@
 """ROM reader for KGJ MLB patcher.
 
-Reads Ken Griffey Jr. Presents MLB (SNES) ROM data.
-Supports both headerless (.sfc) and headered (.smc) ROMs by
-searching for a marker sequence to locate team data.
-
-References:
   - https://github.com/johnz1/ken_griffey_jr_presents_major_league_baseball_tools
 
-**Nothing here is a fixed file offset into the team tables.** `validate` locates
-the team data by searching the whole image for a 14-byte marker and records the
-byte just past it; every other offset in this module is relative to that. That
-one decision is why this reader needs no headered/headerless offset arithmetic
-at all: a 512-byte copier header shifts the marker by 512 and the search finds
-it 512 bytes later, so the recorded offset is already a *file* offset either
-way. `has_header` is reported for information and is used by nothing except
-`rom_writer.update_snes_checksum`, which does need it because the SNES header it
-edits IS at a fixed address.
-
-Preserve that property. Deriving any of these offsets from a constant instead
-would reintroduce the header case this design deletes.
+Nothing here is a fixed file offset into the team tables: `validate` searches the
+whole image for a 14-byte marker and records the byte just past it, and every
+other offset is relative to that. This is why the reader needs no
+headered/headerless arithmetic -- a 512-byte copier header shifts the marker too,
+so the recorded offset is already a file offset either way. Preserve that; a
+constant offset would reintroduce the header case this design deletes.
+`update_snes_checksum` is the one place that still needs `has_header`, because
+the SNES header is at a fixed address.
 """
 
 import os
@@ -38,42 +29,25 @@ from .models import (
     KGJTeamSlot,
 )
 
-# Expected ROM size (2 MB = 16 Mbit, headerless).
-#
-# `validate` tests this for EQUALITY, not as a floor, so it is the strictest
-# size check of any game in this library and a single byte either side is
-# refused. That strictness is what makes it half the signature check -- and it
-# is also what makes the number load-bearing in a way a floor would not be:
-# nothing in this repository has ever been run against a real dump, so if the
-# cartridge turns out not to be 16 Mbit, every genuine image is refused. It is
-# carried over from upstream unchanged; the arithmetic that CAN be checked here
-# is `TEAM_DATA_SPAN` below, which is derived rather than transcribed.
+# 2 MB, 16 Mbit, headerless. `validate` tests this for equality rather than as a
+# floor, which is half this game's signature check.
 ROM_SIZE_EXPECTED = 2097152
-# SMC header size
 SMC_HEADER_SIZE = 512
 
-# Bytes of team data that follow `first_team_offset`: 14 AL teams, the gap, then
-# 14 NL teams. Derived from `get_team_offset`'s own arithmetic for the last
-# slot (27) plus the 800 bytes that slot occupies, so it is exactly the span
-# `read_player` and `KGJRomWriter.write_player` address.
-#
-# Nothing in `validate` bounds the marker's position, so this is the number that
-# matters: the marker can be found anywhere in the file, and if it lands within
-# 25 280 bytes of the end the reads and writes past it fall off the end and are
-# silently dropped. `patcher._team_data_fits` is the guard.
+# Bytes of team data following `first_team_offset`: 14 AL teams, the gap, 14 NL
+# teams. Nothing in `validate` bounds where the marker may match, so a marker
+# landing within this span of the end silently drops every read and write past it;
+# `patcher._team_data_fits` is the guard.
 TEAM_DATA_SPAN = AL_TEAMS * TEAM_LENGTH + AL_TO_NL_GAP + (TEAM_COUNT - AL_TEAMS) * TEAM_LENGTH
 
 
 class KGJRomReader:
-    """Reads and parses KGJ MLB SNES ROM data."""
-
     def __init__(self, rom_path: str):
         self.rom_path = rom_path
         self.data: bytearray | None = None
         self.first_team_offset: int = 0
 
     def load(self) -> bool:
-        """Load ROM file into memory."""
         if not os.path.exists(self.rom_path):
             return False
         try:
@@ -84,23 +58,19 @@ class KGJRomReader:
             return False
 
     def validate(self) -> bool:
-        """Validate that this is a KGJ MLB ROM.
+        """Side effect the rest of this class depends on: a successful return sets
+        `self.first_team_offset`, which `get_team_offset` reads.
 
-        SIDE EFFECT, and the whole rest of this class depends on it: a successful
-        return sets `self.first_team_offset`, which `get_team_offset` reads. The
-        size test is far stricter than the other ported games' -- exactly 2 MB or
-        exactly 2 MB + 512, not a floor -- and the marker search is itself
-        structural evidence, so the two together are this game's signature check.
-        See `patcher._team_data_fits` for the one thing they do not cover: where
-        in the file the marker is allowed to match.
+        The exact size and the marker search together are this game's signature
+        check. Neither bounds where in the file the marker may match; see
+        `patcher._team_data_fits`.
         """
         if not self.data:
             return False
         size = len(self.data)
-        # Accept headerless (2MB) or headered (2MB + 512)
+        # headerless 2 MB, or headered 2 MB + 512
         if size != ROM_SIZE_EXPECTED and size != ROM_SIZE_EXPECTED + SMC_HEADER_SIZE:
             return False
-        # Find team data marker
         pos = self.data.find(FIRST_TEAM_MARKER)
         if pos < 0:
             return False
@@ -108,7 +78,6 @@ class KGJRomReader:
         return True
 
     def get_info(self) -> KGJRomInfo:
-        """Get ROM information and team slots."""
         if not self.data:
             return KGJRomInfo(path=self.rom_path, size=0)
         is_valid = self.validate()
@@ -124,20 +93,11 @@ class KGJRomReader:
         )
 
     def get_team_offset(self, team_index: int) -> int:
-        """Get absolute file offset for a team's player data.
+        """Absolute file offset of a team's player data.
 
-        DELIBERATE DIVERGENCE: the guard below is new. `first_team_offset` is
-        set only by `validate`, and upstream every caller that reached here
-        without it -- `read_team_roster` and `read_player` are both public and
-        neither calls `validate` -- computed offsets from 0 and read the SNES
-        reset vectors at the head of the file as if they were player records.
-        `get_info` and `KGJRomWriter.load` happen to call `validate` first, so
-        the defect was latent rather than live; it is guarded rather than left
-        to the call graph staying that way.
-
-        `== 0` is an exact test for "validate has not succeeded", not an
-        approximation: a successful `validate` stores `pos + 14` for some
-        `pos >= 0`, so the stored value is at least 14 and can never be 0.
+        Without the guard, a caller that skipped `validate` would compute offsets
+        from 0 and read the SNES reset vectors as player records. `== 0` is exact:
+        a successful `validate` stores `pos + 14`, so it can never be 0.
         """
         if self.first_team_offset == 0:
             raise RuntimeError("KGJRomReader.validate() must succeed before any offset is computed")
@@ -153,18 +113,13 @@ class KGJRomReader:
             )
 
     def get_player_offset(self, team_index: int, player_slot: int) -> int:
-        """Get absolute file offset for a specific player."""
         return self.get_team_offset(team_index) + player_slot * PLAYER_LENGTH
 
     def _decode_name(self, data_bytes: bytes | bytearray) -> str:
-        """Decode custom-encoded name bytes to string."""
         return "".join(BYTE_TO_CHAR.get(b, "?") for b in data_bytes).strip()
 
     def read_player(self, team_index: int, player_slot: int) -> dict:
-        """Read a single player record from ROM.
-
-        Returns dict with all parsed fields.
-        """
+        """Read one player record and return its parsed fields."""
         if not self.data:
             return {}
         off = self.get_player_offset(team_index, player_slot)
@@ -172,8 +127,7 @@ class KGJRomReader:
             return {}
 
         d = self.data
-        # Use roster type (0x19 high nibble) to detect batter vs pitcher:
-        # 3 = batter, 1 = starting pitcher, 0 = relief pitcher
+        # roster type, byte 0x19 high nibble: 3 batter, 1 starter, 0 reliever
         roster_type = (d[off + 0x19] >> 4) & 0xF
         is_pitcher = roster_type != 3
 
@@ -216,10 +170,7 @@ class KGJRomReader:
         return result
 
     def read_team_roster(self, team_index: int) -> tuple[list[str], list[dict]]:
-        """Read all players for a team.
-
-        Returns: (player_names, player_dicts)
-        """
+        """Read every player on a team as (names, records)."""
         if not self.data or team_index >= TEAM_COUNT:
             return [], []
 
@@ -236,7 +187,6 @@ class KGJRomReader:
         return names, players
 
     def _read_team_slots(self) -> list[KGJTeamSlot]:
-        """Read team slots for ROM info display."""
         slots = []
         for i in range(TEAM_COUNT):
             first_player = ""
