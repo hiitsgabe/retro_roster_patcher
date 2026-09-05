@@ -269,8 +269,8 @@ def _attrib_columns(team: int, slot: int) -> list[tuple[int, str]]:
 
     Every value encodes the team and the slot, so a record written to the wrong
     id is visible. Height and weight are *plausible and distinct per player*,
-    which is what makes the height and weight divergences testable: a patcher
-    that stamped one constant over them would be obvious.
+    which is what makes the height and weight behaviour testable: the patcher
+    stamps one constant over each of them, and that shows up here.
 
     Column 43 (birthday) and column 39 (salary) are here and are never written
     by the patcher, so they are the two that prove the merge preserves what it

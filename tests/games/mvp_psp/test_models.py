@@ -740,9 +740,11 @@ def test_a_pitch_carries_its_four_values():
     assert (pitch.type, pitch.movement, pitch.control, pitch.velocity) == (1, 2, 3, 4)
 
 
-def test_a_player_record_has_no_height():
-    # The field is gone with the write. `_build_attrib_fields` says why.
-    assert hasattr(MVPPlayerRecord(), "height") is False
+def test_a_player_record_defaults_to_six_feet():
+    # PINS UPSTREAM FIDELITY DELIBERATELY, and this is the bug: nothing in this
+    # package ever assigns `height`, so this default is what every patched
+    # player is written at. `patcher._build_attrib_fields` says why it stays.
+    assert MVPPlayerRecord().height == 72
 
 
 def test_a_player_record_defaults_to_no_weight():

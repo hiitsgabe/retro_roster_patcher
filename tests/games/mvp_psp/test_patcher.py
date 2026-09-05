@@ -1355,9 +1355,23 @@ def test_the_two_handedness_variants_agree_in_the_national_columns_too(tmp_path)
 # -- bug 3 reaching the disc: height and weight ----------------------------
 
 
-def test_no_patched_player_has_his_height_rewritten(tmp_path):
-    # DELIBERATE DIVERGENCE. The source wrote column 9 for every player from a
-    # field nothing ever set, so all 750 became exactly 6'0".
+def test_every_patched_player_is_written_at_six_feet(tmp_path):
+    """PINS UPSTREAM FIDELITY DELIBERATELY, on the disc.
+
+    Column 9 is written for every player from a `MVPPlayerRecord.height` that
+    nothing ever sets, so the whole squad comes out at 72 inches and the disc's
+    own heights are gone. Do not drop the column; see the label on
+    `_build_attrib_fields`.
+    """
+    _, out = patch_one(tmp_path, {1: full_squad(1000)})
+    table = patched_table(out, "attrib")
+    patched = [c for c in table.values() if c.get(ATTRIB_LAST_NAME) == "Family1000"]
+    assert {c[ATTRIB_HEIGHT] for c in patched} == {"72"}
+
+
+def test_the_height_the_disc_shipped_is_overwritten(tmp_path):
+    # The other half, and what makes the test above mean something: the disc's
+    # own value for one of those players is not 72.
     source = write_iso(tmp_path, DISC)
     patcher = make_patcher(tmp_path)
     rosters = patcher.map_rosters(league(squads={1: full_squad(1000)}))
@@ -1369,12 +1383,12 @@ def test_no_patched_player_has_his_height_rewritten(tmp_path):
     )
     after = patched_table(tmp_path / "out.iso", "attrib")
     changed = [pid for pid, cols in after.items() if cols.get(ATTRIB_LAST_NAME) == "Family1000"]
-    assert after[changed[0]][ATTRIB_HEIGHT] == before[changed[0]][ATTRIB_HEIGHT]
+    assert after[changed[0]][ATTRIB_HEIGHT] != before[changed[0]][ATTRIB_HEIGHT]
 
 
 def test_the_disc_holds_more_than_one_height(tmp_path):
-    # Which is what makes the test above mean something: if every disc player
-    # were the same height, preserving and overwriting would look alike.
+    # And the disc's heights were per-player, so what the patch destroys is
+    # real information and not one constant replaced by another.
     source = write_iso(tmp_path, DISC)
     table = fixture.parse_table(
         fixture.decompress_section_at(
