@@ -59,18 +59,40 @@ class NBALive95StatMapper:
     ) -> NBALive95PlayerRecord:
         """Map an NBA player to an NBA Live 95 player record.
 
-        INHERITED DEFECT, carried over deliberately: `season_stats` is never
-        supplied, so every record leaves here with `NBALive95PlayerRecord`'s
-        default of 17 zeros and `rom_writer.write_player` writes all 34 bytes of
-        them over the 1994 season line the cartridge shipped with. That is a
-        deliberate keep rather than an oversight. The alternative repairs are
-        both worse than they look: leaving the bytes alone would attribute the
-        previous occupant's 1994 counting stats to whoever now holds the slot,
-        and filling them honestly is not possible from this provider -- ESPN's
-        team-leaders endpoint publishes per-game averages, not the games,
-        minutes, makes and attempts these 17 fields hold. `skin_color` and
-        `hair_style` are the same shape of problem; see
-        `models.NBALive95PlayerRecord`.
+        PRESERVED, and the reasoning is recorded here because it looks from the
+        outside like the `skin_color` / `hair_style` defect and is not.
+
+        `season_stats` is never supplied, so every record leaves here with
+        `NBALive95PlayerRecord`'s default of 17 zeros and
+        `rom_writer.write_player` writes all 34 bytes of them over the 1994
+        season line the cartridge shipped with. Three things could be done with
+        those bytes and zero is the best of them:
+
+        * **Fill them from the provider.** Not possible. The 17 fields are
+          season *totals* -- games, minutes, makes, attempts, rebounds, fouls --
+          and ESPN's team-leaders endpoint publishes per-game averages. Without
+          a games-played figure, which it does not publish either, no total can
+          be recovered from an average; multiplying by a guessed games count
+          would put fabricated counting stats in a field the game displays as
+          fact.
+        * **Leave the ROM's bytes alone**, which is the call this port makes for
+          `skin_color` and `hair_style` one commit earlier. Wrong here, and for
+          the reason that makes the two fields different. There is no null skin
+          tone, so writing 0 asserts something false and leaving the byte
+          asserts nothing. There *is* a null season line, and it is 17 zeros:
+          a player who has not played this game's season has played 0 games and
+          scored 0 points. Leaving the bytes would attribute the previous
+          occupant's 1994 totals -- 1 000 points, 400 rebounds -- to whoever now
+          holds the slot, which is the one option of the three that puts a
+          statement known to be false on the screen.
+        * **Write the zeros**, which is what happens: the honest "no season yet"
+          for a roster the patch has just replaced.
+
+        So this is a limitation of the format meeting a limitation of the
+        provider, not an error in anyone's arithmetic, and repairing it needs a
+        provider that publishes season totals rather than a change here.
+        `rom_writer.write_player`'s stat clamp is the half of it that *was*
+        repairable, and was.
         """
         pos_str = self._normalize_position(player.position)
         pos_byte = POSITION_TO_BYTE.get(pos_str, POSITION_SF)
