@@ -543,32 +543,46 @@ def test_a_non_ascii_name_becomes_one_question_mark_per_character(rom_paths):
     assert struct.unpack_from(">H", data, start + 9 + 8)[0] == 8
 
 
-def test_an_empty_name_is_written_as_a_placeholder_and_not_as_a_sentinel(rom_paths):
+def test_an_empty_name_is_written_as_a_length_word_the_reader_reads_as_the_end(rom_paths):
+    # PINS UPSTREAM FIDELITY DELIBERATELY. This is upstream's behaviour and it is
+    # known to be wrong; it is preserved because the bytes it writes are the only
+    # bytes this game has ever been fed by a released build of the patcher, and
+    # nothing here has been validated against a real dump.
+    #
     # `read_team_roster` and `get_team_player_region` both stop at a length word
     # below 3, and an empty name encodes a length word of exactly 2. Written
-    # mid-roster it would bury the end-of-roster sentinel inside the roster: the
-    # writer still reports 20 written, but only the three records ahead of it
-    # would ever read back and the region would re-measure at 56 bytes instead of
-    # 355, so a later patch of the same team truncates against the short region.
-    # Both providers can hand over "" — `sports/nhl.py` joins two absent name keys
-    # and strips, `sports/espn.py` falls back to "" when neither display name is
-    # present — and `stat_mapper.map_player` passes it straight through.
+    # mid-roster it buries the end-of-roster sentinel inside the roster: the
+    # writer reports 20 written, only the three records ahead of it read back,
+    # and the region re-measures at 56 bytes instead of 355, so a later patch of
+    # the same team truncates against the short region. Both providers can hand
+    # over "" — `sports/nhl.py` joins two absent name keys and strips,
+    # `sports/espn.py` falls back to "" when neither display name is present —
+    # and `stat_mapper.map_player` passes it straight through.
+    #
+    # Do not "fix" this by writing a placeholder byte. That was tried, and it
+    # changes 621 bytes of a 26-team patch away from what upstream wrote.
     writer, output = _loaded_writer(rom_paths)
     roster = [NHL94GenPlayerRecord(name=f"NAME{i:04d}", jersey_number=i + 1) for i in range(20)]
     roster[3] = NHL94GenPlayerRecord(name="", jersey_number=4)
+    # The writer still counts all twenty, which is the half of the defect that
+    # reaches the caller: `PatchResult.players_patched` overstates the roster.
     assert writer.write_team_roster(0, roster) == 20
     assert writer.finalize() is True
 
+    data = output.read_bytes()
+    start = synthetic_rom.team_base(0) + synthetic_rom.SEC_PLAYERS
+    # Three 18-byte records ahead of it, then the length word the reader stops on.
+    assert struct.unpack_from(">H", data, start + 54)[0] == 2
+
     reader = _read_back(output)
     names, stats = reader.read_team_roster(0)
-    # Twenty, not three: every record the writer counted is still reachable.
-    assert len(names) == 20
-    assert names[3] == "?"
-    assert names[4] == "NAME0004"
-    # The record after the placeholder still starts where the reader expects it.
-    assert stats[4][0] == 0x05
-    # Nineteen 18-byte records, one 11-byte record, and the 2-byte sentinel.
-    assert reader.get_team_player_region(0)[1] == 355
+    # Three, not twenty: the sixteen records after the empty name are unreachable.
+    assert len(names) == 3
+    assert len(stats) == 3
+    assert names == ["NAME0000", "NAME0001", "NAME0002"]
+    # And the region re-measures short, so a second patch of this team would fit
+    # far fewer players than the first one did.
+    assert reader.get_team_player_region(0)[1] == 56
 
 
 def test_a_one_character_name_survives_the_round_trip(rom_paths):
