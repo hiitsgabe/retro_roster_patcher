@@ -204,12 +204,19 @@ def test_the_patcher_declares_espn_as_its_only_provider():
     assert KGJMLBPatcher.providers == ("espn",)
 
 
-def test_this_is_the_librarys_first_baseball_game():
-    """The registration is what makes ESPN's three MLB methods reachable."""
+def test_registering_this_game_makes_espns_mlb_methods_reachable():
+    """The registration is what makes ESPN's three MLB methods reachable.
+
+    Named for the claim rather than for the ordering: this was the library's
+    first baseball game and asserted it was the only one, which `mvp-psp` then
+    made false. Membership is what the claim actually needs -- that a baseball
+    game is registered, so `get_mlb_teams` and its two siblings are reachable
+    from the registry rather than only from a dotted path.
+    """
     from retro_roster_patcher import list_patchers
 
-    baseball = [info.game_id for info in list_patchers() if info.sport == "baseball"]
-    assert baseball == ["kgj-mlb-snes"]
+    baseball = {info.game_id for info in list_patchers() if info.sport == "baseball"}
+    assert "kgj-mlb-snes" in baseball
 
 
 def test_importing_the_package_root_is_what_registers_the_game(tmp_path):

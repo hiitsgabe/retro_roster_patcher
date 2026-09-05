@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from retro_roster_patcher import list_patchers
 from retro_roster_patcher.cli import commands
 from retro_roster_patcher.cli.__main__ import build_parser, main
 from retro_roster_patcher.cli.commands import UsageError, build_patcher, default_cache_dir
@@ -150,16 +151,16 @@ def test_analyze_builds_every_registered_patcher_to_sweep_one_rom(
     monkeypatch.setattr(commands, "build_patcher", spy)
     code, evts = run(["analyze", "--rom", str(rom), "--json", *cache], capsys)
     assert code == 0
-    assert visited == [
-        "iss-snes",
-        "kgj-mlb-snes",
-        "nbalive95-genesis",
-        "nhl05-ps2",
-        "nhl07-psp",
-        "nhl94-genesis",
-        "nhl94-snes",
-        "we2002",
-    ]
+    # Compared against the registry rather than a literal list, which rotted on
+    # every migration. Not circular: the claim is that `cmd_analyze` builds every
+    # patcher the registry holds, and the registry is the independent statement
+    # of which those are -- a sweep that skipped one still fails.
+    registered = sorted(info.game_id for info in list_patchers())
+    # Not zero-over-zero: an empty registry would make both sides empty and the
+    # comparison vacuous, so two games that have shipped since v0.1 are named.
+    assert "nhl94-genesis" in registered
+    assert "we2002" in registered
+    assert visited == registered
     assert [e["event"] for e in evts] == ["result"]
 
 
