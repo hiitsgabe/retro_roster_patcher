@@ -546,15 +546,76 @@ def test_selection_works_with_no_stats_at_all(mapper):
     assert len(mapper.select_roster(players, None)) == 5
 
 
-def test_the_eligibility_filter_filters_nobody(mapper):
-    """The comment says it drops non-basketball positions; it cannot.
+def test_a_squad_of_twelve_goalkeepers_is_selected_whole(mapper):
+    """DELIBERATE DIVERGENCE, in the code's account of itself.
 
-    `_normalize_position` answers `"SF"` for anything it does not recognise, so
-    the membership test the filter runs is true for every player. Pinned as a
-    comment-accuracy defect: a squad of goalkeepers is selected in full.
+    Upstream's opening comprehension was commented "filter out
+    pitchers/non-basketball positions" and could not: `_normalize_position`
+    answers `"SF"` for anything it does not recognise, so its membership test
+    was true for everyone. The comment is gone and the behaviour is not, which
+    is what this pins.
     """
     players, stats = _squad(["Goalkeeper"] * 12)
     assert len(mapper.select_roster(players, stats)) == 12
+
+
+def test_thirteen_goalkeepers_are_cut_by_minutes_and_not_by_arrival(mapper):
+    """A count cannot tell a real filter from no filter, so this asserts the
+    twelve.
+
+    Twelve is what a squad of goalkeepers returns either way: a filter that
+    dropped them all would leave `eligible` empty, and the final pad loop --
+    which reads `players` and not `eligible` -- would put twelve of them back.
+    What the filter *would* change is which twelve and in what order. Here the
+    busiest twelve of thirteen come back busiest-first; under a real filter it
+    would be `players[:12]` in the order they arrived, which is the other twelve
+    and the other order.
+    """
+    players, stats = _squad(["Goalkeeper"] * 13, minutes={i: (i + 1) * 10.0 for i in range(13)})
+    assert [p.id for p in mapper.select_roster(players, stats)] == [
+        12,
+        11,
+        10,
+        9,
+        8,
+        7,
+        6,
+        5,
+        4,
+        3,
+        2,
+        1,
+    ]
+
+
+def test_every_unrecognised_position_still_normalises_into_the_membership_set(mapper):
+    """Why a real filter could not have been written from this predicate.
+
+    Whatever `_normalize_position` is handed, its answer is one of the five the
+    old test asked about -- so the test was true by construction.
+    """
+    answers = {
+        mapper._normalize_position(text)
+        for text in ("Goalkeeper", "Pitcher", "", "  ", "LW", "QB", "SF", "g-f", "?7", "Forward")
+    }
+    assert answers <= {"PG", "SG", "SF", "PF", "C"}
+    assert "SF" in answers
+
+
+def test_selection_does_not_reorder_the_list_it_was_handed(mapper):
+    """`eligible.sort` is in place, and upstream's dead fallback aliased it to
+    the caller's own list."""
+    players, stats = _squad(["C", "PG", "SG"], minutes={0: 1.0, 1: 40.0, 2: 20.0})
+    before = [p.position for p in players]
+    mapper.select_roster(players, stats)
+    assert [p.position for p in players] == before
+    assert before == ["C", "PG", "SG"]
+
+
+def test_selection_still_orders_by_minutes_within_a_position_after_the_copy(mapper):
+    """The copy must not cost the sort: the busiest centre still comes first."""
+    players, stats = _squad(["C", "C", "C"], minutes={0: 3.0, 1: 30.0, 2: 12.0})
+    assert [p.id for p in mapper.select_roster(players, stats)] == [1, 2, 0]
 
 
 # -- slot lookup ------------------------------------------------------------

@@ -237,6 +237,35 @@ class NBALive95StatMapper:
 
         Pick top 12 by minutes played, sorted by position:
         2 PG, 2 SG, 2 SF, 2 PF, 2 C + 2 best remaining.
+
+        DELIBERATE DIVERGENCE, in code that says what it does rather than in
+        what it does. Upstream opened with
+
+            # Filter out pitchers/non-basketball positions
+            eligible = [p for p in players
+                        if self._normalize_position(p.position)
+                        in ("PG", "SG", "SF", "PF", "C")]
+            if not eligible:
+                eligible = players
+
+        and the comment was false. `_normalize_position` answers `"SF"` for
+        every string it does not recognise, so the membership test is true for
+        every player alive and the comprehension is a copy: a squad of twelve
+        goalkeepers was selected whole, in full, exactly as a squad of twelve
+        guards would be. The `if not eligible` fallback was unreachable with it,
+        since an empty comprehension needs an empty `players`, in which case the
+        two are the same empty list anyway.
+
+        The filter is replaced by the copy it was, rather than made real. Making
+        it real would drop any player whose position string this game does not
+        know -- and mapping an unknown position to small forward is a decision
+        `map_player` makes on purpose, one line away, for the same input. A
+        selection that silently discarded players the mapper is willing to map
+        would be a new behaviour introduced under a comment fix, on the argument
+        that someone might point a basketball patcher at a hockey roster.
+
+        `list(players)` and not `players` itself: the sort below is in place, and
+        upstream's fallback branch handed it the caller's own list.
         """
         stats = stats or {}
 
@@ -247,14 +276,7 @@ class NBALive95StatMapper:
             # Use minutes as primary, points as tiebreaker
             return min_val * 100 + pts
 
-        # Filter out pitchers/non-basketball positions
-        eligible = [
-            p
-            for p in players
-            if self._normalize_position(p.position) in ("PG", "SG", "SF", "PF", "C")
-        ]
-        if not eligible:
-            eligible = players
+        eligible = list(players)
 
         eligible.sort(key=minutes_sort, reverse=True)
 
