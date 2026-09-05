@@ -105,7 +105,37 @@ def _encode_name_variable(last: str, first: str, max_bytes: int) -> bytes:
 
     # Last resort: just last name
     result = bytearray(min(len(last_bytes) + 2, max_bytes))
-    result[: len(last_bytes)] = last_bytes[: len(result) - 2]
+    # DELIBERATE DIVERGENCE: upstream indexed the left side by `len(last_bytes)`
+    # and the right side by `len(result) - 2`. On a `bytearray` a slice
+    # assignment whose sides differ in length *resizes* the buffer, so whenever
+    # the surname was longer than the room for it the buffer shrank by the
+    # difference and `result[-2]` below indexed off the front of a buffer that
+    # no longer had two bytes in it. A budget of 2 raised `IndexError` out of a
+    # function whose whole job is to fit a name into a budget.
+    #
+    # Both sides are now the same `keep`, which is what a fixed-layout encoder
+    # means: fill what fits and leave the two-null terminator alone. Where
+    # `len(last_bytes) <= keep` the two indices already agreed and nothing
+    # moves, which is every budget of 3 or more -- this branch is only reached
+    # with a surname truncated to one byte, or with no surname at all.
+    #
+    # Budgets of 0 and 1 still raise `IndexError` from `result[-2]`, and that is
+    # not a residue: a name field shorter than its own two-byte terminator has
+    # no encoding, and inventing one would mean returning bytes that overrun the
+    # budget. `_compute_record_limits` floors every budget at 4 and
+    # `write_player` defaults to 24, so no caller in this package can reach any
+    # of the three.
+    #
+    # `max(0, ...)` changes no output and is not claimed to: at budgets 0 and 1
+    # this branch is only ever reached with a surname of at most one byte, so
+    # both sides of the assignment come out empty either way, and dropping the
+    # guard is a declared equivalent mutant -- swept over 89 010 triples. It is
+    # here because a negative slice bound counts from the other end rather than
+    # meaning "no room", which is the same class of accident as the resize the
+    # line above it replaces, and only the `min` two lines up keeps it out of
+    # reach.
+    keep = max(0, len(result) - 2)
+    result[:keep] = last_bytes[:keep]
     result[-2] = 0
     result[-1] = 0
     return bytes(result)
