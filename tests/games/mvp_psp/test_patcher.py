@@ -1398,14 +1398,27 @@ def test_the_disc_holds_more_than_one_height(tmp_path):
     assert len({cols[ATTRIB_HEIGHT] for cols in table.values()}) > 1
 
 
-def test_a_provider_weight_reaches_the_disc(tmp_path):
+def test_a_provider_weight_does_not_reach_the_disc(tmp_path):
+    # PINS UPSTREAM FIDELITY DELIBERATELY. The provider reports 217 lb and the
+    # disc gets `MVPPlayerRecord.weight`'s default, because nothing between the
+    # two reads the field. See the label on `_build_attrib_fields`.
     _, out = patch_one(tmp_path, {1: full_squad(1000, weight=217.0)})
     table = patched_table(out, "attrib")
     written = [cols for cols in table.values() if cols.get(ATTRIB_LAST_NAME) == "Family1000"]
-    assert written[0][ATTRIB_WEIGHT] == "217"
+    assert written[0][ATTRIB_WEIGHT] == "190"
 
 
-def test_a_player_with_no_provider_weight_keeps_the_discs(tmp_path):
+def test_every_patched_player_is_written_at_that_one_weight(tmp_path):
+    # The flattening, over the whole squad rather than one row.
+    _, out = patch_one(tmp_path, {1: full_squad(1000, weight=217.0)})
+    table = patched_table(out, "attrib")
+    patched = [c for c in table.values() if c.get(ATTRIB_LAST_NAME) == "Family1000"]
+    assert {c[ATTRIB_WEIGHT] for c in patched} == {"190"}
+
+
+def test_the_weight_the_disc_shipped_is_overwritten(tmp_path):
+    # What makes the two tests above matter: the disc's own value for one of
+    # those players is not 190.
     source = write_iso(tmp_path, DISC)
     patcher = make_patcher(tmp_path)
     rosters = patcher.map_rosters(league(squads={1: full_squad(1000)}))
@@ -1417,10 +1430,12 @@ def test_a_player_with_no_provider_weight_keeps_the_discs(tmp_path):
     )
     after = patched_table(tmp_path / "out.iso", "attrib")
     changed = [pid for pid, cols in after.items() if cols.get(ATTRIB_LAST_NAME) == "Family1000"]
-    assert after[changed[0]][ATTRIB_WEIGHT] == before[changed[0]][ATTRIB_WEIGHT]
+    assert after[changed[0]][ATTRIB_WEIGHT] != before[changed[0]][ATTRIB_WEIGHT]
 
 
 def test_the_disc_holds_more_than_one_weight(tmp_path):
+    # And the disc's weights were per-player, so what the patch destroys is real
+    # information and not one constant replaced by another.
     source = write_iso(tmp_path, DISC)
     table = fixture.parse_table(
         fixture.decompress_section_at(

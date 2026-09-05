@@ -10,6 +10,11 @@ upstream's, it is preserved deliberately, and the tests in that section say so
 one by one -- they drive `_apply_pitcher_stats` where they need the derivation,
 because that is the only place it survives.
 
+**And half of the third one is here**: `Player.weight` is not read, so every
+patched player is written at `MVPPlayerRecord.weight`'s 190 lb default. Also
+upstream's, also preserved; the other half is `patcher._build_attrib_fields`,
+which writes the column unconditionally.
+
 Nothing here touches the ROM or the network. The whole module is arithmetic on
 two inputs, and `map_rosters` runs on a machine that has never seen the ISO.
 """
@@ -937,31 +942,34 @@ def test_a_generated_pitch_is_the_frozen_record_type():
 # -- weight, which is half of bug 3 ----------------------------------------
 
 
-def test_a_batter_carries_the_weight_the_provider_reported():
-    # DELIBERATE DIVERGENCE. The source never read `Player.weight`, so every
-    # patched player weighed the record's 190 lb default.
-    assert MAPPER.map_batter(player(weight=215.0)).weight == 215
+def test_a_batter_does_not_carry_the_weight_the_provider_reported():
+    # PINS UPSTREAM FIDELITY DELIBERATELY, and this is half of bug 3:
+    # `Player.weight` is not read, so the record keeps its 190 lb default and
+    # every patched player is written at it. Do not add `weight=...` to the
+    # constructor -- it changes `attrib` column 10 on every player, and no disc
+    # has ever checked this port's output.
+    assert MAPPER.map_batter(player(weight=215.0)).weight == 190
 
 
-def test_a_pitcher_carries_the_weight_the_provider_reported():
-    assert MAPPER.map_pitcher(player(position="SP", weight=201.0)).weight == 201
+def test_a_pitcher_does_not_carry_it_either():
+    assert MAPPER.map_pitcher(player(position="SP", weight=201.0)).weight == 190
 
 
-def test_two_players_of_different_weights_map_to_different_weights():
-    # The zero-over-zero check: a mapper that stamped one constant on everyone
-    # would pass a single-player assertion against that constant.
+def test_two_players_of_different_weights_map_to_the_same_weight():
+    # The flattening itself. Both provider figures are real and neither survives.
     heavy = MAPPER.map_batter(player(weight=250.0))
     light = MAPPER.map_batter(player(weight=160.0))
-    assert (heavy.weight, light.weight) == (250, 160)
+    assert (heavy.weight, light.weight) == (190, 190)
 
 
-def test_a_player_the_provider_has_no_weight_for_carries_zero():
-    # Zero is what makes the writer leave the disc's own weight alone.
-    assert MAPPER.map_batter(player()).weight == 0
+def test_the_provider_really_did_report_those_two_weights():
+    # Pins the two tests above: `Player.weight` is populated, so "190" is the
+    # mapper dropping a value and not an input that was never there.
+    assert [player(weight=250.0).weight, player(weight=160.0).weight] == [250.0, 160.0]
 
 
-def test_a_fractional_weight_is_truncated_to_pounds():
-    assert MAPPER.map_batter(player(weight=199.7)).weight == 199
+def test_a_player_the_provider_has_no_weight_for_gets_the_same_default():
+    assert MAPPER.map_batter(player()).weight == 190
 
 
 # -- roster selection ------------------------------------------------------

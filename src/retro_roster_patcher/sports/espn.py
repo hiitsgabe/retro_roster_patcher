@@ -564,11 +564,17 @@ class EspnClient:
                     )
 
                 # `weight` is reported in pounds, the same unit and the same
-                # key `_parse_hockey_squad` reads. It was not parsed here until
-                # `games/mvp_psp` needed it, so every baseball Player carried
-                # 0.0 and MVP Baseball wrote all 750 of its patched players at
-                # one constant weight. Zero still means "not reported", and a
-                # consumer must treat it that way rather than as a measurement.
+                # key `_parse_hockey_squad` reads. The source did not parse it
+                # here, and **the one consumer of a baseball squad still does
+                # not read it**: `games/mvp_psp` writes every patched player at
+                # `MVPPlayerRecord.weight`'s default of 190 lb, which is
+                # upstream's behaviour and preserved deliberately -- see the
+                # label on `mvp_psp.patcher._build_attrib_fields`. Filling the
+                # field changes no byte on any disc today; it is kept because
+                # this is the provider layer, the figure is right there, and a
+                # parser that silently drops a value the endpoint reports is a
+                # worse default than one that carries it. Zero still means "not
+                # reported" and a consumer must treat it that way.
                 weight = athlete.get("weight", 0) or 0
 
                 players.append(

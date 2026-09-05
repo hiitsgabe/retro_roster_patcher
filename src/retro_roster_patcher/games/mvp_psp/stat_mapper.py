@@ -184,15 +184,13 @@ class MVPStatMapper:
             bats=self.map_bat_hand(player.bats or player.handedness),
             throws=self.map_throw_hand(player.handedness),
             primary_position=pos,
-            # DELIBERATE DIVERGENCE: the source never read a weight from
-            # anywhere, so `MVPPlayerRecord.weight` kept its default of 190 and
-            # every one of the 750 patched players was written at 190 lb. ESPN's
-            # MLB roster endpoint reports a weight per athlete; it was simply
-            # never parsed into `sports.models.Player`, which has had the field
-            # all along. A player the provider has no weight for keeps 0 here,
-            # and `patcher._build_attrib_fields` then omits the column so the
-            # disc's own value survives.
-            weight=int(player.weight),
+            # UPSTREAM BEHAVIOUR, KNOWN WRONG, PRESERVED DELIBERATELY: no weight
+            # is read from anywhere, so `MVPPlayerRecord.weight` keeps its
+            # default of 190 and every one of the 750 patched players is written
+            # at 190 lb. `Player.weight` is right there, filled by
+            # `sports/espn.py` from the MLB roster endpoint's own figure, and it
+            # is not read. See `patcher._build_attrib_fields` for why that
+            # stands.
             is_pitcher=False,
         )
 
@@ -313,8 +311,7 @@ class MVPStatMapper:
             bats=self.map_bat_hand(player.bats or player.handedness),
             throws=self.map_throw_hand(player.handedness),
             primary_position=STARTER_POSITION if is_starter else "RP",
-            weight=int(player.weight),  # see `map_batter`
-            is_pitcher=True,
+            is_pitcher=True,  # no weight is read here either; see `map_batter`
         )
 
         if stats:

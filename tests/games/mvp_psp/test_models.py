@@ -747,10 +747,11 @@ def test_a_player_record_defaults_to_six_feet():
     assert MVPPlayerRecord().height == 72
 
 
-def test_a_player_record_defaults_to_no_weight():
-    # Zero means "the provider did not say", which is what makes the writer
-    # leave the disc's own weight alone.
-    assert MVPPlayerRecord().weight == 0
+def test_a_player_record_defaults_to_the_league_average_weight():
+    # PINS UPSTREAM FIDELITY DELIBERATELY, the other half of the same bug:
+    # nothing assigns `weight` either, so this default is what every patched
+    # player is written at. `patcher._build_attrib_fields` says why it stays.
+    assert MVPPlayerRecord().weight == 190
 
 
 def test_a_player_record_defaults_to_being_out_of_the_lineup():
