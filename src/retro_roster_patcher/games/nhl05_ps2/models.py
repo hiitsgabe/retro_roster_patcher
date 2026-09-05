@@ -290,8 +290,13 @@ class NHL05PlayerRecord:
     object: a dataclass field defaulting to a mutable instance is one object for
     every record ever built, and two of the migrated games shipped that bug.
 
-    There is no `height`. `HEIG` is a real five-bit field in SPBT and this
-    package deliberately does not write it -- see
+    UPSTREAM BEHAVIOUR, KNOWN WRONG, PRESERVED DELIBERATELY -- `height` is the
+    encoded five-bit `HEIG` and nothing ever sets it to anything but this
+    default, because `stat_mapper.map_player` derives it from a `Player.height`
+    that no provider model in this library has. Every patched player is
+    therefore written at 16, about 5'10". That is what the source wrote onto a
+    disc and it is what this port writes, because a byte sequence this code has
+    never had validated against real hardware is not worth improving on. See
     `rom_writer.NHL05PS2RomWriter.write_player_bio`.
     """
 
@@ -301,6 +306,7 @@ class NHL05PlayerRecord:
     jersey_number: int = 1
     handedness: int = 1  # 0 = left, 1 = right
     weight: int = 190  # raw pounds
+    height: int = 16  # encoded five-bit HEIG, ~5'10"
     team_index: int = 0
     player_id: int = 0
     is_goalie: bool = False

@@ -301,15 +301,38 @@ def test_a_bio_write_leaves_the_discs_weight_alone_when_the_provider_has_none(tm
     assert record["WEIG"] == fixture.disc_bio_values(1, 5)["WEIG"]
 
 
-def test_a_bio_write_never_touches_the_height(tmp_path):
-    # DELIBERATE DIVERGENCE. The source wrote `HEIG` from an attribute `Player`
-    # has never had, so every patched player came out at one encoded height.
-    # The disc's own value survives instead -- and 25 is not the source's 16, so
-    # a writer that restored the write fails here.
+def test_a_bio_write_stamps_the_records_constant_height_over_the_discs(tmp_path):
+    # PINS UPSTREAM FIDELITY DELIBERATELY. Upstream's behaviour, known wrong:
+    # `stat_mapper.map_player` derives the height from an attribute `Player` has
+    # never had, so `NHL05PlayerRecord.height` is always its default and every
+    # patched player is flattened to that one encoded height, losing the disc's
+    # own. Do not "fix" this by dropping the write; writing bytes the source did
+    # not write is the hardware risk this port refuses to take.
     writer, out = prepared(tmp_path, fixture.DiscSpec(height=25))
     tdb = writer.reader.get_tdb(TDB_MASTER)
     index = fixture.spbt_position(1, 5)
-    writer.write_player_bio(tdb, index, a_player())
+    player = a_player()
+    writer.write_player_bio(tdb, index, player)
+    writer.rebuild_and_write({TDB_MASTER: tdb})
+    assert spbt_records(out.read_bytes())[index]["HEIG"] == player.height
+
+
+def test_the_height_the_disc_shipped_is_not_the_one_the_record_carries(tmp_path):
+    # Pins the test above: with the disc shipping the record's own default the
+    # assertion could not fail.
+    assert fixture.DiscSpec(height=25).height != a_player().height
+
+
+def test_a_zero_height_leaves_the_discs_height_alone(tmp_path):
+    # The `if player.height > 0` guard the source wrote. Unreachable through
+    # `map_player`, which never produces a zero, but it is the source's guard
+    # and it is what stops a hand-built record blanking the field.
+    from dataclasses import replace
+
+    writer, out = prepared(tmp_path, fixture.DiscSpec(height=25))
+    tdb = writer.reader.get_tdb(TDB_MASTER)
+    index = fixture.spbt_position(1, 5)
+    writer.write_player_bio(tdb, index, replace(a_player(), height=0))
     writer.rebuild_and_write({TDB_MASTER: tdb})
     assert spbt_records(out.read_bytes())[index]["HEIG"] == 25
 

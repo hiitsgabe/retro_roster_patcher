@@ -32,6 +32,7 @@ from retro_roster_patcher.games.nhl05_ps2.models import (
 from retro_roster_patcher.games.nhl05_ps2.stat_mapper import (
     ATTR_MAX,
     ATTR_MIN,
+    DEFAULT_HEIGHT,
     DEFENCE_PAIRS,
     FORWARD_LINES,
     GOALIE_DEFAULTS,
@@ -260,10 +261,24 @@ def test_a_player_without_a_weight_gets_the_league_average():
     assert MAPPER.map_player(player(weight=0), "COL").weight == 190
 
 
-def test_the_record_carries_no_height_at_all():
-    # The dead `HEIG` field. `NHL05PlayerRecord` has no `height`, so the writer
-    # has nothing to write and the disc's own value survives.
-    assert hasattr(NHL05PlayerRecord(), "height") is False
+def test_every_mapped_player_gets_the_same_constant_height():
+    # PINS UPSTREAM FIDELITY DELIBERATELY, and this is the bug itself: the
+    # height comes from `getattr(player, "height", 0)` against a `Player` that
+    # has never had the attribute, so the derivation is dead and every patched
+    # player is written at `DEFAULT_HEIGHT`, over whatever the disc knew.
+    # Preserved because the source put these bytes on a disc and this port's
+    # output has never been checked against one.
+    heights = [
+        MAPPER.map_player(player(id=1, position="D"), "COL").height,
+        MAPPER.map_player(player(id=2, position="G"), "BOS").height,
+    ]
+    assert heights == [DEFAULT_HEIGHT, DEFAULT_HEIGHT]
+
+
+def test_a_provider_player_has_no_height_for_the_derivation_to_read():
+    # Why the test above holds: `getattr`'s default is the only value that
+    # expression can produce, so the `inches - 66` branch is unreachable.
+    assert hasattr(player(), "height") is False
 
 
 def test_a_goalie_is_flagged_as_one():

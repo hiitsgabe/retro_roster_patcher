@@ -200,6 +200,17 @@ GOALIE_DEFAULTS = NHL05GoalieAttributes(
 # is about the 2004 league average. Written to `WEIG` as raw pounds.
 DEFAULT_WEIGHT = 190
 
+# UPSTREAM BEHAVIOUR, KNOWN WRONG, PRESERVED DELIBERATELY -- the encoded `HEIG`
+# every player gets, because the branch below that would compute another one
+# cannot run. 16 is about 5'10". See `map_player`.
+DEFAULT_HEIGHT = 16
+
+# `HEIG` is five bits and encodes inches above `HEIGHT_BASE_INCHES`, so the
+# scale runs 5'6" to 8'1". Only reachable from a `Player` with a `height`, and
+# there is none.
+HEIGHT_BASE_INCHES = 66
+HEIGHT_MAX = 31
+
 # Default jersey number for a player without one. 1 is a goalie's number and is
 # handed to skaters too; the disc's own number is overwritten either way.
 DEFAULT_JERSEY = 1
@@ -335,6 +346,19 @@ class NHL05StatMapper:
 
         weight = int(player.weight) if player.weight > 0 else DEFAULT_WEIGHT
 
+        # UPSTREAM BEHAVIOUR, KNOWN WRONG, PRESERVED DELIBERATELY. `Player` has
+        # no `height` -- not in this library's models and not in the ones the
+        # source read -- so `getattr` always answers its default, the branch
+        # never runs, and every record leaves here at `DEFAULT_HEIGHT`. The
+        # writer then stamps that one constant over the disc's own per-player
+        # heights. Kept as dead code rather than deleted along with the write,
+        # because the write is what the source put on a disc and this port's
+        # output has never been checked against real hardware.
+        height = DEFAULT_HEIGHT
+        player_height = getattr(player, "height", 0) or 0
+        if player_height > 0:
+            height = max(0, min(HEIGHT_MAX, int(player_height) - HEIGHT_BASE_INCHES))
+
         record = NHL05PlayerRecord(
             first_name=first_name[:NAME_FIELD_CHARS],
             last_name=last_name[:NAME_FIELD_CHARS],
@@ -342,6 +366,7 @@ class NHL05StatMapper:
             jersey_number=jersey,
             handedness=hand,
             weight=weight,
+            height=height,
             team_index=MODERN_NHL_TO_NHL05.get(team_abbrev.upper(), 0),
             player_id=player.id if player.id else 0,
             is_goalie=is_goalie,
