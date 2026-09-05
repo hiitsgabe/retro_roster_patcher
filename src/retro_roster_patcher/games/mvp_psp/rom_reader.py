@@ -349,15 +349,25 @@ class MVPPSPRomReader:
     def get_info(self, *, deep: bool = False) -> MVPRomInfo:
         """Describe the loaded image.
 
-        `deep=True` runs `validate_deep`, which decompresses and parses
-        everything. `analyze_rom` passes it; nothing else does.
+        `deep` chooses which check decides `is_valid`: `validate_deep`, the
+        heuristic, or `validate`, the three-byte header test. It does **not**
+        decide whether the sections are read -- a valid disc is decompressed and
+        parsed either way, because that is where the team slots come from, and
+        that is the source's behaviour. `analyze_rom` passes `deep=True`;
+        nothing else does.
         """
         data = self.database_big
         if data is None:
             return MVPRomInfo(path=self.iso_path, size=0)
 
         is_valid = self.validate_deep() if deep else self.validate()
-        team_slots = self._read_team_slots() if is_valid else []
+        team_slots: list[MVPTeamSlot] = []
+        if is_valid:
+            if not self.sections:
+                self.decompress_all()
+            if not self.records:
+                self.parse_all()
+            team_slots = self._read_team_slots()
 
         try:
             iso_size = os.path.getsize(self.iso_path)

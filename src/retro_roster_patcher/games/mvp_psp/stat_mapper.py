@@ -468,9 +468,17 @@ class MVPStatMapper:
 
         # Whichever group came up short takes from whatever is left over, in
         # the order the leftovers already have -- surplus starters first, then
-        # surplus relievers. The rotation is topped up before the bullpen, so a
-        # staff ESPN lists entirely as `P` fills five rotation slots out of the
-        # relief pool before any of them reaches the bullpen.
+        # surplus relievers.
+        #
+        # **The bullpen is filled first and the rotation gets the remainder**,
+        # which is the opposite of what the shape of this code suggests: the
+        # two slices above happen before either top-up loop, so `relievers[:5]`
+        # is already spoken for by the time the rotation asks for anybody.
+        # ESPN lists most of a staff as a bare `P`, which this treats as relief,
+        # so a squad of six such pitchers puts its five best in the bullpen and
+        # the sixth in the rotation -- and a squad of five puts all five in the
+        # bullpen and leaves the rotation empty. Inherited, measured, and
+        # preserved; it is pinned by a test rather than left to be rediscovered.
         remaining = starters[STARTERS_PER_TEAM:] + relievers[RELIEVERS_PER_TEAM:]
         while len(selected_starters) < STARTERS_PER_TEAM and remaining:
             selected_starters.append(remaining.pop(0))
