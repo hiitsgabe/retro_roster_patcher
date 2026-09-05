@@ -4,10 +4,9 @@ Three layers, each read-write, stacked in that order on a disc:
 
     ISO -> db.viv (BIGF archive) -> *.tdb (RefPack-compressed) -> tables
 
-- **RefPack** (also called QFS) is EA's LZ77 variant. `refpack_decompress` and
-  `refpack_compress` are the whole layer. MVP Baseball uses only this one: its
-  `database.big` is 18 concatenated RefPack streams of CSV, with no BIGF and no
-  TDB above them.
+- **RefPack** (also called QFS) is EA's LZ77 variant. MVP Baseball uses only
+  this layer: its `database.big` is 18 concatenated RefPack streams of CSV,
+  with no BIGF and no TDB above them.
 - **BIGF** is EA's archive container: a header, a table of (offset, size, name)
   entries, then the file data.
 - **TDB** is a record database with bit-packed, LSB-first integer fields and
@@ -15,22 +14,6 @@ Three layers, each read-write, stacked in that order on a disc:
   rather than by byte offset. It carries a **CRC chain**: each table's CRC is
   stored in the *next* table's header, and the last table's lands in the file's
   final four bytes.
-
-One module rather than three, deliberately. The layers look separable and are
-not used separably: `bigf_extract` -> `refpack_decompress` -> `TDBFile.parse` is
-one pipeline and two of the three consumers import from all three layers in a
-single statement. Splitting it would mean inventing cross-module imports the
-source does not have, which on a port is precisely where a transcription error
-hides. Nothing here is public API, so the split stays available at no cost to
-anyone the day a fourth consumer wants only one layer.
-
-**Errors.** Every "this is not the format I was handed" rejection raises
-`EaTdbError`, a `RomError`. An out-of-range record index raises `IndexError` and
-deliberately stays a builtin — see `TDBTable.read_record`.
-
-**No real image can be used to check any of this.** Every fixture in
-`tests/formats/` is fabricated, so the field layouts below are as the source
-describes them and have never been run against a retail disc.
 
 References:
   - RefPack/QFS: https://simswiki.info/wiki.php?title=DBPF_Compression
@@ -47,38 +30,16 @@ from ..core.errors import RomError
 
 
 class EaTdbError(RomError):
-    """Raised when data handed to this module is not the format it claims.
-
-    A `RomError` rather than a bare `RetroRosterError` for the same reason
-    `games/we2002/ppf.py`'s `PPFError` is one: every condition that raises it is
-    a statement about the bytes the user's disc actually contains — a `db.viv`
-    that is not a BIGF, a `.tdb` without its magic, a RefPack stream without its
-    two header bytes — and `Patcher.analyze_rom` and `Patcher.patch` promise
-    `RomError` for exactly that.
-
-    Typed here rather than left as the `ValueError` the source raised because
-    the invariant is that nothing outside `RetroRosterError` reaches `main`.
-    Left as `ValueError` it would be three game packages' job to remember to
-    convert at every call site, and the source demonstrably did not: it wrapped
-    some calls in a bare `except Exception: pass` and others in nothing at all.
-    One correctly typed raise site is not three packages' worth of discipline.
-    """
-
-
-# ──────────────────────────────────────────────────────────────
-# RefPack (QFS) compression / decompression
-# ──────────────────────────────────────────────────────────────
+    """Raised when data handed to this module is not the format it claims."""
 
 
 def refpack_decompress(data: bytes) -> bytes:
     """Decompress a RefPack/QFS stream.
 
-    Header: `0x10 0xFB` then a 3-byte big-endian decompressed size.
-
-    The stream is a sequence of commands, each of which emits 0-3 literal bytes
-    taken from the input and then 0 or more bytes copied from what has already
-    been emitted. The command's first byte selects which of five encodings it
-    is, by range.
+    Header: `0x10 0xFB` then a 3-byte big-endian decompressed size. The body is
+    a sequence of commands, each emitting 0-3 literal bytes from the input then
+    0 or more bytes copied from what has already been emitted; the command's
+    first byte selects which of five encodings it is, by range.
 
     Raises:
         EaTdbError: The first two bytes are not `0x10 0xFB`, or there are fewer
@@ -148,9 +109,8 @@ def refpack_decompress(data: bytes) -> bytes:
             pos += num_literal
 
         if num_copy > 0:
-            # Byte at a time and deliberately not a slice copy: a match may
-            # overlap its own output — offset 1 with length 40 is a 40-byte run
-            # of one byte — and a slice would read the pre-copy buffer.
+            # Copy byte at a time, never by slice: a match may overlap its own
+            # output.
             src = len(out) - copy_offset
             for _ in range(num_copy):
                 if src >= 0 and src < len(out):
@@ -162,10 +122,8 @@ def refpack_decompress(data: bytes) -> bytes:
         if b0 >= 0xFC:
             break
 
-    # Truncate only. A stream that ran out of input early returns SHORT, without
-    # complaint, and the header size above is not enforced. That is the source's
-    # behaviour and `tests/formats/test_refpack.py` pins it; the source's comment
-    # here claimed "truncate or pad" and no padding has ever been written.
+    # Truncate only, never pad: a stream that ran out of input early returns
+    # short without complaint.
     if len(out) > decompressed_size:
         out = out[:decompressed_size]
 
@@ -175,18 +133,8 @@ def refpack_decompress(data: bytes) -> bytes:
 def _is_encodable(length: int, offset: int) -> bool:
     """Whether a match of this length and distance fits any copy command.
 
-    The three clauses are the three copy encodings, in the order `_emit_copy`
-    tries them. They overlap, and the overlap is what makes the pair of
-    functions agree: anything true here is emittable there.
-
-    The overlap also makes the second clause's upper bound of 67 inert *in this
-    function*: every length from 68 up that it would refuse, the third clause
-    accepts for a wider range of offsets. Measured by mutation, exhaustively
-    over 2.3 million (length, offset) pairs — raising it to 68 changes no
-    answer. It is the identical bound in `_emit_copy` that is load-bearing,
-    because there it selects between two encodings. Kept in step with it, since
-    a reader comparing the two would otherwise have to work out which one meant
-    it.
+    Keep the three clauses identical to `_emit_copy`'s: anything accepted here
+    must be emittable there.
     """
     if length <= 10 and offset <= 1024:
         return True
@@ -200,11 +148,7 @@ def _is_encodable(length: int, offset: int) -> bool:
 def _emit_copy(out: bytearray, nl: int, lit_bytes: bytes, length: int, offset: int) -> None:
     """Append a copy command carrying `nl` (0-3) attached literals.
 
-    The three branches mirror `refpack_decompress`'s first three, and the bit
-    shuffling in each is the inverse of the one there. The `else` is reached
-    only for a match the first two cannot express, which is why it does not
-    re-test its own bounds: `_is_encodable` has already refused everything the
-    4-byte form cannot hold either.
+    The three branches invert `refpack_decompress`'s first three encodings.
     """
     if length <= 10 and offset <= 1024:
         # 2-byte: length 3-10, offset 1-1024.
@@ -229,22 +173,12 @@ def _emit_copy(out: bytearray, nl: int, lit_bytes: bytes, length: int, offset: i
 
 
 def refpack_compress(data: bytes) -> bytes:
-    """Compress with RefPack/QFS: hash-chain LZ77 with lazy match evaluation.
-
-    Lazy matching emits the current byte as a literal when position + 1 has a
-    *strictly longer* match, which typically buys a few percent.
-
-    The output of this function is what the game loads. A stream that
-    round-trips through `refpack_decompress` is not by itself evidence that it
-    is right, because a different-but-valid encoding round-trips too — so
-    `tests/formats/test_refpack.py` also asserts the exact bytes against the
-    source compressor's output over a corpus.
-    """
+    """Compress with RefPack/QFS: hash-chain LZ77 with lazy match evaluation."""
     size = len(data)
     out = bytearray()
 
     # Header: 0x10 0xFB then the decompressed size, 3 bytes big-endian. Sizes of
-    # 16 MiB and over wrap silently; no EA TDB or CSV section comes close.
+    # 16 MiB and over wrap silently.
     out.extend(b"\x10\xfb")
     out.append((size >> 16) & 0xFF)
     out.append((size >> 8) & 0xFF)
@@ -257,12 +191,12 @@ def refpack_compress(data: bytes) -> bytes:
     hash_bits = 16
     hash_mask = (1 << hash_bits) - 1
     max_chain = 128
-    max_offset = 131072  # 0x20000
+    max_offset = 131072
     max_match = 1028
 
-    head = [-1] * (hash_mask + 1)  # hash -> most recent position with that hash
-    chain = [-1] * size  # position -> previous position with the same hash
-    inserted = bytearray(size)  # positions already linked into a chain
+    head = [-1] * (hash_mask + 1)
+    chain = [-1] * size
+    inserted = bytearray(size)
 
     def calc_hash(p: int) -> int:
         return ((data[p] << 8) ^ (data[p + 1] << 4) ^ data[p + 2]) & hash_mask
@@ -284,7 +218,7 @@ def refpack_compress(data: bytes) -> bytes:
             return 0, 0
         h = calc_hash(p)
         cand = head[h]
-        best_len = 2  # anything shorter than 3 is not worth a command
+        best_len = 2
         best_off = 0
         depth = 0
         d0, d1, d2 = data[p], data[p + 1], data[p + 2]
@@ -314,8 +248,8 @@ def refpack_compress(data: bytes) -> bytes:
         """Emit literal-only commands until at most 3 literals are left pending.
 
         Those last 0-3 ride along on the next copy command, or on the end
-        marker. Chunks are a multiple of four because the literal-only command
-        encodes `(count - 4) / 4` in five bits, so 4 to 128 in steps of four.
+        marker. Chunks are a multiple of four: the literal-only command encodes
+        `(count - 4) / 4` in five bits, so 4 to 128 in steps of four.
         """
         while end - lit_start > 3:
             chunk = min(end - lit_start, 112)
@@ -328,7 +262,7 @@ def refpack_compress(data: bytes) -> bytes:
         return lit_start
 
     pos = 0
-    lit_start = 0  # first input byte not yet emitted
+    lit_start = 0
 
     while pos < size:
         offset, length = find_match(pos)
@@ -342,8 +276,6 @@ def refpack_compress(data: bytes) -> bytes:
             insert(pos)
             next_offset, next_length = find_match(pos + 1)
             if next_length > length + 1 and _is_encodable(next_length, next_offset):
-                # Better match one byte along: leave this byte pending as a
-                # literal and let the next iteration take the longer match.
                 pos += 1
                 continue
 
@@ -353,21 +285,12 @@ def refpack_compress(data: bytes) -> bytes:
         lit_bytes = data[lit_start:pos]
         _emit_copy(out, nl, lit_bytes, length, offset)
 
-        # Link the matched span so later positions can reference into it. The
-        # `size - 2` bound is `insert`'s own guard restated: a position within
-        # two bytes of the end has no three-byte hash. Only the very last
-        # position it admits, `size - 3`, is ever at stake, and nothing can use
-        # it: the only positions that would look it up are `size - 2` and
-        # `size - 1`, and `find_match` answers (0, 0) for both without
-        # consulting a chain. Measured — lowering the bound to `size - 3`
-        # changes no output over 480 inputs and 468 KB.
+        # Link the matched span so later positions can reference into it.
         for i in range(pos, min(pos + length, size - 2)):
             insert(i)
         pos += length
         lit_start = pos
 
-    # Identical to the loop inside `flush_literals`; the source spelled it out a
-    # second time here.
     lit_start = flush_literals(lit_start, size)
 
     trail = size - lit_start
@@ -376,11 +299,6 @@ def refpack_compress(data: bytes) -> bytes:
         out.extend(data[lit_start:size])
 
     return bytes(out)
-
-
-# ──────────────────────────────────────────────────────────────
-# BIGF archive
-# ──────────────────────────────────────────────────────────────
 
 
 @dataclass
@@ -399,12 +317,9 @@ def bigf_parse(archive: bytes) -> list[BigfEntry]:
     a 4-byte big-endian header size; then one entry per file, each a 4-byte
     big-endian offset, a 4-byte big-endian size and a NUL-terminated name.
 
-    The total size and header size are read by nobody: the source's comment
-    records that the header size is "not always reliable", and `bigf_build`
-    writes the total size little-endian while writing the two counts big-endian,
-    so a reader that trusted either would have to know which game wrote it.
-    A truncated directory ends the scan early rather than raising, because a
-    short archive still names the files it did manage to list.
+    The total size and header size are deliberately not read: neither is
+    reliable across the discs this handles. A truncated directory ends the scan
+    early rather than raising.
 
     Raises:
         EaTdbError: Fewer than 16 bytes, or the magic is not `BIGF`.
@@ -426,7 +341,7 @@ def bigf_parse(archive: bytes) -> list[BigfEntry]:
         while pos < len(archive) and archive[pos] != 0:
             pos += 1
         name = archive[name_start:pos].decode("ascii", errors="replace")
-        pos += 1  # step over the NUL
+        pos += 1
         entries.append(BigfEntry(name=name, offset=file_offset, size=file_size))
 
     return entries
@@ -435,8 +350,8 @@ def bigf_parse(archive: bytes) -> list[BigfEntry]:
 def bigf_extract(archive: bytes, filename: str) -> bytes | None:
     """Return one file's bytes, matched case-insensitively, or None.
 
-    Case-insensitive because the same archive is spelled `db.viv` on one disc
-    and `DB.VIV` on another, and the callers hold the name as a constant.
+    Case-insensitive: the same archive is spelled `db.viv` on one disc and
+    `DB.VIV` on another.
 
     Raises:
         EaTdbError: `archive` is not a BIGF.
@@ -452,10 +367,9 @@ def bigf_extract(archive: bytes, filename: str) -> bytes | None:
 def bigf_replace(archive: bytes, filename: str, new_data: bytes) -> bytes:
     """Rebuild the archive with one file's contents replaced.
 
-    Every other file is carried across byte for byte, but offsets move: the
-    result is a fresh `bigf_build`, so a replacement of a different length
-    shifts everything after it. Use `bigf_replace_inplace` when the archive's
-    position inside a disc image must not change.
+    Offsets move: the result is a fresh `bigf_build`, so a replacement of a
+    different length shifts everything after it. Use `bigf_replace_inplace`
+    when the archive's position inside a disc image must not change.
 
     Raises:
         EaTdbError: `archive` is not a BIGF, or holds no file called `filename`.
@@ -469,11 +383,7 @@ def bigf_replace(archive: bytes, filename: str, new_data: bytes) -> bytes:
         else:
             file_contents[entry.name] = archive[entry.offset : entry.offset + entry.size]
 
-    # Case-SENSITIVE, unlike the loop above: the archive may hold `DB.VIV` while
-    # the caller asked for `db.viv`, in which case the replacement above has
-    # already happened and this still raises. Carried over from the source
-    # unchanged, and pinned by a test, because the two NHL patchers work around
-    # it by reading the archive's own spelling out of `bigf_parse` first.
+    # Case-SENSITIVE, unlike the loop above: pass the archive's own spelling.
     if filename not in file_contents:
         raise EaTdbError(f"File '{filename}' not found in BIGF archive")
 
@@ -490,10 +400,8 @@ def bigf_replace_inplace(archive: bytearray, filename: str, new_data: bytes) -> 
 
     Returns:
         True on success. False if there is no such file, or if `new_data` is
-        larger than the space the original occupied. **The two callers in the
-        source ignore this return**, which is how an over-large TDB became a
-        silently skipped write reported as a successful patch; the games are
-        where that gets fixed, since only they can raise about it.
+        larger than the space the original occupied. Check this return, or an
+        over-large write is silently skipped.
 
     Raises:
         EaTdbError: `archive` is not a BIGF.
@@ -526,11 +434,10 @@ def bigf_build(entries: list[BigfEntry], file_contents: dict[str, bytes]) -> byt
 
     `entries` supplies the names and their order; the offsets and sizes on them
     are ignored and recomputed. A name absent from `file_contents` becomes an
-    empty file rather than an error, which is how `bigf_replace` can pass a
-    directory it did not fill completely.
+    empty file rather than an error.
 
-    Files start on 128-byte boundaries, matching what EA's own archives do, and
-    the last file is not padded.
+    Files start on 128-byte boundaries, matching EA's own archives, and the last
+    file is not padded.
     """
     num_files = len(entries)
 
@@ -545,7 +452,7 @@ def bigf_build(entries: list[BigfEntry], file_contents: dict[str, bytes]) -> byt
     entry_positions = []
     for entry in entries:
         entry_positions.append(len(out))
-        out.extend(b"\x00\x00\x00\x00")  # offset, filled in below
+        out.extend(b"\x00\x00\x00\x00")  # offset, patched in below
         data = file_contents.get(entry.name, b"")
         out.extend(struct.pack(">I", len(data)))
         out.extend(entry.name.encode("ascii"))
@@ -563,9 +470,7 @@ def bigf_build(entries: list[BigfEntry], file_contents: dict[str, bytes]) -> byt
             pad = (128 - (len(out) % 128)) % 128
             out.extend(b"\x00" * pad)
 
-    # The total size goes in little-endian and the other two big-endian. That is
-    # not a typo here: it is what the source writes, and `bigf_parse` reads
-    # neither, so nothing in this library can tell which EA intended.
+    # Total size is little-endian, the other two big-endian. Not a typo.
     total_size = len(out)
     struct.pack_into("<I", out, 4, total_size)
     struct.pack_into(">I", out, 8, num_files)
@@ -573,10 +478,6 @@ def bigf_build(entries: list[BigfEntry], file_contents: dict[str, bytes]) -> byt
 
     return bytes(out)
 
-
-# ──────────────────────────────────────────────────────────────
-# TDB database
-# ──────────────────────────────────────────────────────────────
 
 TDB_TYPE_STRING = 0
 TDB_TYPE_BINARY = 1
@@ -590,8 +491,7 @@ TDB_MAGIC = b"DB\x00\x08"
 def _build_crc_table() -> list[int]:
     """The 16-entry nibble table for CRC-32/MPEG-2 (polynomial 0x04C11DB7).
 
-    Sixteen entries, not 256: `tdb_crc` consumes four bits at a time. Built at
-    import rather than typed out so the polynomial stays the only constant.
+    Sixteen entries, not 256: `tdb_crc` consumes four bits at a time.
     """
     poly = 0x04C11DB7
     table = [0] * 16
@@ -611,8 +511,7 @@ _CRC_TABLE = _build_crc_table()
 def tdb_crc(data: bytes) -> int:
     """EA's TDB checksum: CRC-32/MPEG-2's raw accumulator, with no final XOR.
 
-    Not `zlib.crc32`, which is the reflected CRC-32 with an inverted output and
-    gives a different answer for every input longer than nothing.
+    Never `zlib.crc32`; that is reflected and inverted, and disagrees.
     """
     crc = 0xFFFFFFFF
     for byte in data:
@@ -656,13 +555,8 @@ class TDBTable:
     `num_records`. Both are stored 16-bit little-endian at offsets 20 and 22 of
     the table's 40-byte header.
 
-    Nothing here validates `num_records <= capacity`, and a file claiming
-    otherwise parses. That is the source's behaviour and it is kept: clamping
-    would make `serialize` write back a different count than it read and break
-    the round-trip these tests are built on, and raising would refuse a whole
-    disc over one header field. The consequence is that a caller looping
-    `range(table.num_records)` can be handed an `IndexError` by the file's own
-    contents, so a game's reader is the place to bound the loop.
+    `num_records > capacity` is not rejected, so bound any
+    `range(table.num_records)` loop in the caller or it can raise `IndexError`.
     """
 
     name: str
@@ -671,27 +565,19 @@ class TDBTable:
     record_size: int = 0  # bytes per record
     capacity: int = 0  # maxRecords
     num_records: int = 0  # currentRecords
-    data_offset: int = 0  # where the records start in the whole-file buffer
+    data_offset: int = 0  # record start, relative to the whole-file buffer
     _raw_data: bytearray = field(default_factory=bytearray)
     _header_crc: int = 0
     _header_unk: int = 0
     _padding: int = 0
 
     def __post_init__(self) -> None:
-        # `bytearray`, so `write_record` can mutate in place. The source
-        # converted lazily on the first write; converting once here makes the
-        # annotation true for a table nobody has written to, which is what lets
-        # `serialize` slice it without repeating the check.
+        # Must be a `bytearray` from the start: `write_record` mutates in place.
         if not isinstance(self._raw_data, bytearray):
             self._raw_data = bytearray(self._raw_data)
 
     def allocate_record(self) -> int:
-        """Mark one more record live, returning its index, or -1 if full.
-
-        No caller in this repository reaches this; it is kept because a roster
-        longer than the disc shipped with is the obvious next thing a game
-        wants, and the arithmetic is not obvious.
-        """
+        """Mark one more record live, returning its index, or -1 if full."""
         if self.num_records >= self.capacity:
             return -1
         idx = self.num_records
@@ -707,11 +593,8 @@ class TDBTable:
         which is what `TDB_TYPE_BINARY` and `TDB_TYPE_FLOAT` therefore do.
 
         Raises:
-            IndexError: `index` is outside `0 .. capacity - 1`. Left a builtin
-                on purpose: an out-of-range index is the caller asking for a
-                record that was never allocated, which is a bug in the caller
-                and says nothing about the user's disc. `RomError` is reserved
-                for claims about the file's contents.
+            IndexError: `index` is outside `0 .. capacity - 1`. Keep it a
+                builtin: it is a caller bug, not a claim about the user's disc.
         """
         if index < 0 or index >= self.capacity:
             raise IndexError(f"Record {index} out of range (0-{self.capacity - 1})")
@@ -736,19 +619,17 @@ class TDBTable:
     def write_record(self, index: int, values: Mapping[str, object]) -> None:
         """Update the named fields of one record, leaving the others alone.
 
-        A key naming no field of this table is ignored, not reported: the two
-        NHL patchers hand the same value dictionary to tables with different
-        layouts and rely on it.
+        A key naming no field of this table is ignored, not reported: callers
+        hand the same value dictionary to tables with different layouts.
 
         Strings are encoded ASCII, truncated to the field width and NUL-padded
         to fill it. Integers are clamped into the field's width rather than
         wrapped or rejected, so an out-of-range rating saturates.
 
         Raises:
-            IndexError: `index` is outside `0 .. capacity - 1`. See
-                `read_record` for why this stays a builtin.
+            IndexError: `index` is outside `0 .. capacity - 1`.
             TypeError: A value for an integer field is not something `int()`
-                accepts. Also what `int()` itself would have raised.
+                accepts.
         """
         if index < 0 or index >= self.capacity:
             raise IndexError(f"Record {index} out of range (capacity={self.capacity})")
@@ -779,10 +660,9 @@ class TDBTable:
     def _read_bits(self, rec_data: bytes | bytearray, bit_offset: int, bit_width: int) -> int:
         """Read `bit_width` bits as an unsigned integer, LSB first.
 
-        LSB first in both directions: bit `i` of the value comes from bit `i % 8`
-        of byte `(bit_offset + i) // 8`, counting from the low bit of each byte.
-        Bits past the end of `rec_data` read as zero rather than raising, which
-        is how a field declared wider than the record still returns something.
+        Bit `i` of the value comes from bit `i % 8` of byte `(bit_offset + i)
+        // 8`, counting from the low bit of each byte. Bits past the end of
+        `rec_data` read as zero rather than raising.
         """
         value = 0
         for i in range(bit_width):
@@ -797,10 +677,9 @@ class TDBTable:
     def _write_bits(self, rec_start: int, bit_offset: int, bit_width: int, value: int) -> None:
         """Write an unsigned integer into `bit_width` bits, LSB first.
 
-        The value is clamped to `0 .. 2**bit_width - 1` before any bit is
-        touched, so a negative or oversized value saturates instead of
-        corrupting a neighbouring field. Bits past the end of the buffer are
-        dropped, mirroring `_read_bits`.
+        Clamp to `0 .. 2**bit_width - 1` before touching a bit, or an oversized
+        value corrupts the neighbouring field. Bits past the end of the buffer
+        are dropped, mirroring `_read_bits`.
         """
         max_val = (1 << bit_width) - 1
         value = max(0, min(max_val, value))
@@ -818,8 +697,8 @@ class TDBTable:
     def find_record(self, field_name: str, value: object) -> int:
         """Index of the first live record whose field equals `value`, or -1.
 
-        Only `num_records` records are searched, never the whole allocation: a
-        slot past the live count holds whatever the last roster left there.
+        Search only `num_records`, never the whole allocation: a slot past the
+        live count holds whatever the last roster left there.
         """
         for i in range(self.num_records):
             rec = self.read_record(i)
@@ -843,10 +722,9 @@ class TDBTable:
 class TDBFile:
     """A parsed TDB, held as the original bytes plus per-table record buffers.
 
-    `parse` keeps the whole file. `serialize` writes the record buffers back
-    over it in place and fixes up the counts and the CRC chain, so every byte
-    this module does not understand survives untouched — which matters, because
-    what it does not understand includes several header words nothing here reads.
+    `parse` keeps the whole file and `serialize` writes the record buffers back
+    over it in place, so every byte this module does not understand — several
+    header words included — survives untouched.
 
     File layout::
 
@@ -876,12 +754,8 @@ class TDBFile:
         short to hold a table header, is skipped rather than raising, and the
         remaining tables still parse.
 
-        Two tables sharing a name is not rejected either: `tables` keeps the
-        later one and `_table_order` lists the name twice, so `serialize` walks
-        that table twice and computes one link of the CRC chain wrongly. No EA
-        file is known to do it. Carried over from the source rather than fixed
-        here, because fixing it means choosing which of the two to drop and this
-        module has nothing to base that on.
+        Two tables sharing a name is not rejected either, and makes `serialize`
+        compute one link of the CRC chain wrongly. No EA file is known to do it.
 
         Raises:
             EaTdbError: Fewer than 20 bytes, or the magic is not `DB\\x00\\x08`.
@@ -936,10 +810,9 @@ class TDBFile:
             +32  4B  padding
             +36  4B  field-name hash
 
-        `maxRecords` appears twice, at +12 as four bytes and at +20 as two. The
-        16-bit one at +20 is what is read and what `serialize` writes back; the
-        32-bit one is preserved untouched inside `_raw`, so a table of more than
-        65535 records would round-trip inconsistently. None is anywhere near.
+        `maxRecords` appears twice, at +12 as four bytes and at +20 as two. Read
+        and write the 16-bit one at +20; the 32-bit one is preserved untouched,
+        so a table of more than 65535 records would round-trip inconsistently.
         """
         if offset + 20 > len(data):
             return None
@@ -955,9 +828,8 @@ class TDBFile:
             return None
         max_records = struct.unpack_from("<H", data, pos)[0]
         current_records = struct.unpack_from("<H", data, pos + 2)[0]
-        # +4 marker and +12 padding are stepped over, not read: nothing in this
-        # library or its three games consults either, and `serialize` preserves
-        # them by never writing over them.
+        # +4 marker and +12 padding are stepped over, not read; `serialize`
+        # preserves them by never writing over them.
         num_fields = struct.unpack_from("<I", data, pos + 8)[0]
         pos += 16
 
@@ -985,9 +857,7 @@ class TDBFile:
             )
             pos += 16
 
-        # The full allocation, not just the live records. A truncated file
-        # yields a short buffer here without complaint, and `serialize` then
-        # writes back fewer bytes than it replaces — see `serialize`.
+        # The full allocation, not just the live records.
         data_offset = pos
         raw_data = data[data_offset : data_offset + max_records * rec_size]
 
@@ -1008,8 +878,7 @@ class TDBFile:
     def get_table(self, name: str) -> TDBTable | None:
         """The table with this exact four-character name, or None.
 
-        Case-sensitive, unlike `bigf_extract`: table names come out of the file
-        itself and the games spell them as constants — `SPBT`, `SPAI`, `ROST`.
+        Case-sensitive, unlike `bigf_extract`.
         """
         return self.tables.get(name)
 
@@ -1026,17 +895,13 @@ class TDBFile:
             table[i + 1]'s stored CRC = crc(table[i]'s fields and records)
             the file's last 4 bytes = crc(the last table's fields and records)
 
-        So each table's CRC lives in the *next* table's header, and the first
-        table's header holds a CRC of something this method never recomputes.
-        With a single table the chain degenerates to just the trailing four
-        bytes, and nothing is written into any header.
+        So each table's CRC lives in the *next* table's header. With a single
+        table the chain degenerates to just the trailing four bytes, and nothing
+        is written into any header.
 
-        A table whose record buffer is shorter than `capacity * record_size` —
-        which `_parse_table` produces from a truncated file — makes the slice
-        assignment below **shrink** the output, moving every later offset. The
-        source does this too. It is not defended against here because the
-        defence belongs where the truncation is detectable: a `.tdb` that short
-        did not come out of `refpack_decompress` intact.
+        A table whose record buffer is shorter than `capacity * record_size`
+        makes the slice assignment below **shrink** the output, moving every
+        later offset. Reject the truncation upstream, not here.
         """
         out = bytearray(self._raw)
 
@@ -1053,9 +918,8 @@ class TDBFile:
 
         ordered = [self.tables[n] for n in self._table_order if n in self.tables]
         for i, table in enumerate(ordered):
-            # Over the field definitions and the records, i.e. everything after
-            # the 40-byte header. The header is excluded because it holds the
-            # previous link's CRC, which would make the chain self-referential.
+            # Everything after the 40-byte header. Excluding the header is
+            # required: it holds the previous link's CRC.
             crc_start = self._header_offset(table) + 40
             crc_end = table.data_offset + table.capacity * table.record_size
             crc = tdb_crc(bytes(out[crc_start:crc_end]))
@@ -1072,8 +936,6 @@ class TDBFile:
     def _header_offset(table: TDBTable) -> int:
         """Where a table's 40-byte header starts, worked back from its records.
 
-        `data_offset` is the only anchor `_parse_table` records, so the header
-        is found by subtracting the field definitions and the header itself
-        rather than being stored. Sixteen bytes per field definition.
+        Sixteen bytes per field definition, plus the 40-byte header itself.
         """
         return table.data_offset - len(table.fields) * 16 - 40

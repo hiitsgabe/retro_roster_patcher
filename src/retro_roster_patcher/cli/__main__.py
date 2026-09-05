@@ -1,21 +1,10 @@
 """Argument parsing, dispatch, and exit codes.
 
-Exit codes: 0 success, 1 typed error, 2 usage error. Nothing else. A consumer
-that only reads the exit code still learns whether to look at stdout.
+Exit codes: 0 success, 1 typed error, 2 usage error. Nothing else.
 
-Every one of those three ends the NDJSON stream with a terminal event, and so
-does the fourth thing that can happen: an untyped exception, which is a bug in
-this project rather than a failure the user can act on. The last `except`
-announces it on the stream and then re-raises it unchanged, so the traceback,
-the exception and CPython's own exit status are exactly what they would be with
-no clause there at all. It buys the Dart bridge a terminal event instead of a
-dead pipe and buys the bug nothing: it is not caught, not laundered into a typed
-error, and not given a tidy `return 1`.
-
-That the library does not reach it is the actual guarantee, and it is enforced
-elsewhere: `tests/core/test_errors.py` walks the package and fails if any
-exception class is defined outside `RetroRosterError`, and the two conversion
-points in `core/errors.py` type the `OSError`s the filesystem raises.
+Each of the three ends the NDJSON stream with a terminal event, and so does an
+untyped exception: the last `except` announces it and re-raises it unchanged, so
+the traceback and exit status are what they would be with no clause there.
 """
 
 from __future__ import annotations
@@ -31,15 +20,10 @@ from .render import HumanRenderer, JsonRenderer, Renderer
 def _common_parser() -> argparse.ArgumentParser:
     """Flags accepted on either side of the verb.
 
-    `SUPPRESS` as the default is the point: when the user does not type `--json`,
-    the subparser leaves the attribute unset instead of writing `False` over a
-    `--json` that appeared before the verb.
-
-    Note that `parents=` shares action objects rather than copying them, so the
-    root parser and every subparser hold *the same* `--json` action. That is why
-    `main` seeds the false default through a pre-populated `Namespace` and not
-    through `set_defaults`: `set_defaults` rewrites `action.default` in place,
-    which would replace this `SUPPRESS` everywhere and reintroduce the overwrite.
+    The `SUPPRESS` default is load-bearing: without it a subparser writes `False`
+    over a `--json` that appeared before the verb. `parents=` shares action
+    objects, so `main` must seed the false default through a pre-populated
+    `Namespace` — `set_defaults` would overwrite `SUPPRESS` everywhere.
     """
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument(
@@ -117,11 +101,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_patch.add_argument("--season", type=int, default=None, help="fetch this season inline")
     p_patch.add_argument("--rosters", default="", help="use a rosters file from `fetch`")
     p_patch.add_argument("--slot-map", default="", help="JSON list of slot mappings")
-    # No `choices=`: which codes are valid depends on the game, and this parser is
-    # built before `--game` is read. `cmd_patch` checks it against the patcher the
-    # user actually named, and lists that game's codes when it refuses. The codes
-    # named here are `WE2002Patcher.languages`, pinned against it by
-    # `test_the_language_help_names_exactly_the_codes_we2002_ships`.
+    # No `choices=`: which codes are valid depends on the game, and this parser
+    # is built before `--game` is read. `cmd_patch` checks it instead.
     p_patch.add_argument(
         "--language",
         default="",
@@ -153,10 +134,8 @@ def main(argv: list[str] | None = None) -> int:
         renderer.error(KeyboardInterrupt("interrupted"))
         return 1
     except Exception as exc:
-        # Announce and re-raise; see the module docstring. `BaseException` is
-        # deliberately not caught: `SystemExit` is how `parser.error` reports
-        # exit 2, and the suite's network sentinel is a `BaseException` precisely
-        # so no `except` in this tree can swallow it.
+        # Announce and re-raise. Never widen this to `BaseException`:
+        # `SystemExit` is how `parser.error` reports exit 2.
         renderer.error(exc)
         raise
     return 0

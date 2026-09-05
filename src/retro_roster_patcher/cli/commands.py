@@ -48,24 +48,9 @@ def resolve_patcher_class(game_id: str) -> type[Patcher]:
 def _partial_adapter(renderer: Renderer) -> PartialFn:
     """Serialise what the library hands `on_partial` before it reaches the wire.
 
-    `PartialFn` is `Callable[[Any], None]` on purpose, so a library consumer can
-    be handed a typed dataclass: `we2002`'s `fetch` publishes its team list as a
-    `LeagueData` skeleton. `JsonRenderer.partial` then calls `json.dumps` on it,
-    which raises `TypeError: Object of type LeagueData is not JSON serializable`
-    — untyped, so none of `main`'s `except` clauses catch it and `--json` dies
-    with no `error` event. Translating here keeps the fix at the boundary this
-    module's docstring already owns: the library keeps its dataclass contract and
-    `render.py` stays ignorant of the sports models.
-
-    Anything else passes through untouched, though nothing in `src/` reaches that
-    branch today: `we2002`'s `fetch` is the only `on_partial` producer and it
-    publishes a `LeagueData`. `cmd_fetch`'s own already-serialised payload is not
-    a second producer — it calls `renderer.partial` directly and never traverses
-    this adapter. The pass-through is defence against a later patcher publishing
-    a payload that is already serialisable, and its only witness is the synthetic
-    dict in `test_build_patcher_wires_the_renderer_partial_callback`: measured,
-    dropping the branch for an unconditional `league_data_to_dict(data)` fails
-    that one test and nothing else in the suite.
+    `PartialFn` takes `Any` so the library can publish a typed dataclass;
+    `json.dumps` raises an untyped `TypeError` on one, which no `except` in
+    `main` catches. Anything already serialisable passes through untouched.
     """
 
     def emit(data: Any) -> None:
@@ -82,8 +67,8 @@ def build_patcher(game_id: str, args: argparse.Namespace, renderer: Renderer) ->
         "on_status": renderer.status,
         "on_partial": _partial_adapter(renderer),
     }
-    # Only WE2002 accepts this today. Passing it to a patcher that does not
-    # would be a TypeError from deep inside the library; say so plainly instead.
+    # Passing this to a patcher that does not take it would be a TypeError from
+    # deep inside the library; say so plainly instead.
     assets_dir = getattr(args, "assets_dir", None)
     if assets_dir:
         if "assets_dir" not in inspect.signature(cls.__init__).parameters:
@@ -102,13 +87,8 @@ def cmd_analyze(args: argparse.Namespace, renderer: Renderer) -> None:
         raise RomError(f"No such ROM: {rom}")
 
     if args.game:
-        # Redundant with `build_patcher`, whose first statement resolves the same
-        # id: `candidates` gets exactly one element here, so the loop below always
-        # reaches that call, and nothing in between has a side effect. Measured —
-        # deleting this line leaves exit code, stdout and stderr byte-identical
-        # across 19 argvs including `--help`, a typo'd `--game`, a missing ROM and
-        # a directory ROM. It stays as defence against a later edit that reorders
-        # `cmd_analyze`, not as a fail-fast with an observable effect.
+        # Redundant with `build_patcher` today; kept as defence against a later
+        # edit that reorders `cmd_analyze`.
         resolve_patcher_class(args.game)
         candidates = [args.game]
     else:
@@ -163,15 +143,13 @@ def cmd_fetch(args: argparse.Namespace, renderer: Renderer) -> None:
     payload = league_data_to_dict(data)
 
     if args.out:
-        # `--out` is an operator-supplied destination, so both calls can fail on
-        # a read-only mount or a full disk. Untyped, that `OSError` ended the
-        # NDJSON stream after a `progress` event with no terminal one.
+        # `--out` is operator-supplied, so both calls can fail on a read-only
+        # mount; untyped, that `OSError` ends the stream with no terminal event.
         out = Path(args.out)
         with as_storage_error(out):
             out.parent.mkdir(parents=True, exist_ok=True)
             out.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     else:
-        # No file to point at, so hand the data over on the protocol stream.
         # `partial` and not `result`: the summary is still the result.
         renderer.partial(payload)
 
@@ -181,9 +159,8 @@ def cmd_fetch(args: argparse.Namespace, renderer: Renderer) -> None:
 def _rosters_for_patch(
     args: argparse.Namespace, patcher: Patcher, renderer: Renderer
 ) -> LeagueData:
-    # Equal booleans mean neither flag was given or both were, which is exactly
-    # the pair of usage errors. Checked before anything expensive: the fetch
-    # below is a league's worth of provider requests.
+    # Equal booleans mean neither flag was given or both were. Check before the
+    # fetch below, which is a league's worth of provider requests.
     if bool(args.season) == bool(args.rosters):
         raise UsageError("patch needs exactly one of --season or --rosters")
     if args.rosters:
@@ -200,18 +177,12 @@ def _rosters_for_patch(
 def _patch_options(game_id: str, args: argparse.Namespace, patcher: Patcher) -> dict[str, Any]:
     """Resolve the flags that reach `patch` as `**options`.
 
-    `Patcher.patch` ends in `**options`, so an option the patcher does not
-    understand is dropped without a word. That makes forwarding `--language`
-    unconditionally worse than not offering the flag at all: the user asks for
-    Spanish menus, gets Japanese ones, and the run reports success. So the check
-    is here, against the patcher the user actually named, and a flag that cannot
-    be honoured is a `UsageError` — the same answer `build_patcher` gives
-    `--assets-dir` on a patcher whose `__init__` does not take it.
+    `Patcher.patch` ends in `**options`, so an unrecognised option is dropped
+    without a word: check `--language` here, against the patcher the user named,
+    or a request for Spanish menus silently reports success in Japanese.
 
-    Duck-typed on a `languages` attribute rather than on a signature, because
-    `**options` has no signature to inspect, and not on `PatcherInfo`, because
-    that dataclass crosses the IPC boundary in `list`'s payload. Absent means
-    "this game ships no translations", which is the truth for NHL94.
+    Duck-typed on a `languages` attribute — `**options` has no signature to
+    inspect. Absent means the game ships no translations.
     """
     language = getattr(args, "language", "")
     if not language:
@@ -227,32 +198,13 @@ def _patch_options(game_id: str, args: argparse.Namespace, patcher: Patcher) -> 
 def _map_extras(patcher: Patcher, rom: Path) -> dict[str, Any]:
     """Resolve the keyword-only extras `map_rosters` takes beyond the ABC's.
 
-    `Patcher.map_rosters` is `(data, slot_mapping)` and nothing else, because it
-    must be runnable on a machine that never sees the image — `fetch` and
-    `patch` are separable, with a rosters file between them. `nhl94_snes` needs
-    one thing from the ROM anyway: byte 17 of each team block packs that team's
-    forward and defenceman counts, upstream read all 28 of them inside
-    `patch_rom` and used each team's own pair, and the port carries them across
-    the split as `RomInfo.extra["roster_counts"]` for a caller to hand back to
-    `map_rosters(roster_counts=...)`.
+    `Patcher.map_rosters` is `(data, slot_mapping)` and nothing else, so a
+    patcher needing a measurement off the image publishes it as `RomInfo.extra`
+    and declares a keyword for it; this is the caller that reconnects the two.
 
-    This is that caller. Without it `_resolve_roster_counts(None)` falls back to
-    `DEFAULT_ROSTER_COUNTS` and every CLI run wrote 2/14/7 into all 28 slots —
-    the selection *and* the header — whatever the image said. Measured against
-    upstream's own orchestrator on a ROM with non-default nibbles: 3 164 bytes
-    of a 25-team patch differed, in every run.
-
-    Duck-typed on the signature, not on the game id, and the check is first so
-    the other eight patchers pay nothing: `analyze_rom` is a whole-file read and
-    they have no parameter to receive its answer. `analyze_rom` is the same call
-    `cmd_analyze` makes, and `extra` is JSON-serialisable by design precisely so
-    it can cross the `fetch`/`patch` boundary.
-
-    A ROM `analyze_rom` judges invalid publishes no counts, and this returns
-    nothing rather than an empty list: `map_rosters` would reject a list of the
-    wrong length with `MappingError`, and "I could not measure this image" is
-    not a measurement. `patch` refuses that image a moment later on its own
-    terms, which is the refusal worth reporting.
+    Test the signature before calling `analyze_rom`, which is a whole-file read
+    the other patchers must not pay for. An image judged invalid publishes no
+    counts and gets nothing back rather than an empty list.
     """
     if "roster_counts" not in inspect.signature(patcher.map_rosters).parameters:
         return {}
@@ -266,11 +218,8 @@ def cmd_patch(args: argparse.Namespace, renderer: Renderer) -> None:
         raise RomError(f"No such ROM: {rom}")
 
     patcher = build_patcher(args.game, args, renderer)
-    # Options first, then the slot map, then whatever the mapper needs off the
-    # ROM: the first costs no I/O at all, the second is a small file read and
-    # the third a whole-image one. All three precede the fetch, so a bad flag or
-    # an image that cannot answer is settled without paying for the network
-    # round trips its data would have come from.
+    # Cheapest first, and all three before the fetch, so a bad flag or an
+    # unreadable image is settled without paying for the network round trips.
     options = _patch_options(args.game, args, patcher)
     slot_mapping = _load_slot_map(args.slot_map)
     map_extras = _map_extras(patcher, rom)
@@ -280,9 +229,8 @@ def cmd_patch(args: argparse.Namespace, renderer: Renderer) -> None:
     mapped = patcher.map_rosters(data, slot_mapping=slot_mapping, **map_extras)
 
     out = Path(args.out)
-    # Before `patcher.patch`, so an unwritable `--out` costs neither the ROM
-    # copy nor the write. `Patcher.patch` types its own failures as `RomError`;
-    # this one is not about the ROM, and the patcher never sees it.
+    # Before `patcher.patch`, so an unwritable `--out` costs neither the ROM copy
+    # nor the write, and is reported as `StorageError` rather than `RomError`.
     with as_storage_error(out):
         out.parent.mkdir(parents=True, exist_ok=True)
     renderer.status(f"Writing {out}...")

@@ -1,12 +1,8 @@
 """Turning results into bytes on a stream.
 
-The rest of the package returns objects and raises exceptions. Only this module
-knows whether a human or a machine is reading, which is what lets the same
-command handlers serve a terminal and the `retro_toolbox` Dart bridge.
-
-Every payload carries a `kind` key. `JsonRenderer` passes it through; the
+Every payload carries a `kind` key: `JsonRenderer` passes it through, the
 `HumanRenderer` dispatches on it. Adding a verb means adding a formatter here,
-not a `print()` somewhere in a handler.
+not a `print()` in a handler.
 """
 
 from __future__ import annotations
@@ -20,10 +16,8 @@ from typing import Any, Protocol, TextIO, runtime_checkable
 class Renderer(Protocol):
     """What every command handler is allowed to assume about output.
 
-    `runtime_checkable` so the suite can assert both concrete renderers still
-    answer to this surface. That check compares names only — it says nothing
-    about signatures — but it is enough to catch a method renamed on one
-    renderer and not the other.
+    `runtime_checkable` compares names only, but that is enough to catch a
+    method renamed on one renderer and not the other.
     """
 
     def status(self, msg: str) -> None: ...
@@ -41,8 +35,8 @@ def _clamp(pct: float) -> float:
 class JsonRenderer:
     """Newline-delimited JSON on stdout, one event per line.
 
-    `err` is accepted and never written to. Keeping the signature identical to
-    `HumanRenderer` means the CLI picks a renderer once and forgets about it.
+    `err` is accepted and never written to: the signature must stay identical
+    to `HumanRenderer`.
     """
 
     def __init__(self, out: TextIO | None = None, err: TextIO | None = None) -> None:
@@ -63,8 +57,8 @@ class JsonRenderer:
         self._emit({"event": "partial", "data": data})
 
     def result(self, payload: dict[str, Any]) -> None:
-        # Payload first: a handler that happens to carry an `event` or `ok` key
-        # must not be able to overwrite the two keys the consumer parses on.
+        # Payload first: a handler's own `event` or `ok` key must not win over
+        # the two keys the consumer parses on.
         self._emit({**payload, "event": "result", "ok": True})
 
     def error(self, exc: BaseException) -> None:
@@ -79,8 +73,6 @@ class HumanRenderer:
         self.err = err if err is not None else sys.stderr
         self._progress_open = False
 
-    # -- stream bookkeeping -------------------------------------------------
-
     def _close_progress(self) -> None:
         """End a `\\r`-rewritten progress line before anything else prints."""
         if self._progress_open:
@@ -91,17 +83,14 @@ class HumanRenderer:
     def _line(self, text: str) -> None:
         self.out.write(text + "\n")
 
-    # -- Renderer -----------------------------------------------------------
-
     def status(self, msg: str) -> None:
         self._close_progress()
         self.err.write(msg + "\n")
         self.err.flush()
 
     def progress(self, pct: float, msg: str) -> None:
-        # Redirected to a file, rewritten lines are noise. Status still prints,
-        # so a captured log remains readable. Returning before the flag is set
-        # keeps `_close_progress` from emitting a newline no line ever opened.
+        # Return before setting the flag, or `_close_progress` emits a newline
+        # for a progress line that was never opened.
         if not self.err.isatty():
             return
         self.err.write(f"\r{_clamp(pct) * 100:5.1f}%  {msg}")
@@ -118,12 +107,8 @@ class HumanRenderer:
 
     def result(self, payload: dict[str, Any]) -> None:
         self._close_progress()
-        # `.get`, not `[]`: a payload with no `kind` violates this module's
-        # docstring, but raising here would replace a producer bug with no output
-        # at all, and this is the last stop before the user. `_fallback` still
-        # prints every key, so the degraded rendering is the useful failure. That
-        # is contract, not accident: the suite pins the absent-`kind` case as
-        # well as the unrecognised-`kind` one.
+        # `.get`, not `[]`: a missing `kind` must degrade to `_fallback`, not
+        # raise. This is the last stop before the user.
         formatter = {
             "patchers": self._patchers,
             "rom_info": self._rom_info,
@@ -132,8 +117,6 @@ class HumanRenderer:
         }.get(str(payload.get("kind")), self._fallback)
         formatter(payload)
         self.out.flush()
-
-    # -- per-kind formatters ------------------------------------------------
 
     def _patchers(self, payload: dict[str, Any]) -> None:
         rows = [
@@ -149,12 +132,8 @@ class HumanRenderer:
         header = ["GAME", "PLATFORM", "SPORT", "SLOT-MAP", "PROVIDERS"]
         widths = [max(len(r[i]) for r in [header, *rows]) for i in range(len(header))]
         for row in [header, *rows]:
-            # `strict` catches a row longer than the header; a short one never
-            # reaches here, because sizing `widths` indexes every row by every
-            # header position and raises IndexError first. Neither is reachable
-            # from a payload — the comprehension above always yields six cells —
-            # so this is belt-and-braces against a later edit to this function,
-            # and B905 requires an explicit `strict=` either way.
+            # `strict` guards a later edit that changes the row width; B905
+            # requires an explicit `strict=` either way.
             cells = (cell.ljust(w) for cell, w in zip(row, widths, strict=True))
             self._line("  ".join(cells).rstrip())
 
@@ -164,10 +143,8 @@ class HumanRenderer:
             self._line("no registered patcher recognised this ROM")
             return
         for info in matches:
-            # Indexed, not `.get`: every match is a `RomInfo.to_dict()`, which
-            # emits `slots` and `is_valid` unconditionally. A `.get` would turn a
-            # producer that dropped one into "valid: no" / "0 slots" — a
-            # plausible falsehood about the user's ROM rather than a traceback.
+            # Indexed, not `.get`: a `.get` would turn a dropped key into
+            # "valid: no" / "0 slots", a plausible falsehood about the ROM.
             slots = len(info["slots"])
             self._line(f"{info['game_id']}")
             self._line(f"  path:   {info['path']}")
@@ -188,7 +165,6 @@ class HumanRenderer:
         )
 
     def _fallback(self, payload: dict[str, Any]) -> None:
-        """A kind with no formatter still prints something useful."""
         for key, value in payload.items():
             if key != "kind":
                 self._line(f"{key}: {value}")

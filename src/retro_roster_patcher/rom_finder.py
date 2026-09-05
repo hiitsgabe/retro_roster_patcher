@@ -1,8 +1,5 @@
-"""ROM auto-detect service for sport patchers.
-
-Scans local roms folders and backup cache listings to find ROMs
-by fuzzy matching game names.
-"""
+"""Find a ROM by fuzzy-matching game names against local folders and cached
+remote listings."""
 
 import hashlib
 import json
@@ -14,27 +11,21 @@ from typing import Any
 
 @dataclass
 class RomFinderConfig:
-    """Configuration for ROM auto-detection per patcher."""
-
     search_terms: list[str]
     system_folders: list[str]
     file_extensions: list[str]
     system_type: str
-    preferred_region: str = "USA"  # Region to prefer in tiebreakers
+    preferred_region: str = "USA"
 
 
 @dataclass
 class RomFinderResult:
-    """Result from ROM auto-detection."""
-
     status: str = "not_found"  # "found_local" | "found_remote" | "not_found"
     local_path: str = ""
     remote_entry: dict[str, Any] | None = None
     system_data: dict[str, Any] | None = None
     match_name: str = ""
 
-
-# ── Normalization & Scoring ──────────────────────────────────────────────
 
 _REGION_RE = re.compile(r"\([^)]*\)")
 _EXT_RE = re.compile(r"\.\w{2,4}$")
@@ -43,7 +34,6 @@ _MULTI_SPACE = re.compile(r"\s+")
 
 
 def _normalize(name: str) -> str:
-    """Normalize a filename or search term for comparison."""
     name = _EXT_RE.sub("", name)
     name = _REGION_RE.sub("", name)
     name = _PUNCT_RE.sub(" ", name)
@@ -53,7 +43,7 @@ def _normalize(name: str) -> str:
 
 
 def _fuzzy_score(search_term: str, filename: str) -> int:
-    """Score how well a filename matches a search term. Returns 0-100."""
+    """Score a filename against a search term, 0-100."""
     norm_search = _normalize(search_term)
     norm_file = _normalize(filename)
 
@@ -68,9 +58,7 @@ def _fuzzy_score(search_term: str, filename: str) -> int:
 
     search_tokens = set(norm_search.split())
     file_tokens = set(norm_file.split())
-    # Dead: the `not norm_search` guard above already returned, so a non-empty
-    # string always splits into at least one token. Unreachable and therefore
-    # untestable; kept verbatim for port fidelity, not because it is needed.
+    # Unreachable: the `not norm_search` guard above already returned.
     if not search_tokens:
         return 0
     overlap = len(search_tokens & file_tokens)
@@ -79,30 +67,25 @@ def _fuzzy_score(search_term: str, filename: str) -> int:
     return int(ratio * 60)
 
 
-# ── Tiebreaker Sorting ──────────────────────────────────────────────────
-
 # Unreferenced: `_tiebreak_sort_key` does its region check with a lowercased
-# substring test instead. Nothing reads this, so no test can pin it; kept verbatim
-# for port fidelity.
+# substring test instead.
 _USA_RE = re.compile(r"\(USA\)", re.IGNORECASE)
 _BETA_DEMO_RE = re.compile(r"\b(beta|demo|proto|sample)\b", re.IGNORECASE)
 
 
 def _tiebreak_sort_key(filename: str, preferred_region: str = "USA") -> tuple[int, int, int]:
-    """Return a sort key tuple: prefer region, non-beta/demo, shorter names."""
+    """Sort key: preferred region first, then non-beta/demo, then shorter names."""
     fn_lower = filename.lower()
     has_pref = 0 if f"({preferred_region.lower()})" in fn_lower else 1
     is_beta = 1 if _BETA_DEMO_RE.search(filename) else 0
     return (has_pref, is_beta, len(filename))
 
 
-# ── CUE Parsing ─────────────────────────────────────────────────────────
-
 _CUE_FILE_RE = re.compile(r'^FILE\s+"([^"]+)"\s+BINARY', re.MULTILINE)
 
 
 def _resolve_cue_track1(cue_path: str) -> str | None:
-    """Parse a .cue file and return the absolute path to the first FILE entry."""
+    """Absolute path of the first FILE entry in a .cue, or None if it is missing."""
     try:
         with open(cue_path, encoding="utf-8", errors="replace") as f:
             content = f.read()
@@ -118,17 +101,11 @@ def _resolve_cue_track1(cue_path: str) -> str | None:
     return None
 
 
-# ── RomFinder Class ──────────────────────────────────────────────────────
-
-
 class RomFinder:
     """Finds ROMs by scanning local folders and cached remote listings."""
 
     def _scan_local(self, config: RomFinderConfig, roms_dir: str) -> str | None:
-        """Scan local system folders for a matching ROM file.
-
-        Returns the best match path, or None if nothing found.
-        """
+        """Best-matching ROM path under `roms_dir`, or None."""
         candidates: list[str] = []
         ext_set = {e.lower() for e in config.file_extensions}
 
@@ -168,10 +145,7 @@ class RomFinder:
         systems_data: list[dict[str, Any]],
         cache_dir: str = "",
     ) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
-        """Search cached file listings for a matching ROM.
-
-        Returns (best_entry, system_data) or (None, None).
-        """
+        """Best cached listing entry and the system it came from, or (None, None)."""
         candidates: list[tuple[dict[str, Any], dict[str, Any]]] = []
 
         for system in systems_data:
@@ -184,16 +158,8 @@ class RomFinder:
                 urls = [urls]
 
             for url in urls:
-                # No cache directory means no listings cache. Upstream resolved this
-                # path through `services.file_listing._get_listing_cache_path`, which
-                # joins `constants.SYSTEMS_CACHE_DIR` — a host-application global
-                # anchored on that application's own `__file__`, so absolute and
-                # install-relative. A standalone library has no equivalent to fall
-                # back to, and importing the host's module is exactly the coupling
-                # this package exists to remove, so the fallback is dropped rather
-                # than reproduced. Joining onto "" instead would yield the *relative*
-                # "listings/<md5>.json" and key the read off `os.getcwd()` — a bug
-                # this port declines to introduce, not one it inherited.
+                # No cache directory means no listings cache. Never join onto "":
+                # that keys the read off `os.getcwd()`.
                 if not cache_dir:
                     continue
                 url_hash = hashlib.md5(url.encode()).hexdigest()
@@ -228,10 +194,7 @@ class RomFinder:
         systems_data: list[dict[str, Any]],
         cache_dir: str = "",
     ) -> RomFinderResult:
-        """Find a ROM by scanning local folders, then cached listings.
-
-        Returns a RomFinderResult with the appropriate status.
-        """
+        """Scan local folders first, then cached listings."""
         local_path = self._scan_local(config, roms_dir)
         if local_path:
             return RomFinderResult(
