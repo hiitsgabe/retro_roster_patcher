@@ -47,6 +47,13 @@ ESPN_LEAGUES = [
     {"id": 2014, "code": "jpn.1", "name": "J.League", "country": "Japan"},
     {"id": 2015, "code": "col.1", "name": "Primera A", "country": "Colombia"},
     {"id": 2016, "code": "chi.1", "name": "Primera División", "country": "Chile"},
+    {"id": 2017, "code": "bra.2", "name": "Brasileirao Serie B", "country": "Brazil"},
+    {
+        "id": 2018,
+        "code": "conmebol.sudamericana",
+        "name": "Copa Sudamericana",
+        "country": "South America",
+    },
 ]
 
 # NHL team abbreviations mapping to ROM slots (28 teams: 26 NHL + 2 All-Star)
