@@ -77,7 +77,13 @@ from .models import (
     NHL94TeamRecord,
 )
 from .rom_reader import POINTER_SIZE, NHL94SNESRomReader
-from .rom_writer import LINE_ASSIGN_OFFSET, LINE_COUNT, LINE_SLOTS, NHL94SNESRomWriter
+from .rom_writer import (
+    LINE_ASSIGN_OFFSET,
+    LINE_COUNT,
+    LINE_SLOTS,
+    NHL94SNESRomWriter,
+    header_counts,
+)
 from .stat_mapper import NHL94StatMapper
 
 #: One (goalies, forwards, defensemen) triple per ROM slot.
@@ -519,12 +525,22 @@ class NHL94SNESPatcher(Patcher):
                 # whose line table would index players that do not exist -- is
                 # not written either.
                 continue
-            # The counts the selection was cut to, off the record, not off the
-            # ROM: the line assignments index forwards from 2 and defensemen
-            # from `2 + num_forwards`, so a header written from a different
-            # triple than the one that shaped this list labels real players with
-            # the wrong role.
-            writer.write_team_header(slot, team.num_forwards, team.num_defensemen)
+            # The counts off the record and not off the ROM -- the line
+            # assignments index forwards from 2 and defensemen from
+            # `2 + num_forwards`, so a header written from a different triple
+            # than the one that shaped this list labels real players with the
+            # wrong role -- and then clamped to what actually reached the image.
+            #
+            # DELIBERATE DIVERGENCE, the second half of it: upstream wrote the
+            # requested triple whatever happened downstream, so a roster the
+            # writer truncated, or one a provider returned short, produced a
+            # line table naming records that were never written. See
+            # `rom_writer.header_counts`, which is where the arithmetic and its
+            # two remaining edges are argued.
+            written_forwards, written_defencemen = header_counts(
+                written, team.num_forwards, team.num_defensemen
+            )
+            writer.write_team_header(slot, written_forwards, written_defencemen)
             teams_patched += 1
             # `written`, not `len(team.players)`. `write_team_roster` stops as
             # soon as the next record would not fit and drops the rest;
