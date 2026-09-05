@@ -1,55 +1,21 @@
 """Ken Griffey Jr. Presents Major League Baseball (SNES) on the unified Patcher interface.
 
-The translation layer between the ported reader/writer/mapper -- a faithful copy
-of an untested upstream, and kept that way -- and the contracts in
-`core.patcher`. Where the ported code breaks one of those contracts it is worked
-around here rather than fixed there.
+The team tables are found by searching for a 14-byte marker, not by a fixed
+offset, so a 512-byte copier header needs no arithmetic anywhere in this package:
+the search simply finds the marker 512 bytes later and the recorded offset is
+already a file offset. `rom_writer.update_snes_checksum` is the one exception,
+because the SNES header it edits sits at a fixed address.
 
-Five things about this game are worth knowing before reading the code.
+The reader accepts that match wherever it lands, and 25 280 bytes of team data
+follow it. `_team_data_fits` is the bound.
 
-**The team tables are found by searching, not by an offset.**
-`KGJRomReader.validate` runs `data.find(FIRST_TEAM_MARKER)` over the whole image
-and records the byte just past the 14-byte match; every player offset in the
-package is relative to that. This is why nothing here does headered/headerless
-offset arithmetic: a 512-byte copier header moves the marker by 512 and the
-search finds it 512 bytes later, so the recorded offset is already a file
-offset. `rom_writer.update_snes_checksum` is the single exception, and only
-because the SNES header it edits is at a fixed address.
+The SNES checksum is recomputed by `patch`, not by `finalize`, which is where
+this game's upstream put it; the NBA Live 95 port does its equivalent inside
+`finalize`. Do not harmonise them.
 
-**Nothing bounds where that search may land.** `validate` accepts the match
-wherever it is, and 25 280 bytes of team data follow it. If the marker turns up
-within 25 280 bytes of the end -- which `validate` permits -- every read past
-the end answers `{}` and every write answers `False`, and upstream's `patch_rom`
-then returned `success=True` with `teams_patched=0`. `_team_data_fits` is the
-guard, and it is the only structural check this port adds; see its docstring for
-why the signature needs no more than that.
-
-**The character encoding has one lowercase letter.** `models.CHAR_TO_BYTE`
-covers space, the digits, A-Z and a lone `c` at 0x36 so "McGWIRE" renders.
-Everything else -- every accent in a modern MLB roster, every apostrophe --
-encodes to 0x00, a SPACE, silently. Last names are also hard-truncated to eight
-characters and first names reduced to one initial. So "José Ramírez" reaches the
-cartridge as "J. RAM REZ". That is upstream's behaviour and it is preserved;
-fixing it means extending the table against a real font, which no test in this
-repository can check.
-
-**The SNES checksum IS recomputed, and by `patch` rather than by `finalize`.**
-`update_snes_checksum` writes the 16-bit sum of every byte at 0x7FDE and its
-complement at 0x7FDC, both shifted by 512 on a headered image, and `patch` calls
-it explicitly before `finalize`. The NHL 94 SNES port in this library does none
-of this, and the NBA Live 95 port does its equivalent *inside* `finalize`. All
-three are deliberate: each is where its own upstream put it. Do not harmonise
-them.
-
-**`RomSlot.current_name` carries a player, and says so.** The upstream slot
-record is `(index, name, first_player)`: `name` is `KGJ_TEAM_ORDER[i]`, a
-constant, and `first_player` is the only part actually read from the image. This
-reader never parses a team-name string -- the ROM's team names are not in
-`models.py` at all -- so there is no ROM-derived team name to put in
-`current_name`. The same problem, and the same answer, as the NBA Live 95 port:
-`analyze_rom` writes `"First player: K. GRIFFEY"`, and an empty string where no
-record could be read, while `display_name` takes the constant, which is what it
-is for and is distinct across all 28 slots.
+The ROM's team names are never parsed, so `RomSlot.current_name` carries the
+first player read out of the slot, labelled as such, and `display_name` takes the
+`KGJ_TEAM_ORDER` constant.
 """
 
 from __future__ import annotations
@@ -92,27 +58,12 @@ from .stat_mapper import KGJStatMapper
 def _team_data_fits(reader: KGJRomReader) -> bool:
     """Do all 28 team blocks lie inside the file, given where the marker was found?
 
-    IMPROVEMENT, with no upstream equivalent. `KGJRomReader.validate` requires
-    the file to be exactly 2 097 152 bytes or exactly that plus a 512-byte
-    copier header, and then takes `data.find(FIRST_TEAM_MARKER)` wherever it
-    lands. Those two facts do not combine into a bound: the marker may match at
-    offset 2 090 000 of a correctly-sized file, and then `get_team_offset` hands
-    out addresses past the end for most of the league.
-
-    Nothing crashes when that happens, which is the problem. `read_player`
-    answers `{}` and `write_player` answers `False`, so `write_team_roster`
-    returns 0, `teams_patched` never increments, and upstream's `patch_rom`
-    returned `success=True` having written a byte-for-byte copy of the input.
-
-    The condition is `write_player`'s own -- `off + PLAYER_LENGTH >
-    len(self.data)` -- evaluated for the last of the 700 records rather than for
-    each in turn. `TEAM_DATA_SPAN` is derived in `rom_reader` from
-    `get_team_offset`'s arithmetic, not transcribed.
-
-    Unlike a content heuristic this is arithmetic, not a guess about a real
-    image: a file that fails it cannot be patched at all, so `patch` refuses it
-    rather than writing an unmodified copy under a success return. `analyze_rom`
-    reports the same file as `is_valid=False`.
+    A correctly-sized image can still match `FIRST_TEAM_MARKER` near its end, and
+    then `get_team_offset` hands out addresses past the end for most of the
+    league. Nothing crashes: reads answer `{}`, writes answer `False`, and the
+    patch reports success having copied the input unchanged. This is
+    `write_player`'s own bound -- `off + PLAYER_LENGTH > len(self.data)` --
+    evaluated once for the last of the 700 records.
     """
     if reader.data is None:
         return False
@@ -120,40 +71,15 @@ def _team_data_fits(reader: KGJRomReader) -> bool:
 
 
 def _roster_type_for_slot(slot: int) -> int:
-    """Which roster-type nibble a slot gets, from the slot index alone.
+    """Which roster-type nibble (record byte 0x19, high half) a slot gets.
 
-    UPSTREAM BEHAVIOUR, KNOWN WRONG, PRESERVED DELIBERATELY. This is how the
-    nibble at record byte 0x19 is chosen, and the slot index is not a way to
-    find out what kind of player is actually in the slot.
-
-    It is right only while all three groups are full. A team with twelve
-    non-pitchers is not a hypothetical shape -- it is what a provider returns
-    for a club mid-teardown, or any club at all if the roster endpoint is
-    partial. Its first three starting pitchers land in slots 12, 13 and 14 and
-    are stamped `ROSTER_TYPE_BATTER` here, which produces a record that
-    contradicts itself: `rom_writer.write_player` dispatches on
-    `KGJPlayerRecord.is_pitcher` and lays down a *pitcher*-shaped record -- byte
-    0x1D set to the pitcher flag 0x20, wins, losses, ERA, saves -- while byte
-    0x19's high nibble says 3, and `rom_reader.read_player` reads that nibble
-    back as `is_pitcher = False`.
-
-    This port took the nibble from the group `stat_mapper.select_roster_groups`
-    put the player in for a while, which makes the two bytes agree. The slot
-    index is back because the group-derived nibble is a byte no released build of
-    this patcher ever wrote, nothing in this repository has been validated
-    against a real cartridge, and a self-consistent record the game has never
-    been fed is a worse risk than a contradictory one it has. Fidelity to the
-    original beats correctness of the data.
-
-    `map_rosters` pairs this with upstream's `is_starter = idx < 20`, which is
-    the same boundary written a second way: slots 15-19 are the starter slots.
-    Both are wrong on the same rosters and in the same direction, and they are
-    kept together so they stay wrong in step.
-
-    The one thing that did not go back is *where* the stamping happens.
-    Upstream's `KGJRomWriter.write_team_roster` assigned this on the caller's own
-    record objects; `map_rosters` assigns it when it builds each record. The
-    value written is identical -- see `rom_writer.write_team_roster`.
+    Upstream's behaviour, known wrong, preserved for byte fidelity: the slot
+    index is right only while all three groups are full. On a short roster a
+    starting pitcher can land in a batter slot and be stamped
+    `ROSTER_TYPE_BATTER` while `write_player` lays down a pitcher-shaped record,
+    so byte 0x19 and byte 0x1D contradict each other. Do not derive the nibble
+    from the mapper's groups instead; `map_rosters`'s `is_starter = index < 20`
+    is the same boundary written a second way and the two are kept in step.
     """
     if slot < BATTERS_PER_TEAM:
         return ROSTER_TYPE_BATTER
@@ -172,17 +98,10 @@ def _roster_type_for_slot(slot: int) -> int:
 class KGJMLBPatcher(Patcher):
     """Teams map to ROM slots by abbreviation, so no manual mapping step.
 
-    28 slots, all of them patchable: 14 AL then 14 NL, in the 1994 league order.
+    28 slots, all patchable: 14 AL then 14 NL, in the 1994 league order.
     `MODERN_MLB_TO_KGJ` maps 30 modern abbreviations onto them, so Arizona and
-    Tampa Bay -- neither of which existed in 1994 -- have no slot and are
-    dropped before any request goes out.
-
-    ESPN is the only provider, and this is the first baseball game in the
-    library: `EspnClient.get_mlb_teams`, `get_baseball_squad` and
-    `get_baseball_team_leaders` existed and were unreachable until this patcher
-    was registered. The squad endpoint is where `Player.bats` and
-    `Player.handedness` come from, and the mapper needs both -- `bats` for the
-    batting stance byte and `handedness` for a pitcher's throwing hand.
+    Tampa Bay -- neither of which existed in 1994 -- have no slot and are dropped
+    before any request goes out.
     """
 
     def __init__(
@@ -201,9 +120,6 @@ class KGJMLBPatcher(Patcher):
             on_partial=on_partial,
         )
         self.mapper = KGJStatMapper()
-        # Built eagerly, and `EspnClient.__init__` creates its cache directory,
-        # so constructing this patcher can raise `StorageError`. Nothing here
-        # reaches the network.
         self.api = EspnClient(str(self.cache_dir), on_status, transport=transport)
 
     # -- analyze ------------------------------------------------------------
@@ -211,17 +127,6 @@ class KGJMLBPatcher(Patcher):
     def analyze_rom(self, rom_path: Path) -> RomInfo:
         reader = KGJRomReader(str(rom_path))
         if not reader.load():
-            # `load` catches its own OSError and answers False, so a missing
-            # file, a revoked read bit and an EIO all arrive here as the same
-            # False. That is the one case `analyze_rom` may raise for.
-            #
-            # DELIBERATE DIVERGENCE. Upstream returned
-            # `KGJRomInfo(path=rom_path, size=0)` here -- a size of 0 for a file
-            # that may be 2 MB, and `is_valid=False`, which is the same answer it
-            # gives for a readable image of a different game. The library needs
-            # those two apart: `cmd_analyze` catches `RomError` per patcher and
-            # continues, and treats `is_valid=False` as a considered "not this
-            # game".
             raise RomError(f"Cannot read ROM: {rom_path}")
         info = reader.get_info()
         is_valid = info.is_valid and _team_data_fits(reader)
@@ -234,8 +139,7 @@ class KGJMLBPatcher(Patcher):
             slots=[
                 RomSlot(
                     index=slot.index,
-                    # Labelled, because it is a player and not a team. See this
-                    # module's docstring.
+                    # Labelled, because it is a player and not a team.
                     current_name=(
                         f"First player: {slot.first_player}" if slot.first_player else ""
                     ),
@@ -243,11 +147,8 @@ class KGJMLBPatcher(Patcher):
                 )
                 for slot in info.team_slots
             ],
-            # Both are ROM-derived and neither is reachable any other way once
-            # the reader is gone: `has_header` decides which end of the file the
-            # checksum lands at, and `first_team_offset` is the only evidence of
-            # where the marker actually matched. JSON-serialisable, per
-            # `core/models.py`.
+            # `has_header` decides which end of the file the checksum lands at,
+            # and `first_team_offset` records where the marker matched.
             extra={
                 "has_header": info.has_header,
                 "first_team_offset": info.first_team_offset,
@@ -268,9 +169,7 @@ class KGJMLBPatcher(Patcher):
         if not teams:
             raise ApiError("The provider returned no MLB teams")
 
-        # Only teams that exist as a slot in the 1994 ROM are worth fetching:
-        # Arizona and Tampa Bay cost two network round trips each and are then
-        # discarded by `map_rosters`.
+        # Only teams that exist as a slot in the 1994 ROM are worth fetching.
         mapped = [t for t in teams if self.mapper.get_team_slot(t.code) is not None]
         if not mapped:
             raise ApiError("No fetched team matches a Ken Griffey Jr. MLB ROM slot")
@@ -279,25 +178,15 @@ class KGJMLBPatcher(Patcher):
         for i, team in enumerate(mapped):
             if on_progress is not None:
                 on_progress(i / len(mapped), f"Fetching {team.name}...")
-            # DELIBERATE DIVERGENCE: upstream called `get_baseball_squad(team.id)`
-            # with no season at all. The squad endpoint has no season in its URL
-            # but does have one in its cache key, so without it the first season
-            # ever fetched was served forever. The leaders endpoint takes the
-            # season as a path segment, and upstream did pass it there.
+            # The squad endpoint has no season in its URL but does have one in
+            # its cache key, so the season must be passed here too or the first
+            # season ever fetched is served forever.
             players = self.api.get_baseball_squad(team.id, season)
             leaders = self.api.get_baseball_team_leaders(team.id, season)
             rosters.append(
                 TeamRoster(
                     team=team,
                     players=players or [],
-                    # Upstream left these on `self.team_stats`, an instance side
-                    # channel between `fetch_rosters` and `map_rosters_to_kgj`
-                    # that no serialised rosters file could carry -- and that
-                    # `map_rosters_to_kgj` reached for with `getattr(self,
-                    # "team_stats", {})`, so calling the two out of order was a
-                    # silent downgrade to position defaults rather than an error.
-                    # In `extra` the whole result round-trips through JSON and
-                    # the two steps can run in separate processes.
                     extra={"leaders": leaders or {}},
                 )
             )
@@ -305,8 +194,7 @@ class KGJMLBPatcher(Patcher):
         if on_progress is not None:
             on_progress(1.0, "Complete")
         # Every field but `season` is synthesised: this game has no league
-        # endpoint. `country` and `country_code` are distinct fields -- "USA"
-        # and "US" -- and `teams_count` counts the rosters actually built, the
+        # endpoint. `teams_count` counts the rosters actually built, the
         # slot-mapped subset of what the provider returned, not `len(teams)`.
         return LeagueData(
             league=League(
@@ -330,18 +218,12 @@ class KGJMLBPatcher(Patcher):
     ) -> MappedRosters:
         """Reduce league data to one `KGJTeamRecord` per matched ROM slot.
 
-        Sparse: a key exists only for a slot some fetched team mapped to, where
-        upstream always built all 28 records and left the unmatched ones empty.
-        Nothing reads an empty record, and `patch` skips it either way.
+        Sparse: a key exists only for a slot some fetched team mapped to.
         """
         self.check_slot_mapping(slot_mapping)
         teams: dict[int, KGJTeamRecord] = {}
         for roster in data.teams:
             slot = self.mapper.get_team_slot(roster.team.code)
-            # `0 <=` and not just `< TEAM_COUNT`: no value in `MODERN_MLB_TO_KGJ`
-            # is negative today, so this half of the bound is a guard and not a
-            # filter, and `tests/games/kgj_mlb_snes/test_patcher.py` reaches it
-            # with a stub mapper rather than leaving it unexercised.
             if slot is None or not 0 <= slot < TEAM_COUNT:
                 continue
             leaders = roster.extra.get("leaders") or {}
@@ -350,13 +232,8 @@ class KGJMLBPatcher(Patcher):
             records: list[KGJPlayerRecord] = []
             for index, player in enumerate(selected):
                 player_stats = leaders.get(str(player.id), {})
-                # UPSTREAM BEHAVIOUR, KNOWN WRONG, PRESERVED DELIBERATELY: both
-                # the pitcher's rating defaults and his roster-type nibble come
-                # off the slot index, which stops saying what kind of player is
-                # in the slot as soon as a group is short. `20` is upstream's
-                # literal and is `BATTERS_PER_TEAM + STARTERS_PER_TEAM`; the
-                # argument for keeping the whole scheme is at
-                # `_roster_type_for_slot`.
+                # Upstream's literal, equal to `BATTERS_PER_TEAM +
+                # STARTERS_PER_TEAM`; see `_roster_type_for_slot`.
                 is_starter = index < 20  # slots 15-19 are starters
                 if self.mapper.is_pitcher(player):
                     record = self.mapper.map_pitcher(
@@ -366,27 +243,13 @@ class KGJMLBPatcher(Patcher):
                     )
                 else:
                     record = self.mapper.map_batter(player, player_stats)
-                # Stamped here, where the record is built, and not in
-                # `KGJRomWriter.write_team_roster` where upstream did it on the
-                # caller's own objects. Same value, different owner; see the
-                # note there.
                 record.roster_type = _roster_type_for_slot(index)
                 records.append(record)
 
             # `MODERN_MLB_TO_KGJ` maps 30 codes onto 28 slots: CWS/CHW both name
             # slot 3 and OAK/ATH both name slot 10, so two entries in
-            # `data.teams` can target the same one. Upstream kept its rosters in
-            # a dict keyed by team code and only stored a team whose squad was
-            # non-empty, so an empty alias could never displace a populated one;
-            # here the slot is assigned directly. Without this guard an empty
-            # alias arriving second would wipe the populated record, `patch`
-            # would skip the slot, and the run would report success with
-            # `teams_patched` short by one and the 1994 roster still in place.
-            #
-            # An empty roster that collides with nothing still takes the slot:
-            # the mapped result keeps showing which slots a provider team
-            # matched, and `patch` is what keeps the empty list away from the
-            # writer.
+            # `data.teams` can target the same one and an empty alias arriving
+            # second must not wipe a populated record.
             existing = teams.get(slot)
             if not records and existing is not None and existing.players:
                 continue
@@ -408,10 +271,6 @@ class KGJMLBPatcher(Patcher):
         on_progress: ProgressFn | None = None,
         **options: Any,
     ) -> PatchResult:
-        # First, ahead of every other guard and ahead of the first status
-        # message: it is the one check that costs no I/O, and the failure it
-        # prevents is the writer choking on another game's record type with an
-        # exception outside this library's hierarchy.
         rosters.require_game(self.game_id)
         self.status("Validating ROM...")
         reader = KGJRomReader(str(rom_path))
@@ -426,25 +285,13 @@ class KGJMLBPatcher(Patcher):
             )
 
         self.status("Initializing ROM writer...")
-        # The image is read from disk twice -- once above, once by the writer's
-        # own internal reader -- so one whole copy of the file is redundant I/O
-        # per patch. Kept deliberately: it is what lets "not this game" fail
-        # before any writer state exists, and the writer owns its reader for its
-        # whole lifetime.
         writer = KGJRomWriter(str(rom_path), str(output_path))
         if not writer.load():
             raise RomError(f"Failed to load ROM for writing: {rom_path}")
 
-        # `MappedRosters.filled_slots()` is unusable here and its docstring in
-        # `core/models.py` says why: this game's mapped value is an object, so
-        # every one of them is truthy however empty and it would return every
-        # key. The emptiness that matters is the player list's.
-        #
-        # The range is re-checked because those keys come from a plain dict that
-        # may have crossed a JSON boundary since `map_rosters` built it.
         # `write_team_roster` guards only `team_index >= TEAM_COUNT`, so a
-        # negative key would reach `get_team_offset`, compute an offset below
-        # the marker, and overwrite whatever the ROM keeps there.
+        # negative key would reach `get_team_offset`, compute an offset below the
+        # marker, and overwrite whatever the ROM keeps there.
         targets = sorted(
             slot for slot, team in rosters.teams.items() if 0 <= slot < TEAM_COUNT and team.players
         )
@@ -457,23 +304,17 @@ class KGJMLBPatcher(Patcher):
             team: KGJTeamRecord = rosters.teams[slot]
             written = writer.write_team_roster(slot, team.players)
             if written <= 0:
-                # -1 is the writer's error return and 0 means not one of the 25
-                # records was written. Either way nothing reached the image, so
-                # nothing is counted.
+                # -1 is the writer's error return, 0 means no record was written.
                 continue
             teams_patched += 1
-            # `written`, not `len(team.players)`: `write_player` answers False
-            # for a record that would run off the end of the file and the loop
-            # carries on, so the two numbers can differ. `core/models.py`
-            # defines `players_patched` as records that reached the image.
+            # `written`, not `len(team.players)`: `write_player` answers False for
+            # a record that would run off the end of the file.
             players_patched += written
 
         if on_progress is not None:
             on_progress(1.0, "Saving patched ROM...")
 
-        # Explicitly, here, and not inside `finalize`. See this module's
-        # docstring: the NBA Live 95 port does the opposite and both are
-        # deliberate.
+        # Explicitly here, not inside `finalize`. See this module's docstring.
         writer.update_snes_checksum()
 
         self.status("Saving patched ROM...")

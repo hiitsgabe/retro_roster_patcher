@@ -1,16 +1,13 @@
 """Data models for the KGJ MLB patcher.
 
-Ken Griffey Jr. Presents Major League Baseball (SNES, 1994).
-28 MLB teams (14 AL, 14 NL), 25 players per team (15 batters + 10 pitchers).
-Player records are 32 bytes each with custom character encoding.
+28 MLB teams (14 AL, 14 NL), 25 players each (15 batters + 10 pitchers). A player
+record is 32 bytes and names use a custom character encoding.
 
-References:
   - https://github.com/johnz1/ken_griffey_jr_presents_major_league_baseball_tools
 """
 
 from dataclasses import dataclass, field
 
-# Re-export shared sports models
 from ...sports.models import (  # noqa: F401
     League,
     LeagueData,
@@ -22,19 +19,13 @@ from ...sports.models import (  # noqa: F401
 
 # Custom character encoding used for player names.
 #
-# Exactly one lowercase letter is mapped: `c`, at 0x36, so that
-# `KGJStatMapper._split_name` can render "McGWIRE" with a small c. The real
-# cartridge font certainly holds the rest of the lowercase alphabet -- 1994
-# rosters include DeShields and DeLucia -- and this table simply does not
-# enumerate them. Two consequences, both live:
-#
-#  - `rom_writer._encode_char` maps anything absent here to 0x00, a SPACE. So
-#    every accent in a modern MLB roster (Acuna, Guerrero, Baez) is written as
-#    a blank rather than as a letter, and the name silently loses characters.
-#  - `rom_reader._decode_name` renders anything absent here as "?", so a
-#    genuine dump's DeShields reads back as "De?SHIELD"-shaped noise. That is
-#    why this port's ROM signature check does NOT test name bytes against this
-#    table: it would reject real images. See `patcher._team_data_fits`.
+# Exactly one lowercase letter is mapped: `c`, at 0x36, so that `_split_name` can
+# render "McGWIRE". The cartridge font holds the rest of the lowercase alphabet --
+# 1994 rosters include DeShields -- and this table simply does not enumerate them.
+# Two live consequences: the writer maps anything absent to 0x00, a SPACE, so
+# accents in a modern roster (Acuna, Baez) are written as blanks; and the reader
+# renders anything absent as "?", which is why the ROM signature check does not
+# test name bytes against this table.
 CHAR_TO_BYTE = {
     " ": 0x00,
     "0": 0x01,
@@ -77,7 +68,7 @@ CHAR_TO_BYTE = {
 }
 BYTE_TO_CHAR = {v: k for k, v in CHAR_TO_BYTE.items()}
 
-# Position encoding (values step by 2)
+# Position encoding, stepping by 2
 POSITION_TO_BYTE = {
     "P": 0x00,
     "C": 0x02,
@@ -94,12 +85,10 @@ POSITION_TO_BYTE = {
 }
 BYTE_TO_POSITION = {v: k for k, v in POSITION_TO_BYTE.items()}
 
-# Batting handedness encoding
 HAND_RIGHT = 0x00
 HAND_LEFT = 0x11
 HAND_SWITCH = 0x20
 
-# ROM layout constants
 PLAYER_LENGTH = 0x20  # 32 bytes per player
 TEAM_LENGTH = 0x320  # 800 bytes per team (25 * 32)
 AL_TO_NL_GAP = 0xB40  # 2880 bytes between last AL and first NL team
@@ -108,19 +97,14 @@ BATTERS_PER_TEAM = 15
 STARTERS_PER_TEAM = 5
 RELIEVERS_PER_TEAM = 5
 
-# Roster-type nibble written into the high half of record byte 0x19. The reader
-# decodes the same byte back: 3 = batter, 1 = starting pitcher, 0 = relief
-# pitcher. Which one a record gets is decided from the slot index alone, as
-# upstream decided it -- see `patcher._roster_type_for_slot` for why that is
-# wrong on a short roster and kept anyway. The only thing that moved is who
-# stamps the field: `patcher.map_rosters` rather than
-# `KGJRomWriter.write_team_roster`, which did it on the caller's own objects.
-# `rom_writer.write_team_roster` says why.
+# Roster-type nibble in the high half of record byte 0x19: 3 = batter, 1 =
+# starting pitcher, 0 = relief pitcher. Which one a record gets is decided from
+# the slot index alone; see `patcher._roster_type_for_slot`.
 ROSTER_TYPE_BATTER = 0x30
 ROSTER_TYPE_STARTER = 0x10
 ROSTER_TYPE_RELIEVER = 0x00
 
-# Marker to find first team data (14 bytes before team 0)
+# 14 bytes immediately before team 0, used to locate the team tables
 FIRST_TEAM_MARKER = bytes(
     [
         0x81,
@@ -178,45 +162,42 @@ KGJ_TEAM_ORDER = [
     "Florida Marlins",  # 27
 ]
 
-# Modern MLB team abbreviation -> KGJ ROM slot index.
-# Maps current 30 teams to the 28 ROM slots.
-# Arizona (ARI) and Tampa Bay (TB) didn't exist in 1994 — no ROM slot.
-# Montreal Expos became Washington Nationals, California Angels became
-# Los Angeles Angels, Florida Marlins became Miami Marlins.
+# Modern MLB team abbreviation -> ROM slot index. The 30 current teams onto 28
+# slots; Arizona and Tampa Bay did not exist in 1994 and have none.
 #
-# Two slots are named twice: CWS/CHW both mean slot 3 and OAK/ATH both mean
-# slot 10. `patcher.map_rosters` guards the collision; see the comment there.
+# CWS/CHW both mean slot 3 and OAK/ATH both mean slot 10, so `map_rosters` guards
+# the collision.
 MODERN_MLB_TO_KGJ = {
-    "BAL": 0,  # Baltimore Orioles
-    "BOS": 1,  # Boston Red Sox
-    "LAA": 2,  # Los Angeles Angels (was California Angels)
-    "CWS": 3,  # Chicago White Sox
-    "CHW": 3,  # ESPN alternate
-    "CLE": 4,  # Cleveland Guardians (was Indians)
-    "DET": 5,  # Detroit Tigers
-    "KC": 6,  # Kansas City Royals
-    "MIL": 7,  # Milwaukee Brewers
-    "MIN": 8,  # Minnesota Twins
-    "NYY": 9,  # New York Yankees
-    "OAK": 10,  # Oakland Athletics
-    "ATH": 10,  # ESPN abbreviation (Athletics)
-    "SEA": 11,  # Seattle Mariners
-    "TEX": 12,  # Texas Rangers
-    "TOR": 13,  # Toronto Blue Jays
-    "ATL": 14,  # Atlanta Braves
-    "CHC": 15,  # Chicago Cubs
-    "CIN": 16,  # Cincinnati Reds
-    "HOU": 17,  # Houston Astros
-    "LAD": 18,  # Los Angeles Dodgers
-    "WSH": 19,  # Washington Nationals (was Montreal Expos)
-    "NYM": 20,  # New York Mets
-    "PIT": 21,  # Pittsburgh Pirates
-    "STL": 22,  # St. Louis Cardinals
-    "SD": 23,  # San Diego Padres
-    "SF": 24,  # San Francisco Giants
-    "PHI": 25,  # Philadelphia Phillies
-    "COL": 26,  # Colorado Rockies
-    "MIA": 27,  # Miami Marlins (was Florida Marlins)
+    "BAL": 0,
+    "BOS": 1,
+    "LAA": 2,  # was California
+    "CWS": 3,
+    "CHW": 3,
+    "CLE": 4,  # was the Indians
+    "DET": 5,
+    "KC": 6,
+    "MIL": 7,
+    "MIN": 8,
+    "NYY": 9,
+    "OAK": 10,
+    "ATH": 10,
+    "SEA": 11,
+    "TEX": 12,
+    "TOR": 13,
+    "ATL": 14,
+    "CHC": 15,
+    "CIN": 16,
+    "HOU": 17,
+    "LAD": 18,
+    "WSH": 19,  # was Montreal
+    "NYM": 20,
+    "PIT": 21,
+    "STL": 22,
+    "SD": 23,
+    "SF": 24,
+    "PHI": 25,
+    "COL": 26,
+    "MIA": 27,  # was Florida
 }
 
 
@@ -265,23 +246,21 @@ class KGJPitcherAppearance:
 
 @dataclass
 class KGJPlayerRecord:
-    """Complete player record ready to write to ROM (32 bytes)."""
+    """A 32-byte player record."""
 
     first_initial: str = "A"
     last_name: str = "PLAYER"
     position: str = "CF"
     jersey_number: int = 1
     is_pitcher: bool = False
-    bat_hand: int = HAND_RIGHT  # Batting handedness
+    bat_hand: int = HAND_RIGHT
 
-    # Batter fields
     batter_attrs: KGJBatterAttributes = field(default_factory=KGJBatterAttributes)
     batter_appearance: KGJBatterAppearance = field(default_factory=KGJBatterAppearance)
     batting_avg: int = 250  # e.g. 250 = .250
     home_runs: int = 0
     rbi: int = 0
 
-    # Pitcher fields
     pitcher_attrs: KGJPitcherAttributes = field(default_factory=KGJPitcherAttributes)
     pitcher_appearance: KGJPitcherAppearance = field(default_factory=KGJPitcherAppearance)
     pitch_hand: int = 0  # 0=Right, 1=Left
@@ -290,21 +269,13 @@ class KGJPlayerRecord:
     era: int = 400  # e.g. 400 = 4.00 ERA
     saves: int = 0
 
-    # Roster type. 0x30=batter, 0x10=starter, 0x00=reliever.
-    #
-    # DELIBERATE DIVERGENCE from upstream in who sets it, not in its value.
-    # Upstream's `KGJRomWriter.write_team_roster` assigned this field on the
-    # caller's own objects, mutating records the caller still held.
-    # `patcher.map_rosters` stamps it instead -- from the same slot index, with
-    # the same boundaries -- so the record is complete the moment it is built
-    # and the writer only reads it.
+    # 0x30 = batter, 0x10 = starter, 0x00 = reliever. Stamped by
+    # `patcher.map_rosters`; the writer only reads it.
     roster_type: int = ROSTER_TYPE_BATTER
 
 
 @dataclass
 class KGJTeamRecord:
-    """Complete team record."""
-
     index: int
     name: str
     players: list[KGJPlayerRecord] = field(default_factory=list)
@@ -312,17 +283,13 @@ class KGJTeamRecord:
 
 @dataclass
 class KGJTeamSlot:
-    """An existing team slot read from the ROM."""
-
     index: int
-    name: str  # From KGJ_TEAM_ORDER
-    first_player: str  # First player name for verification
+    name: str  # from KGJ_TEAM_ORDER
+    first_player: str
 
 
 @dataclass
 class KGJRomInfo:
-    """Information about a loaded KGJ ROM."""
-
     path: str
     size: int
     first_team_offset: int = 0
