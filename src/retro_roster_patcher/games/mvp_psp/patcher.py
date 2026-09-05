@@ -8,8 +8,9 @@ line of ASCII, the whole table is re-serialised, recompressed with RefPack and
 put back in a fixed-size hole. The failure modes follow from that. A wrong
 column number writes a real column with the wrong meaning; and a table that
 compresses worse after the edit than before cannot be stored at all, which is
-`rom_writer.SectionTooLargeError` and is the second of the three inherited bugs
-this port fixes.
+`rom_writer.SectionTooLargeError` -- the one inherited bug in this game that this
+port does fix, because upstream's `continue` shipped a half-patched disc under a
+full success report.
 
 **Player ids are recycled from the disc, not invented.** MVP's tables link to
 each other by nine-hex-digit ids, and eight tables this patcher does not write --

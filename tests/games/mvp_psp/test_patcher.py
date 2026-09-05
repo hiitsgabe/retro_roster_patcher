@@ -14,8 +14,9 @@ Six things here are not in the ported code at all, and each has its own section:
   * `fetch -> map_rosters -> patch` as three separable steps, where
     `patch_rom` re-ran the mapping itself.
 
-And the three bug fixes reach the disc here: the pitcher arsenal, the section
-that does not fit, and height and weight.
+And the three inherited bugs reach the disc here: the section that does not fit,
+which this port fixes, and the pitcher arsenal and the height and weight, which
+it preserves. The tests for those two say so at the assertion.
 
 Every read-back of a patched image goes through the fixture's own
 `read_database_big`, `decompress_section_at` and `parse_table`, never through
@@ -703,10 +704,14 @@ def test_the_leaders_reach_the_mapper(tmp_path):
     # Without `TeamRoster.extra` every player would silently take position
     # defaults, which is exactly what the source's side channel did when the
     # two calls happened out of order.
+    #
+    # Read through `starpower` and not through the arsenal: the arsenal is
+    # overwritten with the 50/50 default on every pitcher whether the leaders
+    # arrived or not, which is upstream's behaviour and preserved deliberately.
     squad = [make_player(1, "SP")]
     plain = mapped(tmp_path, {1: squad})
     with_stats = mapped(tmp_path, {1: squad}, {1: {"1": {"K": 250, "WHIP": 0.9, "ERA": 2.0}}})
-    assert plain.teams[0][0].pitches != with_stats.teams[0][0].pitches
+    assert plain.teams[0][0].starpower != with_stats.teams[0][0].starpower
 
 
 def test_an_empty_alias_does_not_wipe_a_populated_slot(tmp_path):
@@ -1414,9 +1419,14 @@ def test_the_disc_holds_more_than_one_weight(tmp_path):
 # -- bug 1 reaching the disc: the arsenal ----------------------------------
 
 
-def test_two_pitchers_with_different_statistics_get_different_velocities(tmp_path):
-    # DELIBERATE DIVERGENCE, end to end. Under the source every pitcher on the
-    # disc had the same 50/50 arsenal whatever his statistics were.
+def test_two_pitchers_with_different_statistics_get_the_same_velocity(tmp_path):
+    """PINS UPSTREAM FIDELITY DELIBERATELY, end to end, on the disc.
+
+    Every pitcher gets the same 50/50 arsenal whatever his statistics are,
+    because `map_pitcher` overwrites the derived one on the way out. A Cy Young
+    season and a 6.00 ERA are written with identical velocity. Do not delete
+    that assignment; see the label on `stat_mapper.map_pitcher`.
+    """
     squad = full_squad(1000)
     leaders = {
         1: {
@@ -1428,16 +1438,29 @@ def test_two_pitchers_with_different_statistics_get_different_velocities(tmp_pat
     table = patched_table(out, "pitchattrib")
     first = [c for c in table.values() if c.get(ATTRIB_FIRST_NAME) == f"Given{squad[15].id}"]
     second = [c for c in table.values() if c.get(ATTRIB_FIRST_NAME) == f"Given{squad[16].id}"]
-    assert first[0][PA_PITCH1_VELOCITY] != second[0][PA_PITCH1_VELOCITY]
+    assert first[0][PA_PITCH1_VELOCITY] == second[0][PA_PITCH1_VELOCITY]
 
 
-def test_a_pitcher_with_statistics_does_not_get_the_default_velocity(tmp_path):
+def test_a_pitcher_with_statistics_gets_the_default_velocity(tmp_path):
+    # PINS UPSTREAM FIDELITY DELIBERATELY. 250 strikeouts tops the starter
+    # velocity scale at 99; the disc gets 60, which is `default_pitches`'
+    # `50 + 50 // 5`.
     squad = full_squad(1000)
     leaders = {1: {str(squad[15].id): {"K": 250, "WHIP": 0.90, "ERA": 2.00}}}
     _, out = patch_one(tmp_path, {1: squad}, leaders)
     table = patched_table(out, "pitchattrib")
     written = [c for c in table.values() if c.get(ATTRIB_FIRST_NAME) == f"Given{squad[15].id}"]
-    assert written[0][PA_PITCH1_VELOCITY] == "99"
+    assert written[0][PA_PITCH1_VELOCITY] == "60"
+
+
+def test_that_velocity_is_the_one_a_pitcher_with_no_statistics_gets(tmp_path):
+    # Pins the two tests above: "60" is the default arsenal's velocity and not
+    # a number this file invented.
+    squad = full_squad(1000)
+    _, out = patch_one(tmp_path, {1: squad})
+    table = patched_table(out, "pitchattrib")
+    written = [c for c in table.values() if c.get(ATTRIB_FIRST_NAME) == f"Given{squad[15].id}"]
+    assert written[0][PA_PITCH1_VELOCITY] == "60"
 
 
 def test_a_starters_second_pitch_reaches_the_repeating_block(tmp_path):

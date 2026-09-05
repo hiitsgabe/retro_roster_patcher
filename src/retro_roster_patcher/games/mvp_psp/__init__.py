@@ -12,17 +12,25 @@ Thirty MLB slots, twenty-five players each -- fifteen batters, five starters,
 five relievers -- on a 0-99 scale. Teams map to slots by abbreviation, so there
 is no slot-mapping step. One provider, ESPN.
 
-**Three inherited bugs are fixed here as labelled deliberate divergences**, each
-argued at the line it lives on:
+**Three inherited bugs live here. One is fixed and two are preserved**, each
+argued and labelled at the line it lives on:
 
-  * Every pitcher shipped with the same 50-velocity, 50-control arsenal, because
-    `map_pitcher` overwrote the stat-derived one it had just computed
-    (`stat_mapper.map_pitcher`).
-  * A section that recompressed larger than its fixed allocation was silently
-    dropped, keeping the disc's original table and still reporting a successful
-    patch (`rom_writer.rebuild_database_big`).
-  * Every patched player was written at 6'0" and 190 lb from two fields nothing
-    ever set (`patcher._build_attrib_fields`).
+  * FIXED -- a section that recompressed larger than its fixed allocation was
+    silently dropped, keeping the disc's original table and still reporting a
+    successful patch. It now raises (`rom_writer.rebuild_database_big`). This is
+    the one place where a byte the source wrote is not what this port writes,
+    and the reason is that the source's byte was a disc patched halfway with no
+    warning.
+  * PRESERVED -- every pitcher ships with the same 50-velocity, 50-control
+    arsenal, because `map_pitcher` overwrites the stat-derived one it has just
+    computed (`stat_mapper.map_pitcher`).
+  * PRESERVED -- every patched player is written at 6'0" and 190 lb from two
+    fields nothing ever sets (`patcher._build_attrib_fields`).
+
+The two preserved ones are wrong and known to be wrong. Nothing in this package
+has ever been checked against a retail UMD, and writing a byte the source did not
+write is a risk on hardware that better ratings and truer biographies do not buy
+off.
 
 **Things dropped from the source, listed because dropping is a behaviour
 change.** None had a caller in the source package or the application above it:
