@@ -981,6 +981,26 @@ def test_the_record_phase_ends_before_the_copy(tmp_path):
     assert seen[-2] == PROGRESS_RECORDS_END
 
 
+def test_the_teams_divide_the_record_phase_between_them(tmp_path):
+    # `i / len(targets)`, so the first club is reported before any of its work
+    # rather than after. With one club `(i + 1) / len(targets)` is 1.0 times
+    # `PROGRESS_RECORDS_END`, which is a number the run emits anyway, so it took
+    # two clubs to see it.
+    seen = []
+    patcher = make_patcher(tmp_path)
+    rosters = patcher.map_rosters(league(squads={1: full_squad(1000), 2: full_squad(2000)}))
+    patcher.patch(
+        rom_path=write_iso(tmp_path, DISC),
+        output_path=tmp_path / "out.iso",
+        rosters=rosters,
+        on_progress=lambda f, m: seen.append((f, m)),
+    )
+    assert [f for f, m in seen if m.startswith("Writing ")] == [
+        0.0,
+        PROGRESS_RECORDS_END / 2,
+    ]
+
+
 # -- what reaches the disc -------------------------------------------------
 
 

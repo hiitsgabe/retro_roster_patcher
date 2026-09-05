@@ -167,6 +167,14 @@ class MVPStatMapper:
         plate discipline, bunting, baserunning, stealing -- take fixed values.
         """
         pos = self.normalize_position(player.position)
+        # The fallback is PROVEN EQUIVALENT under mutation, and kept. Every
+        # string `normalize_position` can return is a value of
+        # `POSITION_ALIASES` or `DEFAULT_POSITION`, and all twelve of those are
+        # keys of `POSITION_DEFAULTS` -- pinned by a test in
+        # `test_stat_mapper.py` -- so `.get`'s second argument cannot be
+        # reached from here and could be any position at all. Kept because the
+        # two tables are separate and a future alias added to one and not the
+        # other should land somewhere stated rather than raise `KeyError`.
         defaults = POSITION_DEFAULTS.get(pos, POSITION_DEFAULTS[DEFAULT_POSITION])
 
         rec = MVPPlayerRecord(
@@ -479,7 +487,21 @@ class MVPStatMapper:
         # the sixth in the rotation -- and a squad of five puts all five in the
         # bullpen and leaves the rotation empty. Inherited, measured, and
         # preserved; it is pinned by a test rather than left to be rediscovered.
+        #
+        # The order of the two slices in `remaining` is PROVEN EQUIVALENT under
+        # mutation, and for a reason worth writing down rather than rediscovering:
+        # the first loop runs only when `len(starters) < STARTERS_PER_TEAM`,
+        # which is exactly when `starters[STARTERS_PER_TEAM:]` is empty, and the
+        # second only when `relievers[RELIEVERS_PER_TEAM:]` is empty. So at most
+        # one of the two slices is non-empty on any run where either loop pops
+        # anything, and concatenating them the other way round cannot change
+        # which player is taken.
         remaining = starters[STARTERS_PER_TEAM:] + relievers[RELIEVERS_PER_TEAM:]
+        # The *order of these two loops* is equivalent for the same reason: the
+        # group that is short is the group whose surplus slice is empty, so only
+        # one of them can ever pop anything on a given squad. Both facts are
+        # measured rather than assumed -- swapping the slices and swapping the
+        # loops were separate mutations and both survived the suite.
         while len(selected_starters) < STARTERS_PER_TEAM and remaining:
             selected_starters.append(remaining.pop(0))
         while len(selected_relievers) < RELIEVERS_PER_TEAM and remaining:
@@ -519,12 +541,24 @@ class MVPStatMapper:
                     break
 
         for p in batters:
+            # PROVEN EQUIVALENT under mutation: `>` instead of `>=` appends one
+            # more batter and then leaves on the following iteration, and the
+            # `[:BATTERS_PER_TEAM]` below drops exactly that one. Kept as `>=`
+            # because the bench is fifteen deep and stopping at sixteen to throw
+            # the sixteenth away is not what this loop means.
             if len(selected) >= BATTERS_PER_TEAM:
                 break
             if id(p) not in used:
                 selected.append(p)
                 used.add(id(p))
 
+        # This slice and the `>=` above are PROVEN EQUIVALENT under mutation
+        # *individually*, because they are redundant with each other: the
+        # position pass can add at most nine, the loop stops the list at
+        # fifteen, and the slice then has nothing to remove. Both are kept --
+        # deleting either leaves the other carrying a bound it does not state,
+        # and a squad is not "the first fifteen of however many the loop felt
+        # like".
         return selected[:BATTERS_PER_TEAM]
 
     # -- small conversions --------------------------------------------------
@@ -577,6 +611,11 @@ class MVPStatMapper:
         would leave the surname empty.
         """
         parts = full_name.strip().split()
+        # PROVEN EQUIVALENT under mutation: `< 1` reaches the same answer for a
+        # one-word name the long way round -- `parts[1:]` is empty, so `kept` is
+        # empty and the return below falls to `parts[-1]`, which is the one
+        # word. Kept because "a one-word name is its own surname" is the rule,
+        # and arriving at it through an empty suffix filter is not.
         if len(parts) <= 1:
             return parts[0] if parts else UNNAMED
         kept = [p for p in parts[1:] if p.rstrip(".").upper() not in NAME_SUFFIXES]
@@ -586,6 +625,13 @@ class MVPStatMapper:
     def get_team_slot(team_abbrev: str) -> int | None:
         """The ROM slot a provider's team abbreviation maps to, or None."""
         mvp_abbrev = MODERN_MLB_TO_MVP.get(team_abbrev.upper())
+        # Both lines below are PROVEN EQUIVALENT under mutation and both are
+        # kept. Deleting the guard leaves `MVP_ABBREV_TO_INDEX.get(None)`, which
+        # is None, the same answer by accident. And giving that `.get` a default
+        # cannot fire: every value of `MODERN_MLB_TO_MVP` is a key of
+        # `MVP_ABBREV_TO_INDEX`, which `test_models.py` pins. What the two say
+        # together is that an unknown club has no slot rather than slot zero,
+        # and slot zero is Anaheim.
         if mvp_abbrev is None:
             return None
         return MVP_ABBREV_TO_INDEX.get(mvp_abbrev)

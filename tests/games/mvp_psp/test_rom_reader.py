@@ -750,3 +750,26 @@ def test_a_slot_whose_player_has_no_attrib_record_names_nobody(tmp_path):
     reader = parsed(tmp_path, fixture.DiscSpec(teams=2, players_per_team=3))
     reader.records["attrib"].clear()
     assert reader.get_info().team_slots[0].first_player == ""
+
+
+# `if fname or lname`, and every fixture record carries both, so `and` was
+# indistinguishable. A record with one of the two is what separates them, and
+# the answer that matters is that the name the disc *does* have still reaches
+# the slot rather than being thrown away for want of its other half.
+
+
+def _reader_with_a_surname_only_first_player(tmp_path):
+    reader = parsed(tmp_path, fixture.DiscSpec(teams=2, players_per_team=3))
+    del reader.records["attrib"][fixture.player_id(0, 0)][ATTRIB_FIRST_NAME]
+    return reader
+
+
+def test_a_player_the_disc_gives_only_a_surname_still_names_his_slot(tmp_path):
+    reader = _reader_with_a_surname_only_first_player(tmp_path)
+    assert reader.get_info().team_slots[0].first_player == "Player00"
+
+
+def test_the_slot_beside_it_is_unaffected(tmp_path):
+    # The premise: the record edited above is the one slot 0 reads.
+    reader = _reader_with_a_surname_only_first_player(tmp_path)
+    assert reader.get_info().team_slots[1].first_player == "Disc01 Player00"
