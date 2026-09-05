@@ -53,6 +53,42 @@ from .rom_reader import ISO_SECTOR_SIZE, NHL07PSPRomReader
 #   G1__, G2__     starting and backup goalie
 #   H1__ .. H5__   the power-play unit
 #   S1__ .. S5__   the penalty-kill unit
+#
+# NOT A PORT REGRESSION -- nothing was dropped in the migration. The source's
+# list is these same thirty names in this same order, all thirty distinct, with
+# no `L1LD` and no repeat of `31LD`; the only edit is that its inline
+# `# Note: "31LD" not "L1LD" in TDB` is spelled out here instead. `L1LD` occurs
+# exactly once in the whole source tree and it is in a different game's writer,
+# `nhl05_ps2_patcher/rom_writer.py`. There is no flag to restore.
+#
+# The evidence that `31LD` is a defence *pair* here and not a transcription of
+# `L1LD` is the shape of the two lists, and it does not need a real ROST dump.
+# Group either game's flags by prefix and read off which position suffixes each
+# prefix carries. NHL 05's sixty-four:
+#
+#   L1..L4  C_ LW RW   and  L1..L3  LD RD      even strength: 4 lines, 3 pairs
+#   P1,P2   C_ LW RW   LD RD                   five skaters
+#   K1,K2   C_ LW      LD RD                   four skaters
+#   41,42   C_ LW      LD RD                   four skaters
+#   31,32   C_         LD RD                   three skaters
+#
+# `31C_` exists there. A defence pair has no centre, so on NHL 05 a `3n` prefix
+# is a three-skater strength unit and the even-strength pairs are `L1LD`-style.
+# NHL 07's thirty group the other way:
+#
+#   L1..L4  C_ LW RW   and no L*LD or L*RD at all
+#   31,32,33           LD RD                   two slots each, no centre
+#
+# No `31C_`, exactly two slots per number, three of them, and no other defence
+# flag anywhere in the list -- so on this game `3n` is defence pair *n*, and if
+# it were not, NHL 07 could not assign a defence pair at all. Same prefix, two
+# different meanings, one per game. `stat_mapper.generate_team_line_flags` emits
+# `3{pair}{side}` and that is correct here; `games/nhl05_ps2/rom_writer.py`
+# carries the other half of this argument, where the same emission is wrong.
+#
+# Still unverified against a real disc, and one thing would settle it outright:
+# a dump of the ROST table's field-name array from a retail NHL 07 (PSP) UMD. No
+# such file may enter this repository, so the reasoning above is what there is.
 LINE_FLAGS = [
     "L1C_",
     "L2C_",
