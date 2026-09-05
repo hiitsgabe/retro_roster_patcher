@@ -323,6 +323,12 @@ class MVPPSPRomReader:
             line = line.strip()
             if not line:
                 continue
+            # PROVEN EQUIVALENT under mutation, and kept. A line with no comma
+            # cannot survive the two guards below whatever this one does: it
+            # splits to a single part, so `_parse_record_body` is handed an
+            # empty list and `if not fields` drops it -- and if the line is not
+            # a hex id it is dropped one step earlier. Kept because it is the
+            # cheap test and it names the shape a record has.
             if "," not in line:
                 continue
             parts = line.split(",")

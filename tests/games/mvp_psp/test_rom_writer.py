@@ -168,6 +168,16 @@ def test_a_record_the_order_names_but_the_table_no_longer_holds_is_skipped():
     assert fixture.parse_table_order(data) == ["00000000a"]
 
 
+def test_a_record_the_table_no_longer_holds_leaves_no_line_at_all():
+    # The test above cannot tell "skipped" from "written as `00000000gone,;`":
+    # the fixture's parser drops a record with no columns, so both readings
+    # yield the same one-id order. Mutation testing said so -- `records.get(id)`
+    # against `records.get(id, {})` survived it. These are the bytes, and the
+    # deleted id is not among them.
+    data = build_csv_section("h,e", {"00000000a": {0: "a"}}, ["00000000a", "00000000gone"])
+    assert data == b"h,e;\r\n00000000a,0 a,;\r\n"
+
+
 def test_an_id_the_order_holds_twice_is_written_twice():
     # Inherited from the reader, which appends a duplicate id to the order
     # twice, and preserved so a table's row count survives a rebuild.
@@ -364,6 +374,23 @@ def test_a_section_nothing_staged_is_not_rebuilt(tmp_path):
     assert rebuilt[offset : offset + allocation] == original[offset : offset + allocation]
 
 
+def test_a_table_changed_behind_the_writers_back_is_still_not_rebuilt(tmp_path):
+    # What decides which sections are rewritten is `_modified_tables` -- what
+    # `update_records` and `update_player_record` were asked for -- and not the
+    # current contents of `reader.records`. The test above cannot show that:
+    # re-serialising an untouched table reproduces the disc's own bytes exactly,
+    # so dropping the check entirely is invisible against a fixture disc, and
+    # mutation testing confirmed it survives. This changes a table without
+    # staging it, so the two answers differ.
+    writer = make_writer(tmp_path)
+    original = writer.reader.database_big
+    writer.reader.records["team"]["00000000a"] = {0: "Ghost"}
+    writer.update_player_record("attrib", fixture.player_id(0, 0), {ATTRIB_FIRST_NAME: "E"})
+    offset, allocation = SECTION_ALLOCATIONS["team"]
+    rebuilt = writer.rebuild_database_big()
+    assert rebuilt[offset : offset + allocation] == original[offset : offset + allocation]
+
+
 def test_a_staged_table_with_no_header_is_not_rebuilt(tmp_path):
     writer = make_writer(tmp_path)
     original = writer.reader.database_big
@@ -372,6 +399,54 @@ def test_a_staged_table_with_no_header_is_not_rebuilt(tmp_path):
     offset, allocation = SECTION_ALLOCATIONS["team"]
     rebuilt = writer.rebuild_database_big()
     assert rebuilt[offset : offset + allocation] == original[offset : offset + allocation]
+
+
+# A section whose very first byte is the record terminator has a header, and
+# that header is the empty string. `_extract_headers` stores it -- `idx == 0`
+# is `>= 0` -- so the table passes `name in self.section_headers` and is stopped
+# one step later by `_rebuild_section_bytes`'s own `if not header`. That is the
+# only state in which the two guards disagree, and without it three separate
+# mutations survived: dropping the header guard, dropping the empty-rebuild
+# guard, and (below) the records guard.
+
+
+def _writer_with_an_empty_team_header(tmp_path):
+    writer = make_writer(tmp_path)
+    writer.reader.sections["team"] = b";\r\n00000000a,0 x,;\r\n"
+    writer.section_headers.clear()
+    writer._extract_headers()
+    return writer
+
+
+def test_an_empty_first_line_is_kept_as_an_empty_header(tmp_path):
+    assert _writer_with_an_empty_team_header(tmp_path).section_headers["team"] == ""
+
+
+def test_a_table_whose_header_is_empty_rebuilds_to_nothing(tmp_path):
+    # A table written without its column names is a table the game cannot read,
+    # so the writer refuses to invent one rather than emitting a bare `;\r\n`.
+    writer = _writer_with_an_empty_team_header(tmp_path)
+    assert writer._rebuild_section_bytes("team") is None
+
+
+def test_a_staged_table_whose_header_is_empty_is_not_rebuilt(tmp_path):
+    writer = _writer_with_an_empty_team_header(tmp_path)
+    original = writer.reader.database_big
+    writer.update_records("team", {"00000000a": {0: "x"}})
+    offset, allocation = SECTION_ALLOCATIONS["team"]
+    rebuilt = writer.rebuild_database_big()
+    assert rebuilt[offset : offset + allocation] == original[offset : offset + allocation]
+
+
+def test_a_table_the_reader_never_parsed_rebuilds_to_nothing(tmp_path):
+    # Unreachable through `patch`, and pinned anyway. `parse_all` fills
+    # `records` for every section `decompress_all` read, and `_extract_headers`
+    # keeps a header only for those same sections, so after `load` a name with a
+    # header and no records cannot exist. This is the state a caller that
+    # dropped one would arrive in, and it is the guard's whole purpose.
+    writer = make_writer(tmp_path)
+    del writer.reader.records["team"]
+    assert writer._rebuild_section_bytes("team") is None
 
 
 def test_the_compact_attribute_table_is_never_rebuilt(tmp_path):
@@ -465,6 +540,44 @@ def test_a_section_that_exactly_fills_its_allocation_does_not_raise(tmp_path):
         False,
         True,
     )
+
+
+# The bound is `len(compressed) > allocation`, and the two tests above stand on
+# either side of it *loosely* -- one section is thousands of bytes over and the
+# other some hundreds under. Mutation testing moved the bound to
+# `> allocation + 1` and both of them still passed, because no rebuild in this
+# module lands within one byte of the line. RefPack output length is not a
+# quantity a fixture can dial to an exact byte by choosing record text, so these
+# two hand `rebuild_database_big` a section of an exact length instead. That is
+# the whole of what the bound reads.
+
+
+def test_a_section_one_byte_over_its_allocation_raises(tmp_path, monkeypatch):
+    writer = make_writer(tmp_path)
+    _, allocation = SECTION_ALLOCATIONS["teamstat"]
+    writer.update_records("teamstat", dict(writer.reader.records["teamstat"]))
+    monkeypatch.setattr(writer, "_rebuild_section_bytes", lambda name: b"\xa5" * (allocation + 1))
+    with pytest.raises(SectionTooLargeError):
+        writer.rebuild_database_big()
+
+
+def test_a_section_of_exactly_its_allocation_is_written_whole(tmp_path, monkeypatch):
+    writer = make_writer(tmp_path)
+    offset, allocation = SECTION_ALLOCATIONS["teamstat"]
+    writer.update_records("teamstat", dict(writer.reader.records["teamstat"]))
+    monkeypatch.setattr(writer, "_rebuild_section_bytes", lambda name: b"\xa5" * allocation)
+    rebuilt = writer.rebuild_database_big()
+    assert rebuilt[offset : offset + allocation] == b"\xa5" * allocation
+
+
+def test_a_section_one_byte_over_reports_that_one_byte(tmp_path, monkeypatch):
+    writer = make_writer(tmp_path)
+    _, allocation = SECTION_ALLOCATIONS["teamstat"]
+    writer.update_records("teamstat", dict(writer.reader.records["teamstat"]))
+    monkeypatch.setattr(writer, "_rebuild_section_bytes", lambda name: b"\xa5" * (allocation + 1))
+    with pytest.raises(SectionTooLargeError) as excinfo:
+        writer.rebuild_database_big()
+    assert excinfo.value.compressed - excinfo.value.allocation == 1
 
 
 # -- copy_iso and finalize -------------------------------------------------
