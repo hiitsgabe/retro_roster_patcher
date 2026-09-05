@@ -263,16 +263,16 @@ class NBALive95PlayerRecord:
     `skin_color` and `hair_style` have no producer and are not expected to get
     one: `stat_mapper.map_player` builds this record without them and ESPN
     publishes no such attribute. 0 is therefore what every mapped record carries,
-    and it means "not supplied" rather than "tone 0, style 0".
-    `rom_writer.write_player` reads it that way and leaves the image's own byte
-    alone, which is a DELIBERATE DIVERGENCE from upstream and from this port
-    until now; the argument is at the line there. A direct caller of
-    `write_player` may still set either field to a positive value and have it
-    written.
+    and 0 is not a "not supplied" code -- it is tone 0 of 4 and style 0 of 39.
+    `rom_writer.write_player` writes both bytes for every player regardless, as
+    upstream did, so every patched player comes out with the same skin tone and
+    the same hair. That is known wrong and preserved deliberately for byte
+    fidelity; the argument is at the lines there.
 
-    `season_stats` defaults to 17 zeros and those zeros *are* written, which is
-    the opposite call on a field of the same shape. See
-    `stat_mapper.NBALive95StatMapper.map_player` for why the two differ.
+    `season_stats` defaults to 17 zeros and those zeros are written too. Same
+    shape of field and the same unconditional write, but zero is also the right
+    answer there rather than only the faithful one -- see
+    `stat_mapper.NBALive95StatMapper.map_player`.
     """
 
     name_last: str = "PLAYER"

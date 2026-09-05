@@ -246,35 +246,32 @@ class NBALive95RomWriter:
         d[off + OFF_WEIGHT] = max(0, min(255, player.weight_lbs - 100))
         d[off + OFF_EXPERIENCE] = max(0, min(255, player.experience))
 
-        # DELIBERATE DIVERGENCE -- **skin and hair are written only when the
-        # caller supplied one.** Upstream wrote both unconditionally, and nothing
-        # in this package sets either: `stat_mapper.map_player` builds the record
-        # without them, so both arrived here as `NBALive95PlayerRecord`'s default
-        # of 0 for all 324 patched players. The effect was that **every patched
-        # player got the same skin tone and the same hair**, laid over whatever
-        # variety the 1994 image shipped with. 0 is not a "no value" code in
-        # either field -- it is a real tone and a real style out of 4 and 39 --
-        # so writing it was an assertion about a player's appearance made from
-        # nothing.
+        # UPSTREAM BEHAVIOUR, KNOWN WRONG, PRESERVED DELIBERATELY: both bytes are
+        # written for every player, and nothing in this package supplies either.
+        # `stat_mapper.map_player` builds the record without them, so both arrive
+        # here as `NBALive95PlayerRecord`'s default of 0 for all 324 patched
+        # players, and every patched player therefore gets the same skin tone and
+        # the same hair laid over whatever variety the 1994 image shipped with.
+        # 0 is not a "not supplied" code in either field -- it is a real tone out
+        # of 4 and a real style out of 39 -- so this asserts an appearance from
+        # nothing. ESPN publishes neither attribute and no provider here can fill
+        # them. This port skipped the two writes for a while, on the argument
+        # that the image's own per-player byte is strictly more information than
+        # one constant.
         #
-        # ESPN publishes neither attribute and no provider here can fill them,
-        # so there is nothing to write; leaving the byte alone keeps the image's
-        # own per-player value, which is strictly more information than one
-        # constant. `games/nhl05_ps2` (`HEIG`), `games/nhl07_psp` and
-        # `games/mvp_psp` (height, weight) made the same call on the same shape
-        # of field. The `> 0` test rather than an unconditional skip is
-        # `mvp_psp`'s weight pattern: it costs the ability to write a 0
-        # deliberately, which no caller does and which is the exact value that
-        # caused the damage, and it keeps the two record fields usable by a
-        # direct caller of `write_player` if a producer ever appears.
+        # It writes them the upstream way again because skipping them is a record
+        # layout no released build of this patcher ever produced. Nothing in this
+        # repository has been validated against a real dump, and a 93-byte record
+        # that differs from the one the game has actually been fed is a crash
+        # risk on hardware that outweighs a uniform-looking roster. Fidelity to
+        # the original beats correctness of the data. Do not re-add the `> 0`
+        # guards.
         #
-        # This is NOT the same call as `season_stats` two blocks down, which
-        # keeps writing its zeros; see `stat_mapper.map_player` for why zero is
-        # the right answer for a counting-stat block and the wrong one here.
-        if player.skin_color > 0:
-            d[off + OFF_SKIN] = min(3, player.skin_color)
-        if player.hair_style > 0:
-            d[off + OFF_HAIR] = min(0x26, player.hair_style)
+        # The `max(0, ...)` halves are upstream's and are kept with them: inside
+        # the old `> 0` guard they were dead, and outside it they are what stops
+        # a negative field reaching the buffer as a wrapped byte.
+        d[off + OFF_SKIN] = max(0, min(3, player.skin_color))
+        d[off + OFF_HAIR] = max(0, min(0x26, player.hair_style))
 
         # Season stats (17 x 2-byte BE)
         #

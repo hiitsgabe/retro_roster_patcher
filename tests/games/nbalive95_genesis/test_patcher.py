@@ -737,28 +737,24 @@ def test_the_written_names_reach_the_records_the_pointers_address(patcher, rom, 
     assert found == [f"Written{index:02d}" for index in range(12)]
 
 
-def test_a_patched_team_keeps_the_twelve_different_faces_the_cartridge_shipped_with(
+def test_a_patched_team_loses_the_twelve_different_faces_the_cartridge_shipped_with(
     patcher, rom, out
 ):
-    """DELIBERATE DIVERGENCE, end to end: patched players no longer look alike.
+    """PINS UPSTREAM FIDELITY DELIBERATELY, end to end. Do not "fix" this back.
 
     `map_player` sets neither `skin_color` nor `hair_style`, so every record
-    reaches the writer carrying 0 for both. Upstream, and this port until now,
-    wrote those zeros: all twelve Bulls came out with one skin tone and one
-    hair style. The image's own twelve styles now survive the patch, while the
-    names beside them are all replaced.
+    reaches the writer carrying 0 for both, and `write_player` writes both --
+    upstream's behaviour, restored. All twelve Bulls come out with one skin tone
+    and one hair style, over an image that shipped twelve distinct ones. The
+    argument for keeping it is in `rom_writer.write_player`.
     """
     patcher.patch(rom_path=rom, output_path=out, rosters=_mapped((CHI_SLOT, 12)))
     roster = _read_back(out, CHI_SLOT)
-    assert [player["hair_style"] for player in roster] == [
-        fixture.player_hair(CHI_SLOT, slot) for slot in range(12)
-    ]
-    assert [player["skin_color"] for player in roster] == [
-        fixture.player_skin(CHI_SLOT, slot) for slot in range(12)
-    ]
-    # Not vacuous in either direction: the styles really do differ from each
-    # other, and these are the records the patch rewrote.
-    assert len({player["hair_style"] for player in roster}) == 12
+    assert [player["hair_style"] for player in roster] == [0] * 12
+    assert [player["skin_color"] for player in roster] == [0] * 12
+    # Not vacuous in either direction: the image's styles really do differ from
+    # each other, and these are the records the patch rewrote.
+    assert fixture.player_hair(CHI_SLOT, 0) != fixture.player_hair(CHI_SLOT, 1)
     assert [player["last_name"] for player in roster] == [
         f"Written{index:02d}" for index in range(12)
     ]

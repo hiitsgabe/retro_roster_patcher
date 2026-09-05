@@ -59,8 +59,10 @@ class NBALive95StatMapper:
     ) -> NBALive95PlayerRecord:
         """Map an NBA player to an NBA Live 95 player record.
 
-        PRESERVED, and the reasoning is recorded here because it looks from the
-        outside like the `skin_color` / `hair_style` defect and is not.
+        PRESERVED, and the reasoning is recorded here because `season_stats` and
+        `skin_color` / `hair_style` are the same shape of field -- unsupplied,
+        defaulted to zero, written over the cartridge's own bytes -- and are kept
+        for different reasons.
 
         `season_stats` is never supplied, so every record leaves here with
         `NBALive95PlayerRecord`'s default of 17 zeros and
@@ -75,16 +77,12 @@ class NBALive95StatMapper:
           be recovered from an average; multiplying by a guessed games count
           would put fabricated counting stats in a field the game displays as
           fact.
-        * **Leave the ROM's bytes alone**, which is the call this port makes for
-          `skin_color` and `hair_style` one commit earlier. Wrong here, and for
-          the reason that makes the two fields different. There is no null skin
-          tone, so writing 0 asserts something false and leaving the byte
-          asserts nothing. There *is* a null season line, and it is 17 zeros:
-          a player who has not played this game's season has played 0 games and
-          scored 0 points. Leaving the bytes would attribute the previous
-          occupant's 1994 totals -- 1 000 points, 400 rebounds -- to whoever now
-          holds the slot, which is the one option of the three that puts a
-          statement known to be false on the screen.
+        * **Leave the ROM's bytes alone.** Wrong here. There *is* a null season
+          line and it is 17 zeros: a player who has not played this game's
+          season has played 0 games and scored 0 points. Leaving the bytes would
+          attribute the previous occupant's 1994 totals -- 1 000 points, 400
+          rebounds -- to whoever now holds the slot, which is the one option of
+          the three that puts a statement known to be false on the screen.
         * **Write the zeros**, which is what happens: the honest "no season yet"
           for a roster the patch has just replaced.
 
@@ -93,6 +91,13 @@ class NBALive95StatMapper:
         provider that publishes season totals rather than a change here.
         `rom_writer.write_player`'s stat clamp is the half of it that *was*
         repairable, and was.
+
+        Skin and hair are the other half of the comparison and the answer there
+        is different: there is no null skin tone, so writing 0 asserts something
+        false where leaving the byte asserts nothing. That write is upstream's,
+        it is known wrong, and it is kept anyway -- not because zero is right but
+        because the bytes must match an original nothing here has been validated
+        against. See `rom_writer.write_player`.
         """
         pos_str = self._normalize_position(player.position)
         pos_byte = POSITION_TO_BYTE.get(pos_str, POSITION_SF)
