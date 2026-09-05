@@ -72,9 +72,6 @@ def _player(**overrides):
     return Player(**base)
 
 
-# -- the scale ---------------------------------------------------------------
-
-
 def test_clamp_holds_the_scale_floor_at_one():
     assert _clamp(-4) == 1
 
@@ -111,9 +108,6 @@ def test_a_range_with_no_width_scales_to_the_midpoint():
 
 def test_an_inverted_range_scales_to_the_midpoint():
     assert _scale(5.0, 10.0, 2.0) == 5
-
-
-# -- batter ratings from stats -----------------------------------------------
 
 
 @pytest.mark.parametrize(
@@ -159,9 +153,6 @@ def test_a_stat_that_is_present_but_none_falls_back_to_its_default(mapper):
     # ESPN sends nulls. `float(stats.get("SB", 0) or 0)` is what absorbs them,
     # and a `stats.get("SB", 0)` without the `or` would raise here.
     assert mapper._map_batter_stats({"SB": None, "3B": None}, "CF").speed == 1
-
-
-# -- pitcher ratings from stats ----------------------------------------------
 
 
 def test_a_pitchers_ratings_span_the_scale(mapper):
@@ -210,9 +201,6 @@ def test_exactly_twenty_saves_do_not(mapper):
     assert mapper._map_pitcher_stats({"SV": 20}, False).fatigue == 3
 
 
-# -- the shared-mutable-default divergence -----------------------------------
-
-
 def test_a_stat_less_batter_does_not_receive_the_defaults_table_itself(mapper):
     record = mapper.map_batter(_player(position="SS"))
     assert record.batter_attrs is not BATTER_DEFAULTS["SS"]
@@ -254,9 +242,6 @@ def test_the_closer_default_row_is_never_selected(mapper):
     assert PITCHER_DEFAULTS["CL"].speed == 7
 
 
-# -- map_batter --------------------------------------------------------------
-
-
 def test_a_mapped_batter_is_not_flagged_as_a_pitcher(mapper):
     assert mapper.map_batter(_player()).is_pitcher is False
 
@@ -287,9 +272,6 @@ def test_a_batter_with_stats_takes_the_rbi_total_from_them(mapper):
 
 def test_a_batter_with_no_stats_has_no_home_runs(mapper):
     assert mapper.map_batter(_player()).home_runs == 0
-
-
-# -- map_pitcher -------------------------------------------------------------
 
 
 def test_a_mapped_pitcher_is_flagged_as_one(mapper):
@@ -329,9 +311,6 @@ def test_a_pitcher_with_stats_takes_the_save_total_from_them(mapper):
     assert mapper.map_pitcher(_player(), dict(ACE, SV=41)).saves == 41
 
 
-# -- handedness --------------------------------------------------------------
-
-
 def test_a_left_handed_batter_gets_the_left_stance_byte(mapper):
     assert mapper.map_batter(_player(bats="L")).bat_hand == HAND_LEFT
 
@@ -356,9 +335,6 @@ def test_the_bats_field_wins_over_the_throwing_hand(mapper):
 
 def test_the_throwing_hand_stands_in_when_the_bats_field_is_empty(mapper):
     assert mapper.map_batter(_player(bats="", handedness="L")).bat_hand == HAND_LEFT
-
-
-# -- names -------------------------------------------------------------------
 
 
 def test_a_first_name_is_reduced_to_one_initial(mapper):
@@ -407,9 +383,6 @@ def test_a_name_of_only_a_suffix_keeps_the_last_word(mapper):
     assert mapper._split_name("Ken Jr.") == ("K", "JR.")
 
 
-# -- position normalisation --------------------------------------------------
-
-
 @pytest.mark.parametrize("position", ["C", "1B", "2B", "3B", "SS", "LF", "CF", "RF", "DH"])
 def test_a_lineup_position_passes_through(mapper, position):
     assert mapper._normalize_position(position, is_pitcher=False) == position
@@ -436,9 +409,6 @@ def test_the_pitcher_flag_overrides_the_position_string(mapper):
     assert mapper._normalize_position("SS", is_pitcher=True) == "P"
 
 
-# -- is_pitcher --------------------------------------------------------------
-
-
 @pytest.mark.parametrize("position", ["P", "SP", "RP", "CL", "CP"])
 def test_every_pitching_abbreviation_is_a_pitcher(mapper, position):
     assert mapper.is_pitcher(_player(position=position)) is True
@@ -457,9 +427,6 @@ def test_the_pitcher_test_is_public(mapper):
     # DELIBERATE DIVERGENCE: upstream named it `_is_pitcher` and then called it
     # from `patcher.py`, across the module boundary, through the underscore.
     assert hasattr(mapper, "_is_pitcher") is False
-
-
-# -- team slots --------------------------------------------------------------
 
 
 def test_a_modern_abbreviation_finds_its_1994_slot(mapper):
@@ -493,9 +460,6 @@ def test_the_other_1998_expansion_team_has_no_slot(mapper):
 
 def test_an_abbreviation_from_another_sport_has_no_slot(mapper):
     assert mapper.get_team_slot("ZZZ") is None
-
-
-# -- roster selection --------------------------------------------------------
 
 
 def _squad(batters=20, starters=8, relievers=10):

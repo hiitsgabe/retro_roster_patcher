@@ -1,13 +1,11 @@
 """`games/mvp_psp/models.py`: the constants and the invariants derived from them.
 
-Three of these pin facts the source relied on and never checked, and one of the
-three is what the migration brief called an undeclared invariant duplicated in
-two files:
+Three pin facts the source relied on and never checked:
 
-  * slot order. `patcher.py:160` and `rom_reader.py:250` both indexed
+  * slot order. `patcher.py` and `rom_reader.py` both indexed
     `list(TEAM_HASHES.keys())` by slot number, so the dict's insertion order
     *was* the slot ordering, in two files, with nothing asserting it.
-  * `AL_SLOT_COUNT`. Written inline as `team_index < 14` with no explanation.
+  * `AL_SLOT_COUNT`, written inline as `team_index < 14` with no explanation.
   * the section table. Nineteen entries, ascending, and every allocation
     positive -- a table whose offsets went backwards would give a section a
     negative allocation and silently write nothing.
@@ -83,9 +81,6 @@ AL_CLUBS_2005 = {
     "TB",
     "TOR",
 }
-
-
-# -- the section table -----------------------------------------------------
 
 
 def test_the_database_holds_nineteen_sections():
@@ -164,20 +159,17 @@ def test_the_compact_attribute_table_is_not_among_the_modified_ones():
     assert COMPACT_ATTRIB_TABLE not in MODIFIED_TABLES
 
 
-# -- the section offsets, written out ---------------------------------------
-#
 # The tests above check that the section table is *self-consistent* -- ascending,
-# distinct, tiling the blob without a gap. Every one of them still passes if the
-# whole table is shifted, and mutation testing moved a single offset by four
-# bytes and by one and watched the suite stay green: `SECTION_ALLOCATIONS` is
-# derived from `SECTION_MAP`, and `tests/fixtures/synthetic_mvp_iso.py` writes
-# its sections at the offsets `SECTION_ALLOCATIONS` gives it, so the fixture
-# moves with the code and the round trip closes over the error.
+# distinct, tiling the blob without a gap. All of that still holds if the whole table
+# is shifted: `SECTION_ALLOCATIONS` is derived from `SECTION_MAP` and
+# `tests/fixtures/synthetic_mvp_iso.py` writes its sections at the offsets
+# `SECTION_ALLOCATIONS` gives it, so the fixture moves with the code and the round
+# trip closes over the error.
 #
 # These are the numbers themselves. They are the source's, they have never been
-# checked against a real disc, and no disc may enter this repository to check
-# them -- so this is not a derivation, it is the record. A change to one of them
-# is a change to a disc's layout and has to be a change to this list.
+# checked against a real disc, and no disc may enter this repository to check them --
+# so this is not a derivation, it is the record. A change to one of them is a change
+# to a disc's layout and has to be a change to this list.
 
 SECTION_OFFSETS = (
     (0, "attrib_compact"),
@@ -217,19 +209,15 @@ def test_every_section_starts_where_the_source_said(offset, name):
     assert SECTION_ALLOCATIONS[name][0] == offset
 
 
-# -- the column numbers, written out ----------------------------------------
+# A record here is `id,fieldnum value,fieldnum value,...,;`, so these constants are
+# column *names* rather than addresses: a wrong one writes a real column of a real
+# record with the wrong meaning, and nothing crashes. And a field written at the wrong
+# number and read back from the same wrong number passes forever -- every test in this
+# package that reads a column back reads it through the same constant that wrote it.
 #
-# A record here is `id,fieldnum value,fieldnum value,...,;`, so these constants
-# are column *names* rather than addresses: a wrong one writes a real column of
-# a real record with the wrong meaning, and nothing crashes. And a field written
-# at the wrong number and read back from the same wrong number passes forever --
-# every test in this package that reads a column back reads it through the same
-# constant that wrote it, and mutation testing duly walked `ATTRIB_WEIGHT` from
-# 10 to 11 and `ROSTER_RH_AL_ORDER` from 3 to 13 without turning anything red.
-#
-# So the numbers are written out. They came off a real disc that cannot enter
-# this repository, they cannot be derived from anything here, and this list is
-# the only place they are stated twice.
+# So the numbers are written out. They came off a real disc that cannot enter this
+# repository, they cannot be derived from anything here, and this list is the only
+# place they are stated twice.
 
 ATTRIB_COLUMNS = {
     "ATTRIB_FIRST_NAME": 0,
@@ -403,9 +391,6 @@ def test_the_last_pitch_the_patcher_writes_stops_before_the_delivery_column():
     assert last + models.PA_PITCH_VELOCITY_OFFSET == 22
 
 
-# -- the extent ------------------------------------------------------------
-
-
 def test_the_extent_starts_where_the_lba_says():
     start, _ = database_big_extent()
     assert start == 685735936
@@ -437,9 +422,6 @@ def test_the_extent_follows_a_patched_lba(monkeypatch):
 
     monkeypatch.setattr(models, "DATABASE_BIG_LBA", 40)
     assert database_big_extent() == (81920, 81920 + DATABASE_BIG_SIZE)
-
-
-# -- the team tables -------------------------------------------------------
 
 
 def test_there_are_thirty_team_slots():
@@ -483,12 +465,11 @@ def test_no_two_teams_share_a_hash():
     assert len(set(TEAM_HASHES.values())) == TEAM_COUNT
 
 
-# `MVP_TEAM_ABBREVS` and `MVP_TEAM_ORDER` are two parallel tuples and every test
-# that reads a display name reads it back through `MVP_TEAM_ORDER` itself, so
-# swapping two of its entries changed nothing anywhere -- mutation testing
-# exchanged Oakland and Seattle and the suite stayed green while every UI in the
-# library would have shown Oakland's roster under Seattle's name. This is the
-# pairing, written out from the 2005 league rather than from either tuple.
+# `MVP_TEAM_ABBREVS` and `MVP_TEAM_ORDER` are two parallel tuples and every test that
+# reads a display name reads it back through `MVP_TEAM_ORDER` itself, so swapping two
+# of its entries changes nothing here while every UI in the library would show one
+# club's roster under another club's name. This is the pairing, written out from the
+# 2005 league rather than from either tuple.
 
 CLUB_NAMES_2005 = {
     "ANA": "Anaheim Angels",
@@ -545,9 +526,6 @@ def test_a_record_id_is_nine_characters():
     assert HASH_ID_CHARS == 9
 
 
-# -- the league split ------------------------------------------------------
-
-
 def test_fourteen_slots_are_american_league():
     assert AL_SLOT_COUNT == 14
 
@@ -564,9 +542,6 @@ def test_no_american_league_club_appears_after_the_boundary():
 
 def test_sixteen_slots_are_national_league():
     assert TEAM_COUNT - AL_SLOT_COUNT == 16
-
-
-# -- provider abbreviations ------------------------------------------------
 
 
 def test_every_provider_code_maps_to_a_real_slot():
@@ -600,9 +575,6 @@ def test_the_relocated_marlins_map_to_florida():
 
 def test_the_relocated_angels_map_to_anaheim():
     assert MODERN_MLB_TO_MVP["LAA"] == "ANA"
-
-
-# -- roster shape ----------------------------------------------------------
 
 
 def test_a_roster_is_twenty_five_players():
@@ -687,9 +659,6 @@ def test_a_player_outside_the_lineup_stores_minus_one():
     assert NOT_IN_LINEUP == -1
 
 
-# -- position codes --------------------------------------------------------
-
-
 def test_the_scale_runs_from_zero():
     assert ATTR_MIN == 0
 
@@ -724,9 +693,6 @@ def test_every_lineup_position_has_a_position_code():
 
 def test_the_pitcher_and_reliever_codes_are_distinct():
     assert ATTRIB_POS_PITCHER != ATTRIB_POS_RELIEVER
-
-
-# -- record types ----------------------------------------------------------
 
 
 def test_a_pitch_is_frozen():

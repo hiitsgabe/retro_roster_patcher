@@ -428,9 +428,6 @@ def test_an_absent_assets_dir_is_not_an_error(tmp_path):
     assert (cache_dir / "we2002_portuguese.ppf").exists() is True
 
 
-# ── record merge order and the PPF1 record limit ──────────────────────────
-
-
 def _community_ppf_with(offset: int, payload: bytes) -> bytes:
     """A synthetic PPF2 carrying one record at a caller-chosen offset."""
     header = b"PPF20" + b"\x00" + b"X" * 50 + struct.pack("<I", 0) + b"\x00" * 1024
@@ -502,10 +499,9 @@ def test_no_record_this_package_generates_reaches_the_ppf1_length_limit():
 
 
 def test_a_record_longer_than_the_limit_becomes_several_at_consecutive_offsets():
-    # The split branch has no live caller, which is why it survived every mutant
-    # aimed at it. It is kept rather than deleted because `bytearray.append`
-    # raises `ValueError` above 255, so a caller handing `_make_ppf1` a long
-    # record would otherwise get a crash instead of a patch. 600 bytes is
+    # The split branch has no live caller. It is kept rather than deleted because
+    # `bytearray.append` raises `ValueError` above 255, so a caller handing `_make_ppf1`
+    # a long record would otherwise get a crash instead of a patch. 600 bytes is
     # 255 + 255 + 90, which is three records and not two.
     long_data = bytes(range(256)) * 2 + bytes(88)
     assert len(long_data) == 600

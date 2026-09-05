@@ -52,9 +52,6 @@ def loaded(tmp_path, spec=None, name="game.iso"):
     return reader
 
 
-# -- constants -------------------------------------------------------------
-
-
 def test_the_iso_path_constant_decomposes_into_the_three_directories_and_the_file():
     # The source declared `DB_VIV_PATH` and then wrote the directory list out
     # again at each of three call sites. These two are derived from it, so a
@@ -70,9 +67,6 @@ def test_the_minimum_iso_size_is_twenty_sectors():
     # 20 sectors is the PVD at 16 plus the four directories beneath it. Stated
     # as arithmetic rather than as 40960 so the two cannot drift.
     assert MIN_ISO_SIZE == ISO_SECTOR_SIZE * 20
-
-
-# -- loading ---------------------------------------------------------------
 
 
 def test_loading_a_well_formed_image_succeeds(tmp_path):
@@ -179,9 +173,6 @@ def test_a_sparsely_padded_image_loads_and_reports_the_padded_size(tmp_path):
     assert reader.get_info().size == 8 * 1024 * 1024
 
 
-# -- validate --------------------------------------------------------------
-
-
 def test_a_well_formed_image_validates_deeply(tmp_path):
     assert loaded(tmp_path).validate(deep=True) is True
 
@@ -231,9 +222,6 @@ def test_the_deep_check_finds_the_bio_tdb_however_the_archive_spells_it(tmp_path
     # missed.
     reader = loaded(tmp_path, fixture.DiscSpec(bioatt_name="NHLBIOATT.TDB"))
     assert reader.validate(deep=True) is True
-
-
-# -- get_tdb ---------------------------------------------------------------
 
 
 @pytest.mark.parametrize("name", [TDB_MASTER, TDB_BIOATT, TDB_ROSTER])
@@ -312,9 +300,6 @@ def test_a_member_stored_uncompressed_parses_without_decompression(tmp_path):
         "SPBT",
         "STEA",
     ]
-
-
-# -- get_info and the team slots -------------------------------------------
 
 
 def test_a_valid_image_reports_one_slot_per_stea_record(tmp_path):
@@ -433,9 +418,6 @@ def test_a_live_count_under_the_allocation_bounds_the_slot_list(tmp_path):
     assert len(reader._read_team_slots()) == 6
 
 
-# -- locating db.viv on the disc -------------------------------------------
-
-
 def test_the_archive_is_located_at_the_sector_the_fixture_placed_it(tmp_path):
     db_lba, _, _ = loaded(tmp_path).find_db_viv_location()
     assert db_lba == fixture.DB_VIV_SECTOR
@@ -522,13 +504,6 @@ def test_the_archive_is_found_when_its_directory_record_is_reached_normally(tmp_
     # The control for the test above: the same image, unmodified, does find it.
     # Without this the previous test passes for a fixture that never worked.
     assert NHL07PSPRomReader(str(make_iso(tmp_path))).load() is True
-
-
-# -- holes mutation testing found ------------------------------------------
-#
-# Each of these kills a mutant that survived the first pass. The comment on
-# each says which mutation, because a test whose reason is only "coverage" is
-# the first one a later reader deletes.
 
 
 def test_a_file_of_exactly_the_floor_is_not_refused_for_its_size(tmp_path):

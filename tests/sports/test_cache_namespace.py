@@ -3,31 +3,18 @@
 `cli.commands.default_cache_dir` hands the same `~/.cache/retro-roster-patcher`
 to every patcher, and every patcher hands it straight to its client, so both
 clients write their `{key}.json` files side by side into one flat directory.
-`_load_cache` validates only that what it reads back is a `dict`, so two
-clients agreeing on a key would silently serve one provider's payload to the
-other and the reader would parse it to an empty list rather than fail.
+`_load_cache` validates only that what it reads back is a `dict`, so two clients
+agreeing on a key would silently serve one provider's payload to the other and
+the reader would parse it to an empty list rather than fail.
 
 ESPN prefixes every key `espn_` and the NHL client prefixes `nhl_api_`.
-Reading that off the source is how the reviewer found no collision; it is not a
-proof, because a key template is easy to miss by eye and easy to add later
-without noticing this constraint exists.
 
-A third client, `ApiFootballClient`, was covered here too before it was deleted.
-It namespaced nothing — its four stems were the bare words `leagues`, `teams`,
-`squad` and `players` — and a test named exactly that risk. Both the client and
-the risk are gone; what remains is the discipline the two survivors keep, which
-is what a third client added later has to be held to.
-
-This file executes it instead. Each client's own test module already carries a
-`NETWORK_CALLS` table naming every method that reaches the wire, and
-`test_the_leak_guard_covers_every_public_member` holds each one complete: it
-asserts `dir(client_class)`'s public names *equal* the union of that table and an
-`OFFLINE_MEMBERS` set of members that issue no request at all. A method that
-caches is by definition a method that requests, so it cannot hide in the second
-set. Driving every entry in a table and listing the directory afterwards is
-therefore a complete inventory of that client's key namespace rather than a
-sample of it, and it stays complete: a new cached method left out of the table
-fails that guard before it reaches this one.
+The inventory is complete rather than a sample: each client's own test module
+carries a `NETWORK_CALLS` table naming every method that reaches the wire, and
+`test_the_leak_guard_covers_every_public_member` asserts `dir(client_class)`'s
+public names *equal* the union of that table and an `OFFLINE_MEMBERS` set of
+members that issue no request at all. A method that caches is by definition a
+method that requests, so it cannot hide in the second set.
 """
 
 import json

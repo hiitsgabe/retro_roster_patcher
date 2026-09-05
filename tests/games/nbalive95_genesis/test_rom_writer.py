@@ -63,9 +63,6 @@ def _record(**overrides):
     return NBALive95PlayerRecord(**fields)
 
 
-# -- name encoding ----------------------------------------------------------
-
-
 def test_a_name_that_fits_keeps_the_whole_first_name():
     assert _encode_name_variable("Curry", "Stephen", 20) == b"Curry\x00Stephen\x00\x00"
 
@@ -233,9 +230,6 @@ def test_no_encoding_ever_exceeds_the_budget_it_was_given():
     assert min(lengths) == 3
 
 
-# -- loading and the budget table -------------------------------------------
-
-
 def test_load_refuses_an_image_the_reader_rejects(tmp_path, out):
     path = fixture.write_nbalive95_rom(tmp_path / "96.bin", title="NBA LIVE 96")
     assert NBALive95RomWriter(str(path), str(out)).load() is False
@@ -346,9 +340,6 @@ def test_a_slot_whose_pointer_is_zero_gets_no_budget_entry(rom, out):
     assert (6, 2) not in writer._record_limits
 
 
-# -- the checksum bypass ----------------------------------------------------
-
-
 def test_the_bypass_replaces_the_jump_with_three_nops(rom, out):
     writer = _loaded(rom, out)
     writer.apply_patches()
@@ -390,9 +381,6 @@ def test_the_bypass_does_nothing_before_load(rom, out):
     writer = NBALive95RomWriter(str(rom), str(out))
     writer.apply_patches()
     assert writer.data is None
-
-
-# -- writing a record -------------------------------------------------------
 
 
 def test_a_written_record_carries_every_field_the_caller_supplied(rom, out):
@@ -689,9 +677,6 @@ def test_writing_before_load_fails(rom, out):
     assert NBALive95RomWriter(str(rom), str(out)).write_player(0, 0, _record()) is False
 
 
-# -- writing a roster -------------------------------------------------------
-
-
 def test_a_full_roster_reports_twelve_written(rom, out):
     writer = _loaded(rom, out)
     assert writer.write_team_roster(2, [_record(jersey=n) for n in range(12)]) == 12
@@ -742,9 +727,6 @@ def test_each_slot_of_a_roster_lands_on_its_own_record(rom, out):
         for slot in range(12)
     ]
     assert found == [f"NAME{n:02d}" for n in range(12)]
-
-
-# -- the header checksum and finalize ---------------------------------------
 
 
 def _expected_checksum(data: bytes) -> int:

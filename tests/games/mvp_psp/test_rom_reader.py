@@ -1,23 +1,16 @@
 """`MVPPSPRomReader` against fabricated MVP Baseball PSP images.
 
-Every image here is built by `tests/fixtures/synthetic_mvp_iso.py`. No real ISO
-may enter this repository, so nothing below has ever been run against a retail
-disc and the column layouts are the fixture's invention.
+Every image is built by `tests/fixtures/synthetic_mvp_iso.py`. No real ISO may
+enter this repository, so nothing below has ever been run against a retail disc
+and the column layouts are the fixture's invention.
 
-The reader has four jobs and they fail differently, so they are tested apart:
-
-  * `load`, a seek to a hardcoded offset -- **no ISO 9660 walk at all**, which
-    is what makes this game unlike the two NHL disc games;
-  * `validate` and `validate_deep`, the shallow header check and the heuristic
-    built on top of it;
-  * `decompress_section`, whose first section has a different flag byte from
-    every other;
-  * `parse_csv_section`, the record/header discrimination.
+`load` is a seek to a hardcoded offset -- no ISO 9660 walk at all, which is what
+makes this game unlike the two NHL disc games.
 
 Every read-back goes through the fixture's own `parse_table` and
-`decompress_section_at`, which are independent reimplementations, so a bug
-shared between the reader and the writer that produced the bytes cannot satisfy
-an assertion.
+`decompress_section_at`, which are independent reimplementations, so a bug shared
+between the reader and the writer that produced the bytes cannot satisfy an
+assertion.
 """
 
 from __future__ import annotations
@@ -77,9 +70,6 @@ def parsed(tmp_path, spec=None):
     return reader
 
 
-# -- constants -------------------------------------------------------------
-
-
 def test_the_refpack_magic_is_the_two_header_bytes():
     assert REFPACK_MAGIC == b"\x10\xfb"
 
@@ -100,9 +90,6 @@ def test_the_second_section_starts_at_three_hundred_and_twenty_four():
 
 def test_a_record_id_may_only_hold_lowercase_hex():
     assert HASH_ID_DIGITS == frozenset("0123456789abcdef")
-
-
-# -- _looks_like_record_id -------------------------------------------------
 
 
 def test_a_nine_digit_hex_string_is_a_record_id():
@@ -133,9 +120,6 @@ def test_a_string_with_a_space_is_not_a_record_id():
 
 def test_a_column_name_is_not_a_record_id():
     assert _looks_like_record_id("firstname") is False
-
-
-# -- _parse_record_body ----------------------------------------------------
 
 
 def test_a_column_is_split_on_its_first_space():
@@ -178,9 +162,6 @@ def test_several_columns_are_kept_together():
         1: "Suzuki",
         22: "61",
     }
-
-
-# -- load ------------------------------------------------------------------
 
 
 def test_loading_a_missing_file_answers_false(tmp_path):
@@ -248,25 +229,23 @@ def test_a_file_that_cannot_be_read_answers_false(tmp_path):
 
 
 def test_a_path_the_operating_system_cannot_accept_answers_false(tmp_path):
-    # `os.path.exists` is not merely a fast path for `open`. Every other way of
-    # not having a file raises `FileNotFoundError`, which is an `OSError` and
-    # which the handler below turns into the same False -- so deleting the
-    # `exists` check survived the suite. A path holding a NUL byte is the case
-    # that separates them: `os.path.exists` answers False for it and `open`
-    # raises `ValueError`, which is not an `OSError` and would travel out of
-    # `load` past the handler, out of `analyze_rom`, and out of the CLI.
+    # `os.path.exists` is not merely a fast path for `open`. Every other way of not
+    # having a file raises `FileNotFoundError`, which is an `OSError` and which the
+    # handler below turns into the same False. A path holding a NUL byte is the case
+    # that separates them: `os.path.exists` answers False for it and `open` raises
+    # `ValueError`, which is not an `OSError` and would travel out of `load` past the
+    # handler, out of `analyze_rom`, and out of the CLI.
     assert MVPPSPRomReader("no\x00such.iso").load() is False
 
 
 def test_a_failure_that_is_not_an_os_error_travels(tmp_path, monkeypatch):
     """DELIBERATE DIVERGENCE, pinned: `except OSError`, not `except Exception`.
 
-    The source caught everything here, so a bug inside this method reached the
-    user as "this is not MVP Baseball". The three tests above cover the
-    `OSError` side -- a missing file, a directory, an unreadable file -- and all
-    three answer False either way, which is why the narrowing survived until
-    something raised through it. `f.seek` refuses a string with a `TypeError`,
-    and a `TypeError` here is this module's bug and not the user's disc.
+    The source caught everything here, so a bug inside this method reached the user
+    as "this is not MVP Baseball". The three tests above cover the `OSError` side --
+    a missing file, a directory, an unreadable file -- and all three answer False
+    either way. `f.seek` refuses a string with a `TypeError`, and a `TypeError` here
+    is this module's bug and not the user's disc.
     """
     path = write_iso(tmp_path)
     monkeypatch.setattr(mvp_rom_reader, "database_big_extent", lambda: ("not an offset", 0))
@@ -282,9 +261,6 @@ def test_a_load_at_a_different_lba_reads_a_different_place(tmp_path, monkeypatch
     reader = MVPPSPRomReader(str(path))
     reader.load()
     assert reader.database_big_offset == 60 * fixture.SECTOR_SIZE
-
-
-# -- validate --------------------------------------------------------------
 
 
 def test_an_unloaded_reader_does_not_validate(tmp_path):
@@ -330,9 +306,6 @@ def test_the_magic_is_checked_at_324_and_not_at_325(tmp_path):
     blob[ATTRIB_SECTION_OFFSET + 2] = 0x10
     reader.database_big = bytes(blob)
     assert reader.validate() is True
-
-
-# -- validate_deep ---------------------------------------------------------
 
 
 def test_a_disc_carrying_mvp_team_ids_passes_the_deep_check(tmp_path):
@@ -381,9 +354,6 @@ def test_the_shallow_check_decompresses_nothing(tmp_path):
     assert reader.sections == {}
 
 
-# -- decompress_section ----------------------------------------------------
-
-
 def test_the_first_section_decompresses_through_the_flag_fixup(tmp_path):
     reader = loaded(tmp_path, fixture.DiscSpec(compact_flag_c0=True))
     expected = fixture.decompress_section_at(reader.database_big, "attrib_compact")
@@ -430,12 +400,11 @@ def test_an_offset_one_byte_before_the_end_answers_none(tmp_path):
 
 
 def test_a_first_section_flagged_with_neither_byte_is_refused(tmp_path):
-    # The fixup is `offset == 0 AND the flag is 0xC0`, and the second half of
-    # that is what this pins. Dropping it survived every test here, because for
-    # a section already flagged 0x10 the rewrite puts back the two bytes it
-    # replaced and is a no-op -- so the only way to see the guard is a first
-    # section flagged with neither byte, which must be refused rather than
-    # forced into a header it does not have.
+    # The fixup is `offset == 0 AND the flag is 0xC0`, and the second half of that is
+    # what this pins. For a section already flagged 0x10 the rewrite puts back the two
+    # bytes it replaced and is a no-op, so the only way to see the guard is a first
+    # section flagged with neither byte, which must be refused rather than forced into
+    # a header it does not have.
     reader = loaded(tmp_path)
     blob = bytearray(reader.database_big)
     blob[0] = 0x42
@@ -475,9 +444,6 @@ def test_a_section_of_exactly_two_bytes_reaches_the_decompressor(tmp_path):
     reader.database_big = REFPACK_MAGIC
     with pytest.raises(EaTdbError):
         reader.decompress_section(0)
-
-
-# -- decompress_all --------------------------------------------------------
 
 
 def test_every_section_decompresses(tmp_path):
@@ -527,9 +493,6 @@ def test_the_shallow_get_info_still_reads_the_slots(tmp_path):
     # read. The source had no `deep` and always read them.
     slots = loaded(tmp_path, fixture.DiscSpec(teams=2, players_per_team=3)).get_info().team_slots
     assert slots[1].player_count == 3
-
-
-# -- parse_csv_section -----------------------------------------------------
 
 
 def test_parsing_an_absent_section_answers_an_empty_table(tmp_path):
@@ -614,13 +577,12 @@ def test_an_id_with_a_trailing_space_is_still_a_record():
 
 
 def test_an_all_decimal_id_does_not_become_a_column_of_its_own_record():
-    # The body starts at `parts[1:]`, and this is the record that shows it.
-    # An id is hex, so it is usually not a decimal integer and
-    # `_parse_record_body` would throw it away on the `int()` -- which is why
-    # feeding it the id survived mutation. An id of digits alone, with the
-    # padding space the test above allows, parses: column 123456789 holding the
-    # empty string, invented out of the record's own key and written straight
-    # back into the table on the next rebuild.
+    # The body starts at `parts[1:]`, and this is the record that shows it. An id is
+    # hex, so it is usually not a decimal integer and `_parse_record_body` would throw
+    # it away on the `int()`. An id of digits alone, with the padding space the test
+    # above allows, parses: column 123456789 holding the empty string, invented out of
+    # the record's own key and written straight back into the table on the next
+    # rebuild.
     reader = MVPPSPRomReader("/nonexistent")
     reader.sections["t"] = b"a,b;\r\n123456789 ,0 x,;\r\n"
     assert reader.parse_csv_section("t") == {"123456789": {0: "x"}}
@@ -630,9 +592,6 @@ def test_a_record_terminated_without_a_crlf_is_still_read():
     reader = MVPPSPRomReader("/nonexistent")
     reader.sections["t"] = b"a,b;\r\n00b87d5f5,0 x,;"
     assert reader.parse_csv_section("t") == {"00b87d5f5": {0: "x"}}
-
-
-# -- parse_all -------------------------------------------------------------
 
 
 def test_parsing_covers_every_decompressed_section(tmp_path):
@@ -657,9 +616,6 @@ def test_no_record_id_equals_its_position_in_the_table(tmp_path):
     reader = parsed(tmp_path, fixture.DiscSpec(teams=3, players_per_team=4))
     order = reader.record_order["attrib"]
     assert [i for i, rid in enumerate(order) if int(rid, 16) == i] == []
-
-
-# -- get_info --------------------------------------------------------------
 
 
 def test_an_unloaded_reader_reports_a_zero_sized_rom(tmp_path):

@@ -1,11 +1,8 @@
 """Fabricate a structurally valid NBA Live 95 (Genesis) ROM in memory.
 
 Nothing here is derived from a real ROM. Every byte is computed from the format
-`games/nbalive95_genesis/rom_reader.py` and `rom_writer.py` document, and the
-layout constants below are chosen to be legal rather than to match a real dump.
+`games/nbalive95_genesis/rom_reader.py` and `rom_writer.py` document.
 
-Why the image is 2 MB
----------------------
 The 30 team pointer tables sit at absolute file offsets transcribed from
 Team-95's ROM editor, and the furthest of them -- team 29, the Slammers -- runs
 from 0x1F80AC to 0x1F80DC. So the file has to be at least 2 064 604 bytes before
@@ -14,26 +11,17 @@ the last team's pointers can be read at all. NBA Live 95 is a 2 MB cartridge,
 
 `NBALive95RomReader.validate` would accept a 1 572 864-byte file, which is what
 its own `ROM_SIZE_MIN` calls the minimum. Such a file has no pointer table for
-teams 18-29; `tests/games/nbalive95_genesis/test_rom_reader.py` builds one to
-pin what happens then.
+teams 18-29; `tests/games/nbalive95_genesis/test_rom_reader.py` builds one to pin
+what happens then.
 
-Why the constants here are literals and not imports
----------------------------------------------------
-`TEAM_ROSTER_ADDRESSES` and the record field offsets are duplicated below rather
-than imported from `games.nbalive95_genesis.models`. That duplication is the
-point: a test that located a table using the very constant it is meant to pin
-would move with the constant and assert nothing. Moving `OFF_RATINGS` or an
-entry of the address table in `src/` must break tests here, and it only can if
-these are independent transcriptions of the documented layout.
+`TEAM_ROSTER_ADDRESSES` and the record field offsets are duplicated here rather
+than imported from `games.nbalive95_genesis.models`, so that moving `OFF_RATINGS`
+or an entry of the address table in `src/` breaks tests.
 
-Why every byte in a record is unique to its (team, slot)
---------------------------------------------------------
 Each player's name, jersey, position, ratings and season stats encode both the
-team index and the roster slot. Uniform filler would make the 360 records
-identical, and then no assertion could tell which record a read or a write
-landed on: a writer that ignored `team_index`, or filled a roster in reverse, or
-rotated the ratings block by one, would satisfy every equality a test could
-write.
+team index and the roster slot, so a writer that ignored `team_index`, filled a
+roster in reverse, or rotated the ratings block by one cannot satisfy an
+equality.
 
 Every multi-byte field is BIG-endian, this being a 68000 cartridge.
 """

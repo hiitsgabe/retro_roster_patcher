@@ -75,9 +75,6 @@ class _WithHeight:
         return getattr(self._wrapped, name)
 
 
-# -- _clamp and _scale -----------------------------------------------------
-
-
 def test_clamp_leaves_a_value_inside_the_range():
     assert _clamp(31) == 31
 
@@ -131,9 +128,6 @@ def test_a_narrow_window_still_spans_the_whole_scale():
     assert _scale(0.905, 0.880, 0.930) == 32
 
 
-# -- _stat -----------------------------------------------------------------
-
-
 def test_a_stat_present_and_non_zero_is_returned():
     assert _stat({"G": 21}, "G") == 21.0
 
@@ -159,9 +153,6 @@ def test_the_first_name_wins_when_both_are_present():
 
 def test_a_missing_stat_answers_the_default():
     assert _stat({}, "W", "Wins", default=-1.0) == -1.0
-
-
-# -- position defaults -----------------------------------------------------
 
 
 def test_every_position_has_its_own_defaults():
@@ -207,9 +198,6 @@ def test_mutating_a_copy_does_not_reach_the_shared_object():
 
 def test_an_unknown_position_falls_back_to_a_centres_defaults():
     assert _defaults_for("F") == SKATER_DEFAULTS["C"]
-
-
-# -- map_player ------------------------------------------------------------
 
 
 def test_a_name_is_split_on_the_first_space():
@@ -394,8 +382,6 @@ def test_the_height_derivation_floors_someone_shorter_than_the_base():
     assert MAPPER.map_player(stand_in, "BOS").height == 0
 
 
-# -- skater stat mapping ---------------------------------------------------
-
 ELITE = {"G": 40, "A": 55, "PTS": 95, "+/-": 40, "PIM": 80, "SOG": 300, "FO%": 60}
 POOR = {"G": 1, "A": 1, "PTS": 2, "+/-": -30, "PIM": 0, "SOG": 40, "FO%": 32}
 
@@ -524,9 +510,6 @@ def test_no_derived_skater_rating_exceeds_the_six_bit_range():
 def test_no_derived_skater_rating_falls_below_zero():
     record = MAPPER.map_player(player(), "BOS", {"G": 0, "A": 0, "PTS": 0, "+/-": -999, "PIM": 0})
     assert [name for name, value in vars(record.skater_attrs).items() if value < 0] == []
-
-
-# -- goalie stat mapping ---------------------------------------------------
 
 
 def test_an_elite_save_percentage_saturates_the_save_ratings():
@@ -725,9 +708,6 @@ def test_no_derived_goalie_rating_exceeds_the_six_bit_range():
     assert over == []
 
 
-# -- get_team_slot ---------------------------------------------------------
-
-
 def test_every_abbreviation_in_the_table_resolves():
     assert [c for c in MODERN_NHL_TO_NHL07 if MAPPER.get_team_slot(c) is None] == []
 
@@ -742,9 +722,6 @@ def test_the_espn_and_nhl_spellings_of_los_angeles_reach_one_slot():
 
 def test_the_expansion_teams_take_the_all_star_slots():
     assert (MAPPER.get_team_slot("SEA"), MAPPER.get_team_slot("VGK")) == (30, 31)
-
-
-# -- select_roster ---------------------------------------------------------
 
 
 def squad(**counts):
@@ -864,9 +841,6 @@ def test_no_player_is_selected_twice():
     assert len({id(p) for p in selected}) == len(selected)
 
 
-# -- generate_team_line_flags ----------------------------------------------
-
-
 def records(*positions):
     return [
         NHL07PlayerRecord(position=p, is_goalie=(p == "G"), player_id=i)
@@ -982,9 +956,6 @@ def test_one_flag_dict_is_produced_per_player():
 def test_two_players_never_share_one_flag_dict():
     result = MAPPER.generate_team_line_flags(records("C", "C"))
     assert result[0] is not result[1]
-
-
-# -- holes mutation testing found ------------------------------------------
 
 
 def test_the_selected_roster_is_two_goalies_then_fourteen_forwards_then_defence():

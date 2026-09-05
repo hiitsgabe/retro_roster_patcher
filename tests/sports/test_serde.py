@@ -53,18 +53,12 @@ def sample() -> LeagueData:
                     Player(id=19, name="Onana", position="Goalkeeper", number=24),
                 ],
                 player_stats={18: stats(18)},
-                # The real shape. Both producers of this blob key it by `str`
-                # player id -- `espn.py`'s `_extract_pid` returns `str | None`,
-                # `nhl.py` does `str(sk.get("playerId", ""))` -- and the consumer
-                # reads it back as `leaders.get(str(player.id), {})`. A blob keyed
-                # by `int` would not survive JSON, so using the real shape here is
-                # what makes the pass-through claim meaningful.
+                # The real shape: both producers key this blob by `str` player id
+                # and the consumer reads `leaders.get(str(player.id), {})`.
                 extra={"leaders": {"8471675": {"G": 42, "A": 54, "PTS": 96}}},
             ),
             # `loading` and `error` sit at their dataclass defaults on the roster
-            # above, so nothing there can tell whether the reader sets them at
-            # all. This one is in a non-default state for both, and gives the
-            # team list a length and an order worth asserting.
+            # above; this one is in a non-default state for both.
             TeamRoster(
                 team=Team(id=40, name="Liverpool", code="LIV"),
                 loading=True,
@@ -87,16 +81,14 @@ def test_a_league_survives_a_full_json_round_trip():
 def test_player_stats_keys_come_back_as_ints():
     restored = round_trip(sample())
     assert list(restored.teams[0].player_stats) == [18]
-    # The value comparison above is not the claim, and on its own cannot be:
-    # `[18.0] == [18]` is `True` and `hash(18.0) == hash(18)`, so neither it nor
-    # a whole-object `restored == original` can tell an `int` key from a `float`
-    # one. `TeamRoster.player_stats` is declared `dict[int, PlayerStats]`, so the
-    # type is what has to be asserted.
+    # `[18.0] == [18]` is True and the hashes match, so neither the value comparison
+    # above nor a whole-object equality can tell an `int` key from a `float` one.
+    # `TeamRoster.player_stats` is declared `dict[int, PlayerStats]`.
     assert type(list(restored.teams[0].player_stats)[0]) is int
     assert type(restored.teams[0].player_stats[18]) is PlayerStats
-    # And the divergence is not academic: it lands in the file itself. `str(18)`
-    # is `"18"` but `str(18.0)` is `"18.0"`, so a key of the wrong numeric type
-    # rewrites the key text of the rosters file that `fetch` hands to `patch`.
+    # And it lands in the file itself: `str(18)` is `"18"` but `str(18.0)` is
+    # `"18.0"`, so a key of the wrong numeric type rewrites the rosters file's key
+    # text between `fetch` and `patch`.
     assert '"player_stats": {"18": ' in json.dumps(league_data_to_dict(restored))
 
 
@@ -114,10 +106,8 @@ def _with_absences(*names: str) -> LeagueData:
 
 def test_which_stats_a_provider_never_measured_survives_the_json_round_trip():
     # `fetch` and `patch` are separate processes with this file between them, so a
-    # provider's absences have to reach the mapper through JSON or the mapper is
-    # back to reading a filler zero as a measurement. The round trip is through
-    # real `json.dumps`, which is also the proof the field is not a `set`: it
-    # raises on one.
+    # provider's absences have to reach the mapper through JSON. The round trip is
+    # through real `json.dumps`, which is also the proof the field is not a `set`.
     original = _with_absences("duels_total", "duels_won")
     restored = round_trip(original)
     assert restored.teams[0].player_stats[18].unsupplied == ("duels_total", "duels_won")
@@ -125,18 +115,16 @@ def test_which_stats_a_provider_never_measured_survives_the_json_round_trip():
 
 
 def test_the_absences_come_back_as_a_tuple_and_not_the_json_array():
-    # `("duels_total",) == ["duels_total"]` is `False`, so without the conversion
-    # the whole-object equality above fails -- but every consumer asks `name in
-    # unsupplied`, which both shapes answer identically, so nothing else would
-    # notice. The declared type is what has to be asserted.
+    # `("duels_total",) == ["duels_total"]` is False, but every consumer asks
+    # `name in unsupplied`, which both shapes answer identically. The declared type
+    # is what has to be asserted.
     restored = round_trip(_with_absences("duels_total"))
     assert type(restored.teams[0].player_stats[18].unsupplied) is tuple
 
 
 def test_a_file_written_before_the_field_existed_reads_as_fully_measured():
-    # Every rosters file written before this field existed came from a provider
-    # that measured all twenty stats. Absent has to mean "nothing is missing" or
-    # those files would load as players about whom nothing is known.
+    # Every rosters file written before this field existed came from a provider that
+    # measured all twenty stats. Absent has to mean "nothing is missing".
     raw = league_data_to_dict(sample())
     del raw["teams"][0]["player_stats"][18]["unsupplied"]
     restored = league_data_from_dict(raw)
@@ -149,20 +137,12 @@ def test_the_extra_blob_passes_through_untouched():
 
 
 def test_extra_keys_are_passed_through_rather_than_re_keyed():
-    # The comment beside `serde.py`'s `int(pid)` conversion claims `extra` "needs
-    # no equivalent conversion". The fixture cannot test it: its `extra` is `str`-
-    # keyed already -- the real shape, and worth keeping for that -- so a reader
-    # that coerced every key with `str()` would satisfy it unchanged.
-    #
-    # So skip the `json.dumps` hop and feed `league_data_to_dict` output straight
-    # back in. Any dict assembled in Python can hold a non-`str` key, and the
-    # hand-written `raw` dicts below reach the reader the same direct way, so what
-    # this one adds is that the key survives a reader-side pass unchanged. The path is
-    # deliberately not the production one: this module is the contract for a file,
-    # so in production `league_data_from_dict` is only ever reached through
-    # `to_dict` -> `dumps` -> `loads`, and after real JSON every key is a `str`
-    # before the reader sees it -- which is exactly why `player_stats` needs its
-    # conversion and this one must not have one.
+    # No `json.dumps` hop: `league_data_to_dict` output goes straight back in, so a
+    # non-`str` key reaches the reader and the claim is that it survives unchanged.
+    # Deliberately not the production path -- in production the reader is only
+    # reached through `to_dict` -> `dumps` -> `loads`, after which every key is a
+    # `str`, which is why `player_stats` needs its `int(pid)` conversion and `extra`
+    # must not have one.
     data = LeagueData(
         league=League(id=1, name="N"),
         teams=[TeamRoster(team=Team(id=1, name="X"), extra={7: "seven"})],
@@ -173,21 +153,14 @@ def test_extra_keys_are_passed_through_rather_than_re_keyed():
 
 
 def test_the_extra_blob_is_shallow_copied_rather_than_aliased():
-    # `extra` is the only field handed over whole instead of rebuilt from its
-    # parts, so it is the only one that can end up sharing an object with the
-    # payload it was read from. Without the `dict(...)` around it, a write through
-    # the roster reaches back into the caller's parsed JSON, which is a mutation
-    # of an argument this function was only asked to read.
+    # `extra` is the only field handed over whole instead of rebuilt from its parts,
+    # so without the `dict(...)` a write through the roster reaches back into the
+    # caller's parsed JSON.
     #
-    # `dict(...)` copies one level and that is the whole of the guarantee, so the
-    # second half of this test pins the sharp edge rather than implying it away:
-    # the nested dicts are the *same objects* on both sides, and the real `extra`
-    # shape -- `{"leaders": {...}}`, as in `sample()` -- puts every value a
-    # consumer would write one level down. Deepening the copy is not obviously
-    # right either: `extra` is a provider-defined escape hatch of arbitrary shape
-    # and unbounded size, and nothing under `src/` mutates a roster's `extra` in
-    # place -- `nhl94_genesis/patcher.py` builds one at :198 and only reads it at
-    # :222 -- so a deep copy would be paying on every read for no caller's benefit.
+    # `dict(...)` copies one level and that is the whole guarantee, so the second
+    # half of this test pins the sharp edge: the nested dicts are the *same objects*
+    # on both sides. Do not deepen the copy -- `extra` is a provider-defined escape
+    # hatch of arbitrary size and nothing under `src/` mutates one in place.
     source = {"leaders": {"8471675": {"G": 42}}}
     raw = {
         "league": {"id": 1, "name": "N"},
@@ -229,12 +202,9 @@ def test_unknown_keys_are_ignored_so_newer_files_still_load():
 
 def test_optional_keys_may_be_absent_entirely():
     # A hand-written file, not one this module produced: every optional key of a
-    # roster is missing at once, which no `league_data_to_dict` output ever is.
-    #
-    # Absent is only one of the two shapes the `or []` / `or {}` guards absorb.
-    # `test_a_present_json_null_is_absorbed_like_an_absent_key` is the other, and
-    # it is the one that separates `X or D` from `raw.get(k, D)` -- those two
-    # agree on everything this test does.
+    # roster is missing at once. Absent is only one of the two shapes the `or []` /
+    # `or {}` guards absorb; a present `null` is the other, and it is what separates
+    # `X or D` from `raw.get(k, D)`.
     raw = {
         "league": {"id": 39, "name": "Premier League"},
         "teams": [{"team": {"id": 1, "name": "X"}}],
@@ -251,20 +221,12 @@ def test_optional_keys_may_be_absent_entirely():
 
 def test_absent_containers_are_read_as_empty():
     # The three guards the test above does not reach: `league`, `teams`, and a
-    # roster's own `team`. Absent is not the same as empty in any of the three,
-    # but the failure mode is not the same either, so the assertions below are
-    # not either.
-    #
-    # `league` and `team` are handed to `_only_declared`. Unguarded, `raw.get`
-    # yields `None` and `_only_declared` calls `None.items()`, which is
-    # `AttributeError: 'NoneType' object has no attribute 'items'` -- not the
-    # `TypeError` naming the `id` and `name` the file actually lacks. Those two get
-    # a `pytest.raises` for that `TypeError`.
-    #
-    # `teams` never reaches `_only_declared`: it is the iterable of a list
-    # comprehension. Unguarded it is `TypeError: 'NoneType' object is not iterable`
-    # raised at the comprehension itself, so there is no wrong-exception contrast to
-    # draw and the guarded result -- an empty list -- is the whole claim.
+    # roster's own `team`. `league` and `team` are handed to `_only_declared`, so
+    # unguarded they raise `AttributeError: 'NoneType' object has no attribute
+    # 'items'` instead of the `TypeError` naming the `id` and `name` the file lacks.
+    # `teams` never reaches `_only_declared` -- it is the iterable of a list
+    # comprehension -- so there is no wrong-exception contrast to draw and the
+    # guarded empty list is the whole claim.
     assert league_data_from_dict({"league": {"id": 1, "name": "N"}}).teams == []
     with pytest.raises(TypeError, match="name"):
         league_data_from_dict({"teams": []})
@@ -273,25 +235,17 @@ def test_absent_containers_are_read_as_empty():
 
 
 def test_a_present_json_null_is_absorbed_like_an_absent_key():
-    # The distinction the two tests above do not draw. `null` is legal JSON and a
-    # writer that emits every key -- an older schema, a hand edit, a Dart
-    # `jsonEncode` of a nullable field -- sends it where this one omits the key.
-    # That producer is why the six container guards -- `league`, `teams`, a
-    # roster's own `team`, `players`, `player_stats` and `extra` -- are all
-    # `raw.get(k) or DEFAULT` rather than `raw.get(k, DEFAULT)`: the two forms
-    # agree on an absent key and differ only on a present `null`, so nothing
-    # above can tell those six `or`s from a `get` default. This payload can.
+    # `null` is legal JSON and a writer that emits every key sends it where this one
+    # omits the key. That producer is why the six container guards -- `league`,
+    # `teams`, a roster's own `team`, `players`, `player_stats` and `extra` -- are
+    # `raw.get(k) or DEFAULT` rather than `raw.get(k, DEFAULT)`: the two forms agree
+    # on an absent key and differ only on a present `null`.
     #
-    # `error` is the seventh `or` and is here for the same reason, but it is a
-    # scalar, so what a `get` default lets through is worse: the `str()` around it
-    # would render a `null` as the *string* `"None"` -- non-empty, and so an
-    # error to any consumer that tests the field for one.
-    # `loading` is the one read that is written `raw.get("loading", False)`, and
-    # correctly: `bool(None)` is already `False`, so the guard would change
-    # nothing. It is asserted below to show that, not to separate two forms.
-    #
-    # Built by parsing JSON text rather than as Python dicts, so what is claimed
-    # legal here is demonstrably what a file can carry.
+    # `error` is the seventh `or`, and being a scalar what a `get` default lets
+    # through is worse: the `str()` around it would render a `null` as the *string*
+    # `"None"`, non-empty and so an error to any consumer that tests for one.
+    # `loading` is written `raw.get("loading", False)`, correctly: `bool(None)` is
+    # already `False`.
     roster = json.loads(
         '{"league": {"id": 1, "name": "N"},'
         ' "teams": [{"team": {"id": 1, "name": "X"},'

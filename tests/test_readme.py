@@ -1,22 +1,16 @@
 """The README, checked against the code it describes.
 
-`README.md` is the only tracked documentation in this repository, so it has to
-carry a 30-name public API, four CLI verbs, a five-event NDJSON protocol two
-external applications code against, and the registry a new game plugs into.
-Prose that size drifts. Every claim below is therefore derived by running the
-thing described -- building the real parser, driving the real renderer, reading
-the real `__all__` -- and compared with `==` against what the file says.
+Every claim below is derived by running the thing described -- building the real
+parser, driving the real renderer, reading the real `__all__` -- and compared
+with `==` against what the file says.
 
-Comparisons are two-way on purpose. A flag added to the parser and left out of
+Comparisons are two-way on purpose: a flag added to the parser and left out of
 the README is the same defect as a README documenting a flag that does not
-exist, and only equality catches both. `<=` would have let the first ship.
+exist, and only equality catches both.
 
-Every set extracted from the markdown also has its size pinned, or is compared
-against a set the code says is non-empty. That is not belt-and-braces: a test
-that extracts zero rows from a table it failed to find and then asserts all zero
-of them are correct passes forever and proves nothing. Each helper below raises
-`LookupError` rather than returning `[]` when it finds nothing, for the same
-reason.
+Each helper raises `LookupError` rather than returning `[]` when it finds
+nothing, so a test cannot extract zero rows from a table it failed to find and
+then assert all zero of them are correct.
 """
 
 from __future__ import annotations
@@ -55,7 +49,6 @@ TEXT = README.read_text(encoding="utf-8")
 _NAME = re.compile(r"`([A-Za-z_][A-Za-z0-9_]*)`")
 
 
-# -- extraction ------------------------------------------------------------
 #
 # Each of these raises instead of returning an empty result. A silent `[]` is
 # what turns a broken extractor into a green test.
@@ -133,9 +126,6 @@ def _parser_flags() -> dict[str, dict[str, bool]]:
         }
         for verb, sub in _subparsers().items()
     }
-
-
-# -- the code examples -----------------------------------------------------
 
 
 def test_the_readme_has_the_expected_mix_of_fenced_blocks():
@@ -230,9 +220,6 @@ def test_the_new_game_example_passes_register_arguments_it_accepts():
     assert keywords == {"platform", "sport", "providers"}
     accepted = set(inspect.signature(register).parameters) - {"game_id"}
     assert keywords - accepted == set()
-
-
-# -- the CLI ---------------------------------------------------------------
 
 
 def test_the_flag_table_matches_the_parser_flag_for_flag():
@@ -382,8 +369,6 @@ def test_argparse_rejecting_the_argv_writes_no_json(tmp_path):
     assert "the following arguments are required: --season" in rejected.stderr
 
 
-# -- the NDJSON protocol ---------------------------------------------------
-
 #: One call per method of the `Renderer` protocol, so every documented event can
 #: be produced rather than described. The event names themselves are read back
 #: off the wire; only the arguments are written down here, and the test below
@@ -497,9 +482,6 @@ def test_the_kind_table_names_the_verb_each_payload_comes_from():
     assert documented == set(_subparsers())
 
 
-# -- the library surface ---------------------------------------------------
-
-
 def test_the_root_exports_section_names_every_exported_name():
     """Equality against `__all__`, so an unlisted export fails here too.
 
@@ -523,9 +505,6 @@ def test_the_sports_exports_section_names_every_exported_name():
     documented = set(_NAME.findall(sports_part))
     assert len(documented) == len(sports.__all__)
     assert documented == set(sports.__all__)
-
-
-# -- the registry ----------------------------------------------------------
 
 
 def test_the_games_table_matches_the_registry():
@@ -572,9 +551,6 @@ def test_the_documented_language_codes_are_the_ones_we2002_ships():
     assert len(documented) == 4
     assert documented == tuple(LANGUAGES)
     assert documented == tuple(rrp.get_patcher("we2002").languages)
-
-
-# -- house rules -----------------------------------------------------------
 
 
 def test_the_readme_contains_no_emoji():

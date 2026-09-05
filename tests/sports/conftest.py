@@ -1,19 +1,18 @@
 """Shared helpers for the sports client tests.
 
 Every client takes a `transport`, so the suite replays recorded responses from
-`tests/fixtures/api` instead of reaching the network. `tests/fixtures/api/record.py`
-maps each fixture back to the URL it came from and can re-record it.
+`tests/fixtures/api` instead of reaching the network.
+`tests/fixtures/api/record.py` maps each fixture back to the URL it came from and
+can re-record it.
 
-The transport-seam helpers below are client-agnostic on purpose: each client's own
-test file supplies only its method tables. The subtleties that make the leak guard
-work — the sentinel deriving from `BaseException`, the unfiltered member scan —
-live in one place instead of being re-derived, and trimmed, per client. The
-sentinel itself and the `forbid_default_transport` fixture moved up to
-`tests/conftest.py`, which is the only scope from which `tests/games/` — where
-the NHL94 patcher constructs live sports clients — can see them, and where the
-guard is autouse over the whole suite. `assert_no_transport_leak` still patches
-`default_transport` itself on top of that: it is the same prohibition with a
-message that names the client class under test.
+The transport-seam helpers below are client-agnostic on purpose: each client's
+own test file supplies only its method tables, so the subtleties that make the
+leak guard work -- the sentinel deriving from `BaseException`, the unfiltered
+member scan -- live in one place. The sentinel itself and the
+`forbid_default_transport` fixture live in `tests/conftest.py`, the only scope
+`tests/games/` can see them from. `assert_no_transport_leak` still patches
+`default_transport` itself on top of that: the same prohibition with a message
+that names the client class under test.
 """
 
 import pathlib

@@ -1,22 +1,8 @@
 """`MVPPSPPatcher` against the unified interface.
 
-Six things here are not in the ported code at all, and each has its own section:
-
-  * `_database_big_extent_fits`, the arithmetic bound, which guards `patch` as
-    well as `analyze_rom`;
-  * `validate_deep`, the heuristic, which guards `analyze_rom` only -- and the
-    asymmetry between the two is pinned so nobody harmonises it;
-  * `TeamRoster.extra["leaders"]` in place of the `self.team_stats` instance
-    side channel the pygame front end had to copy between two patcher
-    instances by hand;
-  * `season` threaded into the squad call, which the source omitted;
-  * the alias guard, without which an empty `ATH` wipes a populated `OAK`;
-  * `fetch -> map_rosters -> patch` as three separable steps, where
-    `patch_rom` re-ran the mapping itself.
-
-And the three inherited bugs reach the disc here: the section that does not fit,
-which this port fixes, and the pitcher arsenal and the height and weight, which
-it preserves. The tests for those two say so at the assertion.
+Three inherited bugs reach the disc here: the section that does not fit, which
+this port fixes, and the pitcher arsenal and the height and weight, which it
+preserves. The tests for those two say so at the assertion.
 
 Every read-back of a patched image goes through the fixture's own
 `read_database_big`, `decompress_section_at` and `parse_table`, never through
@@ -177,9 +163,8 @@ def write_iso(tmp_path, spec=None, *, name="game.iso"):
 DISC = fixture.DiscSpec(teams=30, players_per_team=20)
 
 #: A disc whose `attrib` table is padded to within 600 bytes of its 61 448-byte
-#: allocation. It is a disc that exists -- every section fits -- and on which a
-#: roster patch that lengthens any name cannot be stored. That is the condition
-#: the source swallowed by keeping the original table and reporting success.
+#: allocation. Every section fits, and a roster patch that lengthens any name
+#: cannot be stored.
 FULL_DISC = fixture.DiscSpec(teams=4, players_per_team=6, attrib_headroom_bytes=800)
 
 
@@ -188,9 +173,8 @@ def long_named_squad():
 
     Repeating a word twenty-five times would not do: RefPack is LZ77, so the
     second copy of a long name costs almost nothing and the section would not
-    grow. These are distinct pseudo-random hex, seeded so the disc is the same
-    on every run, which is the case a real roster of 750 different surnames
-    approximates.
+    grow. These are distinct pseudo-random hex, seeded so the disc is the same on
+    every run.
     """
     rng = random.Random(0x424C4F42)
     return [
@@ -233,9 +217,6 @@ def roster_rows(path, slot):
     return {rid: cols for rid, cols in table.items() if cols.get(ROSTER_TEAMID) == team_hash}
 
 
-# -- registration ----------------------------------------------------------
-
-
 def test_the_patcher_is_registered_under_its_game_id():
     assert get_patcher("mvp-psp") is MVPPSPPatcher
 
@@ -256,9 +237,6 @@ def test_espn_is_the_only_provider():
     assert MVPPSPPatcher.providers == ("espn",)
 
 
-# -- construction ----------------------------------------------------------
-
-
 def test_the_client_is_built_eagerly(tmp_path):
     assert type(MVPPSPPatcher(tmp_path / "cache").api) is EspnClient
 
@@ -269,8 +247,8 @@ def test_the_cache_directory_accepts_a_string(tmp_path):
 
 
 def test_an_api_key_is_refused(tmp_path):
-    # Not accepted and ignored: a parameter that silently does nothing lets a
-    # caller believe a credential is in use.
+    # Not accepted and ignored: a parameter that silently does nothing lets a caller
+    # believe a credential is in use.
     with pytest.raises(TypeError):
         MVPPSPPatcher(tmp_path / "cache", api_key="secret")
 
@@ -282,9 +260,6 @@ def test_an_unsupported_provider_is_refused(tmp_path):
 
 def test_the_default_provider_is_espn(tmp_path):
     assert MVPPSPPatcher(tmp_path / "cache").provider == "espn"
-
-
-# -- the arithmetic bound --------------------------------------------------
 
 
 def test_a_file_the_size_of_the_extent_fits(tmp_path, monkeypatch):
@@ -357,9 +332,6 @@ def test_analyzing_a_file_shorter_than_the_extent_is_not_an_error(tmp_path, monk
     with open(path, "wb") as f:
         f.truncate(end - 1)
     assert make_patcher(tmp_path).analyze_rom(path).is_valid is False
-
-
-# -- analyze_rom -----------------------------------------------------------
 
 
 def test_analyzing_a_missing_file_raises(tmp_path):
@@ -441,9 +413,6 @@ def test_an_unrelated_file_of_the_right_size_is_not_this_game(tmp_path):
     assert make_patcher(tmp_path).analyze_rom(path).is_valid is False
 
 
-# -- the heuristic, and the asymmetry it must keep -------------------------
-
-
 def test_a_disc_whose_team_ids_are_not_this_games_analyzes_as_invalid(tmp_path):
     path = write_iso(tmp_path, fixture.DiscSpec(teams=4, team_records=False))
     assert make_patcher(tmp_path).analyze_rom(path).is_valid is False
@@ -480,9 +449,6 @@ def test_a_disc_failing_the_shallow_header_check_cannot_be_patched(tmp_path):
         )
 
 
-# -- fetch -----------------------------------------------------------------
-
-
 def test_fetching_answers_a_league_of_the_teams_with_slots(tmp_path):
     patcher = make_patcher(tmp_path)
     assert len(patcher.fetch(season=2025).teams) == 4
@@ -496,9 +462,8 @@ def test_a_team_with_no_slot_is_never_fetched(tmp_path):
 
 
 def test_the_squad_call_carries_the_season(tmp_path):
-    # DELIBERATE DIVERGENCE: the source called `get_baseball_squad(team.id)`
-    # with no season. The endpoint has no season in its URL but does have one
-    # in its cache key, so the first season ever fetched was served forever.
+    # The squad endpoint has no season in its URL but does have one in its cache key,
+    # so without it the first season ever fetched was served forever.
     api = FakeApi()
     make_patcher(tmp_path, api).fetch(season=2019)
     assert api.squad_calls == [(1, 2019), (2, 2019), (3, 2019), (4, 2019)]
@@ -511,8 +476,7 @@ def test_the_leaders_call_carries_the_season(tmp_path):
 
 
 def test_two_seasons_ask_for_two_different_squads(tmp_path):
-    # The zero-over-zero check on the season fix: a patcher that passed a
-    # constant would satisfy either test above on its own.
+    # A patcher that passed a constant season would satisfy either test above alone.
     api = FakeApi()
     patcher = make_patcher(tmp_path, api)
     patcher.fetch(season=2019)
@@ -537,10 +501,9 @@ def test_a_provider_whose_teams_have_no_slots_raises(tmp_path):
 
 
 def test_the_leaders_travel_in_the_roster_extra(tmp_path):
-    # DELIBERATE DIVERGENCE: the source left these on `self.team_stats`, so the
-    # pygame front end copied them between two patcher instances by hand at
-    # `app.py:11414` and `:11490`. Without that line every player silently took
-    # position defaults.
+    # `TeamRoster.extra` rather than `self.team_stats`: the source's instance side
+    # channel had to be copied between two patcher instances by hand, and without
+    # that copy every player silently took position defaults.
     api = FakeApi(leaders={1: {"501": {"HR": 42}}})
     data = make_patcher(tmp_path, api).fetch(season=2025)
     assert data.teams[0].extra["leaders"] == {"501": {"HR": 42}}
@@ -577,9 +540,6 @@ def test_a_status_message_is_published(tmp_path):
     patcher.api = FakeApi()
     patcher.fetch(season=2025)
     assert seen == ["Fetching MLB teams..."]
-
-
-# -- map_rosters -----------------------------------------------------------
 
 
 def mapped(tmp_path, squads, leaders=None):
@@ -701,13 +661,11 @@ def test_that_reliever_still_takes_the_first_rotation_position(tmp_path):
 
 
 def test_the_leaders_reach_the_mapper(tmp_path):
-    # Without `TeamRoster.extra` every player would silently take position
-    # defaults, which is exactly what the source's side channel did when the
-    # two calls happened out of order.
+    # Without `TeamRoster.extra` every player would silently take position defaults.
     #
     # Read through `starpower` and not through the arsenal: the arsenal is
-    # overwritten with the 50/50 default on every pitcher whether the leaders
-    # arrived or not, which is upstream's behaviour and preserved deliberately.
+    # overwritten with the 50/50 default on every pitcher whether the leaders arrived
+    # or not, which is upstream's behaviour and preserved deliberately.
     squad = [make_player(1, "SP")]
     plain = mapped(tmp_path, {1: squad})
     with_stats = mapped(tmp_path, {1: squad}, {1: {"1": {"K": 250, "WHIP": 0.9, "ERA": 2.0}}})
@@ -715,9 +673,9 @@ def test_the_leaders_reach_the_mapper(tmp_path):
 
 
 def test_an_empty_alias_does_not_wipe_a_populated_slot(tmp_path):
-    # DELIBERATE DIVERGENCE. `OAK` and `ATH` name one slot, and the source
-    # assigned unconditionally, so an empty alias arriving second left that
-    # club's 2005 roster on the disc under a success report.
+    # `OAK` and `ATH` name one slot, and the source assigned unconditionally, so an
+    # empty alias arriving second left that club's 2005 roster on the disc under a
+    # success report.
     data = LeagueData(
         league=League(id=0, name="MLB", season=2025),
         teams=[
@@ -745,9 +703,6 @@ def test_an_empty_roster_that_collides_with_nothing_still_takes_its_slot(tmp_pat
         teams=[TeamRoster(team=Team(id=1, name="Athletics", code="OAK"), players=[])],
     )
     assert make_patcher(tmp_path).map_rosters(data).teams == {1: []}
-
-
-# -- the hash pool ---------------------------------------------------------
 
 
 def test_a_pitcher_takes_a_pitchers_id():
@@ -806,9 +761,8 @@ def test_a_synthesised_id_encodes_its_team_and_its_slot():
 
 
 def test_a_synthesised_id_is_eleven_characters_and_not_nine():
-    # The migration brief claimed a synthesised id may collide with a real one.
-    # It cannot: every id in this repository is nine characters and this is
-    # eleven. `_HashPool` argues it at the line.
+    # A synthesised id cannot collide with a real one: every id in this repository
+    # is nine characters and this is eleven.
     pool = _HashPool([], set())
     assert len(pool.take(is_pitcher=False, team_index=29, player_index=24)) == 11
 
@@ -831,9 +785,6 @@ def test_no_two_synthesised_ids_collide():
         for p in range(25)
     ]
     assert len(set(made)) == len(made)
-
-
-# -- patch -----------------------------------------------------------------
 
 
 def patch_one(tmp_path, squads, leaders=None, spec=DISC, out="out.iso"):
@@ -950,11 +901,9 @@ def test_progress_reaches_one(tmp_path):
 
 def test_teams_are_written_in_slot_order_whatever_order_the_mapping_holds(tmp_path):
     # `targets` is sorted, and it has to be: `_HashPool` hands ids out in the
-    # `attrib` table's order, so which player inherits which career depends on
-    # the order the clubs are visited in. A `MappedRosters` that crossed a JSON
-    # boundary carries whatever order its dict was built in, and every mapping
-    # in this file happens to be built in ascending slot order -- which is why
-    # dropping the sort survived. This one is built backwards.
+    # `attrib` table's order, so which player inherits which career depends on the
+    # order the clubs are visited in. A `MappedRosters` that crossed a JSON boundary
+    # carries whatever order its dict was built in; this one is built backwards.
     seen = []
     patcher = make_patcher(tmp_path)
     mapped = patcher.map_rosters(league(squads={2: full_squad(1000), 1: full_squad(2000)}))
@@ -987,10 +936,9 @@ def test_the_record_phase_ends_before_the_copy(tmp_path):
 
 
 def test_the_teams_divide_the_record_phase_between_them(tmp_path):
-    # `i / len(targets)`, so the first club is reported before any of its work
-    # rather than after. With one club `(i + 1) / len(targets)` is 1.0 times
-    # `PROGRESS_RECORDS_END`, which is a number the run emits anyway, so it took
-    # two clubs to see it.
+    # `i / len(targets)`, so the first club is reported before any of its work rather
+    # than after. With one club `(i + 1) / len(targets)` is 1.0 times
+    # `PROGRESS_RECORDS_END`, a number the run emits anyway, so it takes two clubs.
     seen = []
     patcher = make_patcher(tmp_path)
     rosters = patcher.map_rosters(league(squads={1: full_squad(1000), 2: full_squad(2000)}))
@@ -1004,9 +952,6 @@ def test_the_teams_divide_the_record_phase_between_them(tmp_path):
         0.0,
         PROGRESS_RECORDS_END / 2,
     ]
-
-
-# -- what reaches the disc -------------------------------------------------
 
 
 def test_the_bytes_before_the_extent_are_untouched(tmp_path):
@@ -1059,13 +1004,10 @@ def test_a_patched_player_keeps_the_discs_salary(tmp_path):
 
 
 def test_a_patched_player_keeps_the_discs_second_position(tmp_path):
-    # `_build_attrib_fields` writes column 6 only when the mapper produced a
-    # second position, and it never does -- `MVPPlayerRecord.secondary_position`
-    # has no producer. The guard is there because writing an empty string erases
-    # the disc's own value and leaves the player unable to be moved in the
-    # field, and until the fixture carried a value in that column there was
-    # nothing for it to protect: `if player.secondary_position` could be
-    # loosened to `is not None` and every test still passed.
+    # `_build_attrib_fields` writes column 6 only when the mapper produced a second
+    # position, and it never does -- `MVPPlayerRecord.secondary_position` has no
+    # producer. The guard is there because writing an empty string erases the disc's
+    # own value and leaves the player unable to be moved in the field.
     source = write_iso(tmp_path, DISC)
     patcher = make_patcher(tmp_path)
     rosters = patcher.map_rosters(league(squads={1: full_squad(1000)}))
@@ -1110,11 +1052,9 @@ def test_no_roster_row_id_is_reused(tmp_path):
     assert len(table) == len(set(table))
 
 
-# The assertion above cannot fail. `table` is a dict, so `set(table)` is its own
-# key set and the two lengths are equal by construction -- zero over zero, and
-# mutation testing said so by starting `roster_counter` on the highest id the
-# disc already held instead of one past it and surviving the whole suite. What a
-# reused id actually does is silently drop a row, so these count the rows.
+# The assertion above cannot fail: `table` is a dict, so `set(table)` is its own key
+# set and the two lengths are equal by construction. What a reused id actually does
+# is silently drop a row, so these count the rows.
 
 
 def test_the_roster_table_holds_every_kept_row_and_every_new_one(tmp_path):
@@ -1134,9 +1074,8 @@ def test_the_highest_numbered_row_the_disc_had_still_names_its_own_player(tmp_pa
 
 
 def test_the_new_rows_take_the_ids_that_follow_the_highest_the_disc_held(tmp_path):
-    # The ids themselves, consecutively, from `max(old_roster) + 1`. Nothing
-    # else in the file looks at a new row's id at all, so the counter could
-    # start one low or step by two unremarked.
+    # The ids themselves, consecutively, from `max(old_roster) + 1`. Nothing else in
+    # the file looks at a new row's id, so the counter could start one low unremarked.
     _, out = patch_one(tmp_path, {1: full_squad(1000)})
     highest = int(fixture.roster_row_id(DISC.teams - 1, DISC.players_per_team - 1), 16)
     assert sorted(int(rid, 16) for rid in roster_rows(out, 0)) == [
@@ -1145,11 +1084,9 @@ def test_the_new_rows_take_the_ids_that_follow_the_highest_the_disc_held(tmp_pat
 
 
 def test_the_counter_counts_the_rows_the_patch_drops_as_well(tmp_path):
-    # `max(...)` runs over `old_roster` -- every row the disc held -- and not
-    # over the rows this patch keeps, and patching the *last* club is what
-    # separates the two: its rows carry the highest ids on the disc and they
-    # are exactly the ones being dropped. A counter built from the survivors
-    # restarts inside a range the disc has already used.
+    # `max(...)` runs over `old_roster` -- every row the disc held -- and not over the
+    # rows this patch keeps, and patching the *last* club is what separates the two:
+    # its rows carry the highest ids on the disc and are exactly the ones dropped.
     patcher = make_patcher(tmp_path)
     mapped = patcher.map_rosters(league(squads={1: full_squad(1000)}))
     patcher.patch(
@@ -1198,18 +1135,14 @@ def test_a_patched_players_position_code_reaches_the_disc(tmp_path):
 
 
 def test_an_unmapped_primary_position_falls_back_to_centre_field():
-    # Unreachable through `map_rosters`: `normalize_position` only ever returns
-    # keys of `POS_STRING_TO_NUM`, and `map_pitcher` sets `SP` or `RP`, which
-    # are keys too. So only a hand-built record reaches the fallback, and until
-    # one did, the fallback could be anything -- 0, which files the player as a
-    # starting pitcher, survived the suite.
+    # Unreachable through `map_rosters`: `normalize_position` only ever returns keys
+    # of `POS_STRING_TO_NUM`, and `map_pitcher` sets `SP` or `RP`, which are keys too.
+    # Only a hand-built record reaches the fallback.
     fields = MVPPSPPatcher._build_attrib_fields(MVPPlayerRecord(primary_position="QB"))
     assert fields[ATTRIB_PRIMARY_POS] == "7"
 
 
 def test_the_progress_bar_gives_the_copy_its_last_tenth():
-    # Read back through the constant everywhere else, so the number itself is
-    # only stated here.
     assert PROGRESS_RECORDS_END == 0.9
 
 
@@ -1231,17 +1164,14 @@ def test_a_patched_batters_contact_reaches_the_split_table(tmp_path):
     assert written[0][LR_CONTACT] == "55"
 
 
-# A batter with no statistics takes his position's default for both splits, and
-# a pitcher takes the same pair for both, so on the squads above
-# `lrattrib_rhp` and `lrattrib_lhp` hold identical numbers -- and swapping the
-# two tables, or swapping the two ratings inside `_build_lr_attrib_fields`,
-# survived every one of them. Zero over zero. These give one batter statistics,
-# which is the only thing in the mapper that makes the two sides differ: the
-# left-hand column is five points below the right.
+# A batter with no statistics takes his position's default for both splits, and a
+# pitcher takes the same pair for both, so on the squads above `lrattrib_rhp` and
+# `lrattrib_lhp` hold identical numbers. These give one batter statistics, which is
+# the only thing in the mapper that makes the two sides differ: the left-hand column
+# is five points below the right.
 #
 # `full_squad`'s player 1001 rather than 1000, because `make_player` gives every
-# fifth id a switch hitter's `bats`, and a switch hitter's two splits are
-# averaged back together.
+# fifth id a switch hitter's `bats`, and a switch hitter's two splits are averaged.
 
 LR_SPLIT_LEADERS = {1: {"1001": {"AVG": 0.330, "OBP": 0.420, "SLG": 0.600, "HR": 45}}}
 
@@ -1294,9 +1224,6 @@ def test_the_lineup_positions_reach_the_roster_table(tmp_path):
     _, out = patch_one(tmp_path, {1: full_squad(1000)})
     positions = [cols[ROSTER_RH_AL_POS] for cols in roster_rows(out, 0).values()]
     assert sorted(positions[:9]) == sorted(LINEUP_POSITIONS)
-
-
-# -- the American League split ---------------------------------------------
 
 
 def test_an_american_league_club_bats_in_the_al_columns(tmp_path):
@@ -1352,9 +1279,6 @@ def test_the_two_handedness_variants_agree_in_the_national_columns_too(tmp_path)
     assert [r[ROSTER_RH_NL_ORDER] for r in rows] == [r[ROSTER_LH_NL_ORDER] for r in rows]
 
 
-# -- bug 3 reaching the disc: height and weight ----------------------------
-
-
 def test_every_patched_player_is_written_at_six_feet(tmp_path):
     """PINS UPSTREAM FIDELITY DELIBERATELY, on the disc.
 
@@ -1370,8 +1294,7 @@ def test_every_patched_player_is_written_at_six_feet(tmp_path):
 
 
 def test_the_height_the_disc_shipped_is_overwritten(tmp_path):
-    # The other half, and what makes the test above mean something: the disc's
-    # own value for one of those players is not 72.
+    # The other half: the disc's own value for one of those players is not 72.
     source = write_iso(tmp_path, DISC)
     patcher = make_patcher(tmp_path)
     rosters = patcher.map_rosters(league(squads={1: full_squad(1000)}))
@@ -1387,8 +1310,6 @@ def test_the_height_the_disc_shipped_is_overwritten(tmp_path):
 
 
 def test_the_disc_holds_more_than_one_height(tmp_path):
-    # And the disc's heights were per-player, so what the patch destroys is
-    # real information and not one constant replaced by another.
     source = write_iso(tmp_path, DISC)
     table = fixture.parse_table(
         fixture.decompress_section_at(
@@ -1417,8 +1338,7 @@ def test_every_patched_player_is_written_at_that_one_weight(tmp_path):
 
 
 def test_the_weight_the_disc_shipped_is_overwritten(tmp_path):
-    # What makes the two tests above matter: the disc's own value for one of
-    # those players is not 190.
+    # The other half: the disc's own value for one of those players is not 190.
     source = write_iso(tmp_path, DISC)
     patcher = make_patcher(tmp_path)
     rosters = patcher.map_rosters(league(squads={1: full_squad(1000)}))
@@ -1434,8 +1354,6 @@ def test_the_weight_the_disc_shipped_is_overwritten(tmp_path):
 
 
 def test_the_disc_holds_more_than_one_weight(tmp_path):
-    # And the disc's weights were per-player, so what the patch destroys is real
-    # information and not one constant replaced by another.
     source = write_iso(tmp_path, DISC)
     table = fixture.parse_table(
         fixture.decompress_section_at(
@@ -1443,9 +1361,6 @@ def test_the_disc_holds_more_than_one_weight(tmp_path):
         )
     )
     assert len({cols[ATTRIB_WEIGHT] for cols in table.values()}) > 1
-
-
-# -- bug 1 reaching the disc: the arsenal ----------------------------------
 
 
 def test_two_pitchers_with_different_statistics_get_the_same_velocity(tmp_path):
@@ -1483,8 +1398,7 @@ def test_a_pitcher_with_statistics_gets_the_default_velocity(tmp_path):
 
 
 def test_that_velocity_is_the_one_a_pitcher_with_no_statistics_gets(tmp_path):
-    # Pins the two tests above: "60" is the default arsenal's velocity and not
-    # a number this file invented.
+    # "60" is the default arsenal's velocity and not a number this file invented.
     squad = full_squad(1000)
     _, out = patch_one(tmp_path, {1: squad})
     table = patched_table(out, "pitchattrib")
@@ -1500,11 +1414,10 @@ def test_a_starters_second_pitch_reaches_the_repeating_block(tmp_path):
     assert PA_PITCH2_TYPE in written[0]
 
 
-# Membership alone does not say *which* pitch landed there. Pitch 1 is the
-# asymmetric one -- always a fastball, four columns, no type column of its own
-# -- so the repeating block starts at the arsenal's *second* entry, and slicing
-# it from the first instead puts a fastball in the slider's type column and
-# survived the test above.
+# Membership alone does not say *which* pitch landed there. Pitch 1 is the asymmetric
+# one -- always a fastball, four columns, no type column of its own -- so the
+# repeating block starts at the arsenal's *second* entry, and slicing it from the
+# first instead puts a fastball in the slider's type column.
 
 
 def _starter_pitch_record(tmp_path):
@@ -1537,13 +1450,9 @@ def test_a_batter_gets_no_pitching_record_of_his_own(tmp_path):
     assert batters == []
 
 
-# -- bug 2 reaching the disc: a section that does not fit ------------------
-
-
 def test_a_patch_that_cannot_be_stored_raises(tmp_path):
-    # DELIBERATE DIVERGENCE. The source kept the original section, dropped
-    # every edit to it, and returned success with a full count of teams and
-    # players patched.
+    # The source kept the original section, dropped every edit to it, and returned
+    # success with a full count of teams and players patched.
     patcher = make_patcher(tmp_path)
     rosters = patcher.map_rosters(league(squads={1: long_named_squad()}))
     with pytest.raises(SectionTooLargeError):
@@ -1567,8 +1476,7 @@ def test_a_patch_that_cannot_be_stored_leaves_no_output(tmp_path):
 
 
 def test_the_full_disc_can_still_be_patched_with_ordinary_names(tmp_path):
-    # The zero-over-zero check on the two tests above: they would both pass on
-    # a disc that could not be patched at all.
+    # Both tests above would pass on a disc that could not be patched at all.
     patcher = make_patcher(tmp_path)
     rosters = patcher.map_rosters(league(squads={1: full_squad(1000)}))
     result = patcher.patch(
@@ -1580,8 +1488,7 @@ def test_the_full_disc_can_still_be_patched_with_ordinary_names(tmp_path):
 
 
 def test_the_same_patch_on_a_roomier_disc_succeeds(tmp_path):
-    # Which is what makes the two tests above about *fitting* rather than
-    # about long names being rejected outright.
+    # Which makes the two tests above about *fitting* and not about long names.
     patcher = make_patcher(tmp_path)
     rosters = patcher.map_rosters(league(squads={1: long_named_squad()}))
     result = patcher.patch(
@@ -1592,12 +1499,9 @@ def test_the_same_patch_on_a_roomier_disc_succeeds(tmp_path):
     assert result.players_patched == 25
 
 
-# -- degradation is reported -----------------------------------------------
-
-
 def test_an_exhausted_pool_is_reported(tmp_path):
-    # The source degraded in silence. The degradation is preserved -- every
-    # alternative drops a player -- and it is now said out loud.
+    # The degradation is preserved -- every alternative drops a player -- but said
+    # out loud rather than silent.
     seen = []
     patcher = MVPPSPPatcher(tmp_path / "cache", on_status=seen.append)
     patcher.api = FakeApi()
@@ -1619,8 +1523,8 @@ ONE_TEAM_DISC = fixture.DiscSpec(teams=1, players_per_team=25)
 
 
 def test_a_run_that_only_crosses_still_reports(tmp_path):
-    # `or`, not `and`. The exhausted-pool test above is a disc small enough that
-    # both tiers fire, so reporting only when both had happened survived it.
+    # `or`, not `and`. The exhausted-pool test above is a disc small enough that both
+    # tiers fire, so it cannot tell the two connectives apart.
     seen = []
     patcher = MVPPSPPatcher(tmp_path / "cache", on_status=seen.append)
     patcher.api = FakeApi()
@@ -1647,9 +1551,6 @@ def test_a_patch_that_does_not_degrade_says_nothing_about_it(tmp_path):
         rosters=rosters,
     )
     assert [m for m in seen if "synthesised id" in m] == []
-
-
-# -- fetch, map and patch are separable -------------------------------------
 
 
 def test_a_mapping_can_be_reused_for_two_patches(tmp_path):

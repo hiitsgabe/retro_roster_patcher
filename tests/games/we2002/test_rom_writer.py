@@ -148,9 +148,6 @@ def test_the_two_master_league_capacities_are_not_the_same_number(tmp_path):
     assert _slot_player_range(31) == (0, 15)
 
 
-# ── flag colours ─────────────────────────────────────────────────────────
-
-
 def test_two_master_league_slots_have_no_known_colour_offset():
     # `_compute_ml_color_offsets` traces the upstream C++ write sequence, and
     # that sequence never writes ml[5] or ml[22]. The count and the two indices

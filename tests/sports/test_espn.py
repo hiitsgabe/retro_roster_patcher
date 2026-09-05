@@ -121,9 +121,7 @@ def _sequence_transport(*bodies):
     """Serve each body in turn, repeating the last, and log the URLs asked for.
 
     `conftest.replay` serves one recorded body forever, which cannot tell a cache
-    hit from a second identical response. These tests need consecutive requests
-    to the same URL to differ, so that a cached answer is distinguishable from a
-    re-fetched one by its content and not only by the call count.
+    hit from a second identical response.
     """
 
     def transport(url, headers, timeout):
@@ -135,12 +133,6 @@ def _sequence_transport(*bodies):
 
 
 def test_get_nhl_teams_parses_the_recorded_response(tmp_path, replay):
-    # The fixture is a recorded response with fixed content, so every claim here is
-    # exact rather than approximate. The `len(teams) >= 30` bound and the
-    # `all(t.id ...)` / `all(t.name ...)` checks this replaces passed on any
-    # non-empty value: they would have stayed green had every team parsed to the
-    # wrong id and the wrong name, which is the failure that matters. Indexing
-    # positionally pins the parsed order too.
     client = EspnClient(str(tmp_path), transport=replay("espn_nhl_teams.json"))
     teams = client.get_nhl_teams()
 
@@ -156,8 +148,7 @@ def test_get_nhl_teams_truncates_the_two_fields_it_slices(tmp_path, replay):
     # `code` and `short_name` are the only fields `_parse_teams` transforms rather
     # than copies, and the fixture carries exactly one team past each limit: "UTAH"
     # is its only abbreviation longer than 3 characters, and "Golden Knights" its
-    # only shortDisplayName longer than 12. Pinning any other team would assert the
-    # slices without exercising them.
+    # only shortDisplayName longer than 12.
     client = EspnClient(str(tmp_path), transport=replay("espn_nhl_teams.json"))
     teams = client.get_nhl_teams()
 
@@ -167,7 +158,7 @@ def test_get_nhl_teams_truncates_the_two_fields_it_slices(tmp_path, replay):
 
 def test_results_are_cached_so_the_second_call_skips_the_transport(tmp_path, replay):
     # Asserts the URL too: the replay transport ignores it, so without this nothing
-    # in the suite would notice the base URL, sport segment, or path changing.
+    # would notice the base URL, sport segment or path changing.
     transport = replay("espn_nhl_teams.json")
     client = EspnClient(str(tmp_path), transport=transport)
     client.get_nhl_teams()
@@ -210,19 +201,11 @@ def test_a_repeated_squad_request_is_served_from_the_cache(tmp_path):
     assert transport.calls == [SOCCER_ROSTER_URL.format(code="eng.1")]
 
 
-# --- the season in the squad key ---
-#
 # The ESPN roster endpoints take no season and answer with the squad as it stands
 # today, so the season reaches the cache key and nothing else. Without it the key
-# has no time coordinate at all: nothing the caller can vary invalidates it, so
-# the first fetch a user ever ran was replayed for every later season, with no
-# network call, and reported as a success for the season that was asked for.
-#
-# Every test below drives two seasons whose correct answers differ, because a
-# single season proves nothing about a key that ignores the season, and pairs
-# them with a repeat of the first — a key that had grown *too* specific would
-# re-request that one, and losing the cache is a real cost on a per-team endpoint
-# a league fetch calls dozens of times.
+# has no time coordinate at all: the first fetch a user ever ran was replayed for
+# every later season, with no network call, and reported as a success for the
+# season that was asked for.
 
 
 def test_two_seasons_get_two_hockey_squads_and_a_repeat_gets_the_cache(tmp_path):
@@ -248,11 +231,7 @@ def test_two_seasons_get_two_hockey_squads_and_a_repeat_gets_the_cache(tmp_path)
 
 
 def test_the_hockey_squad_key_names_the_season_on_disk(tmp_path):
-    """The file name is the whole mechanism, so it is asserted directly.
-
-    The test above would also pass for a key built from something else that
-    happened to vary per call — a counter, or the request ordinal.
-    """
+    """The file name is the whole mechanism, so it is asserted directly."""
     transport = _sequence_transport(_hockey_roster("Mats Sundin"))
     client = EspnClient(str(tmp_path), transport=transport)
     client.get_hockey_squad(5, 2024)
@@ -294,12 +273,9 @@ def test_a_hockey_squad_asked_for_without_a_season_gets_its_own_key(tmp_path):
 def test_the_other_two_sports_squad_keys_carry_the_season_too(tmp_path, method, body, stem):
     """The same fix on the two sports no registered game reaches yet.
 
-    `EspnClient` is a public client, not private to NHL94: leaving two of its
-    four squad methods keyed without a season would leave the next game that
-    wants MLB or NBA rosters serving one season's squad for another, and no test
-    to notice. The bodies differ because the parsers do — baseball groups its
-    athletes by role and basketball returns a flat list — so one shared fixture
-    would silently parse to nothing for one of them.
+    The bodies differ because the parsers do — baseball groups its athletes by
+    role and basketball returns a flat list — so one shared fixture would silently
+    parse to nothing for one of them.
     """
     transport = _sequence_transport(body("Alpha"), body("Beta"))
     client = EspnClient(str(tmp_path), transport=transport)
@@ -428,9 +404,8 @@ def test_the_status_callback_reports_the_fetch(tmp_path, replay):
 
 def test_a_raising_status_callback_is_not_mistaken_for_a_failed_fetch(tmp_path, replay):
     # Only the request belongs inside the `try`. With the callback in there too, a
-    # raising `on_status` was caught as if the fetch had failed and the caller got
-    # an empty result — a caller bug silently downgraded to "no data". The
-    # transport-failure test above pins the other half: a failing request is still
+    # raising `on_status` was caught as if the fetch had failed and the caller got an
+    # empty result. The test above pins the other half: a failing request is still
     # swallowed.
     def raising(message):
         raise RuntimeError("the progress UI went away")
@@ -440,8 +415,6 @@ def test_a_raising_status_callback_is_not_mistaken_for_a_failed_fetch(tmp_path, 
     with pytest.raises(RuntimeError):
         client.get_nhl_teams()
 
-
-# --- the transport seam (helpers live in conftest.py) ---
 
 # Every public method that issues a request, with arguments that reach the wire.
 # `get_squad` needs its league code passed: without one the client looks the league
@@ -475,12 +448,9 @@ def test_no_call_site_falls_back_to_the_default_transport(tmp_path, assert_no_tr
     assert_no_transport_leak(EspnClient, NETWORK_CALLS, str(tmp_path))
 
 
-# --- the leaders parse loop (`_extract_pid` and its caller) ---
-
-# Every leaders test above this line drove `get_hockey_team_leaders` with `{}`,
-# so `data.get("categories", [])` was empty and the loop body — the whole of the
-# parse, including `_extract_pid` — never ran once. NHL94's `fetch` calls this
-# method for the `espn` provider on every team, so the parse is on the live path.
+# Every leaders test above this line drove `get_hockey_team_leaders` with `{}`, so
+# `data.get("categories", [])` was empty and the parse loop — including
+# `_extract_pid` — never ran once. NHL94's `fetch` calls this method per team.
 
 LEADERS_URL = (
     "https://sports.core.api.espn.com/v2/sports/hockey/leagues/nhl"
@@ -621,10 +591,9 @@ def test_a_payload_that_parses_to_no_stats_is_asked_for_again(tmp_path):
 
 
 def test_a_payload_that_parses_to_no_stats_leaves_no_file_behind(tmp_path):
-    # `if stats:`. Dropping that guard is invisible from the return value — an
-    # empty dict is falsy, so `_load_cache`'s `if cached:` rejects it and the next
-    # call goes to the wire either way. The file itself is the only trace, so the
-    # file is what this asserts.
+    # `if stats:`. Dropping that guard is invisible from the return value — an empty
+    # dict is falsy, so `_load_cache`'s `if cached:` rejects it and the next call goes
+    # to the wire either way. The file itself is the only trace.
     body = _leaders_body([("G", [({}, 26)])])
     client = EspnClient(str(tmp_path), transport=_body_transport(body))
     client.get_hockey_team_leaders(5)
@@ -647,24 +616,21 @@ def test_an_athlete_sent_as_null_is_skipped_rather_than_crashing(tmp_path):
     assert client.get_hockey_team_leaders(5) == {}
 
 
-# --- soccer per-player statistics, from ESPN's core API ---
-#
 # `get_player_stats` returned `[]` under the docstring "ESPN doesn't provide
 # historical stats". It does: the same core API the three leaders methods above
-# already use serves soccer, keyless, and `tests/fixtures/api/record.py` carries
-# the two URLs these fixtures were recorded from. There is no bulk endpoint —
-# `/athletes` on a team is a 404 — so it is the team's leaders document to
-# enumerate the athletes, then one statistics document each.
+# already use serves soccer, keyless, and `tests/fixtures/api/record.py` carries the
+# two URLs these fixtures were recorded from. There is no bulk endpoint —
+# `/athletes` on a team is a 404 — so it is the team's leaders document to enumerate
+# the athletes, then one statistics document each.
 
 SOCCER_LEADERS_URL = (
     "https://sports.core.api.espn.com/v2/sports/soccer/leagues/eng.1"
     "/seasons/2025/types/1/teams/364/leaders"
 )
 
-# The 25 athletes the recorded leaders document names, in first-seen order across
-# its twelve categories. Spelled out because `get_player_stats` requests one
-# document per athlete in this order, and the URL list is the only thing that can
-# show it asked for the right ones.
+# The 25 athletes the recorded leaders document names, in first-seen order across its
+# twelve categories. `get_player_stats` requests one document per athlete in this
+# order, and the URL list is the only thing that can show it asked for the right ones.
 RECORDED_ATHLETES = [
     304901,
     249524,
@@ -790,13 +756,10 @@ def _recorded_transport():
     return transport
 
 
-# --- the recorded documents ---
-
-
 def test_the_recorded_statistics_document_becomes_one_player_stats(tmp_path):
-    # Field for field against the document `record.py` fetched, so that a
-    # provider renaming `totalGoals` or moving it between categories fails here
-    # rather than showing up as a league of strikers who never scored.
+    # Field for field against the document `record.py` fetched, so a provider
+    # renaming `totalGoals` or moving it between categories fails here rather than
+    # showing up as a league of strikers who never scored.
     client = EspnClient(str(tmp_path), transport=_recorded_transport())
     stats = client.get_player_stats(364, 2025, league_code="eng.1")
 
@@ -819,14 +782,11 @@ def test_the_recorded_statistics_document_becomes_one_player_stats(tmp_path):
 
 
 def test_the_pass_percentage_arrives_as_a_fraction_and_is_stored_as_a_percentage(tmp_path):
-    # `general.passPct` reads `0.768` in the recorded document where
-    # `displayValue` says `"0.8"`; `PlayerStats.passes_accuracy` is declared a
-    # percentage, so the fraction is scaled rather than stored as it arrives.
-    #
-    # This is the one field whose unit cannot be caught by any rating assertion:
-    # `pass_accuracy` is percentiled league-wide, so scaling every player by the
-    # same hundred leaves the ranking, and therefore every rating in the game,
-    # exactly as it was. Only the concrete number shows it.
+    # `general.passPct` reads `0.768` in the recorded document where `displayValue`
+    # says `"0.8"`; `PlayerStats.passes_accuracy` is declared a percentage, so the
+    # fraction is scaled rather than stored as it arrives. No rating assertion can
+    # catch this: `pass_accuracy` is percentiled league-wide, so scaling every player
+    # by the same hundred leaves every rating in the game exactly as it was.
     client = EspnClient(str(tmp_path), transport=_recorded_transport())
     assert client.get_player_stats(364, 2025, league_code="eng.1")[0].passes_accuracy == 76.8
 
@@ -856,9 +816,6 @@ def test_the_requests_are_the_leaders_document_and_then_one_per_athlete(tmp_path
     assert transport.calls == [SOCCER_LEADERS_URL] + [
         _soccer_stats_url(aid) for aid in RECORDED_ATHLETES
     ]
-
-
-# --- what the records say they do not measure ---
 
 
 def test_every_record_declares_the_four_stats_espn_never_reports(tmp_path):
@@ -893,26 +850,20 @@ def test_the_declared_absences_are_exactly_the_fields_left_at_zero(tmp_path):
 
 
 def test_the_mapper_this_constant_describes_does_not_read_it():
-    # `StatMapper` had a `CATEGORY_INPUTS` table naming the `PlayerStats` fields
-    # each rating category reads, and gated on the intersection of that table
-    # with this constant. It was removed to restore the original patcher's
-    # bytes, and this pins the removal so the cross-package claim above cannot
-    # rot into a reference to something that is gone.
+    # `StatMapper` had a `CATEGORY_INPUTS` table naming the `PlayerStats` fields each
+    # rating category reads, and gated on its intersection with this constant. It was
+    # removed to restore the original patcher's bytes; this pins the removal.
     #
-    # The consequence is in `tests/games/we2002/test_stat_mapper.py`:
-    # `body_balance`, `technique` and `dribble` percentile a filler zero to the
-    # floor for every player in the league. That is upstream's behaviour, it is
-    # wrong, and it is preserved deliberately.
+    # The consequence is in `tests/games/we2002/test_stat_mapper.py`: `body_balance`,
+    # `technique` and `dribble` percentile a filler zero to the floor for every player
+    # in the league. That is upstream's behaviour, it is wrong, and it is preserved.
     assert hasattr(StatMapper, "CATEGORY_INPUTS") is False
 
 
-# --- the records differ where the documents differ ---
-
-
 def test_three_athletes_with_three_documents_get_three_different_records(tmp_path):
-    # A fixture where every player scores the same cannot tell a working parser
-    # from one that returns a constant, and the recorded fixture is a single
-    # athlete replayed for all 25. These three differ in every field asserted.
+    # The recorded fixture is a single athlete replayed for all 25, which cannot tell
+    # a working parser from one that returns a constant. These three differ in every
+    # field asserted.
     transport = _soccer_transport(
         _soccer_leaders_body(1, 2, 3),
         {
@@ -963,9 +914,6 @@ def test_a_later_rating_field_is_used_when_the_first_is_empty(tmp_path):
     assert client.get_player_stats(364, 2025, league_code="eng.1")[0].rating == 6.9
 
 
-# --- documents that are not there or not usable ---
-
-
 def test_an_athlete_whose_document_has_no_categories_yields_no_record(tmp_path):
     # A player with twenty zeroes is not the same as a player with no record:
     # `map_player` reads `appearances == 0` and falls back, but every other
@@ -1012,9 +960,6 @@ def test_stats_for_a_team_in_no_known_league_are_not_requested(tmp_path):
     client = EspnClient(str(tmp_path), transport=transport)
     assert client.get_player_stats(99999, 2025) == []
     assert transport.calls == []
-
-
-# --- caching, which is what makes 500 requests a league viable ---
 
 
 def test_a_second_fetch_of_the_same_team_and_season_makes_no_request(tmp_path):
@@ -1080,15 +1025,11 @@ def test_one_athlete_already_cached_is_not_requested_again(tmp_path):
     assert transport.calls == calls_before + [SOCCER_LEADERS_URL, _soccer_stats_url(2)]
 
 
-# --- resolving the league code from what `get_teams` cached ---
-
-
 def test_a_squad_asked_for_without_a_league_code_resolves_it_from_the_cached_teams(tmp_path):
-    # `WE2002Patcher.fetch` calls `get_teams` and then `get_squad`, and only the
-    # first is told the league. This lookup is what carries the code across, and
-    # it was reading `espn_teams_{id}` — a key nothing has written since the
-    # season joined it — so it always answered `None`, and `get_squad` returned an
-    # empty list without issuing a request or raising anything.
+    # `WE2002Patcher.fetch` calls `get_teams` and then `get_squad`, and only the first
+    # is told the league. This lookup carries the code across, and it was reading
+    # `espn_teams_{id}` — a key nothing has written since the season joined it — so it
+    # always answered `None` and `get_squad` returned [] without issuing a request.
     def transport(url, headers, timeout):
         transport.calls.append(url)
         if url.endswith("/teams"):
@@ -1122,9 +1063,6 @@ def test_the_teams_cached_for_one_season_do_not_resolve_another_seasons_squad(tm
     assert transport.calls == ["https://site.api.espn.com/apis/site/v2/sports/soccer/eng.1/teams"]
 
 
-# --- the season on the league the caller is answered with ---
-
-
 def test_a_league_carries_the_season_it_was_asked_about(tmp_path):
     # `WE2002Patcher.fetch` puts this object straight onto the `LeagueData` it
     # returns and `serde` writes it to the rosters file, so a `League` that
@@ -1143,9 +1081,6 @@ def test_a_league_asked_for_without_a_season_falls_back_to_the_calendar_year(tmp
     assert client.get_featured_leagues()[0].season == datetime.now().year
 
 
-# --- the two soccer signatures, pinned by name and order ---
-
-
 @pytest.mark.parametrize(
     ("method", "expected"),
     [
@@ -1154,14 +1089,8 @@ def test_a_league_asked_for_without_a_season_falls_back_to_the_calendar_year(tmp
     ],
 )
 def test_a_soccer_methods_parameters_are_exactly_these_in_this_order(method, expected):
-    # `WE2002Patcher.fetch` calls both of these positionally and passes the
-    # season second. When `get_squad`'s second parameter was `league_code`, the
-    # season landed in it, `"2024"` matched no league, and every squad came back
-    # empty with nothing raised anywhere.
-    #
-    # Fixing the call site would have fixed that one line. This pins the order
-    # itself, so the mistake cannot come back through the signature. The pin was
-    # once written as "a positional superset of `ApiFootballClient`'s", which
-    # said the same thing by comparison; with that client deleted the list is
-    # written out here instead, which is the same guard and one fewer indirection.
+    # `WE2002Patcher.fetch` calls both of these positionally and passes the season
+    # second. When `get_squad`'s second parameter was `league_code`, the season landed
+    # in it, `"2024"` matched no league, and every squad came back empty with nothing
+    # raised anywhere. This pins the order itself, not the one call site.
     assert list(inspect.signature(getattr(EspnClient, method)).parameters) == expected

@@ -1,22 +1,10 @@
 """The KGJ MLB patcher against the unified interface.
 
-The reader, writer and stat mapper below it are a faithful port of an untested
-upstream; this layer is where its contract violations are absorbed and where the
-migration's own decisions live. Five things here are not in the ported code at
-all:
-
-  * `_team_data_fits`, without which an image whose marker matches too near the
-    end is patched for none of its teams and reported as a success;
-  * `_roster_type_for_slot`, which is where the roster-type stamping moved to
-    when `write_team_roster` stopped mutating the caller's records. The *value*
-    is upstream's -- the slot index, which is not right on a roster short of
-    fifteen non-pitchers, paired with upstream's `is_starter = idx < 20`. Both
-    are preserved deliberately for byte fidelity; see the function's docstring
-    and the short-roster tests near the end of this file;
-  * the alias guard, without which an empty `CHW` wipes a populated `CWS`;
-  * `season` threaded into the squad call, which upstream omitted;
-  * `TeamRoster.extra["leaders"]` in place of `self.team_stats`;
-  * `RomError` against `RomInfo(is_valid=False)`, which upstream conflated.
+`_roster_type_for_slot` is where roster-type stamping moved when
+`write_team_roster` stopped mutating the caller's records. The *value* is
+upstream's -- the slot index, which is not right on a roster short of fifteen
+non-pitchers, paired with upstream's `is_starter = idx < 20`. Both are preserved
+deliberately for byte fidelity.
 
 Every read-back of a patched ROM goes through a *fresh* reader on the output
 path. `KGJRomWriter.__init__` builds its own reader over the *input* file, so
@@ -218,9 +206,6 @@ def _read_back(path, slot):
     return reader.read_team_roster(slot)
 
 
-# -- registration ------------------------------------------------------------
-
-
 def test_the_patcher_is_registered_with_its_id():
     from retro_roster_patcher import get_patcher
 
@@ -273,9 +258,6 @@ def test_importing_the_package_root_is_what_registers_the_game(tmp_path):
     assert "kgj-mlb-snes" in result.stdout.strip().split(",")
 
 
-# -- construction ------------------------------------------------------------
-
-
 def test_the_constructor_accepts_a_string_cache_directory(tmp_path):
     p = KGJMLBPatcher(cache_dir=str(tmp_path / "cache"))
     assert p.cache_dir == tmp_path / "cache"
@@ -313,9 +295,6 @@ def test_the_default_provider_is_the_first_declared(tmp_path):
     assert p.provider == "espn"
 
 
-# -- _roster_type_for_slot ---------------------------------------------------
-
-
 @pytest.mark.parametrize("slot", [0, 7, BATTERS_PER_TEAM - 1])
 def test_a_batter_slot_takes_the_batter_nibble(slot):
     assert _roster_type_for_slot(slot) == ROSTER_TYPE_BATTER
@@ -351,9 +330,6 @@ def test_the_three_nibbles_are_distinct():
     assert len(values) == 3
 
 
-# -- _team_data_fits ---------------------------------------------------------
-
-
 def _reader_for(path):
     reader = KGJRomReader(str(path))
     reader.load()
@@ -380,9 +356,6 @@ def test_a_marker_one_byte_too_late_does_not(tmp_path):
 
 def test_a_reader_that_never_loaded_does_not_fit(tmp_path):
     assert _team_data_fits(KGJRomReader(str(tmp_path / "absent.sfc"))) is False
-
-
-# -- analyze_rom -------------------------------------------------------------
 
 
 def test_analyze_recognises_a_headerless_image(patcher, rom):
@@ -517,9 +490,6 @@ def test_the_unreadable_error_names_the_file(patcher, tmp_path):
         patcher.analyze_rom(missing)
 
 
-# -- fetch -------------------------------------------------------------------
-
-
 def test_fetch_returns_one_roster_per_slot_mapped_team(patcher):
     # SEA and CWS have slots; ARI never existed in 1994 and ZZZ is not a team.
     assert len(patcher.fetch(season=2025).teams) == 2
@@ -594,9 +564,6 @@ def test_fetch_narrates_its_first_step(tmp_path):
 def test_fetch_does_not_reach_the_provider_for_a_team_with_no_slot(patcher):
     patcher.fetch(season=2025)
     assert [call[0] for call in patcher.api.squad_calls] == [1, 2]
-
-
-# -- map_rosters -------------------------------------------------------------
 
 
 def test_map_rosters_refuses_a_slot_mapping(patcher):
@@ -709,9 +676,6 @@ def test_an_empty_roster_with_no_collision_still_takes_its_slot(patcher):
 def test_two_different_teams_take_two_different_slots(patcher):
     mapped = patcher.map_rosters(_league_data(("SEA", 25), ("CWS", 25)))
     assert sorted(mapped.teams) == sorted([SEA_SLOT, CWS_SLOT])
-
-
-# -- patch -------------------------------------------------------------------
 
 
 def test_patch_refuses_another_games_rosters(patcher, rom, out):
@@ -929,9 +893,6 @@ def test_the_records_keep_the_roster_types_they_were_built_with(patcher, rom, ou
     assert [r.roster_type for r in rosters.teams[SEA_SLOT].players] == before
 
 
-# -- the analyze/patch asymmetry ---------------------------------------------
-
-
 def test_analyze_reports_a_readable_non_kgj_image_rather_than_raising(patcher, tmp_path):
     # `cmd_analyze` probes every registered patcher against one ROM and catches
     # `RomError` per patcher, so "not this game" must not be an exception --
@@ -954,9 +915,6 @@ def test_analyze_declines_and_patch_raises_on_a_marker_that_leaves_no_room(patch
     assert patcher.analyze_rom(path).is_valid is False
     with pytest.raises(RomError):
         patcher.patch(rom_path=path, output_path=out, rosters=_mapped((SEA_SLOT, 25)))
-
-
-# -- the whole pipeline ------------------------------------------------------
 
 
 def test_fetch_map_and_patch_run_end_to_end(patcher, rom, out):
@@ -991,9 +949,6 @@ def test_the_pipeline_survives_a_json_round_trip_of_the_league_data(patcher, rom
     mapped = patcher.map_rosters(reloaded)
     result = patcher.patch(rom_path=rom, output_path=out, rosters=mapped)
     assert result.players_patched == 50
-
-
-# -- holes mutation testing found --------------------------------------------
 
 
 class _StubMapper:
@@ -1048,9 +1003,6 @@ def test_map_rosters_keeps_the_last_slot_in_the_league(patcher):
 def test_map_rosters_keeps_slot_zero(patcher):
     patcher.mapper = _StubMapper(0)
     assert list(patcher.map_rosters(_league_data(("SEA", 25))).teams) == [0]
-
-
-# -- the slot/kind disagreement on a short roster ----------------------------
 
 
 def test_a_pitcher_in_a_batter_slot_is_typed_a_batter(patcher):

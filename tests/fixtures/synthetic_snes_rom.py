@@ -1,30 +1,23 @@
 """Fabricate a structurally valid NHL94 SNES ROM in memory.
 
 Nothing here is derived from a real ROM. Every byte is computed from the format
-`games/nhl94_snes/rom_reader.py` documents, and the layout constants below are
-chosen to be legal rather than to match a real dump.
+`games/nhl94_snes/rom_reader.py` documents.
 
-Why the image is 1 MB
----------------------
-The team pointer table is at file offset 0xE25E7, and a team pointer carries
-only 16 bits: `_read_team_pointer` ORs them under a hardcoded bank $9C, and
+The team pointer table is at file offset 0xE25E7, and a team pointer carries only
+16 bits: `_read_team_pointer` ORs them under a hardcoded bank $9C, and
 `snes_to_file_offset` folds that to file offsets 0xE0000-0xE7FFF. So every team
 block, and the pointer table itself, must live inside that one 32 KB window, and
 the file must be at least 0xE8000 bytes for the window to exist at all. NHL '94
 (SNES) is an 8 Mbit LoROM, 1 048 576 bytes, which is what this builds.
 
-`NHL94SNESRomReader.validate` would accept a 649 728-byte file, which is the
-size its own `ROM_SIZE_NO_HEADER` calls standard. Such a file has no bank $9C
-and no pointer table; `tests/games/nhl94_snes/test_rom_reader.py` builds one to
-pin what happens then.
+`NHL94SNESRomReader.validate` would accept a 649 728-byte file, the size its own
+`ROM_SIZE_NO_HEADER` calls standard. Such a file has no bank $9C and no pointer
+table; `tests/games/nhl94_snes/test_rom_reader.py` builds one to pin what happens
+then.
 
-Why every byte in a team block is unique to its team
-----------------------------------------------------
 Each player's name and each of its eight stat bytes encode both the team index
-and the roster slot. Uniform filler would make the 28 team blocks identical, and
-then no assertion could tell which team a read came from: a reader that ignored
-`team_index`, or returned a roster reversed, or rotated the stat blocks by one,
-would satisfy every equality a test could write.
+and the roster slot, so a reader that ignored `team_index`, returned a roster
+reversed, or rotated the stat blocks by one cannot satisfy an equality.
 
 Every multi-byte field is LITTLE-endian. The Genesis sibling in
 `synthetic_rom.py` is big-endian and the two formats are otherwise close enough

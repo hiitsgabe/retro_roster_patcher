@@ -3,39 +3,34 @@
     ISO 9660 -> /PSP_GAME/USRDIR/DB/DB.VIV -> BIGF -> three RefPacked TDBs
              -> PLAY / ROST / SPBT / SPAI / SGAI / STEA
 
-Nothing here comes from a real disc; no ISO may enter this repository. Every
-byte is generated, and the field layouts are this file's invention -- the real
-ones have never been seen by anything in this project, upstream included.
+Nothing here comes from a real disc; no ISO may enter this repository. Every byte
+is generated, and the field layouts are this file's invention -- the real ones
+have never been seen by anything in this project, upstream included.
 
-**A real PSP image is 500 MB to 1.5 GB and this one is under 300 KB.** That is
-not a compromise: the patcher touches the PVD, four directory sectors and the
-`db.viv` extent, and nothing else on the disc. `build_iso(pad_to=...)` inflates
-the file with `truncate`, so a multi-megabyte image for the copy path costs a
-sparse hole rather than real bytes.
+A real PSP image is 500 MB to 1.5 GB and this one is under 300 KB. The patcher
+touches the PVD, four directory sectors and the `db.viv` extent and nothing else,
+and `build_iso(pad_to=...)` inflates the file with `truncate`, so a
+multi-megabyte image for the copy path costs a sparse hole rather than real
+bytes.
 
-Three things are deliberately **independent reimplementations** of code under
-test, and that is the point of the file:
+Three things are independent reimplementations of code under test:
 
 - `iso_read_file` walks ISO 9660 itself rather than calling
   `NHL07PSPRomReader._extract_db_viv`, so the reader's walk is checked against a
   second one.
-- `unpack_bits` reads LSB-first bit fields the long way, from a `FieldSpec`
-  list this file owns. `TDBTable.write_record` is what puts them there, so a
-  test can assert a named field holds the number it should -- rather than that a
-  round trip through one bit-width mistake preserved it.
-- `synthetic_tdb.mpeg2_crc`, which `build_tdb` uses for the chain, is the
-  bitwise form of the nibble-table CRC in `formats/ea_tdb.py`.
+- `unpack_bits` reads LSB-first bit fields the long way, from a `FieldSpec` list
+  this file owns. `TDBTable.write_record` is what puts them there, so a test can
+  assert a named field holds the number it should.
+- `synthetic_tdb.mpeg2_crc`, which `build_tdb` uses for the chain, is the bitwise
+  form of the nibble-table CRC in `formats/ea_tdb.py`.
 
-`refpack_compress` *is* the module's own, and that is the one place a fixture
-leans on the code under test. It is justified: `tests/formats/test_refpack.py`
-pins its output byte-for-byte against the source compressor over fifteen inputs
-covering all seven command families, on top of a 52-case round-trip corpus, so
-reimplementing it here would add a second compressor to get wrong.
+`refpack_compress` *is* the module's own, and that is the one place this fixture
+leans on the code under test. `tests/formats/test_refpack.py` pins its output
+byte-for-byte against the source compressor.
 
-Record contents are self-identifying. Every player's name, jersey, weight and
+Record contents are self-identifying: every player's name, jersey, weight and
 every attribute encode the team, the roster row and the field, so a write that
-landed on the wrong record, the wrong table or the wrong field cannot satisfy an
-assertion.
+landed on the wrong record, table or field cannot satisfy an assertion.
 """
 
 from __future__ import annotations
@@ -87,9 +82,7 @@ PAD_FILE_BYTES = bytes(range(256)) * 8  # 2048 bytes, every value eight times
 # reads it.
 MEMBER_SLACK = 8192
 
-# ──────────────────────────────────────────────────────────────
-# TDB field layouts
-# ──────────────────────────────────────────────────────────────
+
 #
 # Bit offsets are chosen so that most integer fields are NOT byte-aligned and
 # several straddle a byte boundary. A layout of byte-aligned bytes would let a
@@ -246,9 +239,6 @@ STEA_FIELDS = [
 ]
 STEA_RECORD_SIZE = 33
 
-# ──────────────────────────────────────────────────────────────
-# The roster the fixture disc ships with
-# ──────────────────────────────────────────────────────────────
 
 # Four teams is enough for the two collisions that matter -- a slot patched and
 # a slot left alone -- while keeping the whole image under 300 KB. Twenty-five
@@ -512,11 +502,6 @@ def _stea_table() -> TableSpec:
     )
 
 
-# ──────────────────────────────────────────────────────────────
-# TDB files and the BIGF around them
-# ──────────────────────────────────────────────────────────────
-
-
 def build_master_tdb(height: int = DEFAULT_DISC_HEIGHT) -> bytes:
     """`nhl2007.tdb`: every table, in an order the patcher does not assume.
 
@@ -661,10 +646,6 @@ def build_db_viv(spec: DiscSpec | None = None) -> bytes:
         archive = spec.archive_magic + archive[4:]
     return archive
 
-
-# ──────────────────────────────────────────────────────────────
-# ISO 9660
-# ──────────────────────────────────────────────────────────────
 
 # A fixed recording timestamp, so two builds of the same spec are byte-identical.
 # Year is stored as years since 1900: 106 is 2006.
@@ -849,11 +830,6 @@ def write_iso(path, spec: DiscSpec | None = None) -> int:  # type: ignore[no-unt
         if spec.pad_to > len(image):
             f.truncate(spec.pad_to)
     return max(len(image), spec.pad_to)
-
-
-# ──────────────────────────────────────────────────────────────
-# Independent readers, for assertions
-# ──────────────────────────────────────────────────────────────
 
 
 def unpack_bits(fields: list[FieldSpec], record: bytes) -> dict[str, object]:

@@ -1,12 +1,11 @@
 """The ISS reader, and the three-part signature check registration needed.
 
 Upstream's `validate_rom` answered True for any existing file of a megabyte or
-more. It read no byte of the file. Registering this patcher with only that would
-have made `retro-roster analyze` claim every ROM and every ISO in a user's
-library, because `analyze` probes every registered patcher against one image.
+more, reading no byte of it. `analyze` probes every registered patcher against
+one image, so that alone would claim every ROM and every ISO in a user's library.
 
-The replacement is deliberately in three pieces, and which entry point each
-piece guards is the point:
+The replacement is in three pieces, and which entry point each one guards is the
+point:
 
   * `validate_rom` -- the 1 MB floor, kept, and the side effect that sets
     `header_offset`, which every other offset is measured from;
@@ -15,9 +14,6 @@ piece guards is the point:
     patched;
   * `signature_ok` -- a HEURISTIC, three pointer tables dereferenced, which
     guards `analyze_rom` alone.
-
-`test_patcher.py` pins the asymmetry between the last two at the entry points.
-This file pins the predicates themselves.
 """
 
 from __future__ import annotations
@@ -44,9 +40,6 @@ def rom(tmp_path):
 @pytest.fixture
 def headered_rom(tmp_path):
     return fixture.write_iss_rom(tmp_path / "iss.smc", with_header=True)
-
-
-# -- the encoding tables -----------------------------------------------------
 
 
 def test_the_encode_and_decode_tables_are_inverses():
@@ -109,9 +102,6 @@ def test_decoding_drops_a_byte_the_font_table_does_not_name():
 
 def test_decoding_an_all_unmapped_field_gives_an_empty_string():
     assert decode_iss_name(bytes([0xFF] * 8)) == ""
-
-
-# -- validate_rom: the size floor and the header side effect -----------------
 
 
 def test_a_one_megabyte_image_passes_the_floor(rom):
@@ -183,9 +173,6 @@ def test_a_size_on_a_kilobyte_boundary_is_taken_as_headerless(tmp_path):
     assert reader.header_offset == 0
 
 
-# -- data_fits: the arithmetic bound -----------------------------------------
-
-
 def test_the_arithmetic_minimum_is_the_writers_highest_write():
     """Derived in `rom_writer` from its own constants; retranscribed in the fixture."""
     assert MIN_PATCHABLE_SIZE == fixture.SIZE_ARITHMETIC_MINIMUM
@@ -251,9 +238,6 @@ def test_the_arithmetic_minimum_is_far_below_the_floor():
     """The gap the two guards deliberately leave. `patch` accepts this band and
     `analyze` does not; `test_patcher.py` pins that at the entry points."""
     assert MIN_PATCHABLE_SIZE < fixture.ROM_SIZE
-
-
-# -- signature_ok: the heuristic ---------------------------------------------
 
 
 def test_the_synthetic_image_passes_the_signature(rom):
@@ -386,9 +370,6 @@ def test_the_signature_reads_pointer_tables_the_reader_transcribes_itself(rom):
     assert rom_reader._MAX_NAME_TEXT_ADDR == rom_writer._MAX_NAME_TEXT_ADDR
 
 
-# -- read_player_names / read_team_slots -------------------------------------
-
-
 def test_the_reader_reads_all_405_names(rom):
     names = ISSRomReader(str(rom)).read_player_names()
     assert len(names) == TOTAL_TEAMS
@@ -449,9 +430,6 @@ def test_no_two_slots_report_the_same_first_player(rom):
     """A reader that ignored the team index would give 27 identical strings."""
     slots = ISSRomReader(str(rom)).read_team_slots()
     assert len({slot.first_player for slot in slots}) == TOTAL_TEAMS
-
-
-# -- get_rom_info ------------------------------------------------------------
 
 
 def test_get_rom_info_reports_a_valid_image(rom):

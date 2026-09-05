@@ -1,17 +1,9 @@
 """Stat mapper coverage: the provider payload turned into ROM nibbles.
 
-`NHL94GenStatMapper` had no test file at all, and three of its branches were
-provably dead — each of them decides bytes that reach the cartridge, so none was
-an equivalent mutation. Against the suite as it stood, `if is_goalie:` -> `if
-False:` (the entire goalie arm, the only code converting SV%/GAA into goalie
-attributes), `(weight_pounds - 140) // 8` -> `0`, and `hand = 1` -> `hand = 0`
-all survived.
-
-Every assertion here is on the resulting integers rather than on the shape of the
+Every assertion is on the resulting integers rather than on the shape of the
 record. The attributes are packed as 0-6 nibbles by `rom_writer.encode_nibble`,
 so a mapper that returned the right field names carrying the wrong numbers
-produces a ROM that loads and plays wrong, which is the failure this file exists
-to catch.
+produces a ROM that loads and plays wrong.
 
 The goalie arm and `POSITION_DEFAULTS["G"]` agree on ten of the twelve
 attributes; only `agility` and `def_awareness` are derived. Inputs here are
@@ -54,9 +46,6 @@ def _skater(**kwargs):
     fields = {"id": 1, "name": "PLAYER ONE", "position": "C", "number": 9}
     fields.update(kwargs)
     return Player(**fields)
-
-
-# ── Goalies ──────────────────────────────────────────────────────────────
 
 
 def test_a_goalies_save_percentage_and_gaa_become_agility_and_def_awareness(mapper):
@@ -152,9 +141,6 @@ def test_a_lower_case_position_still_reads_as_a_goalie(mapper):
     assert record.is_goalie is True
 
 
-# ── Weight class ─────────────────────────────────────────────────────────
-
-
 def test_weight_is_mapped_in_eight_pound_steps_from_one_hundred_and_forty(mapper):
     # `(lbs - 140) // 8`, clamped 0-14, checked at every boundary that decides a
     # different nibble. 139 is below the floor and would otherwise be -1; 147 is
@@ -183,9 +169,6 @@ def test_a_fractional_weight_is_truncated_before_the_class_is_computed(mapper):
     assert classes == [0, 1]
 
 
-# ── Handedness ───────────────────────────────────────────────────────────
-
-
 def test_handedness_is_one_for_right_and_zero_for_everything_else(mapper):
     # The nibble is written into the low half of stat byte 4 by
     # `rom_writer._write_player_stats`, so this is a ROM byte, not a label. Only
@@ -197,9 +180,6 @@ def test_handedness_is_one_for_right_and_zero_for_everything_else(mapper):
     ]
 
     assert hands == [1, 0, 0, 0, 0]
-
-
-# ── Position defaults are not shared ─────────────────────────────────────
 
 
 def test_two_records_at_one_position_do_not_share_an_attributes_object(mapper):
@@ -242,9 +222,6 @@ def test_an_unknown_position_falls_back_to_centre_without_aliasing_it(mapper):
     assert record.position == "W"
     assert record.attributes == POSITION_DEFAULTS["C"]
     assert (record.attributes is POSITION_DEFAULTS["C"]) is False
-
-
-# ── Jersey numbers ───────────────────────────────────────────────────────
 
 
 def test_a_player_with_no_jersey_number_is_given_one(mapper):

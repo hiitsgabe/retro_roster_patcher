@@ -54,9 +54,6 @@ def loaded(tmp_path, spec=None, name="game.iso"):
     return reader
 
 
-# -- constants -------------------------------------------------------------
-
-
 def test_the_archive_sits_one_directory_below_the_root():
     # The whole of the ISO-layer difference from NHL 07, whose path is three
     # directories deep. A one-element tuple, not the three-element one.
@@ -94,9 +91,6 @@ def test_the_master_tdb_is_named_for_the_year():
 
 def test_the_roster_tdb_is_the_only_other_member():
     assert TDB_ROSTER == "nhlrost.tdb"
-
-
-# -- loading ---------------------------------------------------------------
 
 
 def test_loading_a_well_formed_image_succeeds(tmp_path):
@@ -187,9 +181,6 @@ def test_a_reader_that_never_loaded_has_no_archive(tmp_path):
     assert NHL05PS2RomReader(str(make_iso(tmp_path))).get_db_viv() is None
 
 
-# -- validate --------------------------------------------------------------
-
-
 def test_a_well_formed_image_validates_deeply(tmp_path):
     assert loaded(tmp_path).validate(deep=True) is True
 
@@ -253,9 +244,6 @@ def test_a_reader_that_never_loaded_does_not_validate(tmp_path):
     assert NHL05PS2RomReader(str(make_iso(tmp_path))).validate(deep=True) is False
 
 
-# -- get_info --------------------------------------------------------------
-
-
 def test_get_info_reports_the_image_as_valid(tmp_path):
     assert loaded(tmp_path).get_info(deep=True).is_valid is True
 
@@ -310,9 +298,6 @@ def test_the_two_paths_disagree_about_the_names(tmp_path):
     deep = [s.name for s in reader.get_info(deep=True).team_slots]
     shallow = [s.name for s in reader.get_info(deep=False).team_slots]
     assert deep != shallow
-
-
-# -- team slots ------------------------------------------------------------
 
 
 def test_the_deep_path_drops_every_stea_record_past_the_club_slots(tmp_path):
@@ -418,9 +403,6 @@ def test_a_stea_header_understating_its_live_count_reads_fewer_slots(tmp_path):
     assert [s.index for s in reader._read_team_slots()] == list(range(5, 30))
 
 
-# -- get_tdb ---------------------------------------------------------------
-
-
 def test_get_tdb_parses_the_master(tmp_path):
     assert loaded(tmp_path).get_tdb(TDB_MASTER) is not None
 
@@ -472,9 +454,6 @@ def test_the_master_holds_every_table_the_patcher_needs(tmp_path):
 def test_the_roster_mirror_holds_only_rost(tmp_path):
     tdb = loaded(tmp_path).get_tdb(TDB_ROSTER)
     assert sorted(tdb.tables) == ["ROST"]
-
-
-# -- locating the archive on the disc --------------------------------------
 
 
 def test_find_db_viv_location_reports_the_fixtures_lba(tmp_path):
@@ -554,9 +533,6 @@ def test_the_archive_is_extracted_when_its_record_ends_flush_with_the_extent(tmp
     assert loaded(tmp_path, spec).get_db_viv()[:4] == b"BIGF"
 
 
-# -- the directory record --------------------------------------------------
-
-
 def test_the_directory_record_offset_lies_inside_the_db_directory(tmp_path):
     offset = loaded(tmp_path).find_db_viv_dir_entry_offset()
     start = fixture.DB_DIR_SECTOR * ISO_SECTOR_SIZE
@@ -607,9 +583,6 @@ def test_the_directory_record_offset_is_zero_when_there_is_no_pvd(tmp_path):
     assert reader.find_db_viv_dir_entry_offset() == 0
 
 
-# -- what the fixture disc actually contains -------------------------------
-
-
 def test_no_roster_row_holds_the_player_its_position_would_suggest(tmp_path):
     # The fixture's four-hop chain, stated: a ROST row's `INDX` names a PLAY
     # record at a different position, whose `ID__` names an SPBT record at a
@@ -643,9 +616,6 @@ def test_the_discs_bios_survive_a_read_back_unchanged(tmp_path):
     )
     position = fixture.spbt_position(2, 9)
     assert records[position] == fixture.disc_bio_values(2, 9)
-
-
-# -- the size floor, and what it is a floor on ------------------------------
 
 
 def test_the_smallest_well_formed_image_is_exactly_the_floor():

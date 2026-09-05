@@ -1,21 +1,11 @@
 """The ISS patcher against the unified interface.
 
-The reader, writer and mapper below it are a faithful port; this layer is where
-the migration's own decisions live, and five of them are the subject of this
-file:
+`requires_slot_mapping=True`: upstream assigned club team *i* to national slot
+*i* and gave the user no way to change it. `default_slot_mapping` reproduces that
+assignment, but it is now a suggestion.
 
-  * `requires_slot_mapping=True`, which upstream did not have. It assigned club
-    team *i* to national slot *i* and gave the user no way to change it.
-    `default_slot_mapping` reproduces that assignment, and is the mapping the
-    differential audit was driven with, but it is now a suggestion.
-  * no `api_key`, which upstream took positionally and never read.
-  * the arithmetic bound guarding `patch` *and* `analyze_rom`, against the
-    heuristic guarding only `analyze_rom`. The two tests named
-    `..._asymmetry_...` are what hold that apart.
-  * `RomError` for a missing or unreadable file against `is_valid=False` for a
-    readable one that is not this game, which upstream conflated.
-  * the collapse of the per-team `except` block, which used to *import* two
-    exception classes from a module this library no longer has.
+An arithmetic bound guards `patch` *and* `analyze_rom`; the heuristic guards
+`analyze_rom` alone. The two tests named `..._asymmetry_...` hold that apart.
 
 Every read-back of a patched ROM reads the output path fresh. The writer holds
 the output handle for its whole lifetime and `finalize` is what flushes it.
@@ -169,9 +159,6 @@ def _mapped(*pairs, colours=None, game_id="iss-snes"):
     return MappedRosters(game_id=game_id, teams=teams)
 
 
-# -- registration -----------------------------------------------------------
-
-
 def test_the_patcher_is_registered_under_its_game_id():
     assert get_patcher("iss-snes") is ISSPatcher
 
@@ -188,9 +175,6 @@ def test_the_registry_declares_that_a_slot_mapping_is_required():
     national slot `i` and offered nothing else."""
     info = next(i for i in list_patchers() if i.game_id == "iss-snes")
     assert info.requires_slot_mapping is True
-
-
-# -- construction -----------------------------------------------------------
 
 
 def test_the_constructor_accepts_a_string_cache_directory(tmp_path):
@@ -226,9 +210,6 @@ def test_the_provider_defaults_to_espn(tmp_path):
 
 def test_the_client_is_built_eagerly(tmp_path):
     assert type(ISSPatcher(cache_dir=tmp_path / "cache").api) is EspnClient
-
-
-# -- analyze_rom ------------------------------------------------------------
 
 
 def test_analyze_reports_a_valid_rom(patcher, rom):
@@ -320,9 +301,6 @@ def test_analyze_raises_for_an_unreadable_file(patcher, tmp_path):
         path.chmod(0o600)
 
 
-# -- the two guards, and which entry point each one holds --------------------
-
-
 def test_the_asymmetry_analyze_refuses_the_signature_but_patch_does_not(patcher, tmp_path, out):
     """The plan's rule, pinned. A content heuristic is a *guess*, so a false
     negative must not block a patch the user asked for by name. This image is
@@ -371,9 +349,6 @@ def test_a_refused_patch_writes_no_output_file(patcher, tmp_path, out):
 def test_patch_raises_for_a_missing_rom(patcher, tmp_path, out):
     with pytest.raises(RomError, match="ROM not found"):
         patcher.patch(rom_path=tmp_path / "nope.sfc", output_path=out, rosters=_mapped((0, 15)))
-
-
-# -- fetch ------------------------------------------------------------------
 
 
 def test_fetch_requires_a_league_id(patcher):
@@ -480,9 +455,6 @@ def test_fetch_keys_the_player_stats_by_player_id(patcher):
     data = patcher.fetch(season=2025, league_id=2001)
     first = data.teams[0]
     assert set(first.player_stats) == {p.id for p in first.players}
-
-
-# -- map_rosters ------------------------------------------------------------
 
 
 def _league(patcher):
@@ -618,9 +590,6 @@ def test_the_colour_parser_accepts_only_six_hex_digits(text, expected):
     assert _parse_hex_colour(text) == expected
 
 
-# -- default_slot_mapping ---------------------------------------------------
-
-
 def test_the_default_mapping_is_upstreams_sequential_assignment(patcher):
     """The mapping the differential audit was driven with, so the byte
     comparison against upstream stayed meaningful."""
@@ -649,9 +618,6 @@ def test_the_default_mapping_round_trips_through_map_rosters(patcher):
     data = _league(patcher)
     mapped = patcher.map_rosters(data, patcher.default_slot_mapping(data))
     assert sorted(mapped.teams) == [0, 1, 2, 3]
-
-
-# -- patch ------------------------------------------------------------------
 
 
 def test_patch_refuses_rosters_mapped_for_another_game(patcher, rom, out):

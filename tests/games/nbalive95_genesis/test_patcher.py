@@ -1,18 +1,13 @@
 """The NBA Live 95 patcher against the unified interface.
 
-The reader, writer and stat mapper below it are a faithful port of an untested
-upstream; this layer is where its contract violations are absorbed and where the
-migration's own decisions live. Five things here are not in the ported code at
-all and are the reason this file is the longest of the four:
+Three guards here are not in the ported code at all:
 
   * `_looks_like_nbalive95`, without which this patcher claims most of a Genesis
     library -- the ported `validate` looks at team 0 alone, behind a title test
     that passes unconditionally on any header not mentioning the NBA;
   * `_pointer_tables_fit`, without which a file 491 740 bytes too short is
     patched for eighteen of its thirty teams and reported as a success;
-  * the alias guard, without which an empty `GSW` wipes a populated `GS`;
-  * `season` threaded into the squad call, which upstream omitted;
-  * `RomError` against `RomInfo(is_valid=False)`, which upstream conflated.
+  * the alias guard, without which an empty `GSW` wipes a populated `GS`.
 
 Every read-back of a patched ROM goes through a *fresh* reader on the output
 path. `NBALive95RomWriter.__init__` builds its own reader over the *input* file,
@@ -174,9 +169,6 @@ def _corrupt(rom, offset, payload):
     return rom
 
 
-# -- registration ------------------------------------------------------------
-
-
 def test_the_patcher_is_registered_with_its_capabilities():
     from retro_roster_patcher import get_patcher
 
@@ -229,9 +221,6 @@ def test_the_two_genesis_patchers_are_distinct_registrations():
     assert get_patcher("nbalive95-genesis").sport != get_patcher("nhl94-genesis").sport
 
 
-# -- construction ------------------------------------------------------------
-
-
 def test_the_only_provider_is_espn(tmp_path):
     p = NBALive95Patcher(cache_dir=tmp_path)
     assert p.provider == "espn"
@@ -265,9 +254,6 @@ def test_the_transport_reaches_the_client(tmp_path):
 
     p = NBALive95Patcher(cache_dir=tmp_path, transport=transport)
     assert p.api._transport is transport
-
-
-# -- analyze -----------------------------------------------------------------
 
 
 def test_a_synthetic_rom_is_recognised(patcher, rom):
@@ -376,9 +362,6 @@ def test_an_image_whose_header_names_another_game_is_not_claimed(patcher, tmp_pa
     assert patcher.analyze_rom(path).is_valid is False
 
 
-# -- the structural check ----------------------------------------------------
-
-
 def test_the_pointer_tables_end_where_the_address_table_says(rom):
     assert _LAST_POINTER_END == fixture.LAST_POINTER_END
 
@@ -481,9 +464,6 @@ def test_the_structural_check_is_not_run_by_patch(rom, out, patcher):
     assert result.teams_patched == 1
 
 
-# -- fetch -------------------------------------------------------------------
-
-
 def test_fetch_returns_one_roster_per_slot_mapped_team(patcher):
     data = patcher.fetch(season=2025)
     assert [roster.team.code for roster in data.teams] == ["BOS", "CHI"]
@@ -563,9 +543,6 @@ def test_fetch_reports_its_first_status(patcher):
     p.api = FakeApi(_teams())
     p.fetch(season=2025)
     assert seen[0] == "Fetching NBA teams..."
-
-
-# -- map_rosters -------------------------------------------------------------
 
 
 def test_map_rosters_keys_the_result_by_rom_slot(patcher):
@@ -688,9 +665,6 @@ def test_the_leaders_reach_the_mapped_ratings(patcher):
     mapped = patcher.map_rosters(data)
     rated = [record for record in mapped.teams[BOS_SLOT].players if record.ratings[0] == 62]
     assert len(rated) == 1
-
-
-# -- patch -------------------------------------------------------------------
 
 
 def test_patch_writes_an_image_of_the_same_length(patcher, rom, out):
@@ -960,9 +934,6 @@ def test_patch_leaves_the_input_image_untouched(patcher, rom, out):
     before = rom.read_bytes()
     patcher.patch(rom_path=rom, output_path=out, rosters=_mapped((BOS_SLOT, 12)))
     assert rom.read_bytes() == before
-
-
-# -- the four steps together -------------------------------------------------
 
 
 def test_the_whole_interface_runs_end_to_end(patcher, rom, out):

@@ -1,23 +1,20 @@
 """The one call site in this package that reaches the network.
 
-`download_and_convert` used to be a bare `requests.get`, which the library
-cannot ship: `pyproject.toml` declares no runtime dependencies. It now goes
-through `_http`, and these tests pin the consequences of that — the transport
-seam exists and is honoured, the suite-wide network guard therefore reaches this
-call site the same way it reaches the sports clients, and a transport failure
-leaves as an `ApiError` rather than a raw `urllib` exception.
+`download_and_convert` used to be a bare `requests.get`, which the library cannot
+ship: `pyproject.toml` declares no runtime dependencies. It now goes through
+`_http`, so the transport seam exists and is honoured, the suite-wide network
+guard reaches this call site the same way it reaches the sports clients, and a
+transport failure leaves as an `ApiError` rather than a raw `urllib` exception.
 
 No test here touches Pillow, which is an optional extra and is not installed in
-the dev venv. Four of them finish inside the transport, before `png_to_tim` is
-ever reached; the fifth substitutes `png_to_tim` so it can exercise the tempfile
-handling around it without needing the real converter.
+the dev venv. The tests that would need it either finish inside the transport or
+substitute `png_to_tim`.
 
 The rest reach the two pieces of `png_to_tim` that decide the output but take no
 image: `_tim_row_words`, which refuses a width the TIM pixel block cannot
 describe, and `_build_clut`, which fits however many palette entries the
 quantiser supplied into the fixed number the header declares. Both were pulled
-out of `png_to_tim` so they could be reached at all — inline, the only way to
-test them was to install the optional extra.
+out of `png_to_tim` so they could be reached without the optional extra.
 """
 
 import os
@@ -126,9 +123,6 @@ def test_the_downloaded_bytes_reach_png_to_tim_and_the_temp_file_is_removed(tmp_
     assert list(tmp_path.iterdir()) == []
 
 
-# ── TIM geometry ─────────────────────────────────────────────────────────
-
-
 def test_the_row_width_is_the_pixel_count_divided_by_the_pixels_per_word():
     # A TIM pixel block declares its width in 16-bit units, so a 4bpp row packs
     # four pixels per unit and an 8bpp row two. 64 is chosen because the two
@@ -161,9 +155,6 @@ def test_the_supported_depths_are_exactly_four_and_eight_bits():
     # this is the table both of them agree on.
     assert sorted(_TIM_PIXELS_PER_WORD) == [4, 8]
     assert _TIM_PIXELS_PER_WORD == {4: 4, 8: 2}
-
-
-# ── CLUT ─────────────────────────────────────────────────────────────────
 
 
 def test_a_palette_shorter_than_the_clut_is_padded_rather_than_overrun():

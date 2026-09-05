@@ -69,9 +69,6 @@ def _listing(cache_dir, url_hash, entries):
     _write(cache_dir / "listings" / f"{url_hash}.json", json.dumps(entries))
 
 
-# ── Normalisation ────────────────────────────────────────────────────────
-
-
 def test_normalize_drops_the_extension_the_region_and_the_punctuation():
     # One realistic filename exercising every substitution in the chain, pinned to
     # the exact string the rest of the module compares against.
@@ -111,9 +108,6 @@ def test_normalize_leaves_a_bare_search_term_alone():
 
 def test_a_name_that_is_nothing_but_a_region_normalizes_to_empty():
     assert _normalize("(USA).bin") == ""
-
-
-# ── Scoring ──────────────────────────────────────────────────────────────
 
 
 def test_a_name_that_matches_once_the_region_is_stripped_scores_100():
@@ -180,9 +174,6 @@ def test_an_empty_term_or_filename_scores_zero():
     assert _fuzzy_score("NHL 94", "(USA).bin") == 0
 
 
-# ── Tiebreaks ────────────────────────────────────────────────────────────
-
-
 def test_the_sort_key_is_region_then_beta_then_length():
     assert _tiebreak_sort_key("NHL 94 (USA).bin", "USA") == (0, 0, 16)
     assert _tiebreak_sort_key("NHL 94 (Europe).bin", "USA") == (1, 0, 19)
@@ -242,9 +233,6 @@ def test_sorting_a_realistic_dump_list_puts_the_usa_release_first():
         "NHL 94 (Japan).bin",
         "NHL 94 (Europe).bin",
     ]
-
-
-# ── CUE parsing ──────────────────────────────────────────────────────────
 
 
 def test_a_cue_resolves_to_its_track_1_binary(tmp_path):
@@ -331,9 +319,6 @@ def test_a_cue_whose_first_file_is_an_audio_track_resolves_to_nothing(tmp_path):
     assert _resolve_cue_track1(str(cue)) is None
 
 
-# ── Local scan ───────────────────────────────────────────────────────────
-
-
 def test_the_local_scan_returns_the_preferred_region_dump(tmp_path):
     for name in ("NHL 94 (Europe).bin", "NHL 94 (USA).bin", "NHL 94 (USA) (Beta).bin"):
         _write(tmp_path / "megadrive" / name)
@@ -363,13 +348,13 @@ def test_the_local_scan_honours_a_non_default_preferred_region(tmp_path):
 
 def test_the_local_scan_ranks_on_the_basename_not_the_whole_path(tmp_path):
     # The sort key's third component is a length, so feeding it the full path lets the
-    # *folder* name decide. Measured: dropping the `os.path.basename` call from the
-    # local-scan sort left the whole suite green, because every other scan test in this
-    # file puts its candidates in one folder, where the prefix is common and cancels.
+    # *folder* name decide, and `os.path.basename` is what stops it. Every other scan
+    # test in this file puts its candidates in one folder, where the prefix is common
+    # and cancels.
     #
     # Both files score 100 and both are USA, so only length separates them. The
     # No-Intro folder name is 25 characters longer than "md", which more than covers
-    # the 8 characters the Rev A basename is longer — so the two orderings disagree,
+    # the 8 characters the Rev A basename is longer -- so the two orderings disagree,
     # and the plain dump is the one the scan is supposed to prefer.
     long_folder = "Sega - Mega Drive - Genesis"
     cross = RomFinderConfig(
@@ -472,9 +457,9 @@ def test_the_local_scan_accepts_a_name_scoring_at_or_above_the_threshold(tmp_pat
 def test_the_local_scan_accepts_a_name_scoring_exactly_the_threshold(tmp_path):
     # The accept side of the boundary. Every other scan test scores 80 or 100 here and
     # 20 or 40 on the reject side, so this one closes the top of the range: `> 50` and
-    # `>= 51` now fail. It does not close the bottom — measured, the entire suite stayed
-    # green with both call sites at `>= 41` — which is what the near-miss case below is
-    # for. Only the pair fixes the constant at 50.
+    # `>= 51` both fail against it. It does not close the bottom -- `>= 41` at both
+    # call sites still passes -- which is what the near-miss case below is for. Only
+    # the pair fixes the constant at 50.
     _write(tmp_path / "megadrive" / BOUNDARY_FILE)
 
     assert RomFinder()._scan_local(BOUNDARY_CONFIG, str(tmp_path)) == str(
@@ -541,9 +526,6 @@ def test_the_local_scan_keeps_a_cue_whose_binary_is_present(tmp_path):
 
 def test_the_local_scan_finds_nothing_in_an_empty_roms_directory(tmp_path):
     assert RomFinder()._scan_local(GENESIS, str(tmp_path)) is None
-
-
-# ── Cached listing search ────────────────────────────────────────────────
 
 
 def test_the_cache_search_returns_the_best_entry_with_its_system(tmp_path):
@@ -665,25 +647,19 @@ def test_the_cache_search_finds_nothing_without_a_cached_listing(tmp_path):
 
 def test_an_empty_cache_dir_reads_no_listing_at_all(tmp_path, monkeypatch):
     # No cache directory, no listings cache. Upstream fell back to a host-application
-    # global (`constants.SYSTEMS_CACHE_DIR`, anchored on that application's own
-    # `__file__`) which a standalone package has no equivalent of, so this port drops
-    # the fallback rather than importing the host. Upstream's own path was absolute
-    # and had no cwd dependency; the cwd is the hazard of the *naive* replacement,
-    # not something inherited.
+    # global anchored on that application's own `__file__`, which a standalone package
+    # has no equivalent of, so this port drops the fallback rather than importing the
+    # host.
     #
-    # Which is why the chdir is load-bearing rather than scene-setting. Delete the
-    # `if not cache_dir` guard and what is left is `os.path.join("", "listings", ...)`,
-    # a relative path: with the listing planted in the working directory the search
-    # finds it and this assertion fails. Measured — run from anywhere else, that same
-    # mutant passes here vacuously.
+    # The chdir is load-bearing rather than scene-setting: delete the `if not
+    # cache_dir` guard and what is left is `os.path.join("", "listings", ...)`, a
+    # relative path, so with the listing planted in the working directory the search
+    # finds it and this assertion fails.
     monkeypatch.chdir(tmp_path)
     system = {"roms_folder": "megadrive", "url": LISTING_URL}
     _listing(tmp_path, LISTING_HASH, [{"filename": "NHL 94 (USA).bin"}])
 
     assert RomFinder()._search_cache(GENESIS, [system]) == (None, None)
-
-
-# ── Empty search terms ───────────────────────────────────────────────────
 
 
 def test_a_config_with_no_search_terms_raises_in_the_local_scan(tmp_path):
@@ -716,9 +692,6 @@ def test_a_config_with_no_search_terms_raises_in_the_cache_search(tmp_path):
 
     with pytest.raises(ValueError):
         RomFinder()._search_cache(no_terms, [system], str(tmp_path))
-
-
-# ── find() ───────────────────────────────────────────────────────────────
 
 
 def test_find_reports_a_local_hit_and_never_consults_the_listings(tmp_path):

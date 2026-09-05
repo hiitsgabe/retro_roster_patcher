@@ -86,9 +86,6 @@ def a_player(**kw) -> NHL05PlayerRecord:
     return NHL05PlayerRecord(**base)
 
 
-# -- LINE_FLAGS ------------------------------------------------------------
-
-
 def test_the_game_has_sixty_four_line_flags():
     # NHL 07 has thirty. A port that copied that list would zero thirty fields
     # and leave thirty-four of the disc's own bits set.
@@ -173,9 +170,6 @@ def test_the_game_has_two_flags_the_mapper_never_emits():
     assert [f for f in fixture.UNREACHABLE_FLAGS if f not in LINE_FLAGS] == []
 
 
-# -- progress spans --------------------------------------------------------
-
-
 def test_the_progress_spans_are_monotonic():
     # IMPROVEMENT over the source, whose three spans were 0.0-0.3, 0.35-0.60 and
     # then back to 0.3-0.7.
@@ -188,9 +182,6 @@ def test_the_last_progress_span_stops_short_of_one():
     # 1.0 is reserved for "Complete", which `rebuild_and_write` reports after
     # the file is closed and fsynced.
     assert PROGRESS_COMPRESS_END < 1.0
-
-
-# -- copy_iso --------------------------------------------------------------
 
 
 def test_copying_reproduces_the_source_byte_for_byte(tmp_path):
@@ -251,9 +242,6 @@ def test_loading_without_a_copy_returns_false(tmp_path):
 def test_the_archive_property_is_none_before_loading(tmp_path):
     src = make_iso(tmp_path)
     assert NHL05PS2RomWriter(str(src), str(tmp_path / "o.iso")).db_viv is None
-
-
-# -- write_player_bio ------------------------------------------------------
 
 
 def written_bio(tmp_path, player, position=None):
@@ -401,9 +389,6 @@ def test_a_bio_write_to_a_tdb_without_spbt_is_a_no_op(tmp_path):
     assert roster_tdb.get_table("SPBT") is None
 
 
-# -- attribute writes ------------------------------------------------------
-
-
 def written_attrs(tmp_path, table, fields, record_size, index, call):
     writer, out = prepared(tmp_path)
     tdb = writer.reader.get_tdb(TDB_MASTER)
@@ -539,9 +524,6 @@ def test_a_goalie_write_past_the_allocation_is_a_no_op(tmp_path):
     assert bytes(sgai._raw_data) == before
 
 
-# -- roster_values ---------------------------------------------------------
-
-
 def test_roster_values_carries_the_jersey():
     assert NHL05PS2RomWriter.roster_values(17, 0, 1)["JERS"] == 17
 
@@ -605,9 +587,6 @@ def test_the_even_strength_pairs_stay_zero_when_the_mapper_emits_the_numbered_on
     flags = {"31LD": 1, "31RD": 1, "32LD": 1, "32RD": 1, "33LD": 1, "33RD": 1}
     values = NHL05PS2RomWriter.roster_values(1, 0, 1, flags)
     assert [f for f in ("L1LD", "L1RD", "L2LD", "L2RD", "L3LD", "L3RD") if values[f] != 0] == []
-
-
-# -- rebuild_and_write -----------------------------------------------------
 
 
 def test_a_rebuild_leaves_the_image_the_same_length(tmp_path):

@@ -1,22 +1,17 @@
 """`MVPStatMapper`: ESPN rosters and team leaders onto MVP's 0-99 scale.
 
-**This is where the first of the three inherited bugs is**, and it has its own
-section. `map_pitcher` ends with an unconditional
+`map_pitcher` ends with an unconditional
 `rec.pitches = self.default_pitches(is_starter)` *outside* the `if stats:`
 branch, so the velocity and control `_apply_pitcher_stats` has just derived from
-strikeouts, WHIP and ERA are discarded and every pitcher in the game ships with
-the same 50/50 arsenal. Twelve lines and four statistics are dead code. It is
-upstream's, it is preserved deliberately, and the tests in that section say so
-one by one -- they drive `_apply_pitcher_stats` where they need the derivation,
-because that is the only place it survives.
+strikeouts, WHIP and ERA are discarded and every pitcher ships with the same
+50/50 arsenal. Upstream's, preserved deliberately; the tests that need the
+derivation drive `_apply_pitcher_stats` directly, because that is the only place
+it survives.
 
-**And half of the third one is here**: `Player.weight` is not read, so every
-patched player is written at `MVPPlayerRecord.weight`'s 190 lb default. Also
-upstream's, also preserved; the other half is `patcher._build_attrib_fields`,
-which writes the column unconditionally.
-
-Nothing here touches the ROM or the network. The whole module is arithmetic on
-two inputs, and `map_rosters` runs on a machine that has never seen the ISO.
+`Player.weight` is not read either, so every patched player is written at
+`MVPPlayerRecord.weight`'s 190 lb default. Also upstream's, also preserved; the
+other half is `patcher._build_attrib_fields`, which writes the column
+unconditionally.
 """
 
 from __future__ import annotations
@@ -81,14 +76,9 @@ def derived_arsenal(stats, *, is_starter=True):
     return MAPPER._apply_pitcher_stats(record, stats, is_starter).pitches
 
 
-# -- the numbers, written out ----------------------------------------------
-#
-# Everything below reads a rating back through the constant that produced it, so
-# a whole table of them can be changed together and nothing notices: mutation
-# testing exchanged the contact and power columns of the centre fielder's
-# defaults, moved `DEFAULT_PICKOFF` by one and lower-cased `UNNAMED`, and the
-# suite stayed green through all three. These are the source's numbers, stated
-# once more so a change to one is a change to a test.
+# Everything below reads a rating back through the constant that produced it, so a
+# whole table of them can be changed together and nothing notices. These are the
+# source's numbers, stated once more so a change to one is a change to a test.
 
 CENTRE_FIELD_DEFAULTS = PositionDefaults(
     speed=65, fielding=60, arm_range=65, throw_strength=60, throw_accuracy=55, contact=55, power=45
@@ -137,9 +127,6 @@ def test_no_alias_can_name_a_position_with_no_defaults():
     # eleven alias targets and `DEFAULT_POSITION` -- is a key here.
     reachable = set(MAPPER.normalize_position(p) for p in ["C", "OF", "IF", "DH", "nonsense"])
     assert reachable - set(POSITION_DEFAULTS) == set()
-
-
-# -- the helpers -----------------------------------------------------------
 
 
 def test_clamping_leaves_a_value_inside_the_scale():
@@ -216,9 +203,6 @@ def test_a_statistic_is_answered_as_a_float():
     assert type(_stat({"HR": 42}, "HR", 0)) is float
 
 
-# -- position defaults -----------------------------------------------------
-
-
 def test_the_position_defaults_are_frozen():
     with pytest.raises(dataclasses.FrozenInstanceError):
         POSITION_DEFAULTS["C"].speed = 99
@@ -243,9 +227,6 @@ def test_the_defaults_type_is_the_frozen_dataclass():
 
 def test_an_unrecognised_position_falls_back_to_centre_field():
     assert DEFAULT_POSITION == "CF"
-
-
-# -- normalisation ---------------------------------------------------------
 
 
 @pytest.mark.parametrize("code", ["C", "1B", "2B", "3B", "SS", "LF", "CF", "RF", "DH"])
@@ -290,9 +271,6 @@ def test_an_empty_position_is_not_a_pitcher():
     assert MAPPER.is_pitcher(player(position="")) is False
 
 
-# -- handedness ------------------------------------------------------------
-
-
 def test_a_left_handed_batter_is_one():
     assert MAPPER.map_bat_hand("L") == BATS_LEFT
 
@@ -334,9 +312,6 @@ def test_no_throwing_hand_at_all_is_right_handed():
     assert MAPPER.map_throw_hand("") == THROWS_RIGHT
 
 
-# -- names -----------------------------------------------------------------
-
-
 def test_a_first_name_is_the_first_word():
     assert MAPPER.first_name("Ken Griffey Jr.") == "Ken"
 
@@ -376,9 +351,6 @@ def test_a_suffix_is_matched_case_insensitively():
     assert MAPPER.last_name("Cal Ripken jr") == "Ripken"
 
 
-# -- team slots ------------------------------------------------------------
-
-
 def test_a_provider_code_maps_to_its_slot():
     assert MAPPER.get_team_slot("NYY") == MVP_ABBREV_TO_INDEX["NYY"]
 
@@ -412,9 +384,6 @@ def test_a_lowercase_provider_code_answers_its_game_abbreviation():
     # `get_team_slot` has an `.upper()` of its own, and this method has no
     # caller inside the package at all -- it is here for the front ends.
     assert MAPPER.get_mvp_abbrev("wsh") == "WAS"
-
-
-# -- batters ---------------------------------------------------------------
 
 
 def test_a_batter_with_no_stats_takes_his_positions_speed():
@@ -635,9 +604,6 @@ def test_every_derived_batting_rating_stays_on_the_scale(field):
     assert 0 <= getattr(extreme, field) <= ATTR_MAX
 
 
-# -- pitchers, and bug 1 ---------------------------------------------------
-
-
 def test_a_pitcher_with_no_stats_gets_the_fifty_fifty_arsenal():
     # Which is what the source gave *every* pitcher, derived or not.
     record = MAPPER.map_pitcher(player(position="SP"), None, is_starter=True)
@@ -688,10 +654,9 @@ def test_a_low_whip_pitcher_has_better_control_than_a_high_one():
 
 
 def test_a_starter_and_a_reliever_read_the_same_strikeouts_on_different_scales():
-    # 250 strikeouts is a league-leading starter and 90 a league-leading
-    # reliever, so the same 90 is near the bottom of one scale and the top of
-    # the other. Every other velocity test here holds the role fixed, so
-    # exchanging the two ranges outright survived them.
+    # 250 strikeouts is a league-leading starter and 90 a league-leading reliever, so
+    # the same 90 is near the bottom of one scale and the top of the other. Every
+    # other velocity test here holds the role fixed.
     starter = derived_arsenal({"K": 90}, is_starter=True)
     reliever = derived_arsenal({"K": 90}, is_starter=False)
     assert (starter[0].velocity, reliever[0].velocity) == (26, 99)
@@ -742,10 +707,10 @@ def test_a_relievers_starpower_weights_saves_three_times():
 
 
 def test_control_reads_the_walks_and_hits_the_right_way_round():
-    # The test above moves ERA as well as WHIP, and the ERA term alone orders
-    # the two whichever way the WHIP term is read -- so inverting the WHIP
-    # subtraction survived it. Here ERA is held and only WHIP moves: a 0.90 WHIP
-    # tops its scale and a 1.60 bottoms it, leaving the ERA term to halve alone.
+    # The test above moves ERA as well as WHIP, and the ERA term alone orders the two
+    # whichever way the WHIP term is read. Here ERA is held and only WHIP moves: a
+    # 0.90 WHIP tops its scale and a 1.60 bottoms it, leaving the ERA term to halve
+    # alone.
     sharp = derived_arsenal({"WHIP": 0.90, "ERA": 2.0})
     wild = derived_arsenal({"WHIP": 1.60, "ERA": 2.0})
     assert (sharp[0].control, wild[0].control) == (99, 49)
@@ -844,9 +809,6 @@ def test_a_winning_starter_has_more_starpower_than_a_losing_one():
     assert ace.starpower > filler.starpower
 
 
-# -- the arsenal -----------------------------------------------------------
-
-
 def test_a_starter_gets_three_pitches():
     assert len(MAPPER.default_pitches(True)) == 3
 
@@ -890,10 +852,9 @@ def test_the_slider_trades_five_points_of_control_for_movement():
     assert (pitches[1].control, pitches[1].movement) == (45, 35)
 
 
-# Each pitch's three numbers, in full, at one velocity and one control. The
-# tests around this one compare a pitch with its neighbour, which leaves the
-# fastball's `velocity // 2` movement and the changeup's fifteen-point velocity
-# drop unstated -- both survived mutation.
+# Each pitch's three numbers, in full, at one velocity and one control. The tests
+# around this one compare a pitch with its neighbour, which leaves the fastball's
+# `velocity // 2` movement and the changeup's fifteen-point velocity drop unstated.
 
 
 def test_a_starters_whole_arsenal_at_sixty_velocity_and_fifty_control():
@@ -939,9 +900,6 @@ def test_a_generated_pitch_is_the_frozen_record_type():
     assert type(MAPPER.default_pitches(True)[0]) is MVPPitch
 
 
-# -- weight, which is half of bug 3 ----------------------------------------
-
-
 def test_a_batter_does_not_carry_the_weight_the_provider_reported():
     # PINS UPSTREAM FIDELITY DELIBERATELY, and this is half of bug 3:
     # `Player.weight` is not read, so the record keeps its 190 lb default and
@@ -970,9 +928,6 @@ def test_the_provider_really_did_report_those_two_weights():
 
 def test_a_player_the_provider_has_no_weight_for_gets_the_same_default():
     assert MAPPER.map_batter(player()).weight == 190
-
-
-# -- roster selection ------------------------------------------------------
 
 
 def squad(batters=15, starters=5, relievers=5, base=1000):

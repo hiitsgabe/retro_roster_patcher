@@ -22,7 +22,7 @@ class StubPatcher(Patcher):
     def analyze_rom(self, rom_path):
         # Recorded, because `cmd_patch` must NOT call this for a patcher whose
         # `map_rosters` has nothing to receive its answer: `analyze_rom` is a
-        # whole-image read and eight of the nine games would pay it for nothing.
+        # whole-image read.
         StubPatcher.calls.append(("analyze", str(rom_path)))
         return RomInfo(path=str(rom_path), size=0, game_id=self.game_id)
 
@@ -32,14 +32,10 @@ class StubPatcher(Patcher):
         if on_progress:
             on_progress(0.5, "Fetching squads")
         StubPatcher.calls.append(("fetch", season, league_id))
-        # Two teams with unequal squads, deliberately. `_summarise` derives both
-        # its counts from this one object, so a one-team/one-player league
-        # collapses `len(data.teams)`, `sum(len(t.players) ...)` and
-        # `max(len(t.players) ...)` all to 1 and the two fields become
-        # interchangeable. At 3 and 1 players they are 2, 4 and 3 — three
-        # distinct values, so no one of those expressions can stand in for
-        # another. Measured: 2 teams / 3 players is *not* enough, because `len`
-        # and `max` are both 2 there and `teams` computed as `max(...)` survives.
+        # Two teams with unequal squads, deliberately. At 3 and 1 players the
+        # team count, the total squad size and the largest squad are 2, 4 and 3 —
+        # three distinct numbers, so no one of `_summarise`'s expressions can
+        # stand in for another.
         return LeagueData(
             league=League(id=league_id or 1, name="Test League", season=season),
             teams=[
@@ -67,9 +63,8 @@ class StubPatcher(Patcher):
         return MappedRosters(game_id=self.game_id, teams={0: data.teams[0] if data.teams else None})
 
     def patch(self, *, rom_path, output_path, rosters, on_progress=None, **options):
-        # Reports progress and records the roster count, both so that a
-        # `cmd_patch` which stopped forwarding `on_progress` or `rosters` is
-        # visible from the outside; the stub is the only witness either has.
+        # Both recorded, so a `cmd_patch` that stopped forwarding `on_progress` or
+        # `rosters` is visible from the outside; the stub is the only witness.
         if on_progress:
             on_progress(1.0, "Writing slots")
         StubPatcher.calls.append(("patch", str(rom_path), str(output_path), len(rosters.teams)))
@@ -81,8 +76,7 @@ class PartialStubPatcher(StubPatcher):
     """A stub whose `fetch` publishes a `LeagueData` partial, as WE2002's does.
 
     `StubPatcher` never calls `on_partial` at all, and that gap is what let
-    `fetch --game we2002 --json` ship broken: every CLI test drove a patcher that
-    stayed silent, so nothing observed a renderer being handed a dataclass.
+    `fetch --game we2002 --json` ship broken.
     """
 
     def fetch(self, *, season, league_id=None, on_progress=None):
@@ -104,9 +98,8 @@ class CountsStubPatcher(StubPatcher):
     `Patcher.map_rosters` is `(data, slot_mapping)` and nothing else, so a game
     that needs a measurement off the ROM to *select* players adds a keyword-only
     extra and publishes the measurement in `RomInfo.extra`. `cmd_patch` is the
-    caller that has to join the two up, and for a long time it did not: it
-    called `map_rosters(data, slot_mapping=...)` and every CLI run of NHL 94
-    (SNES) selected and headered 2/14/7 for all 28 slots whatever byte 17 said.
+    caller that has to join the two up, and for a long time it did not: every CLI
+    run of NHL 94 (SNES) selected and headered 2/14/7 whatever byte 17 said.
     """
 
     counts: object = [[2, 13, 8]] * 3
@@ -128,11 +121,9 @@ class CountsStubPatcher(StubPatcher):
 class SlotStubPatcher(StubPatcher):
     """A stub that declares `requires_slot_mapping`, so a mapping reaches it.
 
-    `StubPatcher` does not, and `check_slot_mapping` therefore rejects any
-    mapping handed to it before `map_rosters` records anything. That guard is
-    worth its own test, but it also means the plain stub can never witness what
-    `_load_slot_map` parsed — every `--slot-map` run through it ends in
-    `CapabilityError` whatever the file contained.
+    `StubPatcher` does not, so `check_slot_mapping` rejects any mapping handed to
+    it before `map_rosters` records anything: every `--slot-map` run through the
+    plain stub ends in `CapabilityError` whatever the file contained.
     """
 
 
@@ -140,13 +131,9 @@ class SlotStubPatcher(StubPatcher):
 def stub():
     """Register the stub for the duration of one test, then take it back out.
 
-    Reaching into `registry._REGISTRY` to clean up is the price of the plain-dict
-    registry, and a fair one: no plugin machinery to stub out either. Registering
-    inside the `try` rather than before it means `stub-game` is taken back out
-    even when `register` itself raises — it raises on a duplicate id, which is
-    what an earlier leak would leave behind. `tests/cli/test_main.py` compares
-    the ids `cmd_analyze` sweeps against a two-element list by equality, so a
-    stub left in the registry fails that test rather than this one.
+    Registering inside the `try` rather than before it means `stub-game` is taken
+    back out even when `register` itself raises — it raises on a duplicate id,
+    which is what an earlier leak would leave behind.
     """
     StubPatcher.calls = []
     StubPatcher.fail_with = None
@@ -164,9 +151,9 @@ def stub():
 def partial_stub():
     """The same bargain as `stub`, under its own id, for the partial-firing stub.
 
-    The recording attributes are reset here as well as in `stub`: they live on
-    `StubPatcher`, which this subclass inherits them from, so a `fail_with` left
-    by an earlier test would make this stub's `fetch` raise too.
+    The recording attributes are reset here as well: they live on `StubPatcher`,
+    which this subclass inherits them from, so a `fail_with` left by an earlier
+    test would make this stub's `fetch` raise too.
     """
     StubPatcher.calls = []
     StubPatcher.fail_with = None
@@ -239,9 +226,6 @@ def _slot_mapping_seen():
     return [c for c in StubPatcher.calls if c[0] == "map"][0][2]
 
 
-# -- fetch ------------------------------------------------------------------
-
-
 def test_fetch_writes_a_rosters_file_that_serde_can_read_back(tmp_path, stub, base):
     from retro_roster_patcher.sports.serde import league_data_from_dict
 
@@ -252,8 +236,7 @@ def test_fetch_writes_a_rosters_file_that_serde_can_read_back(tmp_path, stub, ba
     assert restored.league.name == "Test League"
     assert restored.teams[0].team.name == "Team A"
     # Indented, not compact: this file is meant to be opened and edited between
-    # `fetch` and `patch`, and `json.loads` reads either form identically, so
-    # nothing else in this file would notice the difference.
+    # `fetch` and `patch`, and `json.loads` reads either form identically.
     assert out.read_text().splitlines()[1] == '  "league": {'
 
 
@@ -270,11 +253,8 @@ def test_fetch_result_summarises_the_league(tmp_path, stub, base, capsys):
     assert result["kind"] == "rosters"
     assert result["league"] == "Test League"
     assert result["season"] == 2024
-    # 2 and 4, from a league whose team count, total squad size and largest
-    # squad are three different numbers, so neither field can be computed by
-    # any of the others' expressions. Measured — with a one-team, one-player
-    # league, `players` as `len(teams)` and `players` as `max(len(t.players)
-    # ...)` both survive the whole suite.
+    # 2 and 4, from a league whose team count, total squad size and largest squad
+    # are three different numbers.
     assert result["teams"] == 2
     assert result["players"] == 4
     # `output_path` is the file this run wrote. With no `--out` it is `""`
@@ -285,14 +265,12 @@ def test_fetch_result_summarises_the_league(tmp_path, stub, base, capsys):
 def test_a_league_data_partial_is_serialised_before_it_reaches_the_json_stream(
     tmp_path, partial_stub, capsys
 ):
-    # `retro-roster fetch --game we2002 --json` verbatim, minus the network: the
-    # library hands `on_partial` a `LeagueData`, because `PartialFn` is
+    # The library hands `on_partial` a `LeagueData`, because `PartialFn` is
     # `Callable[[Any], None]` so that a programmatic consumer gets the dataclass.
     # Unadapted, `json.dumps` raised `TypeError: Object of type LeagueData is not
     # JSON serializable` — untyped, so it escaped all three `except` clauses in
-    # `main` and the run died with no `error` event and no return at all.
-    # `--out` is passed so the only `partial` on the stream is the patcher's;
-    # `cmd_fetch` emits one of its own when `--out` is absent.
+    # `main` and the run died with no `error` event and no return at all. `--out`
+    # is passed so the only `partial` on the stream is the patcher's.
     code = main(
         [
             "fetch",
@@ -343,8 +321,8 @@ def unwritable_dir(tmp_path):
 
 def test_fetch_reports_an_out_path_it_cannot_create(tmp_path, stub, base, unwritable_dir, capsys):
     # The mirror of `test_fetch_creates_the_parent_directories_of_out`: the same
-    # `mkdir` that makes a nested path work raises `PermissionError` on a
-    # read-only one, which used to leave the stream with no terminal event.
+    # `mkdir` raises `PermissionError` on a read-only path, which used to leave the
+    # stream with no terminal event.
     out = unwritable_dir / "nested" / "r.json"
     code = main(["fetch", "--season", "2024", "--out", str(out), *base])
     evts = events(capsys)
@@ -366,11 +344,8 @@ def test_fetch_reports_an_out_file_it_cannot_open(tmp_path, stub, base, unwritab
 
 
 def test_fetch_without_out_emits_the_rosters_on_the_protocol_stream(tmp_path, stub, base, capsys):
-    # The stream is the sole delivery mechanism when `--out` is absent, so it
-    # owes the caller exactly what the file would have held. Asserting a league
-    # name alone left the `teams` array — the payload this test is named for —
-    # free to vanish: measured, streaming `payload` minus its `teams` key
-    # survived the whole suite.
+    # The stream is the sole delivery mechanism when `--out` is absent, so it owes
+    # the caller exactly what the file would have held, `teams` array included.
     out = tmp_path / "reference.json"
     main(["fetch", "--season", "2024", "--out", str(out), *base])
     written = json.loads(out.read_text())
@@ -420,16 +395,11 @@ def test_an_unknown_provider_is_exit_one(tmp_path, stub, base, capsys):
     assert events(capsys)[-1]["type"] == "CapabilityError"
 
 
-# -- credentials, of which there are none -----------------------------------
-
-
 @pytest.mark.parametrize("verb", ["fetch", "patch"])
 def test_no_verb_accepts_an_api_key_flag(verb):
-    # `--api-key`, defaulting to `$RETRO_ROSTER_API_KEY`, was once on every
-    # network-touching verb and is gone. Argparse answers an unknown flag
-    # with exit 2, so this is the parser refusing it rather than accepting and
-    # discarding it — the difference between telling an operator their key is
-    # not wanted and silently ignoring the one they supplied.
+    # `--api-key`, defaulting to `$RETRO_ROSTER_API_KEY`, is gone. Argparse answers
+    # an unknown flag with exit 2, so this is the parser refusing it rather than
+    # accepting and discarding it.
     with pytest.raises(SystemExit) as excinfo:
         build_parser().parse_args(
             [verb, "--game", "nhl94-genesis", "--season", "2024", "--api-key", "k"]
@@ -438,15 +408,11 @@ def test_no_verb_accepts_an_api_key_flag(verb):
 
 
 def test_the_api_key_environment_variable_changes_nothing(monkeypatch):
-    # The flag read `$RETRO_ROSTER_API_KEY` for its default, so a machine with
-    # one exported fed it to every patcher. Nothing reads it now, and the
-    # parsed namespace carries no attribute for it at all.
+    # The flag read `$RETRO_ROSTER_API_KEY` for its default, so a machine with one
+    # exported fed it to every patcher. The parsed namespace has no attribute now.
     monkeypatch.setenv("RETRO_ROSTER_API_KEY", "dummy-env-key")
     args = build_parser().parse_args(["fetch", "--game", "nhl94-genesis", "--season", "2024"])
     assert hasattr(args, "api_key") is False
-
-
-# -- the flags argparse itself enforces -------------------------------------
 
 
 def test_the_cache_dir_flag_defaults_to_the_default_cache_dir_on_fetch():
@@ -459,11 +425,9 @@ def test_the_cache_dir_flag_defaults_to_the_default_cache_dir_on_fetch():
 @pytest.mark.parametrize(
     "argv",
     [
-        # Each of these omits a flag declared `required=True` with no default,
-        # so without the requirement it would reach the handler as `None` and
-        # fail far from the user. `SystemExit` is what says argparse rejected it:
-        # `main` returns 2 for a `UsageError` too, so the exit code alone cannot
-        # tell the two apart.
+        # Each omits a flag declared `required=True` with no default, so without
+        # the requirement it would reach the handler as `None`. `SystemExit` is what
+        # says argparse rejected it: `main` returns 2 for a `UsageError` too.
         ["fetch", "--season", "2024"],
         ["fetch", "--game", "nhl94-genesis"],
         ["patch", "--game", "nhl94-genesis", "--out", "o.bin", "--season", "2024"],
@@ -477,9 +441,6 @@ def test_a_missing_required_flag_exits_two_at_parse_time(argv):
     assert excinfo.value.code == 2
 
 
-# -- patch ------------------------------------------------------------------
-
-
 def test_patch_from_a_season_fetches_then_writes(tmp_path, stub, base):
     rom, out = tmp_path / "in.bin", tmp_path / "out.bin"
     rom.write_bytes(b"\x00" * 16)
@@ -487,16 +448,11 @@ def test_patch_from_a_season_fetches_then_writes(tmp_path, stub, base):
     assert code == 0
     assert out.read_bytes() == b"patched"
     assert [c[0] for c in StubPatcher.calls] == ["fetch", "map", "patch"]
-    # The season reaches the inline fetch as an int, exactly as it does for the
-    # `fetch` verb; `patch` declares its own `--season`, so that is a second
-    # `type=int` and not the one the `fetch` tests above cover.
+    # `patch` declares its own `--season`, so this is a second `type=int` and not
+    # the one the `fetch` tests above cover.
     assert ("fetch", 2024, None) in StubPatcher.calls
-    # The two paths and the mapped rosters, in one tuple: each is a separate
-    # keyword on the `patcher.patch` call. Two of the three have no other
-    # witness — measured, with this line deleted, mutating `rom_path` alone or
-    # the mapped rosters alone in `cmd_patch` leaves the whole suite green.
-    # `output_path` is not exclusive: mutating it the same way fails three
-    # tests, `out.read_bytes()` two lines above among them.
+    # The two paths and the mapped rosters in one tuple: each is a separate keyword
+    # on the `patcher.patch` call, and two of the three have no other witness.
     assert ("patch", str(rom), str(out), 1) in StubPatcher.calls
 
 
@@ -534,9 +490,7 @@ def test_patch_from_a_rosters_file_does_not_fetch(tmp_path, stub, base):
 
 def test_a_rosters_file_round_trips_into_map_rosters(tmp_path, stub, base):
     # The team count is what separates deserialisation from a bare read here: an
-    # empty `LeagueData` would still produce the same call sequence as the test
-    # above. `test_a_rosters_file_keeps_non_ascii_names` below checks the other
-    # half, that the values themselves survive the trip.
+    # empty `LeagueData` would produce the same call sequence as the test above.
     rosters = tmp_path / "r.json"
     main(["fetch", "--season", "2024", "--out", str(rosters), *base])
     StubPatcher.calls = []
@@ -548,12 +502,10 @@ def test_a_rosters_file_round_trips_into_map_rosters(tmp_path, stub, base):
 
 
 def test_a_rosters_file_keeps_non_ascii_names(tmp_path, stub, base):
-    # Literal UTF-8 bytes, not the `\uXXXX` escapes `cmd_fetch` writes: this
-    # file is deliberately indented so it can be hand-edited between `fetch` and
-    # `patch`, and an editor saves an accented name as the bytes themselves.
-    # Reading it as latin-1 never raises — every byte decodes to something — so
-    # the corruption is silent and lands in the patched ROM. Measured, under
-    # `encoding="latin-1"` these arrive as "AtlÃ©tico MÃ¼nchÃ©n" and "RaÃºl".
+    # Literal UTF-8 bytes, not the `\uXXXX` escapes `cmd_fetch` writes: this file is
+    # deliberately indented so it can be hand-edited between `fetch` and `patch`, and
+    # an editor saves an accented name as the bytes themselves. Reading it as latin-1
+    # never raises, so the corruption is silent: "AtlÃ©tico MÃ¼nchÃ©n" and "RaÃºl".
     rosters = tmp_path / "r.json"
     payload = {
         "league": {"id": 1, "name": "La Liga", "season": 2024},
@@ -576,10 +528,9 @@ def test_a_rosters_file_keeps_non_ascii_names(tmp_path, stub, base):
 
 
 def test_the_roms_own_measurements_reach_map_rosters(tmp_path, counts_stub, counts_base):
-    # The whole point of `RomInfo.extra` crossing the fetch/patch split. Upstream
-    # read byte 17 of every team block inside `patch_rom` and used each team's
-    # own nibbles; the port splits that into two hops, and this is the CLI making
-    # the second one. Without it every run selected and headered 2/14/7.
+    # The point of `RomInfo.extra` crossing the fetch/patch split. Upstream read byte
+    # 17 of every team block inside `patch_rom`; the port splits that into two hops,
+    # and without this second one every run selected and headered 2/14/7.
     rom, out = tmp_path / "in.bin", tmp_path / "out.bin"
     rom.write_bytes(b"\x00" * 16)
     code = main(["patch", "--rom", str(rom), "--out", str(out), "--season", "2024", *counts_base])
@@ -601,8 +552,7 @@ def test_the_measurements_are_read_from_the_rom_the_patch_will_write(
 
 
 def test_the_rom_is_measured_before_the_fetch(tmp_path, counts_stub, counts_base):
-    # Ordering, and it is worth a byte of nobody's network quota: a ROM that
-    # cannot answer should be settled before a league's worth of provider
+    # A ROM that cannot answer is settled before a league's worth of provider
     # requests, exactly as `--slot-map` and `--language` already are.
     rom, out = tmp_path / "in.bin", tmp_path / "out.bin"
     rom.write_bytes(b"\x00" * 16)
@@ -613,10 +563,9 @@ def test_the_rom_is_measured_before_the_fetch(tmp_path, counts_stub, counts_base
 def test_an_image_that_publishes_no_measurements_falls_back_rather_than_failing(
     tmp_path, counts_stub, counts_base
 ):
-    # `analyze_rom` publishes nothing for an image it judges invalid, and this is
-    # not the place to argue with it: `map_rosters` would reject a list of the
-    # wrong length with `MappingError`, and "I could not measure this" is not a
-    # measurement. `patch` refuses the image a moment later on its own terms.
+    # `analyze_rom` publishes nothing for an image it judges invalid, and "I could
+    # not measure this" is not a measurement: `map_rosters` would reject a list of
+    # the wrong length with `MappingError`. `patch` refuses the image a moment later.
     CountsStubPatcher.counts = None
     rom, out = tmp_path / "in.bin", tmp_path / "out.bin"
     rom.write_bytes(b"\x00" * 16)
@@ -627,10 +576,9 @@ def test_an_image_that_publishes_no_measurements_falls_back_rather_than_failing(
 
 
 def test_an_empty_measurement_list_is_not_passed_either(tmp_path, counts_stub, counts_base):
-    # The empty list is the shape `extra.get("roster_counts")` returns when a
-    # patcher published the key and then had nothing to put under it. Passing it
-    # on is a `MappingError` about a length; not passing it is the same fallback
-    # as the key being absent, which is what it means.
+    # The empty list is the shape `extra.get("roster_counts")` returns when a patcher
+    # published the key and had nothing to put under it. Passing it on is a
+    # `MappingError` about a length; not passing it is the same fallback as absent.
     CountsStubPatcher.counts = []
     rom, out = tmp_path / "in.bin", tmp_path / "out.bin"
     rom.write_bytes(b"\x00" * 16)
@@ -642,10 +590,8 @@ def test_an_empty_measurement_list_is_not_passed_either(tmp_path, counts_stub, c
 
 
 def test_a_patcher_whose_mapper_takes_no_measurements_is_never_asked_for_any(tmp_path, stub, base):
-    # The signature check comes first precisely so the other eight games pay
-    # nothing: `analyze_rom` reads the whole image, and they have no parameter to
-    # receive its answer. Measured — without the check, `patch` on every game
-    # gains one full-file read.
+    # The signature check comes first so the games with no such parameter pay
+    # nothing: `analyze_rom` reads the whole image.
     rom, out = tmp_path / "in.bin", tmp_path / "out.bin"
     rom.write_bytes(b"\x00" * 16)
     assert main(["patch", "--rom", str(rom), "--out", str(out), "--season", "2024", *base]) == 0
@@ -664,11 +610,9 @@ def test_patch_result_reports_the_counts(tmp_path, stub, base, capsys):
 
 
 def test_patch_narrates_the_mapping_and_the_write(tmp_path, stub, base, capsys):
-    # Without this the two `renderer.status` calls in `cmd_patch` are unpinned:
-    # measured, deleting either one or blanking either message leaves the rest of
-    # the suite green. They are the only place the CLI names what it is doing
-    # before the result arrives, and the second is the only echo of the output
-    # path before the patch is written.
+    # The two `renderer.status` calls in `cmd_patch` are the only place the CLI names
+    # what it is doing before the result arrives, and the second is the only echo of
+    # the output path before the patch is written.
     rom, out = tmp_path / "in.bin", tmp_path / "out.bin"
     rom.write_bytes(b"\x00" * 16)
     main(["patch", "--rom", str(rom), "--out", str(out), "--season", "2024", *base])
@@ -785,32 +729,28 @@ def test_a_slot_map_on_a_patcher_that_does_not_take_one_is_a_capability_error(
             *base,
         ]
     )
-    # The `stub` fixture registers without `requires_slot_mapping`, so the
-    # stamped capability is False and `check_slot_mapping` rejects the mapping.
-    # This is the Task 7 guard firing through the whole CLI stack.
+    # The `stub` fixture registers without `requires_slot_mapping`, so the stamped
+    # capability is False and `check_slot_mapping` rejects the mapping.
     assert code == 1
     assert events(capsys)[-1]["type"] == "CapabilityError"
 
 
 def test_a_slot_map_file_is_parsed_into_slot_mappings(tmp_path, slot_stub, slot_base):
-    # `slot_stub`, not `stub`: the test above proves a mapping never survives
-    # `check_slot_mapping` on a patcher that declares no need for one, so the
-    # plain stub can only ever witness the rejection, never the parse.
+    # `slot_stub`, not `stub`: a mapping never survives `check_slot_mapping` on a
+    # patcher that declares no need for one, so the plain stub can only witness the
+    # rejection, never the parse.
     slot_map = tmp_path / "map.json"
     slot_map.write_text(json.dumps([{"slot_index": 0, "team_id": 33, "team_name": "Team A"}]))
     assert _patch_with_slot_map(tmp_path, slot_base, slot_map) == 0
     # The whole list in one `==`, so the length is pinned along with the values.
-    # Measured — a `_load_slot_map` returning its parsed list repeated three
-    # times survived the entire suite until this assertion existed.
     assert _slot_mapping_seen() == [SlotMapping(slot_index=0, team_id=33, team_name="Team A")]
 
 
 def test_a_slot_map_file_is_read_as_utf_8(tmp_path, slot_stub, slot_base):
-    # Literal UTF-8 bytes, not the `\uXXXX` escapes `json.dumps` emits by
-    # default: a slot map is hand-written, so an accented club name arrives as
-    # the bytes an editor saved. Reading it as latin-1 never raises — it decodes
-    # every byte to something — so the damage is silent mojibake that lands in
-    # the ROM. Measured, `encoding="latin-1"` here yields "AtlÃ©tico MÃ¼nchÃ©n".
+    # Literal UTF-8 bytes, not the `\uXXXX` escapes `json.dumps` emits by default: a
+    # slot map is hand-written, so an accented club name arrives as the bytes an
+    # editor saved. Reading it as latin-1 never raises, so the damage is silent
+    # mojibake that lands in the ROM: "AtlÃ©tico MÃ¼nchÃ©n".
     slot_map = tmp_path / "map.json"
     entry = [{"slot_index": 0, "team_id": 33, "team_name": "Atlético Münchén"}]
     slot_map.write_bytes(json.dumps(entry, ensure_ascii=False).encode("utf-8"))
@@ -824,9 +764,6 @@ def test_assets_dir_on_a_patcher_that_does_not_take_it_is_a_usage_error(
     code = main(["fetch", "--season", "2024", "--assets-dir", str(tmp_path), *base])
     assert code == 2
     assert "--assets-dir" in events(capsys)[-1]["msg"]
-
-
-# -- what `_load_slot_map` has to survive -----------------------------------
 
 
 def _patch_with_slot_map(tmp_path, base, slot_map) -> int:
@@ -854,8 +791,7 @@ def test_a_malformed_slot_map_is_a_usage_error(tmp_path, stub, base, capsys):
     assert _patch_with_slot_map(tmp_path, base, slot_map) == 2
     evts = events(capsys)
     # The error and nothing before it: `cmd_patch` loads the slot map before it
-    # resolves the roster source, so a bad map costs no API call. The stub
-    # reports progress from `fetch`, so a `progress` event would prove one ran.
+    # resolves the roster source, so a bad map costs no API call.
     assert [e["event"] for e in evts] == ["error"]
     assert evts[-1]["type"] == "UsageError"
     assert evts[-1]["msg"].startswith(f"Cannot read slot map {slot_map}: ") is True
@@ -882,9 +818,6 @@ def test_a_slot_map_that_is_an_object_not_a_list_is_a_usage_error(tmp_path, stub
     slot_map.write_text(json.dumps({"slot_index": 0}))
     assert _patch_with_slot_map(tmp_path, base, slot_map) == 2
     assert events(capsys)[-1]["type"] == "UsageError"
-
-
-# -- what `--rosters` has to survive ----------------------------------------
 
 
 def test_a_rosters_file_that_is_not_there_is_a_usage_error(tmp_path, stub, base, capsys):
