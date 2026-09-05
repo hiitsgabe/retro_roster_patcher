@@ -251,9 +251,10 @@ class KGJStatMapper:
           [20-24] = relief pitchers (closer first, then setup)
 
         Those three counts are the *maxima*, not guarantees, and where they are
-        not met the slot index stops saying what kind of player is in it. A
-        caller that needs the kind must ask `select_roster_groups` and not
-        arithmetic on the index; `patcher.map_rosters` does.
+        not met the slot index stops saying what kind of player is in it.
+        `patcher.map_rosters` reads the kind off the index anyway, as upstream
+        did, and `patcher._roster_type_for_slot` records why that is kept.
+        `select_roster_groups` is the caller-facing way to get the fact itself.
         """
         batters, starters, relievers = self.select_roster_groups(players, stats)
         return batters + starters + relievers
@@ -265,25 +266,23 @@ class KGJStatMapper:
     ) -> tuple[list[Player], list[Player], list[Player]]:
         """The roster as `(batters, starters, relievers)`, each already ordered.
 
-        DELIBERATE DIVERGENCE, in shape rather than in output: the source had
-        only the concatenated list, and both of its callers then recovered the
-        kind of a player by comparing his index against `BATTERS_PER_TEAM` and
-        `STARTERS_PER_TEAM`. That is only correct while all three groups are
-        full. A team with 12 non-pitchers puts its first three starting pitchers
-        in slots 12, 13 and 14, and the index says "batter" for all three; one
-        with three genuine starters and seven relievers has two relievers
-        promoted into the rotation, and the index says "starter" for both --
-        which is right -- while a kind read off the provider's position would
-        say "reliever".
+        DELIBERATE DIVERGENCE in shape only, and it changes no written byte: the
+        source had just the concatenated list, which `select_roster` still
+        answers by joining these three. Nothing in the patch path calls this.
 
-        Neither the index nor the position is the fact wanted. The group is, and
-        it is known here and nowhere else, so it is returned rather than
-        reconstructed. `select_roster` still answers the flat list.
+        It exists because the group is the one place a player's kind is actually
+        known. Callers recover the kind by comparing a slot index against
+        `BATTERS_PER_TEAM` and `STARTERS_PER_TEAM`, which is correct only while
+        all three groups are full: a team with 12 non-pitchers puts its first
+        three starting pitchers in slots 12, 13 and 14 and the index calls all
+        three batters. `patcher.map_rosters` does exactly that, on purpose, and
+        `patcher._roster_type_for_slot` carries the argument for keeping it.
+        This method is what a caller that needs the fact rather than upstream's
+        bytes should ask.
 
         The three groups are the same players in the same order the source
-        produced, so for any roster that fills all three -- every complete
-        major-league squad -- concatenating them is byte-for-byte the source's
-        answer.
+        produced, so for any roster at all -- not only a full one --
+        concatenating them is byte-for-byte the source's answer.
         """
         stats = stats or {}
 
