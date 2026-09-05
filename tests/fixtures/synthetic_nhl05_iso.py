@@ -275,17 +275,14 @@ LINE_FLAG_NAMES = [
 # Flags the game has and nothing in the package ever emits, so a patched row
 # carries them cleared. `X1__`/`X2__` have no counterpart in the mapper at all.
 #
-# The six `3n` and `4n` defence slots are here for a different reason: they are
-# where the *source* put this game's first two defence pairs, by copying NHL
-# 07's `3{pair}{side}` spelling into a game whose `3n` family is a five-on-three
-# unit. The port emits `L{pair}{side}` instead, so these must now come back zero
-# from a patch -- which is the assertion that would fail if anyone reverted the
-# divergence in `nhl05_ps2/stat_mapper.py`.
-#
-# `L3LD` and `L3RD` used to be on this list and are deliberately no longer: they
-# are the third pair, and they are now assigned.
+# `EVEN_STRENGTH_DEFENCE_FLAGS` are there for a different reason. They are the
+# pairs NHL 2005's ROST actually names, and they come back zero from every
+# patch, because `stat_mapper.generate_team_line_flags` emits NHL 07's
+# `3{pair}{side}` spelling instead -- upstream's behaviour, known wrong,
+# preserved deliberately; see the label on that function. So a patched team has
+# no even-strength defence pairing at all, and these four assert it.
 UNREACHABLE_FLAGS = ["X1__", "X2__"]
-SOURCE_DEFENCE_FLAGS = ["31LD", "31RD", "32LD", "32RD"]
+EVEN_STRENGTH_DEFENCE_FLAGS = ["L1LD", "L1RD", "L2LD", "L2RD"]
 
 #   bits  0.. 5  TEAM   6 bits
 #   bits  6..12  JERS   7 bits
