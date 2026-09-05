@@ -54,6 +54,13 @@ ESPN_LEAGUES = [
         "name": "Copa Sudamericana",
         "country": "South America",
     },
+    {"id": 2019, "code": "fifa.world", "name": "FIFA World Cup", "country": "World"},
+    {
+        "id": 2020,
+        "code": "fifa.wwc",
+        "name": "FIFA Women's World Cup",
+        "country": "World",
+    },
 ]
 
 # NHL team abbreviations mapping to ROM slots (28 teams: 26 NHL + 2 All-Star)
