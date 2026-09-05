@@ -211,10 +211,11 @@ def test_a_shooting_value_below_the_scale_saturates():
     assert _shooting_to_rom(-5) == 0
 
 
-@pytest.mark.parametrize("value", [1, 2, 3, 4, 5, 6, 7, 8])
+@pytest.mark.parametrize("value", [1, 2, 3, 4, 5, 6, 7])
 def test_the_low_half_of_the_speed_scale_encodes_to_multiples_of_0x20(value):
-    """To 8, not to 7. 0xE0 is the largest multiple of 0x20 a byte holds, so the
-    decoder's exact branch covers exactly 1-8 and upstream stopped it one short.
+    """To 7, which is where upstream stopped it. 0xE0 is the largest multiple of
+    0x20 a byte holds, so the decoder's exact branch would cover 1-8 and this
+    branch covers one fewer; `_speed_to_rom` says why the short version ships.
     """
     assert _speed_to_rom(value) == (value - 1) * 0x20
 
@@ -226,28 +227,38 @@ def _decode_speed(byte):
     return (byte + 1) // 0x20 + 8
 
 
-@pytest.mark.parametrize("value", [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16])
-def test_every_speed_round_trips_through_the_games_own_decoder(value):
-    """DELIBERATE DIVERGENCE: 8 is in this list, and used to be the exception."""
+@pytest.mark.parametrize("value", [1, 2, 3, 4, 5, 6, 7, 9, 10, 11, 12, 13, 14, 15, 16])
+def test_every_speed_but_eight_round_trips_through_the_games_own_decoder(value):
+    """Fifteen of the sixteen. 8 is the exception and has its own test below."""
     assert _decode_speed(_speed_to_rom(value)) == value
 
 
-def test_the_scales_midpoint_encodes_to_the_last_multiple_of_0x20():
-    """`(8 - 8) * 0x20 - 1` was -1, `max(0, -1)` was 0, and 0 decodes to 1: the
-    midpoint of the scale, and `ISSPlayerAttributes.speed`'s own default, was
-    written as the slowest speed in the game. 0xE0, not 0x00, and not merely
-    "something that decodes to 8" -- 31 bytes do."""
-    assert _speed_to_rom(8) == 0xE0
-    assert _decode_speed(0x00) == 1
+def test_the_scales_midpoint_encodes_to_zero():
+    """PINS UPSTREAM FIDELITY DELIBERATELY. Do not "fix" this back.
+
+    `clamped <= 7` sends 8 down the high branch, where `(8 - 8) * 0x20 - 1` is
+    -1 and `max(0, -1)` is 0. This port encoded it as 0xE0 for a while, which
+    round-trips; 0x00 is the byte upstream wrote and no released build ever
+    wrote the other. See `_speed_to_rom`.
+    """
+    assert _speed_to_rom(8) == 0x00
 
 
-def test_the_default_speed_no_provider_measured_is_the_one_that_used_to_break():
-    """Why the single broken value was the expensive one."""
+def test_the_scales_midpoint_therefore_reads_back_as_the_slowest_speed():
+    """The cost of the line above, stated separately: 0 is a multiple of 0x20, so
+    the decoder takes its first branch and answers 1 rather than 8."""
+    assert _decode_speed(_speed_to_rom(8)) == 1
+
+
+def test_the_default_speed_no_provider_measured_is_the_one_that_breaks():
+    """Why the single broken value is the expensive one: it is the default every
+    player the provider measured nothing for gets."""
     assert ISSPlayerAttributes().speed == 8
 
 
-def test_the_two_speed_branches_meet_without_a_gap_or_an_overlap():
-    """Sixteen values, sixteen distinct bytes, and the join is 8 -> 9."""
+def test_the_two_speed_branches_meet_with_an_overlap_at_the_bottom():
+    """PINS UPSTREAM FIDELITY DELIBERATELY: sixteen values, fifteen distinct
+    bytes. Speed 1 and speed 8 both encode to 0x00."""
     encoded = [_speed_to_rom(value) for value in range(1, 17)]
     assert encoded == [
         0x00,
@@ -257,7 +268,7 @@ def test_the_two_speed_branches_meet_without_a_gap_or_an_overlap():
         0x80,
         0xA0,
         0xC0,
-        0xE0,
+        0x00,
         31,
         63,
         95,
@@ -267,13 +278,14 @@ def test_the_two_speed_branches_meet_without_a_gap_or_an_overlap():
         223,
         255,
     ]
-    assert len(set(encoded)) == 16
+    assert len(set(encoded)) == 15
 
 
 @pytest.mark.parametrize("value", list(range(1, 17)))
 def test_every_encoded_speed_fits_in_the_byte_it_is_written_to(value):
-    """`& 0xFF` was removed with the `max(0, ...)`; neither could ever fire."""
-    assert 0 <= _speed_to_rom(value) <= 0xFF
+    """`max(0, ...)` is load-bearing for 8 alone -- the expression is -1 there --
+    and `& 0xFF` for nothing; both are upstream's and both are back."""
+    assert _speed_to_rom(value) in range(0x100)
 
 
 def test_speed_is_clamped_at_both_ends():
@@ -637,6 +649,25 @@ def test_the_speed_byte_is_replaced_outright(rom, out):
     writer.write_player_data(0, [_player(0, speed=3)])
     writer.finalize()
     assert _record(out, 0, 0)[0] == 0x40
+
+
+def test_the_default_speed_reaches_the_image_as_zero(rom, out):
+    """PINS UPSTREAM FIDELITY DELIBERATELY, in the bytes. Do not "fix" this back.
+
+    8 is `ISSPlayerAttributes.speed`'s default and two of the four position
+    fallback rows carry it, so this is the byte most patched players get.
+    `_speed_to_rom` says why 0x00 rather than 0xE0 ships.
+    """
+    writer = ISSRomWriter(str(rom), str(out))
+    writer.write_player_data(0, [_player(0, speed=8)])
+    writer.finalize()
+    assert _record(out, 0, 0)[0] == 0x00
+
+
+def test_that_zero_is_a_change_to_the_image_and_not_a_byte_left_alone(rom, out):
+    """Without this the test above passes against a writer that skipped the
+    field entirely, if the fixture happened to hold 0x00 there."""
+    assert fixture.player_data_record(0, 0)[0] != 0x00
 
 
 def test_the_shooting_index_replaces_only_the_low_three_bits(rom, out):

@@ -36,8 +36,11 @@ not report. Deriving speed from anything else on that list would be a judgement
 about how the game ought to play, dressed as a defect fix, applied to 405
 players on every patched cartridge and checkable by nobody.
 
-`_speed_to_rom`'s own defect, which sent the value 8 to the slowest byte in the
-game, is a separate thing and is fixed; see `rom_writer`.
+`_speed_to_rom`'s own defect, which sends the value 8 to the slowest byte in the
+game, is a separate thing and is also preserved -- deliberately, for byte
+fidelity to an original nothing here has been validated against. It bites hard,
+because 8 is the speed two of the four position defaults carry and the value
+every unmeasured player gets. See `rom_writer._speed_to_rom`.
 """
 
 from __future__ import annotations
