@@ -112,10 +112,14 @@ class DirEntry:
     `record_offset` is the absolute offset of the record itself, not of the data
     it points at. It is here because a caller that rewrites a file's length has
     to find the two length fields, at `record_offset + 10` little-endian and
-    `record_offset + 14` big-endian -- **and because carrying it merges two
-    scans into one.** Both game packages had a `_find_dir_entry` and a
-    `_find_dir_entry_abs_offset` that walked the same records the same way and
-    returned different halves of the same record; four copies of one loop.
+    `record_offset + 14` big-endian -- **and because carrying it merges three
+    scans into one.** Both game packages had a `_find_dir_entry`, a
+    `_find_dir_entry_abs_offset` and a `_find_entry_with_gap`, all three walking
+    the same records the same way and returning different parts of the same
+    record; **six copies of one loop**, which `_records` plus three thin callers
+    replaces. The only behavioural difference between the three was
+    `min_name_length`: `> 0` for the first two, `> 1` for the gap scan, which is
+    how `.` and `..` were excluded there and not elsewhere.
     """
 
     name: str

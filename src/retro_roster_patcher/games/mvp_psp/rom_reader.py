@@ -176,10 +176,15 @@ class MVPPSPRomReader:
                 f.seek(offset)
                 data = f.read(DATABASE_BIG_SIZE)
         except OSError:
-            # DELIBERATE DIVERGENCE: `except Exception` upstream, one of six in
-            # the package. Narrowed to `OSError`, which is what a seek or a read
-            # can raise; anything else here is a bug in this module and must not
-            # be reported to the user as "not this game".
+            # DELIBERATE DIVERGENCE: `except Exception` upstream, one of five in
+            # the source package -- two in `rom_writer.py`, around the ISO copy
+            # and around the write-back, and three in `rom_reader.py`: here,
+            # around the decompress loop, and around an `os.path.getsize`. (Its
+            # other `except` clauses are one `except ValueError` guarding an
+            # `int()` and four `except StopIteration` used as control flow, and
+            # none of those swallows an error.) Narrowed to `OSError`, which is
+            # what a seek or a read can raise; anything else here is a bug in
+            # this module and must not be reported as "not this game".
             return False
         if len(data) < DATABASE_BIG_SIZE:
             return False
