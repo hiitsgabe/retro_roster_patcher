@@ -152,21 +152,24 @@ def test_no_forename_length_under_three_ever_reaches_the_initial_form():
     assert reached == {0: False, 1: False, 2: False, 3: True, 4: True}
 
 
-def test_a_budget_of_two_holds_the_terminator_and_nothing_else():
-    """DELIBERATE DIVERGENCE: this used to raise `IndexError`.
+def test_a_budget_of_two_raises_index_error_when_there_is_a_surname():
+    """PINS UPSTREAM FIDELITY DELIBERATELY. Do not "fix" this back.
 
-    The last-resort branch indexed its two slice sides differently, and on a
-    `bytearray` an assignment whose sides differ in length resizes the buffer.
-    A two-byte buffer became one byte and `result[-2]` went off the front.
-    Two bytes is exactly the terminator, so an empty name is the only encoding
-    that fits.
+    The last-resort branch indexes its two slice sides differently -- left by
+    `len(last_bytes)`, right by `len(result) - 2` -- and on a `bytearray` an
+    assignment whose sides differ in length resizes the buffer. The two-byte
+    buffer becomes one byte and `result[-2]` goes off the front. This port
+    returned `b"\\0\\0"` here for a while; upstream's bytes are what ship, and 2
+    is the only budget at which the two forms differ at all.
     """
-    assert _encode_name_variable("Curry", "Stephen", 2) == b"\x00\x00"
+    with pytest.raises(IndexError):
+        _encode_name_variable("Curry", "Stephen", 2)
 
 
-def test_a_budget_of_two_gives_the_same_answer_whether_or_not_there_is_a_surname():
-    """The surname was the only thing that made the two cases differ, and it was
-    the resize that made it matter rather than the size."""
+def test_a_budget_of_two_with_no_surname_holds_the_terminator_and_nothing_else():
+    """The surname is the only thing that makes the two budget-2 cases differ,
+    and it is the resize that makes it matter rather than the size: with nothing
+    to copy in, both slice sides are empty and the buffer keeps its two bytes."""
     assert _encode_name_variable("", "Stephen", 2) == b"\x00\x00"
 
 
@@ -180,17 +183,23 @@ def test_a_budget_of_three_keeps_one_letter_of_the_surname():
 
 
 @pytest.mark.parametrize("budget", [0, 1])
-def test_a_budget_too_small_for_the_terminator_still_raises(budget):
-    """Not a residue of the resize: a field shorter than its own two-byte
-    terminator has no encoding at all, and returning one would overrun the
-    budget. `_compute_record_limits` floors every budget at 4."""
+def test_a_budget_too_small_for_the_terminator_raises(budget):
+    """Not the resize this time, and identical on both sides throughout: a field
+    shorter than its own two-byte terminator has no encoding at all, and
+    returning one would overrun the budget. `_compute_record_limits` floors every
+    budget at 4, so no caller in this package reaches 0, 1 or 2."""
     with pytest.raises(IndexError):
         _encode_name_variable("Curry", "Stephen", budget)
 
 
-def test_the_buffer_the_last_resort_branch_returns_is_the_length_it_allocated():
-    """The resize, stated directly: the returned length is a function of the
-    budget alone, and used to be a function of the surname's length too."""
+def test_at_a_budget_of_three_the_surname_is_cut_before_the_resize_can_bite():
+    """Why 2 is the only budget the resize reaches.
+
+    The truncation above the branch cuts the surname to `max(1, budget - 5)`
+    bytes, which is 1 here, and one byte is exactly what a three-byte buffer has
+    room for. The two slice sides then have the same length, nothing resizes, and
+    the returned length is the budget whatever the surname was.
+    """
     lengths = [len(_encode_name_variable("X" * surname, "Stephen", 3)) for surname in range(1, 12)]
     assert lengths == [3] * 11
 
@@ -213,15 +222,15 @@ def test_a_non_ascii_name_is_replaced_rather_than_raising():
 def test_no_encoding_ever_exceeds_the_budget_it_was_given():
     """Sweeping the budget, because a single over-long return corrupts the next record.
 
-    From 2 rather than from 4: 2 is now the smallest budget that returns at all,
-    and it is the one the last-resort branch used to get wrong.
+    From 3, the smallest budget that returns at all for a name with a surname:
+    0, 1 and 2 all raise, and the tests above pin which and why.
     """
-    lengths = [len(_encode_name_variable("Antetokounmpo", "Giannis", n)) for n in range(2, 40)]
-    over = [n for n, length in zip(range(2, 40), lengths, strict=True) if length > n]
+    lengths = [len(_encode_name_variable("Antetokounmpo", "Giannis", n)) for n in range(3, 40)]
+    over = [n for n, length in zip(range(3, 40), lengths, strict=True) if length > n]
     assert over == []
     # And it is not vacuous: some of those budgets really are being filled.
     assert max(lengths) == 23
-    assert min(lengths) == 2
+    assert min(lengths) == 3
 
 
 # -- loading and the budget table -------------------------------------------

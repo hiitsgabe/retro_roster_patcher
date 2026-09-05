@@ -105,37 +105,33 @@ def _encode_name_variable(last: str, first: str, max_bytes: int) -> bytes:
 
     # Last resort: just last name
     result = bytearray(min(len(last_bytes) + 2, max_bytes))
-    # DELIBERATE DIVERGENCE: upstream indexed the left side by `len(last_bytes)`
-    # and the right side by `len(result) - 2`. On a `bytearray` a slice
+    # UPSTREAM BEHAVIOUR, KNOWN WRONG, PRESERVED DELIBERATELY: the two sides of
+    # this slice assignment are indexed differently on purpose -- the left by
+    # `len(last_bytes)`, the right by `len(result) - 2`. On a `bytearray` a slice
     # assignment whose sides differ in length *resizes* the buffer, so whenever
-    # the surname was longer than the room for it the buffer shrank by the
-    # difference and `result[-2]` below indexed off the front of a buffer that
-    # no longer had two bytes in it. A budget of 2 raised `IndexError` out of a
-    # function whose whole job is to fit a name into a budget.
+    # the surname is longer than the room for it the buffer shrinks by the
+    # difference, and `result[-2]` on the next line indexes off the front of a
+    # buffer that no longer has two bytes in it. At a budget of exactly 2 that is
+    # an `IndexError` out of a function whose whole job is to fit a name into a
+    # budget. This port made both sides the same for a while and returned
+    # `b"\x00\x00"` there instead.
     #
-    # Both sides are now the same `keep`, which is what a fixed-layout encoder
-    # means: fill what fits and leave the two-null terminator alone. Where
-    # `len(last_bytes) <= keep` the two indices already agreed and nothing
-    # moves, which is every budget of 3 or more -- this branch is only reached
-    # with a surname truncated to one byte, or with no surname at all.
+    # Restored because the repair is byte-changing in principle and this project
+    # writes upstream's bytes: nothing here has been validated against a real
+    # cartridge, so a name field this port invented is a worse risk than an
+    # exception on an input no caller produces.
     #
-    # Budgets of 0 and 1 still raise `IndexError` from `result[-2]`, and that is
-    # not a residue: a name field shorter than its own two-byte terminator has
-    # no encoding, and inventing one would mean returning bytes that overrun the
-    # budget. `_compute_record_limits` floors every budget at 4 and
+    # Exhaustively measured over surnames and forenames from {a,b,c} of length
+    # 0..4 against budgets 0..15 -- 234 256 triples -- the only budget at which
+    # the two forms differ at all is 2. Budgets 0 and 1 raise `IndexError` from
+    # `result[-2]` either way, because a name field shorter than its own two-byte
+    # terminator has no encoding. Budgets of 3 or more are identical: this branch
+    # is only reached with a surname truncated to one byte or with no surname,
+    # and there `len(last_bytes) <= len(result) - 2` already, so no resize
+    # happens. `_compute_record_limits` floors every budget at 4 and
     # `write_player` defaults to 24, so no caller in this package can reach any
     # of the three.
-    #
-    # `max(0, ...)` changes no output and is not claimed to: at budgets 0 and 1
-    # this branch is only ever reached with a surname of at most one byte, so
-    # both sides of the assignment come out empty either way, and dropping the
-    # guard is a declared equivalent mutant -- swept over 89 010 triples. It is
-    # here because a negative slice bound counts from the other end rather than
-    # meaning "no room", which is the same class of accident as the resize the
-    # line above it replaces, and only the `min` two lines up keeps it out of
-    # reach.
-    keep = max(0, len(result) - 2)
-    result[:keep] = last_bytes[:keep]
+    result[: len(last_bytes)] = last_bytes[: len(result) - 2]
     result[-2] = 0
     result[-1] = 0
     return bytes(result)
