@@ -123,14 +123,27 @@ class NHL94GenesisRomWriter:
             if max_name_len < 1:
                 break  # No room for more players
 
-            # Truncate name to fit. An empty name would encode a length word of
-            # 2, which both `read_team_roster` and `get_team_player_region` treat
-            # as the end-of-roster sentinel, so it would hide every record after
-            # it while this method still counted them. One placeholder byte keeps
-            # the length word at 3 — the low edge of the reader's test — and the
-            # record chain intact.
+            # Truncate name to fit.
+            #
+            # UPSTREAM BEHAVIOUR, KNOWN WRONG, PRESERVED DELIBERATELY: an empty
+            # name encodes a length word of 2, and both `read_team_roster` and
+            # `get_team_player_region` treat any length below 3 as the
+            # end-of-roster sentinel. Written mid-roster it therefore buries the
+            # real sentinel inside the roster: every record after it becomes
+            # unreachable, the region re-measures short, and this method still
+            # counts and returns every player it wrote. Writing one placeholder
+            # byte would keep the length word at 3 and the chain intact, and this
+            # port did that for a while.
+            #
+            # It is written the upstream way again because the placeholder is a
+            # byte sequence no released build of this patcher ever produced.
+            # Nothing in this repository has been validated against a real dump,
+            # so a record layout that differs from the one the game has actually
+            # been fed is a crash risk on hardware that outweighs an unreachable
+            # tail of a roster. Fidelity to the original beats correctness of the
+            # data. Do not re-add the `or b"?"`.
             name = player.name[:max_name_len]
-            name_bytes = name.encode("ascii", errors="replace") or b"?"
+            name_bytes = name.encode("ascii", errors="replace")
             name_len = len(name_bytes)
 
             # Write 2-byte BE length (includes the 2 length bytes)

@@ -194,13 +194,21 @@ class NHL94SNESRomWriter:
 
             # Truncate name to fit.
             #
-            # DELIBERATE DIVERGENCE, the same one already made in
-            # `games/nhl94_genesis/rom_writer.py`: an empty name encodes a length
-            # word of 2, and both `read_team_roster` and `_get_team_player_region`
-            # stop at any length below 3. Upstream would write it, hiding every
-            # record after it behind a terminator while still reporting them all
+            # DELIBERATE DIVERGENCE: an empty name encodes a length word of 2,
+            # and both `read_team_roster` and `_get_team_player_region` stop at
+            # any length below 3. Upstream would write it, hiding every record
+            # after it behind a terminator while still reporting them all
             # written. One placeholder byte keeps the length word at 3 and the
             # record chain intact.
+            #
+            # The Genesis sibling made the same change and it has since been
+            # reverted: `games/nhl94_genesis/rom_writer.py` writes the empty name
+            # upstream's way again, and says there why byte fidelity to an
+            # unvalidated original outranks a reachable roster tail. This one has
+            # not been reverted, and the two are inconsistent. It is flagged
+            # rather than reverted here because the revert ledger adjudicated
+            # only the Genesis site; changing this one is a byte-level decision
+            # that belongs to whoever owns that ledger, not to this comment.
             name = player.name[:max_name_for_record]
             name_bytes = name.encode("ascii", errors="replace") or b"?"
             name_len = len(name_bytes)
