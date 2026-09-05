@@ -17,8 +17,6 @@ BASE_URL = "https://api-web.nhle.com/v1"
 
 
 class NhlApiClient:
-    """Client for the NHL official API."""
-
     def __init__(
         self,
         cache_dir: str,
@@ -29,10 +27,6 @@ class NhlApiClient:
         self.on_status = on_status
         self._transport = transport
         ensure_cache_dir(cache_dir)
-
-    # ------------------------------------------------------------------
-    # Public interface (mirrors EspnClient hockey methods)
-    # ------------------------------------------------------------------
 
     def get_nhl_teams(self) -> list[Team]:
         """Fetch all current NHL teams from standings."""
@@ -63,12 +57,10 @@ class NhlApiClient:
         return self._parse_roster(data)
 
     def get_hockey_team_leaders(self, team_abbrev: str, season: int = 2025) -> dict[str, dict]:
-        """Fetch per-player season stats via club-stats endpoint.
+        """Fetch per-player season stats via the club-stats endpoint.
 
-        Returns dict mapping player ID (str) to stat dict:
+        Returns a dict mapping player ID (str) to a stat dict:
         {"12345": {"G": 26, "A": 22, "PTS": 48, ...}}
-
-        One API call per team — covers all rostered players.
         """
         season_str = f"{season}{season + 1}"
         cache_key = f"nhl_api_stats_{team_abbrev}_{season_str}"
@@ -121,10 +113,6 @@ class NhlApiClient:
         if stats:
             self._save_cache(cache_key, stats)
         return stats
-
-    # ------------------------------------------------------------------
-    # Parsers
-    # ------------------------------------------------------------------
 
     def _parse_standings_teams(self, data: dict) -> list[Team]:
         if not isinstance(data, dict):
@@ -196,10 +184,6 @@ class NhlApiClient:
                 )
 
         return players
-
-    # ------------------------------------------------------------------
-    # HTTP / Cache
-    # ------------------------------------------------------------------
 
     def _request(self, path: str) -> dict:
         try:

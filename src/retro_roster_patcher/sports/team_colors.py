@@ -44,7 +44,6 @@ def load_color_cache(cache_dir: str) -> dict[str, dict]:
 
 
 def save_color_cache(cache_dir: str, cache: dict[str, dict]) -> None:
-    """Save team colors to cache file."""
     path = _cache_path(cache_dir)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w") as f:
@@ -58,18 +57,13 @@ def get_team_color(cache_dir: str, team_id: int) -> dict | None:
 
 
 def set_team_color(cache_dir: str, team_id: int, primary_hex: str, secondary_hex: str) -> None:
-    """Set and persist a team's colors."""
     cache = load_color_cache(cache_dir)
     cache[str(team_id)] = {"primary": primary_hex, "secondary": secondary_hex}
     save_color_cache(cache_dir, cache)
 
 
 def apply_cached_colors(cache_dir: str, league_data: Any) -> None:
-    """Apply cached colors to all teams in league_data that lack colors.
-
-    Modifies Team.color and Team.alternate_color in-place for teams
-    that have cached colors but empty color fields.
-    """
+    """Fill in `Team.color` and `Team.alternate_color` in-place, where empty."""
     if not league_data or not hasattr(league_data, "teams"):
         return
     cache = load_color_cache(cache_dir)
@@ -84,7 +78,6 @@ def apply_cached_colors(cache_dir: str, league_data: Any) -> None:
 
 
 def all_teams_have_colors(league_data: Any) -> bool:
-    """Check if all teams in league_data have both primary and secondary colors."""
     if not league_data or not hasattr(league_data, "teams"):
         return False
     for tr in league_data.teams:
