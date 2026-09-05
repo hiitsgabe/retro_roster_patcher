@@ -1022,6 +1022,112 @@ def test_a_generous_budget_leaves_the_names_alone(rom, out):
     assert _read(out, _name_text_pointers(out)[0], len(expected)) == expected
 
 
+# The mid-blob cut. 27 patched names shrink to three characters each and encode
+# to 25 bytes apiece -- 675 in all -- so a budget under that reaches the final
+# slice with the shrink loop already exhausted.
+#
+# 411 rather than a round number, and the choice is load-bearing twice. 411 is
+# not a multiple of 25, so the cut lands 11 bytes inside team 16's blob and the
+# case really is a *mid-blob* cut rather than a short write that stopped on a
+# boundary. And at 411 the last byte the writer puts down differs from the byte
+# the image already held there, so a cap one byte tighter or looser moves an
+# assertion below -- at 410 and at 412 the two coincide and the boundary is
+# invisible.
+_STARVED_BUDGET = 411
+_SHRUNK_BLOB = 25
+_CUT_TEAM = 16
+_CUT_WITHIN_BLOB = 11
+
+
+@pytest.fixture
+def starved(tmp_path):
+    return fixture.write_iss_rom(
+        tmp_path / "starved.sfc",
+        name_text_base=fixture.MAX_NAME_TEXT_ADDR - _STARVED_BUDGET,
+    )
+
+
+def _starve(starved, out):
+    writer = ISSRomWriter(str(starved), str(out))
+    writer.write_team_name_texts({i: "WOLVERHAMPTON WANDERERS" for i in range(TOTAL_TEAMS)})
+    writer.finalize()
+    return _name_text_pointers(out)
+
+
+def test_the_shrink_loop_really_does_run_out_at_three_characters():
+    """Sizes the fixture: the floor is 675 bytes and the budget is 411, so the
+    starved case below is starved and not merely tight."""
+    assert len(_encode_team_name_text("WOL")) == _SHRUNK_BLOB
+    assert _SHRUNK_BLOB * TOTAL_TEAMS == 675
+    assert _STARVED_BUDGET < 675
+    assert _STARVED_BUDGET % _SHRUNK_BLOB == _CUT_WITHIN_BLOB
+
+
+def test_a_budget_below_the_shrink_floor_still_reports_success(starved, out):
+    """INHERITED DEFECT, PRESERVED and pinned. Nothing signals the overflow.
+
+    `write_name_tiles` raises `RomError` in the same situation; this method
+    returns, and the argument for the asymmetry is at the line in `rom_writer`.
+    """
+    writer = ISSRomWriter(str(starved), str(out))
+    result = writer.write_team_name_texts(
+        {i: "WOLVERHAMPTON WANDERERS" for i in range(TOTAL_TEAMS)}
+    )
+    writer.close()
+    assert result is None
+
+
+def test_the_pointer_table_names_ten_teams_the_writer_never_wrote(starved, out):
+    """The corruption, counted. The table is written before the slice and is
+    not shortened with it."""
+    pointers = _starve(starved, out)
+    cut = fixture.MAX_NAME_TEXT_ADDR
+    assert len([p for p in pointers if p >= cut]) == 10
+    assert pointers[-1] == cut + 239
+
+
+def test_the_write_stops_at_exactly_the_ceiling(starved, out):
+    """The boundary, to the byte, on an image where the two sides differ.
+
+    The whole written region is compared against the 675 bytes that were built,
+    cut at the budget; then the first byte past the ceiling is asserted to still
+    hold the image's own value, and to be a value the intended data would have
+    changed. A cap one byte short or one byte long moves one of the three.
+    """
+    _starve(starved, out)
+    before = starved.read_bytes()
+    after = out.read_bytes()
+    cut = fixture.MAX_NAME_TEXT_ADDR
+    start = cut - _STARVED_BUDGET
+    intended = _encode_team_name_text("WOL") * TOTAL_TEAMS
+    assert after[start:cut] == intended[:_STARVED_BUDGET]
+    assert after[cut] == before[cut]
+    assert intended[_STARVED_BUDGET] != before[cut]
+
+
+def test_the_blob_at_the_cut_is_severed_in_the_middle_of_itself(starved, out):
+    """Eleven bytes of team 16's display list reach the image and fourteen do not.
+
+    Both halves asserted: a short write that stopped on a blob boundary would
+    satisfy the first and fail the second.
+    """
+    pointers = _starve(starved, out)
+    intended = _encode_team_name_text("WOL")
+    written = _read(out, pointers[_CUT_TEAM], _SHRUNK_BLOB)
+    assert pointers[_CUT_TEAM] + _CUT_WITHIN_BLOB == fixture.MAX_NAME_TEXT_ADDR
+    assert written[:_CUT_WITHIN_BLOB] == intended[:_CUT_WITHIN_BLOB]
+    assert written[_CUT_WITHIN_BLOB:] != intended[_CUT_WITHIN_BLOB:]
+
+
+def test_the_teams_before_the_cut_are_written_correctly(starved, out):
+    """The other side of it: this is a tail overflow and not a general failure,
+    which is why nothing downstream notices."""
+    pointers = _starve(starved, out)
+    intended = _encode_team_name_text("WOL")
+    before = [_read(out, pointers[i], _SHRUNK_BLOB) for i in range(_CUT_TEAM)]
+    assert before == [intended] * _CUT_TEAM
+
+
 def test_a_non_positive_budget_raises_rather_than_writing_past_the_ceiling(tmp_path, out):
     """DELIBERATE DIVERGENCE. `all_data[:budget]` with a negative budget is not
     a truncation: it drops bytes from the end and writes the rest at `min_addr`,
