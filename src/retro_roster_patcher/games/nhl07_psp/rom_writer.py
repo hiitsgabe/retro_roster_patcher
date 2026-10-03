@@ -4,18 +4,15 @@
     -> overwrite them inside `db.viv` where they already sit -> write `db.viv`
     back into the image at its original LBA
 
-Patch the archive in place; never use `bigf_replace`, which reassembles the
-directory and so moves every offset after the replaced file. The disc has one
-allocation for `db.viv` and the game seeks inside it by recorded offset.
-`bigf_replace_inplace` keeps every offset and zero-pads the slack, so a
-recompressed table may only get *smaller*.
+Patch the archive in place where possible; never use `bigf_replace`, which
+reassembles the directory and so moves every offset after the replaced file.
+`bigf_replace_inplace` keeps every offset and zero-pads the slack. A
+recompressed table that outgrew its slot is moved to the end of the archive by
+`bigf_relocate` instead, which rewrites only that table's own directory entry,
+so every other table stays where it was.
 
-Two size checks follow from that, at two different layers, and both matter:
-
-  * a recompressed `.tdb` must fit the space that `.tdb` already occupies inside
-    `db.viv` -- `bigf_replace_inplace`'s own bound;
-  * the resulting `db.viv` must fit the sector gap before the next file on the
-    ISO -- `find_db_viv_location`'s `max_size`.
+The size check that remains: the resulting `db.viv` must fit the sector gap
+before the next file on the ISO -- `find_db_viv_location`'s `max_size`.
 """
 
 from __future__ import annotations
@@ -25,7 +22,7 @@ import struct
 from collections.abc import Callable, Mapping
 
 from ...core.errors import RomError
-from ...formats.ea_tdb import TDBFile, bigf_replace_inplace, refpack_compress
+from ...formats.ea_tdb import TDBFile, bigf_relocate, bigf_replace_inplace, refpack_compress
 from .models import (
     NAME_FIELD_CHARS,
     POSITION_REVERSE,
@@ -320,15 +317,14 @@ class NHL07PSPRomWriter:
         `modified_tdbs` is keyed by the archive's *own* spelling of each member,
         which the caller reads out of `bigf_parse` -- see `patcher.py`.
 
-        Never discard `bigf_replace_inplace`'s return value: a table that does
-        not fit its slot would be silently skipped, leaving `db.viv` with its
-        three TDBs disagreeing about the same roster and the patch reported as a
-        success. Raise instead.
+        Every table is written: one that no longer fits its slot is relocated,
+        never skipped. Skipping (what the original tool did) left `db.viv`
+        with its three TDBs disagreeing about the same roster.
 
         Raises:
-            RomError: a recompressed TDB does not fit its slot inside `db.viv`;
-                `db.viv` cannot be located on the ISO; or the rebuilt `db.viv`
-                does not fit the sector gap before the next file.
+            RomError: a TDB is not in `db.viv`; `db.viv` cannot be located on the
+                ISO; or the rebuilt `db.viv` does not fit the sector gap before the
+                next file.
         """
         if self._db_viv is None or self.reader is None:
             raise RomError("db.viv was never loaded; call copy_iso() and load() first")
@@ -345,11 +341,14 @@ class NHL07PSPRomWriter:
                 )
 
             compressed = refpack_compress(tdb_file.serialize())
-            if not bigf_replace_inplace(new_viv, tdb_name, compressed):
-                raise RomError(
-                    f"Recompressed {tdb_name} is {len(compressed)} bytes and does not fit "
-                    f"the space it occupies in db.viv; the patched roster cannot be written"
-                )
+            # In place when it fits. Otherwise move it to the end of the archive
+            # rather than skip it (the original tool skipped, leaving the TDBs
+            # disagreeing about the roster); the size check below still refuses
+            # an archive that outgrows its allocation on the disc.
+            if not bigf_replace_inplace(new_viv, tdb_name, compressed) and not bigf_relocate(
+                new_viv, tdb_name, compressed
+            ):
+                raise RomError(f"db.viv holds no {tdb_name}; the patched roster cannot be written")
 
         if on_progress is not None:
             on_progress(PROGRESS_COMPRESS_END, "Writing db.viv to ISO...")

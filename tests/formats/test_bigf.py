@@ -22,6 +22,7 @@ from retro_roster_patcher.formats.ea_tdb import (
     bigf_build,
     bigf_extract,
     bigf_parse,
+    bigf_relocate,
     bigf_replace,
     bigf_replace_inplace,
 )
@@ -326,6 +327,41 @@ def test_replace_inplace_takes_the_last_of_two_entries_sharing_a_name():
     assert bigf_replace_inplace(archive, "dup.tdb", b"ZZ") is True
     assert bytes(archive[entries[1].offset : entries[1].offset + 2]) == b"ZZ"
     assert bytes(archive[entries[0].offset : entries[0].offset + 2]) == b"AA"
+
+
+def test_relocate_appends_the_file_on_a_128_byte_boundary_and_points_its_entry_there():
+    archive = bytearray(ARCHIVE)
+    new = bytes(range(200)) * 2  # longer than the 17-byte original slot
+    assert bigf_relocate(archive, "nhlrost.tdb", new) is True
+
+    entry = bigf_parse(bytes(archive))[1]
+    assert entry.offset % 128 == 0
+    assert entry.offset >= len(ARCHIVE)
+    assert entry.size == len(new)
+    assert bigf_extract(bytes(archive), "NHLROST.TDB") == new
+
+
+def test_relocate_moves_no_other_file():
+    archive = bytearray(ARCHIVE)
+    bigf_relocate(archive, "nhlrost.tdb", b"x" * 500)
+    for name, data in (FILES[0], FILES[2]):
+        assert bigf_extract(bytes(archive), name) == data
+    before, after = bigf_parse(ARCHIVE), bigf_parse(bytes(archive))
+    assert (before[0].offset, before[2].offset) == (after[0].offset, after[2].offset)
+
+
+def test_relocate_zero_fills_the_old_slot_and_updates_the_total_size():
+    archive = bytearray(ARCHIVE)
+    old = bigf_parse(ARCHIVE)[1]
+    bigf_relocate(archive, "nhlrost.tdb", b"x" * 500)
+    assert archive[old.offset : old.offset + old.size] == b"\x00" * old.size
+    assert struct.unpack_from("<I", archive, 4)[0] == len(archive)
+
+
+def test_relocate_of_an_absent_file_is_false_and_changes_nothing():
+    archive = bytearray(ARCHIVE)
+    assert bigf_relocate(archive, "missing.tdb", b"x") is False
+    assert bytes(archive) == ARCHIVE
 
 
 def test_build_then_parse_returns_what_went_in():

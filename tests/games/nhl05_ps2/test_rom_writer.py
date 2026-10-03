@@ -632,11 +632,12 @@ def test_rebuilding_before_loading_raises(tmp_path):
         writer.rebuild_and_write({})
 
 
-def test_a_recompressed_member_too_large_for_its_slot_raises(tmp_path):
+def test_a_member_too_large_for_both_its_slot_and_the_disc_raises(tmp_path):
     # DELIBERATE DIVERGENCE: the source discarded `bigf_replace_inplace`'s
     # return value, so a table's edits were dropped and the run still reported
-    # success. The archive is rebuilt here with no slack at all, so a member
-    # that recompresses even one byte larger cannot fit.
+    # success. A member that outgrows its slot is now relocated to the end of
+    # the archive; here the archive has no slack and the relocated table is
+    # bigger than the disc's gap, so the archive-level bound refuses it.
     src = tmp_path / "tight.iso"
     from tests.fixtures.synthetic_tdb import BigfSpec, build_bigf
 
@@ -669,7 +670,7 @@ def test_a_recompressed_member_too_large_for_its_slot_raises(tmp_path):
                 "LNME": "".join(rng.choice(string.ascii_lowercase) for _ in range(15)),
             },
         )
-    with pytest.raises(RomError, match="does not fit"):
+    with pytest.raises(RomError, match="allocation"):
         writer.rebuild_and_write({TDB_MASTER: tdb})
 
 
