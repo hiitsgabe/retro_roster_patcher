@@ -2312,12 +2312,16 @@ class RomWriter:
         team: WETeamRecord,
         players: list[WEPlayerRecord] | None = None,
         include_flag: bool = True,
-    ):
-        """Write national team names, abbreviations, force bars, players, and flag."""
+    ) -> int:
+        """Write national team names, abbreviations, force bars, players, and flag.
+
+        Returns how many of `players` were written: at most the 23 places of a
+        national squad, 0 when nothing was written.
+        """
         if not os.path.exists(self.output_path):
-            return
+            return 0
         if nat_index < 0 or nat_index >= _SQUADRE_NAZ:
-            return
+            return 0
 
         with open(self.output_path, "r+b") as f:
             self._write_nat_team_names(f, nat_index, team)
@@ -2335,6 +2339,7 @@ class RomWriter:
 
         # Queue 3D jersey TEX patch (national teams are TEX indices 0-62)
         self._pending_tex_patches.append((nat_index, team.kit_home))
+        return min(len(players), _PLAYERS_PER_NAT) if players is not None else 0
 
     def _write_nat_team_names(self, f, nat_index: int, team: WETeamRecord):
         name = team.name

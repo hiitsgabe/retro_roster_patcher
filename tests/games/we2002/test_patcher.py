@@ -23,7 +23,7 @@ from retro_roster_patcher.core.errors import (
 from retro_roster_patcher.core.models import MappedRosters, RomSlot, SlotMapping
 from retro_roster_patcher.games.we2002 import patcher as patcher_module
 from retro_roster_patcher.games.we2002.models import WETeamRecord
-from retro_roster_patcher.games.we2002.patcher import MAX_ML_SLOTS, WE2002Patcher
+from retro_roster_patcher.games.we2002.patcher import MAX_ML_SLOTS, MAX_NAT_SLOTS, WE2002Patcher
 from retro_roster_patcher.games.we2002.ppf import PPFError
 from retro_roster_patcher.games.we2002.rom_writer import RomWriter, _slot_player_range
 from retro_roster_patcher.sports.espn import EspnClient
@@ -179,6 +179,10 @@ def _fake_writer_class(log, *, create_output=True):
             # real `_slot_player_range` rather than restating the rule here.
             return min(len(players or []), _slot_player_range(slot_index)[1])
 
+        def write_nat_team(self, nat_index, team, players=None, include_flag=True):
+            log.append(("write_nat_team", nat_index, team.name, len(players or []), include_flag))
+            return min(len(players or []), 23)
+
         def flush_tex_patches(self):
             log.append(("flush_tex_patches",))
 
@@ -199,14 +203,18 @@ def _silence_translation(monkeypatch, log=None):
     monkeypatch.setattr(patcher_module, "apply_ppf", _apply)
 
 
-def _valid_rom(tmp_path, name="we2002.bin"):
-    """An input file `patch` will accept: 100 MB of addressable zeroes.
+# A raw Mode2/2352 image starts every sector with the CD sync pattern.
+CD_SYNC = b"\x00" + b"\xff" * 10 + b"\x00"
 
-    `validate_rom`'s only test is `size >= 100 MB`. `truncate` keeps the file
-    sparse, so this costs neither disk nor time.
+
+def _valid_rom(tmp_path, name="we2002.bin"):
+    """An input file `patch` will accept: a raw-sector sync header, then 100 MB
+    of addressable zeroes. `truncate` keeps the file sparse, so this costs
+    neither disk nor time.
     """
     path = tmp_path / name
     with path.open("wb") as handle:
+        handle.write(CD_SYNC)
         handle.truncate(100 * 1024 * 1024)
     return path
 
@@ -682,14 +690,15 @@ def test_default_slot_mapping_is_sequential_and_serialisable(patcher):
     assert SlotMapping.from_dict(mapping[0].to_dict()) == mapping[0]
 
 
-def test_default_slot_mapping_stops_at_the_master_league_slot_count(patcher):
-    data = _league_data([_roster(100 + i) for i in range(40)])
+def test_default_slot_mapping_stops_at_the_national_slot_count(patcher):
+    data = _league_data([_roster(100 + i) for i in range(70)])
 
     mapping = patcher.default_slot_mapping(data)
 
     assert MAX_ML_SLOTS == 32
-    assert len(mapping) == 32
-    assert mapping[-1].slot_index == 31
+    assert MAX_NAT_SLOTS == 63
+    assert len(mapping) == 63
+    assert mapping[-1].slot_index == 62
 
 
 def test_map_rosters_requires_a_slot_mapping(patcher):
@@ -738,14 +747,15 @@ def test_an_out_of_range_slot_raises_before_anything_is_written(patcher):
         patcher.map_rosters(data, slot_mapping=[SlotMapping(slot_index=63, team_id=100)])
 
 
-def test_the_last_master_league_slot_is_accepted_and_the_next_one_is_not(patcher):
+def test_slots_past_the_master_league_go_to_the_national_table_up_to_its_end(patcher):
+    # 32..62 exist only in the national table; 63 exists in neither.
     data = patcher.fetch(season=2024, league_id=39)
 
-    mapped = patcher.map_rosters(data, slot_mapping=[SlotMapping(slot_index=31, team_id=100)])
-    assert sorted(mapped.teams) == [31]
+    mapped = patcher.map_rosters(data, slot_mapping=[SlotMapping(slot_index=62, team_id=100)])
+    assert sorted(mapped.teams) == [62]
 
-    with pytest.raises(MappingError, match=r"0\.\.31"):
-        patcher.map_rosters(data, slot_mapping=[SlotMapping(slot_index=32, team_id=100)])
+    with pytest.raises(MappingError, match=r"0\.\.62"):
+        patcher.map_rosters(data, slot_mapping=[SlotMapping(slot_index=63, team_id=100)])
 
 
 def test_a_negative_slot_is_rejected(patcher):
@@ -891,6 +901,7 @@ def test_a_file_large_enough_to_be_the_game_reports_its_thirty_two_slots(patcher
     # addressable zeroes with no blocks allocated.
     rom = tmp_path / "we2002.bin"
     with rom.open("wb") as handle:
+        handle.write(CD_SYNC)
         handle.truncate(100 * 1024 * 1024)
 
     info = patcher.analyze_rom(rom)
@@ -916,6 +927,7 @@ def test_every_slot_gets_its_own_display_name(patcher, tmp_path):
     # field a slot-picking UI lists, and WE2002 requires a slot mapping.
     rom = tmp_path / "we2002.bin"
     with rom.open("wb") as handle:
+        handle.write(CD_SYNC)
         handle.truncate(100 * 1024 * 1024)
 
     info = patcher.analyze_rom(rom)
@@ -962,6 +974,22 @@ def test_patching_a_file_too_small_to_be_the_game_raises_rom_error(patcher, tmp_
     assert out.exists() is False
 
 
+def test_a_cooked_2048_byte_image_is_refused_before_anything_is_written(patcher, tmp_path):
+    # Every offset assumes raw 2352-byte sectors; a big enough .iso without the
+    # CD sync header would otherwise be patched into garbage.
+    data = patcher.fetch(season=2024, league_id=39)
+    mapped = patcher.map_rosters(data, slot_mapping=[SlotMapping(slot_index=0, team_id=100)])
+    rom = tmp_path / "we2002.iso"
+    with rom.open("wb") as handle:
+        handle.truncate(100 * 1024 * 1024)
+    out = tmp_path / "out.bin"
+
+    with pytest.raises(RomError, match="raw"):
+        patcher.patch(rom_path=rom, output_path=out, rosters=mapped)
+
+    assert out.exists() is False
+
+
 def test_patch_writes_every_slot_with_its_players_then_flushes_then_finalises(
     patcher, tmp_path, monkeypatch
 ):
@@ -990,7 +1018,9 @@ def test_patch_writes_every_slot_with_its_players_then_flushes_then_finalises(
         ("open", str(rom), str(out)),
         ("apply_ppf", False),
         ("write_team", 0, "Team 0", 11, True),
+        ("write_nat_team", 0, "Team 0", 11, True),
         ("write_team", 5, "Team 1", 11, True),
+        ("write_nat_team", 5, "Team 1", 11, True),
         ("flush_tex_patches",),
         ("finalize",),
     ]
@@ -1090,8 +1120,8 @@ def test_patching_with_nothing_mapped_still_writes_an_output(patcher, tmp_path, 
 
 
 def test_a_slot_the_writer_would_silently_drop_is_not_counted(patcher, tmp_path, monkeypatch):
-    # `RomWriter.write_team` returns without writing for any slot outside 0..31,
-    # so counting one would report a patch that never happened.
+    # Slot 40 is national-only: written to the national table, never to the
+    # Master League one. Slot -1 exists in neither and must not be counted.
     log = []
     monkeypatch.setattr(patcher_module, "RomWriter", _fake_writer_class(log))
     _silence_translation(monkeypatch)
@@ -1104,15 +1134,16 @@ def test_a_slot_the_writer_would_silently_drop_is_not_counted(patcher, tmp_path,
     result = patcher.patch(rom_path=rom, output_path=tmp_path / "out.bin", rosters=mapped)
 
     assert [entry[1] for entry in log if entry[0] == "write_team"] == [0]
-    assert (result.teams_patched, result.players_patched) == (1, 11)
+    assert [entry[1] for entry in log if entry[0] == "write_nat_team"] == [0, 40]
+    assert (result.teams_patched, result.players_patched) == (2, 22)
 
 
 def test_players_past_the_slot_capacity_are_counted_as_written_not_as_supplied(
     tmp_path, monkeypatch
 ):
-    # `_slot_player_range` gives slot 0 fourteen places and slot 31 fifteen, and
-    # `_write_players_impl` never looks past that count, so a 22-man squad in each
-    # of those two slots puts 14 + 15 = 29 players into the image.
+    # Every team also gets a 23-place national squad, which holds a 22-man squad
+    # whole; the Master League copy (14 or 15 places) is a subset of it. So the
+    # count is the national one: 22 + 22.
     log = []
     monkeypatch.setattr(patcher_module, "RomWriter", _fake_writer_class(log))
     _silence_translation(monkeypatch)
@@ -1133,7 +1164,8 @@ def test_players_past_the_slot_capacity_are_counted_as_written_not_as_supplied(
     # All 22 are still handed over — the truncation is the writer's, not the
     # patcher's, and `patch` must not start second-guessing which ones fit.
     assert [entry[3] for entry in log if entry[0] == "write_team"] == [22, 22]
-    assert result.players_patched == 29
+    assert [entry[3] for entry in log if entry[0] == "write_nat_team"] == [22, 22]
+    assert result.players_patched == 44
     assert result.teams_patched == 2
 
 
