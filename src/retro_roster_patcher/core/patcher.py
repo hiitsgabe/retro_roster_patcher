@@ -14,6 +14,7 @@ re-running the network step.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -113,10 +114,34 @@ class Patcher(ABC):
         is a reordering of the full squad and loses no player.
 
         The default returns the players untouched; games with a roster model
-        override it. Purely advisory: `map_rosters` still runs the authoritative
-        selection at patch time.
+        override it. By default `map_rosters` still runs its own selection at
+        patch time; pass it `order_as_given=True` to write an edited copy of
+        this list as it stands.
         """
         return list(team_roster.players)
+
+    @staticmethod
+    def _given_blocks(
+        players: list[Player],
+        blocks: list[tuple[Callable[[Player], bool], int]],
+        total: int | None = None,
+    ) -> list[Player]:
+        """The caller's squad order, regrouped into a ROM's position blocks.
+
+        `blocks` is `[(belongs, cap), ...]` in ROM order: each block takes the
+        players `belongs` accepts, in the caller's order, up to `cap`. `total`
+        tops the result up with whoever was left out (caller order) and cuts it
+        there, the way the stat-ranked selections fill a short squad.
+        """
+        out: list[Player] = []
+        used: set[int] = set()
+        for belongs, cap in blocks:
+            picked = [p for p in players if id(p) not in used and belongs(p)][:cap]
+            used.update(id(p) for p in picked)
+            out.extend(picked)
+        if total is not None:
+            out = Patcher._append_unused(out, players)[:total]
+        return out
 
     @staticmethod
     def _append_unused(ordered: list[Player], everyone: list[Player]) -> list[Player]:
@@ -154,11 +179,18 @@ class Patcher(ABC):
         self,
         data: LeagueData,
         slot_mapping: list[SlotMapping] | None = None,
+        *,
+        order_as_given: bool = False,
     ) -> MappedRosters:
         """Reduce league data to this game's own record types.
 
         Call `self.check_slot_mapping(slot_mapping)` first, then validate the
         mapping's contents yourself and raise `MappingError`.
+
+        `order_as_given=True` writes each `TeamRoster.players` in its own order
+        (typically an edited `suggest_squad_order`), cut to the ROM's capacity,
+        instead of re-selecting by stats. Games whose ROM groups players by
+        position keep those groups and apply the caller's order within each.
         """
 
     @abstractmethod

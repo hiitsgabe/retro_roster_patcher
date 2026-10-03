@@ -1030,3 +1030,44 @@ def test_short_names_reach_the_full_cap(tmp_path, patcher):
 
     assert (result.teams_patched, result.players_patched) == (1, 23)
     assert [len(n) for n in _read_back(out, BOS_SLOT)[0]] == [8] * 23
+
+
+def _ranked_squad():
+    """One goalie, eighteen forwards and nine defencemen, named by id."""
+    positions = ["G"] + ["C", "LW", "RW"] * 6 + ["D"] * 9
+    return [
+        Player(id=n, name=f"P{n:02d}", position=pos, number=n + 1)
+        for n, pos in enumerate(positions)
+    ]
+
+
+def _ranked_league(players):
+    """One BOS roster whose leaders rank every player by id, highest first."""
+    data = _league_data(players)
+    data.teams[0].extra["leaders"] = {str(p.id): {"PTS": p.id, "SV%": p.id} for p in players}
+    return data
+
+
+def test_order_as_given_keeps_the_blocks_and_the_callers_order_inside_them(patcher):
+    # One goalie leaves the G block a player short, so the 23rd slot is the
+    # first leftover in the caller's order.
+    squad = _ranked_squad()
+    given = squad[::2] + squad[1::2]
+
+    mapped = patcher.map_rosters(_ranked_league(given), order_as_given=True)
+
+    goalies = [p for p in given if p.position == "G"][:2]
+    forwards = [p for p in given if p.position not in ("G", "D")][:14]
+    defence = [p for p in given if p.position == "D"][:7]
+    blocks = goalies + forwards + defence
+    expected = blocks + [p for p in given if p not in blocks]
+    assert [r.name for r in mapped.teams[BOS_SLOT]] == [
+        p.name for p in expected[:MAX_PLAYERS_PER_SLOT]
+    ]
+
+
+def test_without_order_as_given_the_input_order_is_ignored(patcher):
+    squad = _ranked_squad()
+    forward = patcher.map_rosters(_ranked_league(squad)).teams[BOS_SLOT]
+    backward = patcher.map_rosters(_ranked_league(squad[::-1])).teams[BOS_SLOT]
+    assert [r.name for r in forward] == [r.name for r in backward]

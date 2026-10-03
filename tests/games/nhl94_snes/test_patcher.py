@@ -907,3 +907,55 @@ def test_a_patched_rom_can_be_analysed_and_patched_again(patcher, rom, tmp_path)
     assert result.teams_patched == 1
     names, _ = _read_back(twice, BOS_SLOT)
     assert names == [f"Written {i:02d}" for i in range(10)]
+
+
+def _ranked_squad():
+    """One goalie, nine forwards and five defencemen, named by id."""
+    positions = ["G"] + ["C", "LW", "RW"] * 3 + ["D"] * 5
+    return [
+        Player(id=n, name=f"P{n:02d}", position=pos, number=n + 1)
+        for n, pos in enumerate(positions)
+    ]
+
+
+def _ranked_league(players):
+    """One BOS roster whose leaders rank every player by id, highest first."""
+    data = _league_data(("BOS", 0))
+    data.teams[0].players = players
+    data.teams[0].extra["leaders"] = {str(p.id): {"PTS": p.id, "SV%": p.id} for p in players}
+    return data
+
+
+def _small_counts():
+    """Default counts everywhere but BOS, which holds 2 G, 5 F and 3 D."""
+    counts = [list(DEFAULT_ROSTER_COUNTS) for _ in range(TEAM_COUNT)]
+    counts[BOS_SLOT] = [2, 5, 3]
+    return counts
+
+
+def test_order_as_given_keeps_the_slots_blocks_and_the_callers_order_inside_them(patcher):
+    # One goalie leaves the G block a player short, so the tenth slot is the
+    # first leftover in the caller's order.
+    squad = _ranked_squad()
+    given = squad[::2] + squad[1::2]
+
+    mapped = patcher.map_rosters(
+        _ranked_league(given), roster_counts=_small_counts(), order_as_given=True
+    )
+
+    goalies = [p for p in given if p.position == "G"][:2]
+    forwards = [p for p in given if p.position not in ("G", "D")][:5]
+    defence = [p for p in given if p.position == "D"][:3]
+    blocks = goalies + forwards + defence
+    expected = blocks + [p for p in given if p not in blocks]
+    assert [r.name for r in mapped.teams[BOS_SLOT].players] == [p.name for p in expected[:10]]
+
+
+def test_without_order_as_given_the_input_order_is_ignored(patcher):
+    squad = _ranked_squad()
+    counts = _small_counts()
+    forward = patcher.map_rosters(_ranked_league(squad), roster_counts=counts)
+    backward = patcher.map_rosters(_ranked_league(squad[::-1]), roster_counts=counts)
+    assert [r.name for r in forward.teams[BOS_SLOT].players] == [
+        r.name for r in backward.teams[BOS_SLOT].players
+    ]

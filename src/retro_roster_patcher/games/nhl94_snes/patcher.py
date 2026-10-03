@@ -268,6 +268,7 @@ class NHL94SNESPatcher(Patcher):
         slot_mapping: list[SlotMapping] | None = None,
         *,
         roster_counts: Sequence[Sequence[int]] | None = None,
+        order_as_given: bool = False,
     ) -> MappedRosters:
         """Reduce league data to one `NHL94TeamRecord` per matched ROM slot.
 
@@ -285,13 +286,26 @@ class NHL94SNESPatcher(Patcher):
                 continue
             leaders = roster.extra.get("leaders") or {}
             num_goalies, num_forwards, num_defensemen = counts[slot]
-            selected = self.mapper.select_roster(
-                roster.players,
-                leaders,
-                num_goalies=num_goalies,
-                num_forwards=num_forwards,
-                num_defensemen=num_defensemen,
-            )
+            if order_as_given:
+                # The line table assumes contiguous G, F, D blocks sized to this
+                # slot's counts; the caller's order decides who comes first.
+                selected = self._given_blocks(
+                    roster.players,
+                    [
+                        (lambda p: p.position == "G", num_goalies),
+                        (lambda p: p.position not in ("G", "D"), num_forwards),
+                        (lambda p: p.position == "D", num_defensemen),
+                    ],
+                    total=num_goalies + num_forwards + num_defensemen,
+                )
+            else:
+                selected = self.mapper.select_roster(
+                    roster.players,
+                    leaders,
+                    num_goalies=num_goalies,
+                    num_forwards=num_forwards,
+                    num_defensemen=num_defensemen,
+                )
             records = [
                 self.mapper.map_player(player, roster.team.code, leaders.get(str(player.id), {}))
                 for player in selected

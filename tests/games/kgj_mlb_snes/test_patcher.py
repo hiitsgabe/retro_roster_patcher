@@ -1122,3 +1122,46 @@ def test_the_written_record_contradicts_itself_on_the_disc(patcher, rom, out):
     offset = fixture.player_offset(SEA_SLOT, 12, first_team_offset=FIRST_TEAM_OFFSET)
     record = fixture.decode_player_record(out.read_bytes(), offset)
     assert [record["kind_flag"] & 0xF0, record["roster_type"]] == [0x20, 0x3]
+
+
+def _ranked_league(players):
+    """One SEA roster whose leaders rank every player by id, highest first."""
+    leaders = {str(p.id): {"OPS": p.id, "H": p.id, "W": p.id, "SV": p.id} for p in players}
+    return LeagueData(
+        league=League(id=0, name="MLB", country="USA", country_code="US", season=2025),
+        teams=[
+            TeamRoster(
+                team=Team(id=1, name="SEA", code="SEA"),
+                players=players,
+                extra={"leaders": leaders},
+            )
+        ],
+    )
+
+
+def _ranked_squad():
+    """Eighteen batters, six starters and six relievers; jersey = id + 1."""
+    positions = ["CF"] * 18 + ["SP"] * 6 + ["RP"] * 6
+    return [
+        Player(id=n, name=f"First{n:02d} Last{n:02d}", position=pos, number=n + 1)
+        for n, pos in enumerate(positions)
+    ]
+
+
+def test_order_as_given_keeps_the_blocks_and_the_callers_order_inside_them(patcher):
+    squad = _ranked_squad()
+    given = squad[::2] + squad[1::2]
+
+    mapped = patcher.map_rosters(_ranked_league(given), order_as_given=True)
+
+    batters = [p for p in given if p.position == "CF"][:BATTERS_PER_TEAM]
+    pitchers = [p for p in given if p.position != "CF"][: PLAYERS_PER_TEAM - BATTERS_PER_TEAM]
+    expected = [p.number for p in batters + pitchers]
+    assert [r.jersey_number for r in mapped.teams[SEA_SLOT].players] == expected
+
+
+def test_without_order_as_given_the_input_order_is_ignored(patcher):
+    squad = _ranked_squad()
+    forward = patcher.map_rosters(_ranked_league(squad)).teams[SEA_SLOT].players
+    backward = patcher.map_rosters(_ranked_league(squad[::-1])).teams[SEA_SLOT].players
+    assert [r.jersey_number for r in forward] == [r.jersey_number for r in backward]

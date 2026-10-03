@@ -90,6 +90,7 @@ from .models import (
     PA_PITCH_TYPE_OFFSET,
     PA_PITCH_VELOCITY_OFFSET,
     PA_STAMINA,
+    PITCHERS_PER_TEAM,
     POS_STRING_TO_NUM,
     ROSTER_LH_AL_ORDER,
     ROSTER_LH_AL_POS,
@@ -358,6 +359,8 @@ class MVPPSPPatcher(Patcher):
         self,
         data: LeagueData,
         slot_mapping: list[SlotMapping] | None = None,
+        *,
+        order_as_given: bool = False,
     ) -> MappedRosters:
         """Reduce league data to a list of `MVPPlayerRecord` per matched slot.
 
@@ -377,7 +380,18 @@ class MVPPSPPatcher(Patcher):
                 continue
 
             leaders = roster.extra.get("leaders") or {}
-            selected = self.mapper.select_roster(roster.players, leaders)
+            if order_as_given:
+                # Batter and pitcher blocks stay; slots 0-8 are the batting
+                # order and fielding positions, 15-19 the rotation.
+                selected = self._given_blocks(
+                    roster.players,
+                    [
+                        (lambda p: not self.mapper.is_pitcher(p), BATTERS_PER_TEAM),
+                        (self.mapper.is_pitcher, PITCHERS_PER_TEAM),
+                    ],
+                )
+            else:
+                selected = self.mapper.select_roster(roster.players, leaders)
             records = [
                 self._map_one(player, leaders.get(str(player.id), {}), index)
                 for index, player in enumerate(selected)

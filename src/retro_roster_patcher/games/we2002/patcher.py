@@ -227,6 +227,8 @@ class WE2002Patcher(Patcher):
         self,
         data: LeagueData,
         slot_mapping: list[SlotMapping] | None = None,
+        *,
+        order_as_given: bool = False,
     ) -> MappedRosters:
         self.check_slot_mapping(slot_mapping)
         # Narrows `list | None` for the type checker; `check_slot_mapping` has
@@ -250,7 +252,9 @@ class WE2002Patcher(Patcher):
                 )
             # The whole league, not just this team: percentiles are normalised
             # league-wide.
-            record = self.mapper.map_team_with_league_context(roster, data.teams)
+            record = self.mapper.map_team_with_league_context(
+                roster, data.teams, order_as_given=order_as_given
+            )
             self._apply_kit_colours(record, roster.team)
             teams[entry.slot_index] = record
         return MappedRosters(game_id=self.game_id, teams=teams)

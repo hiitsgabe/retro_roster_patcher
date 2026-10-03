@@ -173,6 +173,8 @@ class NHL94GenesisPatcher(Patcher):
         self,
         data: LeagueData,
         slot_mapping: list[SlotMapping] | None = None,
+        *,
+        order_as_given: bool = False,
     ) -> MappedRosters:
         self.check_slot_mapping(slot_mapping)
         teams: dict[int, list[NHL94GenPlayerRecord]] = {}
@@ -181,9 +183,22 @@ class NHL94GenesisPatcher(Patcher):
             if slot is None or not 0 <= slot < TEAM_COUNT:
                 continue
             leaders = roster.extra.get("leaders") or {}
-            selected = self.mapper.select_roster(
-                roster.players, leaders, max_players=MAX_PLAYERS_PER_SLOT
-            )
+            if order_as_given:
+                # The header and line table assume contiguous G, F, D blocks;
+                # the caller's order decides who comes first inside each.
+                selected = self._given_blocks(
+                    roster.players,
+                    [
+                        (lambda p: p.position == "G", 2),
+                        (lambda p: p.position not in ("G", "D"), 14),
+                        (lambda p: p.position == "D", 7),
+                    ],
+                    total=MAX_PLAYERS_PER_SLOT,
+                )
+            else:
+                selected = self.mapper.select_roster(
+                    roster.players, leaders, max_players=MAX_PLAYERS_PER_SLOT
+                )
             records = [
                 self.mapper.map_player(player, roster.team.code, leaders.get(str(player.id), {}))
                 for player in selected

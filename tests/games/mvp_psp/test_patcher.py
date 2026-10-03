@@ -1576,3 +1576,36 @@ def test_a_mapping_survives_a_json_round_trip(tmp_path):
         rosters=revived,
     )
     assert result.players_patched == 25
+
+
+def _ranked_squad():
+    """Eighteen batters, six starters and six relievers; jersey = id + 1."""
+    positions = ["LF"] * 18 + ["SP"] * 6 + ["RP"] * 6
+    return [make_player(pid, pos) for pid, pos in enumerate(positions)]
+
+
+def _ranked_leaders(squad):
+    """Leaders that rank every player by id, highest first."""
+    return {1: {str(p.id): {"OPS": p.id, "H": p.id, "W": p.id, "SV": p.id} for p in squad}}
+
+
+def test_order_as_given_keeps_the_blocks_and_the_callers_order_inside_them(tmp_path):
+    squad = _ranked_squad()
+    given = squad[::2] + squad[1::2]
+    patcher = make_patcher(tmp_path)
+
+    result = patcher.map_rosters(
+        league(squads={1: given}, leaders=_ranked_leaders(squad)), order_as_given=True
+    )
+
+    batters = [p for p in given if p.position == "LF"][:15]
+    pitchers = [p for p in given if p.position != "LF"][:10]
+    assert [r.jersey for r in result.teams[0]] == [p.number for p in batters + pitchers]
+
+
+def test_without_order_as_given_the_input_order_is_ignored(tmp_path):
+    squad = _ranked_squad()
+    leaders = _ranked_leaders(squad)
+    forward = mapped(tmp_path, {1: squad}, leaders).teams[0]
+    backward = mapped(tmp_path, {1: squad[::-1]}, leaders).teams[0]
+    assert [r.jersey for r in forward] == [r.jersey for r in backward]

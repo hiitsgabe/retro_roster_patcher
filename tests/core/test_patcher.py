@@ -5,7 +5,7 @@ import pytest
 from retro_roster_patcher.core.errors import CapabilityError
 from retro_roster_patcher.core.models import MappedRosters, PatchResult, RomInfo, SlotMapping
 from retro_roster_patcher.core.patcher import Patcher
-from retro_roster_patcher.sports import League, LeagueData
+from retro_roster_patcher.sports import League, LeagueData, Player
 
 
 class FakePatcher(Patcher):
@@ -194,3 +194,51 @@ def test_the_happy_paths_pass_the_guard():
         slot_mapping=[SlotMapping(slot_index=0, team_id=1)],
     )
     assert slotted.game_id == "fake-slots"
+
+
+def _squad(*positions):
+    """One `Player` per position, named position + index so order reads off the names."""
+    return [Player(id=i, name=f"{pos}{i}", position=pos) for i, pos in enumerate(positions)]
+
+
+def _is(position):
+    return lambda p: p.position == position
+
+
+def test_given_blocks_keep_the_callers_order_inside_each_block():
+    squad = _squad("F", "G", "D", "F", "G", "D")
+    picked = Patcher._given_blocks(squad, [(_is("G"), 5), (_is("F"), 5), (_is("D"), 5)])
+    assert [p.name for p in picked] == ["G1", "G4", "F0", "F3", "D2", "D5"]
+
+
+def test_given_blocks_cap_each_block_and_drop_the_rest_without_a_total():
+    squad = _squad("G", "F", "G", "F", "G", "F")
+    picked = Patcher._given_blocks(squad, [(_is("G"), 2), (_is("F"), 1)])
+    assert [p.name for p in picked] == ["G0", "G2", "F1"]
+
+
+def test_given_blocks_never_use_a_player_twice():
+    # Both blocks accept everyone: the second takes up where the first stopped.
+    squad = _squad("F", "F", "F", "F")
+    picked = Patcher._given_blocks(squad, [(lambda p: True, 2), (lambda p: True, 3)])
+    assert [p.name for p in picked] == ["F0", "F1", "F2", "F3"]
+
+
+def test_given_blocks_top_up_to_the_total_with_leftovers_in_caller_order():
+    # Blocks take G0 and F1; the leftovers follow in the caller's order (F2, G3,
+    # D4, ...) and the result is cut at the total.
+    squad = _squad("G", "F", "F", "G", "D", "F", "G")
+    picked = Patcher._given_blocks(squad, [(_is("G"), 1), (_is("F"), 1)], total=4)
+    assert [p.name for p in picked] == ["G0", "F1", "F2", "G3"]
+
+
+def test_given_blocks_cut_to_the_total_even_when_the_blocks_overflow_it():
+    squad = _squad("F", "F", "F", "F", "F")
+    picked = Patcher._given_blocks(squad, [(_is("F"), 5)], total=3)
+    assert [p.name for p in picked] == ["F0", "F1", "F2"]
+
+
+def test_given_blocks_with_a_total_past_the_squad_return_everyone_once():
+    squad = _squad("D", "G", "F")
+    picked = Patcher._given_blocks(squad, [(_is("G"), 1)], total=10)
+    assert [p.name for p in picked] == ["G1", "D0", "F2"]

@@ -841,3 +841,31 @@ def test_patch_ignores_an_option_it_does_not_understand(patcher, rom, out):
 
 def test_this_game_ships_no_translations(patcher):
     assert hasattr(patcher, "languages") is False
+
+
+def _named_league(patcher):
+    """The fake league with team 1's players renamed to unique 8-character mononyms."""
+    data = _league(patcher)
+    for player in data.teams[0].players:
+        player.name = f"N{player.id % 100:02d}"
+    return data
+
+
+def test_order_as_given_writes_the_callers_first_fifteen_in_order(patcher):
+    data = _named_league(patcher)
+    team = data.teams[0]
+    team.players = team.players[::2] + team.players[1::2]
+
+    mapped = patcher.map_rosters(data, [SlotMapping(slot_index=0, team_id=1)], order_as_given=True)
+
+    expected = [p.name for p in team.players[:PLAYERS_PER_TEAM]]
+    assert [r.name for r in mapped.teams[0].players] == expected
+
+
+def test_without_order_as_given_the_input_order_is_ignored(patcher):
+    data = _named_league(patcher)
+    mapping = [SlotMapping(slot_index=0, team_id=1)]
+    forward = [r.name for r in patcher.map_rosters(data, mapping).teams[0].players]
+    data.teams[0].players.reverse()
+    backward = [r.name for r in patcher.map_rosters(data, mapping).teams[0].players]
+    assert forward == backward

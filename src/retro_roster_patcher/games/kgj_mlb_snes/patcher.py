@@ -42,6 +42,7 @@ from ...sports.models import League, LeagueData, TeamRoster
 from .models import (
     BATTERS_PER_TEAM,
     KGJ_TEAM_ORDER,
+    PLAYERS_PER_TEAM,
     ROSTER_TYPE_BATTER,
     ROSTER_TYPE_RELIEVER,
     ROSTER_TYPE_STARTER,
@@ -222,6 +223,8 @@ class KGJMLBPatcher(Patcher):
         self,
         data: LeagueData,
         slot_mapping: list[SlotMapping] | None = None,
+        *,
+        order_as_given: bool = False,
     ) -> MappedRosters:
         """Reduce league data to one `KGJTeamRecord` per matched ROM slot.
 
@@ -234,7 +237,18 @@ class KGJMLBPatcher(Patcher):
             if slot is None or not 0 <= slot < TEAM_COUNT:
                 continue
             leaders = roster.extra.get("leaders") or {}
-            selected = self.mapper.select_roster(roster.players, leaders)
+            if order_as_given:
+                # Batter and pitcher blocks stay; the caller's order sets the
+                # lineup and bench, and the first five pitchers are the rotation.
+                selected = self._given_blocks(
+                    roster.players,
+                    [
+                        (lambda p: not self.mapper.is_pitcher(p), BATTERS_PER_TEAM),
+                        (self.mapper.is_pitcher, PLAYERS_PER_TEAM - BATTERS_PER_TEAM),
+                    ],
+                )
+            else:
+                selected = self.mapper.select_roster(roster.players, leaders)
 
             records: list[KGJPlayerRecord] = []
             for index, player in enumerate(selected):
