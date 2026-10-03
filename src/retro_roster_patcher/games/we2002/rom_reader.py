@@ -62,6 +62,12 @@ class RomReader:
             return False
         return True
 
+    def is_raw_image(self) -> bool:
+        """True when the file starts with the CD sync pattern of a raw
+        Mode2/2352 sector, which every offset in the writer assumes."""
+        with open(self.rom_path, "rb") as f:
+            return f.read(12) == b"\x00" + b"\xff" * 10 + b"\x00"
+
     def read_teams(self) -> list[WETeamRecord]:
         """Return stub team records (name reading not yet implemented)."""
         return []

@@ -190,8 +190,8 @@ def we2002_run(tmp_path, monkeypatch):
     """Everything `patch --game we2002` needs except the flag under test.
 
     Returns a callable taking the extra argv. The ROM is a sparse 100 MB file
-    because `WE2002Patcher.patch` applies `RomReader.validate_rom`, whose only
-    test is that size; `truncate` allocates no blocks, so it costs nothing.
+    with a raw-sector sync header, because `WE2002Patcher.patch` checks both;
+    `truncate` allocates no blocks, so it costs nothing.
     `RomWriter` and `apply_ppf` are replaced because the real pair copies the
     input and writes PSX disc sectors into it, which is `test_patcher.py`'s
     subject and not this file's. `ensure_ppf` is replaced by a recorder: it is
@@ -208,6 +208,9 @@ def we2002_run(tmp_path, monkeypatch):
             open(output_path, "wb").close()
 
         def write_team(self, slot_index, team, players=None, include_flag=True):
+            return len(players or [])
+
+        def write_nat_team(self, nat_index, team, players=None, include_flag=True):
             return len(players or [])
 
         def flush_tex_patches(self):
@@ -228,6 +231,7 @@ def we2002_run(tmp_path, monkeypatch):
 
     rom = tmp_path / "we2002.bin"
     with rom.open("wb") as handle:
+        handle.write(b"\x00" + b"\xff" * 10 + b"\x00")
         handle.truncate(100 * 1024 * 1024)
 
     rosters = tmp_path / "rosters.json"

@@ -125,6 +125,8 @@ def _build_iso(tmp_path, tex, *, extra_records=(), listed_sizes=None):
         per_sector[n % 2].append(_dir_record(b"TEX_%02d.BIN;1" % idx, size))
     with open(path, "wb") as f:
         f.truncate(last * _SECTOR)
+        # A real raw image starts with a sync header; `patch` checks for it.
+        f.write(_SYNC)
         for s, records in per_sector.items():
             f.seek((_BIN_DIR_LBA + s) * _SECTOR)
             f.write(_sector(b"".join(records), _BIN_DIR_LBA + s))

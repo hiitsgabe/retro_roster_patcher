@@ -22,6 +22,7 @@ the JSON-serialisable `core.models` one crosses this interface.
 
 from __future__ import annotations
 
+import struct
 from pathlib import Path
 from typing import Any
 
@@ -50,9 +51,11 @@ from .stat_mapper import StatMapper
 from .translations.we2002 import LANGUAGE_CODES, LANGUAGES, ensure_ppf
 
 # The ROM has two team tables: 32 Master League slots and 63 national slots.
-# `slot_index` always means a Master League slot; the national table is reachable
-# only through `write_nat_team`, which the public `SlotMapping` cannot address.
+# A mapped `slot_index` i fills both tables at once, as the original tool did:
+# Master League slot i when i < 32, and national slot i when i < 63. So slots
+# 32..62 are national-only, and a league of up to 63 teams fits.
 MAX_ML_SLOTS = 32
+MAX_NAT_SLOTS = 63
 
 
 def _parse_hex_colour(value: str) -> tuple[int, int, int] | None:
@@ -233,11 +236,11 @@ class WE2002Patcher(Patcher):
         by_id = {roster.team.id: roster for roster in data.teams}
         teams: dict[int, WETeamRecord] = {}
         for entry in entries:
-            # `write_team` returns without writing for a slot outside this
-            # range, so accepting one would report a patch that never happened.
-            if not 0 <= entry.slot_index < MAX_ML_SLOTS:
+            # The writers return without writing for a slot outside this range,
+            # so accepting one would report a patch that never happened.
+            if not 0 <= entry.slot_index < MAX_NAT_SLOTS:
                 raise MappingError(
-                    f"Slot {entry.slot_index} is outside the WE2002 range 0..{MAX_ML_SLOTS - 1}"
+                    f"Slot {entry.slot_index} is outside the WE2002 range 0..{MAX_NAT_SLOTS - 1}"
                 )
             roster = by_id.get(entry.team_id)
             if roster is None:
@@ -274,7 +277,8 @@ class WE2002Patcher(Patcher):
         # Every write below is an absolute seek into a 700 MB image, and seeking
         # past the end of a short file extends it: without this a 4 KB input
         # comes back as a 12 MB "patched ISO" holding nothing but the patch.
-        if not RomReader(str(rom_path)).validate_rom():
+        reader = RomReader(str(rom_path))
+        if not reader.validate_rom():
             raise RomError(f"Too small to be a WE2002 ROM, or not a WE2002 ROM: {rom_path}")
 
         # `Patcher.patch` promises `RomError` on any write failure, and
@@ -283,6 +287,15 @@ class WE2002Patcher(Patcher):
         # from the writer is a bug in the writer.
         with as_rom_error(rom_path):
             self.status("Preparing ROM...")
+            # Every offset below is into raw 2352-byte sectors. A cooked
+            # 2048-byte .iso of the same game is big enough to pass the size
+            # check and would be patched into garbage. Inside `as_rom_error`:
+            # this is the first read of the file, so an unreadable one fails here.
+            if not reader.is_raw_image():
+                raise RomError(
+                    f"Not a raw CD image (.bin with 2352-byte sectors); a cooked .iso "
+                    f"can't be patched: {rom_path}"
+                )
             # The constructor copies the ROM to `output_path`, so the file the
             # translation patches below exists by the time it runs.
             writer = RomWriter(str(rom_path), str(output_path))
@@ -291,7 +304,7 @@ class WE2002Patcher(Patcher):
             # Re-check the range even though `map_rosters` does: a caller may
             # hand `patch` a `MappedRosters` it built itself. Sorted so writes go
             # out in slot order regardless of insertion order.
-            slots = sorted(slot for slot in rosters.teams if 0 <= slot < MAX_ML_SLOTS)
+            slots = sorted(slot for slot in rosters.teams if 0 <= slot < MAX_NAT_SLOTS)
 
             teams_patched = 0
             players_patched = 0
@@ -299,12 +312,16 @@ class WE2002Patcher(Patcher):
                 record = rosters.teams[slot]
                 if on_progress is not None:
                     on_progress(0.05 + 0.9 * (i / len(slots)), f"Writing slot {slot}...")
-                # Pass the whole list and count what comes back: the writer's
-                # loop is bounded by the slot's ROM capacity (14 or 15 places),
-                # so a 22-man squad leaves records on the floor.
-                written = writer.write_team(slot, record, players=record.players, include_flag=True)
-                # Unconditional: `write_team` writes names, abbreviations, force
-                # bars, kit colours and flag before it looks at `players`, so an
+                # Both tables, Master League first, as the original tool did.
+                # The national squad (23 places) holds what the Master League
+                # one (14 or 15) does and more, so its count is the one reported.
+                if slot < MAX_ML_SLOTS:
+                    writer.write_team(slot, record, players=record.players, include_flag=True)
+                written = writer.write_nat_team(
+                    slot, record, players=record.players, include_flag=True
+                )
+                # Unconditional: the writers write names, abbreviations, force
+                # bars, kit colours and flag before they look at `players`, so an
                 # in-range slot has changed the ROM even with an empty squad.
                 teams_patched += 1
                 players_patched += written
@@ -331,12 +348,12 @@ class WE2002Patcher(Patcher):
     def default_slot_mapping(self, data: LeagueData) -> list[SlotMapping]:
         """Sequential mapping: team 0 to slot 0, team 1 to slot 1, and so on.
 
-        Teams beyond the 32 Master League slots are dropped.
+        Teams 32..62 land in the national table only; beyond 63 they are dropped.
         """
         return [
             SlotMapping(slot_index=i, team_id=roster.team.id, team_name=roster.team.name)
             for i, roster in enumerate(data.teams)
-            if i < MAX_ML_SLOTS
+            if i < MAX_NAT_SLOTS
         ]
 
     @staticmethod
@@ -396,7 +413,9 @@ class WE2002Patcher(Patcher):
                     assets_dir=str(self.assets_dir) if self.assets_dir is not None else "",
                 )
                 apply_ppf(str(output_path), ppf_path)
-        except (MissingAssetError, PPFError, OSError, ValueError) as exc:
+        # `struct.error`/`IndexError`: a truncated PPF fails mid-parse. Like any
+        # other bad translation file, skip it rather than fail the roster patch.
+        except (MissingAssetError, PPFError, OSError, ValueError, struct.error, IndexError) as exc:
             self.status(f"{name} translation skipped: {exc}")
             if on_progress is not None:
                 on_progress(0.05, f"{name} translation skipped")
