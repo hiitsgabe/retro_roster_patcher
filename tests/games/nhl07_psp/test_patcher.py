@@ -31,6 +31,7 @@ from retro_roster_patcher.games.nhl07_psp.patcher import (
     _play_id_by_indx,
 )
 from retro_roster_patcher.games.nhl07_psp.rom_reader import ISO_SECTOR_SIZE, NHL07PSPRomReader
+from retro_roster_patcher.games.nhl07_psp.stat_mapper import MAX_PLAYERS
 from retro_roster_patcher.sports.espn import EspnClient
 from retro_roster_patcher.sports.models import League, LeagueData, Player, Team, TeamRoster
 from retro_roster_patcher.sports.nhl import NhlApiClient
@@ -1660,3 +1661,33 @@ def test_the_master_still_receives_the_row_the_mirror_could_not_take(tmp_path):
     finally:
         NHL07PSPRomReader.get_tdb = original
     assert rost_of(out)[shrunk]["CAPT"] == 1
+
+
+def _ranked_squad():
+    """Three goalies, eighteen forwards and nine defencemen; jersey = id + 1."""
+    positions = ["G"] * 3 + ["C", "LW", "RW"] * 6 + ["D"] * 9
+    return [make_player(pid, pos) for pid, pos in enumerate(positions)]
+
+
+def _ranked_league(players):
+    """One team whose leaders rank every player by id, highest first."""
+    leaders = {str(p.id): {"PTS": p.id, "SV%": p.id / 100} for p in players}
+    return league(teams=default_teams()[:1], squads={"ANA": players}, leaders={"ANA": leaders})
+
+
+def test_order_as_given_writes_the_callers_first_twenty_five_in_order(tmp_path):
+    squad = _ranked_squad()
+    given = squad[::2] + squad[1::2]
+
+    mapped = build(tmp_path).map_rosters(_ranked_league(given), order_as_given=True)
+
+    (records,) = mapped.teams.values()
+    assert [r.jersey_number for r in records] == [p.number for p in given[:MAX_PLAYERS]]
+
+
+def test_without_order_as_given_the_input_order_is_ignored(tmp_path):
+    squad = _ranked_squad()
+    patcher = build(tmp_path)
+    (forward,) = patcher.map_rosters(_ranked_league(squad)).teams.values()
+    (backward,) = patcher.map_rosters(_ranked_league(squad[::-1])).teams.values()
+    assert [r.jersey_number for r in forward] == [r.jersey_number for r in backward]

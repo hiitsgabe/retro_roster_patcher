@@ -1521,3 +1521,29 @@ def test_patching_a_real_rom_produces_a_readable_output(patcher, tmp_path):
     assert result.teams_patched == 4
     assert out.stat().st_size == rom.stat().st_size
     assert patcher.analyze_rom(out).is_valid is True
+
+
+def _ranked_squad(size):
+    """Midfielders whose `lineups` rise with their id, so the stat ranking is
+    the reverse of id order and any other order is not it."""
+    players = [Player(id=i, name=f"P{i:02d}", position="Midfielder") for i in range(size)]
+    return players, {p.id: _stats(p.id, lineups=p.id) for p in players}
+
+
+def test_order_as_given_writes_the_callers_first_22_in_order(patcher):
+    players, stats = _ranked_squad(25)
+    given = players[::2] + players[1::2]
+    data = _league_data([_roster(100, players=given, player_stats=stats)])
+
+    mapped = patcher.map_rosters(
+        data, slot_mapping=[SlotMapping(slot_index=0, team_id=100)], order_as_given=True
+    )
+
+    assert [r.last_name for r in mapped.teams[0].players] == [p.name for p in given[:22]]
+
+
+def test_without_order_as_given_the_input_order_is_ignored(patcher):
+    players, stats = _ranked_squad(25)
+    forward = _map_one(patcher, _roster(100, players=players, player_stats=stats))
+    backward = _map_one(patcher, _roster(100, players=players[::-1], player_stats=stats))
+    assert [r.last_name for r in forward.players] == [r.last_name for r in backward.players]

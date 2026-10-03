@@ -109,8 +109,13 @@ class StatMapper:
         self,
         team_roster: TeamRoster,
         all_rosters: list[TeamRoster],
+        order_as_given: bool = False,
     ) -> WETeamRecord:
-        """Map team using league-wide percentile normalization."""
+        """Map team using league-wide percentile normalization.
+
+        `order_as_given`: the squad is the caller's list as it stands (first 22)
+        instead of the stat-ranked best 22.
+        """
         all_stats = {}
         for roster in all_rosters:
             for pid, ps in roster.player_stats.items():
@@ -118,7 +123,11 @@ class StatMapper:
 
         percentiles = self._compute_percentiles(all_stats)
 
-        best_22 = self._select_best_22(team_roster.players, team_roster.player_stats)
+        best_22 = (
+            team_roster.players[:22]
+            if order_as_given
+            else self._select_best_22(team_roster.players, team_roster.player_stats)
+        )
 
         we_players = []
         for player in best_22:

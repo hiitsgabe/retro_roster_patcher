@@ -104,6 +104,7 @@ class ISSStatMapper:
         self,
         team_roster: TeamRoster,
         all_rosters: list[TeamRoster],
+        order_as_given: bool = False,
     ) -> ISSTeamRecord:
         all_stats = {}
         for roster in all_rosters:
@@ -112,7 +113,13 @@ class ISSStatMapper:
 
         percentiles = self._compute_percentiles(all_stats)
 
-        best_15 = self._select_best_15(team_roster.players, team_roster.player_stats)
+        # `order_as_given`: the caller's list as it stands; slot index is the
+        # role in this ROM, so index 0 keeps goal.
+        best_15 = (
+            team_roster.players[:PLAYERS_PER_TEAM]
+            if order_as_given
+            else self._select_best_15(team_roster.players, team_roster.player_stats)
+        )
 
         iss_players = []
         for player in best_15:

@@ -430,6 +430,8 @@ class NHL07PSPPatcher(Patcher):
         self,
         data: LeagueData,
         slot_mapping: list[SlotMapping] | None = None,
+        *,
+        order_as_given: bool = False,
     ) -> MappedRosters:
         """Reduce league data to a list of `NHL07PlayerRecord` per matched slot.
 
@@ -442,7 +444,13 @@ class NHL07PSPPatcher(Patcher):
             if slot is None or not 0 <= slot < SLOT_COUNT:
                 continue
             leaders = roster.extra.get("leaders") or {}
-            selected = self.mapper.select_roster(roster.players, leaders, max_players=MAX_PLAYERS)
+            # `order_as_given`: the writer splits goalies from skaters itself and
+            # keeps list order within each, so the caller's list goes as is.
+            selected = (
+                roster.players[:MAX_PLAYERS]
+                if order_as_given
+                else self.mapper.select_roster(roster.players, leaders, max_players=MAX_PLAYERS)
+            )
             records = [
                 self.mapper.map_player(player, roster.team.code, leaders.get(str(player.id), {}))
                 for player in selected

@@ -238,6 +238,8 @@ class NBALive95Patcher(Patcher):
         self,
         data: LeagueData,
         slot_mapping: list[SlotMapping] | None = None,
+        *,
+        order_as_given: bool = False,
     ) -> MappedRosters:
         """Reduce league data to one `NBALive95TeamRecord` per matched ROM slot.
 
@@ -252,7 +254,11 @@ class NBALive95Patcher(Patcher):
             if slot is None or not 0 <= slot < NBA_TEAM_COUNT:
                 continue
             leaders = roster.extra.get("leaders") or {}
-            selected = self.mapper.select_roster(roster.players, leaders)
+            selected = (
+                roster.players[:PLAYERS_PER_TEAM]
+                if order_as_given
+                else self.mapper.select_roster(roster.players, leaders)
+            )
             records = [
                 self.mapper.map_player(player, leaders.get(str(player.id), {}))
                 for player in selected

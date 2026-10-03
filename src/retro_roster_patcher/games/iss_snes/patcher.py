@@ -199,6 +199,8 @@ class ISSPatcher(Patcher):
         self,
         data: LeagueData,
         slot_mapping: list[SlotMapping] | None = None,
+        *,
+        order_as_given: bool = False,
     ) -> MappedRosters:
         """Reduce league data to one `ISSTeamRecord` per mapped ROM slot.
 
@@ -228,7 +230,9 @@ class ISSPatcher(Patcher):
                 )
             # The whole league, not just this team: percentiles are normalised
             # league-wide.
-            record = self.mapper.map_team_with_league_context(roster, data.teams)
+            record = self.mapper.map_team_with_league_context(
+                roster, data.teams, order_as_given=order_as_given
+            )
             self._apply_colours(record, roster.team)
             teams[entry.slot_index] = record
         return MappedRosters(game_id=self.game_id, teams=teams)

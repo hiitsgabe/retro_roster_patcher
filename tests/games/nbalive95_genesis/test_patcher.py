@@ -966,3 +966,35 @@ def test_a_patched_image_reports_the_new_first_player(patcher, rom, out):
         rom_path=rom, output_path=out, rosters=patcher.map_rosters(patcher.fetch(season=2025))
     )
     assert patcher.analyze_rom(out).slots[BOS_SLOT].current_name == "First player: First0 Last0"
+
+
+def _ranked_league(players):
+    """One BOS roster whose leaders rank every player by id, highest first."""
+    data = _league_data(("BOS", 0))
+    data.teams[0].players = players
+    data.teams[0].extra["leaders"] = {str(p.id): {"MPG": p.id} for p in players}
+    return data
+
+
+def _ranked_squad():
+    positions = ["PG", "SG", "SF", "PF", "C"] * 3 + ["SF"]
+    return [
+        Player(id=n, name=f"First{n:02d} Last{n:02d}", position=pos, number=n + 1)
+        for n, pos in enumerate(positions)
+    ]
+
+
+def test_order_as_given_writes_the_callers_first_twelve_in_order(patcher):
+    squad = _ranked_squad()
+    given = squad[::2] + squad[1::2]
+
+    mapped = patcher.map_rosters(_ranked_league(given), order_as_given=True)
+
+    assert [r.jersey for r in mapped.teams[BOS_SLOT].players] == [p.number for p in given[:12]]
+
+
+def test_without_order_as_given_the_input_order_is_ignored(patcher):
+    squad = _ranked_squad()
+    forward = patcher.map_rosters(_ranked_league(squad)).teams[BOS_SLOT].players
+    backward = patcher.map_rosters(_ranked_league(squad[::-1])).teams[BOS_SLOT].players
+    assert [r.jersey for r in forward] == [r.jersey for r in backward]
