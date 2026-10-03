@@ -429,6 +429,43 @@ def bigf_replace_inplace(archive: bytearray, filename: str, new_data: bytes) -> 
     return True
 
 
+def bigf_relocate(archive: bytearray, filename: str, new_data: bytes) -> bool:
+    """Move one file to the end of the archive with new contents.
+
+    For a replacement that outgrew its slot: the file is appended on a 128-byte
+    boundary and only its own directory entry changes, so every other file keeps
+    its offset. The old slot is zero-filled. The archive grows; the caller must
+    check the result still fits wherever the archive is stored.
+
+    Returns:
+        True on success, False if there is no such file (nothing changed).
+
+    Raises:
+        EaTdbError: `archive` is not a BIGF.
+    """
+    entries = bigf_parse(bytes(archive))
+    filename_lower = filename.lower()
+    pos = 16
+    target: tuple[int, BigfEntry] | None = None
+    for entry in entries:
+        if entry.name.lower() == filename_lower:
+            target = (pos, entry)
+        pos += 8 + len(entry.name.encode("ascii", errors="replace")) + 1
+    if target is None:
+        return False
+
+    entry_pos, entry = target
+    archive[entry.offset : entry.offset + entry.size] = b"\x00" * entry.size
+    archive.extend(b"\x00" * ((128 - len(archive) % 128) % 128))
+    new_offset = len(archive)
+    archive.extend(new_data)
+    struct.pack_into(">I", archive, entry_pos, new_offset)
+    struct.pack_into(">I", archive, entry_pos + 4, len(new_data))
+    # Total size is little-endian, as `bigf_build` writes it.
+    struct.pack_into("<I", archive, 4, len(archive))
+    return True
+
+
 def bigf_build(entries: list[BigfEntry], file_contents: dict[str, bytes]) -> bytes:
     """Assemble a BIGF from a directory and a name-to-bytes mapping.
 

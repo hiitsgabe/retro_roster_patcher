@@ -1414,49 +1414,34 @@ def test_breaking_four_rows_costs_the_one_player_the_spares_cannot_absorb(tmp_pa
     assert result.players_patched == fixture.TEAM_COUNT * 22 - 1
 
 
-def test_a_recompressed_tdb_that_does_not_fit_raises(tmp_path):
-    # `bigf_replace_inplace`'s return value must be checked. The source discarded it,
-    # reasoning that a split TDB could be skipped because the master holds every
-    # table; the effect was a disc written back with two of its three TDBs
-    # disagreeing about the same roster, reported as a success.
+def test_a_mirror_that_outgrows_its_slot_is_relocated_and_every_player_lands(tmp_path):
+    # The source skipped a table that did not fit, leaving the TDBs disagreeing
+    # about the same roster. Here the roster mirror does not fit in place
+    # (stub), so it is relocated, and the patch still writes every player.
     #
     # Driven by a stub rather than by shrinking a BIGF entry, because whether a
     # recompressed table grows depends on how the new roster's names compress. The
     # real size condition is pinned in
-    # `test_rom_writer.py::test_a_tdb_too_large_for_its_slot_raises`.
+    # `test_rom_writer.py::test_a_tdb_too_large_for_its_slot_is_relocated_not_skipped`.
     from retro_roster_patcher.games.nhl07_psp import rom_writer
 
     source = iso(tmp_path)
     patcher = build(tmp_path)
     rosters = patcher.map_rosters(league())
     original = rom_writer.bigf_replace_inplace
-    rom_writer.bigf_replace_inplace = lambda archive, filename, data: False
+    rom_writer.bigf_replace_inplace = lambda archive, filename, data: (
+        filename.lower() != TDB_ROSTER and original(archive, filename, data)
+    )
     try:
-        with pytest.raises(RomError, match="does not fit"):
-            patcher.patch(rom_path=source, output_path=tmp_path / "out.iso", rosters=rosters)
+        result = patcher.patch(rom_path=source, output_path=tmp_path / "out.iso", rosters=rosters)
     finally:
         rom_writer.bigf_replace_inplace = original
-
-
-def test_the_refusal_names_the_tdb_that_did_not_fit(tmp_path):
-    from retro_roster_patcher.games.nhl07_psp import rom_writer
-
-    source = iso(tmp_path)
-    patcher = build(tmp_path)
-    rosters = patcher.map_rosters(league())
-    original = rom_writer.bigf_replace_inplace
-    rom_writer.bigf_replace_inplace = lambda archive, filename, data: False
-    try:
-        with pytest.raises(RomError, match=TDB_MASTER):
-            patcher.patch(rom_path=source, output_path=tmp_path / "out.iso", rosters=rosters)
-    finally:
-        rom_writer.bigf_replace_inplace = original
+    assert result.players_patched == fixture.TEAM_COUNT * 22
 
 
 def test_the_same_patch_succeeds_with_the_replacement_left_alone(tmp_path):
-    # The control for the two above: without the stub, this exact call writes
-    # every player. So the refusal is the return value being checked and not
-    # something else about the run.
+    # The control for the one above: without the stub, this exact call writes
+    # every player in place.
     source = iso(tmp_path)
     patcher = build(tmp_path)
     result = patcher.patch(

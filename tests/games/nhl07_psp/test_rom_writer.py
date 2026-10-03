@@ -845,36 +845,52 @@ def test_rebuilding_before_loading_raises(tmp_path):
         writer.rebuild_and_write({})
 
 
-def test_a_tdb_too_large_for_its_slot_raises(tmp_path):
-    # DELIBERATE DIVERGENCE. The source discarded `bigf_replace_inplace`'s
-    # return value, under a comment reasoning that a split TDB could be skipped
-    # because the master has every table. The effect was a disc written back
-    # with two of its three TDBs disagreeing about the same roster, reported as
-    # a success.
-    #
-    # The slot is shrunk to 8 bytes, which no RefPack stream fits.
-    writer = prepared(tmp_path)
+def _shrink_slot(writer, member: str) -> None:
+    """Shrink `member`'s directory size to 8 bytes, which no RefPack stream fits."""
     viv = bytearray(writer.db_viv)
+    position = viv.find(member.encode("ascii")) - 4
+    struct.pack_into(">I", viv, position, 8)
+    writer._db_viv = bytes(viv)
+
+
+def test_a_tdb_too_large_for_its_slot_is_relocated_not_skipped(tmp_path):
+    # DELIBERATE DIVERGENCE, both from the source (which skipped the table and
+    # left the TDBs disagreeing) and from refusing the patch: the table moves to
+    # the end of the archive and every edit still lands.
+    from pathlib import Path
+
+    writer = prepared(tmp_path)
+    roster_tdb = writer.reader.get_tdb(TDB_ROSTER)
+    expected = roster_tdb.serialize()
+    _shrink_slot(writer, TDB_ROSTER)
+
+    writer.rebuild_and_write({TDB_ROSTER: roster_tdb})
+
+    assert fixture.read_member(Path(writer.output_path).read_bytes(), TDB_ROSTER) == expected
+
+
+def test_the_master_is_relocated_too_and_the_other_tables_stay_put(tmp_path):
+    # Too-large-for-the-disc is still refused, by the archive-level bound in
+    # `test_an_archive_larger_than_its_iso_allocation_raises`.
+    from pathlib import Path
+
     from retro_roster_patcher.formats.ea_tdb import bigf_parse
 
-    entries = bigf_parse(bytes(viv))
-    target = next(e for e in entries if e.name == TDB_MASTER)
-    position = viv.find(TDB_MASTER.encode("ascii")) - 4
-    struct.pack_into(">I", viv, position, 8)
-    writer._db_viv = bytes(viv)
-    assert target.size > 8
-    with pytest.raises(RomError):
-        writer.rebuild_and_write({TDB_MASTER: master(writer)})
-
-
-def test_the_message_for_an_over_large_tdb_names_the_file(tmp_path):
     writer = prepared(tmp_path)
-    viv = bytearray(writer.db_viv)
-    position = viv.find(TDB_MASTER.encode("ascii")) - 4
-    struct.pack_into(">I", viv, position, 8)
-    writer._db_viv = bytes(viv)
-    with pytest.raises(RomError, match=TDB_MASTER):
-        writer.rebuild_and_write({TDB_MASTER: master(writer)})
+    before = {e.name: e.offset for e in bigf_parse(writer.db_viv)}
+    expected = master(writer).serialize()
+    _shrink_slot(writer, TDB_MASTER)
+
+    writer.rebuild_and_write({TDB_MASTER: master(writer)})
+
+    image = Path(writer.output_path).read_bytes()
+    assert fixture.read_member(image, TDB_MASTER) == expected
+    after = {
+        e.name: e.offset for e in bigf_parse(fixture.iso_read_file(image, fixture.DB_VIV_ISO_PATH))
+    }
+    assert {n: o for n, o in after.items() if n != TDB_MASTER} == {
+        n: o for n, o in before.items() if n != TDB_MASTER
+    }
 
 
 def test_a_member_the_archive_does_not_hold_raises(tmp_path):
