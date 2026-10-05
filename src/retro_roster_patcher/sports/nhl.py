@@ -9,6 +9,7 @@ import os
 from collections.abc import Callable
 from typing import Any
 
+from ..core.concurrency import emit_status
 from ..core.errors import ensure_cache_dir
 from . import _http
 from .models import Player, Team
@@ -187,8 +188,7 @@ class NhlApiClient:
 
     def _request(self, path: str) -> dict:
         try:
-            if self.on_status:
-                self.on_status(f"Fetching {path}...")
+            emit_status(self.on_status, f"Fetching {path}...")
             return _http.get_json(BASE_URL + path, transport=self._transport)
         except Exception:
             return {}

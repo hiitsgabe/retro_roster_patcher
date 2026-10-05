@@ -11,6 +11,7 @@ import os
 from collections.abc import Callable
 from typing import Any
 
+from ..core.concurrency import emit_status, parallel_map
 from ..core.errors import ensure_cache_dir
 from . import _http
 from .models import League, Player, PlayerStats, Team
@@ -248,12 +249,14 @@ class EspnClient:
         code = league_code or self._find_league_code_for_team(team_id, season)
         if not code:
             return []
-        stats = []
-        for athlete_id in self._soccer_stat_athletes(team_id, code, season):
-            parsed = self._soccer_athlete_stats(team_id, code, season, athlete_id)
-            if parsed is not None:
-                stats.append(parsed)
-        return stats
+        athlete_ids = self._soccer_stat_athletes(team_id, code, season)
+        # One request per athlete and no bulk endpoint, so overlap them; the input
+        # order is kept, which keeps the result identical to a serial run.
+        parsed = parallel_map(
+            lambda athlete_id: self._soccer_athlete_stats(team_id, code, season, athlete_id),
+            athlete_ids,
+        )
+        return [ps for ps in parsed if ps is not None]
 
     def _soccer_stat_athletes(self, team_id: int, code: str, season: int) -> list[int]:
         """Ids of the athletes the team's leaders document names, in first-seen order.
@@ -266,8 +269,7 @@ class EspnClient:
         document = self._load_cache(cache_key)
         if document is None:
             url = f"{SOCCER_CORE_URL}/{code}/seasons/{season}/types/1/teams/{team_id}/leaders"
-            if self.on_status:
-                self.on_status(f"Fetching stats for team {team_id}...")
+            emit_status(self.on_status, f"Fetching stats for team {team_id}...")
             try:
                 document = _http.get_json(url, transport=self._transport)
             except Exception:
@@ -663,8 +665,7 @@ class EspnClient:
             base = SOCCER_BASE_URL
         # Keep outside the `try`: only the request is meant to be guarded, and a
         # raising status callback is a caller bug, not a failed fetch.
-        if self.on_status:
-            self.on_status(f"Fetching{path}...")
+        emit_status(self.on_status, f"Fetching{path}...")
         try:
             data = _http.get_json(base + path, transport=self._transport)
         except Exception:

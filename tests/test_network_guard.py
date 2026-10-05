@@ -19,7 +19,7 @@ def test_the_network_guard_is_armed_for_a_test_that_did_not_ask_for_it():
     # This module never requests `forbid_default_transport` and carries no
     # `allow_default_transport` marker, so reaching this line with the real
     # transport still installed means the guard is not covering the suite.
-    assert _http.default_transport is not _http._urllib_transport
+    assert _http.default_transport not in (_http._pooled_transport, _http._urllib_transport)
 
 
 def test_the_leak_sentinel_cannot_be_swallowed_by_an_except_exception():
