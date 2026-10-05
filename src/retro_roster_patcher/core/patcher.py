@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from ..sports.models import LeagueData, Player, TeamRoster
+from .concurrency import emit_status
 from .errors import CapabilityError
 from .models import (
     MappedRosters,
@@ -81,8 +82,7 @@ class Patcher(ABC):
 
     def status(self, message: str) -> None:
         """Report a human-readable status message, if anyone is listening."""
-        if self.on_status is not None:
-            self.on_status(message)
+        emit_status(self.on_status, message)
 
     def partial(self, data: Any) -> None:
         """Publish an intermediate result worth showing before the call returns."""

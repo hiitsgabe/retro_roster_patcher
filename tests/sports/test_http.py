@@ -160,8 +160,8 @@ def test_an_empty_body_is_reported_as_empty():
 # reads the attribute, and the loopback group below drives the real urllib code
 # path. Neither reaches the network — the server is bound to 127.0.0.1.
 @pytest.mark.allow_default_transport
-def test_the_default_transport_is_urllib_based():
-    assert _http.default_transport.__name__ == "_urllib_transport"
+def test_the_default_transport_is_the_pooled_one():
+    assert _http.default_transport.__name__ == "_pooled_transport"
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -170,6 +170,15 @@ class _Handler(BaseHTTPRequestHandler):
     def do_GET(self):  # noqa: N802  (stdlib-mandated name)
         if self.path.startswith("/slow"):
             time.sleep(SLOW_RESPONSE_SECONDS)
+        if self.path.startswith("/redirect"):
+            self.send_response(302)
+            self.send_header("Location", "/echo")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+        if self.path.startswith("/hangup"):
+            self.close_connection = True  # no response at all
+            return
         if self.path.startswith("/boom"):
             status = 503
             body = b'{"error": "upstream blew up"}'
@@ -177,7 +186,11 @@ class _Handler(BaseHTTPRequestHandler):
             status = 200
             # Echo what arrived so tests can assert on the request we really sent.
             body = json.dumps(
-                {"path": self.path, "headers": {k.lower(): v for k, v in self.headers.items()}}
+                {
+                    "port": self.client_address[1],
+                    "path": self.path,
+                    "headers": {k.lower(): v for k, v in self.headers.items()},
+                }
             ).encode()
         try:
             self.send_response(status)
@@ -266,3 +279,52 @@ def test_the_timeout_is_honoured(server_url):
     # `match=` above is what stops the other way a fast failure could happen —
     # connection-refused — from satisfying this test.
     assert time.monotonic() - started < SLOW_RESPONSE_SECONDS
+
+
+@pytest.mark.allow_default_transport
+def test_the_pooled_transport_reuses_one_connection_for_sequential_requests(server_url):
+    ports = {_http.get_json(f"{server_url}/echo")["port"] for _ in range(5)}
+    assert len(ports) == 1
+
+
+@pytest.mark.allow_default_transport
+def test_a_redirect_is_followed_through_the_urllib_fallback(server_url):
+    assert _http.get_json(f"{server_url}/redirect")["path"] == "/echo"
+
+
+@pytest.mark.allow_default_transport
+def test_a_dropped_connection_falls_back_to_urllib_instead_of_failing(server_url):
+    # `/hangup` answers nothing on either transport, so it fails -- but as an
+    # ApiError from the fallback, and the next request still works.
+    with pytest.raises(ApiError):
+        _http.get_json(f"{server_url}/hangup")
+    assert _http.get_json(f"{server_url}/echo")["path"] == "/echo"
+
+
+@pytest.mark.allow_default_transport
+def test_a_stale_pooled_connection_is_retried_transparently(server_url):
+    first = _http.get_json(f"{server_url}/echo")["port"]
+    # Kill the idle socket from our side, as a server-side idle timeout would.
+    for conns in _http._idle.values():
+        for conn in conns:
+            conn.sock.close()
+    assert _http.get_json(f"{server_url}/echo")["path"] == "/echo"
+    assert first  # the first request did go through the pool
+
+
+@pytest.mark.allow_default_transport
+def test_a_configured_proxy_bypasses_the_pool(server_url, monkeypatch):
+    calls = []
+    monkeypatch.setattr(_http, "_urllib_transport", lambda *a: calls.append(a) or b"{}")
+    monkeypatch.setattr(_http.urllib.request, "getproxies", lambda: {"http": "http://proxy.test"})
+    monkeypatch.setattr(_http.urllib.request, "proxy_bypass", lambda host: False)
+    _http.get_json(f"{server_url}/echo")
+    assert len(calls) == 1
+
+
+@pytest.mark.allow_default_transport
+def test_the_pool_is_safe_under_concurrent_use(server_url):
+    from retro_roster_patcher.core.concurrency import parallel_map
+
+    paths = parallel_map(lambda i: _http.get_json(f"{server_url}/p{i}")["path"], range(40))
+    assert paths == [f"/p{i}" for i in range(40)]

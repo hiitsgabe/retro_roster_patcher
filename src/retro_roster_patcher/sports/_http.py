@@ -9,7 +9,9 @@ test suite replay recorded JSON fixtures offline instead of hitting the network.
 
 from __future__ import annotations
 
+import http.client
 import json
+import threading
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -69,7 +71,84 @@ def _urllib_transport(url: str, headers: Mapping[str, str], timeout: float) -> b
         raise ApiError(f"HTTP {exc.code} {exc.reason} from {url}: {_describe(exc.read())}") from exc
 
 
-default_transport: Transport = _urllib_transport
+# Idle keep-alive connections by (scheme, host, port). A league fetch makes
+# hundreds of requests to one host; a fresh TLS handshake for each is most of
+# its wall time.
+_MAX_IDLE_PER_HOST = 16
+_idle: dict[tuple[str, str, int | None], list[http.client.HTTPConnection]] = {}
+_idle_lock = threading.Lock()
+
+
+def _checkout(key: tuple[str, str, int | None], timeout: float) -> http.client.HTTPConnection:
+    with _idle_lock:
+        idle = _idle.get(key)
+        conn = idle.pop() if idle else None
+    scheme, host, port = key
+    cls = http.client.HTTPSConnection if scheme == "https" else http.client.HTTPConnection
+    if conn is not None:
+        conn.timeout = timeout
+        try:
+            if conn.sock is not None:  # a live socket keeps the timeout it opened with
+                conn.sock.settimeout(timeout)
+            return conn
+        except OSError:  # the socket died while idle
+            conn.close()
+    return cls(host, port, timeout=timeout)
+
+
+def _checkin(key: tuple[str, str, int | None], conn: http.client.HTTPConnection) -> None:
+    with _idle_lock:
+        idle = _idle.setdefault(key, [])
+        if len(idle) < _MAX_IDLE_PER_HOST:
+            idle.append(conn)
+            return
+    conn.close()
+
+
+def _pooled_transport(url: str, headers: Mapping[str, str], timeout: float) -> bytes:
+    """GET over a reused connection; `_urllib_transport` for anything it can't do.
+
+    The fallback is deliberately wide: a proxy configured in the environment, a
+    redirect, or any connection-level failure (a keep-alive socket the server
+    closed while idle looks exactly like one) is retried by urllib, which does
+    all of that. Only an HTTP status of 400 or above is final here, because it
+    is an answer, not a transport fault.
+    """
+    parts = urllib.parse.urlsplit(url)
+    scheme, host = parts.scheme, parts.hostname
+    if scheme not in ("http", "https") or not host:
+        return _urllib_transport(url, headers, timeout)
+    if urllib.request.getproxies().get(scheme) and not urllib.request.proxy_bypass(host):
+        return _urllib_transport(url, headers, timeout)
+
+    key = (scheme, host, parts.port)
+    target = parts.path or "/"
+    if parts.query:
+        target = f"{target}?{parts.query}"
+    conn = _checkout(key, timeout)
+    try:
+        conn.request("GET", target, headers=_with_default_user_agent(headers))
+        response = conn.getresponse()
+        body = response.read()
+    except TimeoutError:
+        conn.close()
+        raise  # a hung server, not a stale socket: retrying would double the wait
+    except (OSError, http.client.HTTPException):
+        conn.close()
+        return _urllib_transport(url, headers, timeout)
+
+    if response.will_close:
+        conn.close()
+    else:
+        _checkin(key, conn)
+    if 300 <= response.status < 400:
+        return _urllib_transport(url, headers, timeout)
+    if response.status >= 400:
+        raise ApiError(f"HTTP {response.status} {response.reason} from {url}: {_describe(body)}")
+    return body
+
+
+default_transport: Transport = _pooled_transport
 
 
 def get_json(

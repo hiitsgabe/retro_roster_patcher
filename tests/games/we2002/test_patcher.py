@@ -606,16 +606,19 @@ def test_fetch_over_espn_asks_for_the_squad_before_the_statistics(tmp_path):
 
     p.fetch(season=2025, league_id=2001)
 
-    assert p.api._transport.calls == [
+    calls = p.api._transport.calls
+    assert calls[:3] == [
         "https://site.api.espn.com/apis/site/v2/sports/soccer/eng.1/teams",
         "https://site.api.espn.com/apis/site/v2/sports/soccer/eng.1/teams/364/roster",
         "https://sports.core.api.espn.com/v2/sports/soccer/leagues/eng.1"
         "/seasons/2025/types/1/teams/364/leaders",
-    ] + [
+    ]
+    # The athlete documents are fetched concurrently, so only their set is defined.
+    assert sorted(calls[3:]) == sorted(
         "https://sports.core.api.espn.com/v2/sports/soccer/leagues/eng.1"
         f"/seasons/2025/types/1/teams/364/athletes/{pid}/statistics"
         for pid, _, _, _ in _ESPN_SQUAD
-    ]
+    )
 
 
 def test_every_espn_record_says_which_stats_were_not_measured(tmp_path):

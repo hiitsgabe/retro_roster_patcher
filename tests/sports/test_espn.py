@@ -811,11 +811,12 @@ def test_the_requests_are_the_leaders_document_and_then_one_per_athlete(tmp_path
     client = EspnClient(str(tmp_path), transport=transport)
     client.get_player_stats(364, 2025, league_code="eng.1")
 
+    # The leaders document gates the rest; the athlete requests then overlap, so
+    # their arrival order is not defined -- each athlete exactly once is.
     assert transport.calls[0] == SOCCER_LEADERS_URL
-    assert transport.calls[1] == _soccer_stats_url(304901)
-    assert transport.calls == [SOCCER_LEADERS_URL] + [
+    assert sorted(transport.calls[1:]) == sorted(
         _soccer_stats_url(aid) for aid in RECORDED_ATHLETES
-    ]
+    )
 
 
 def test_every_record_declares_the_four_stats_espn_never_reports(tmp_path):
@@ -1094,3 +1095,52 @@ def test_a_soccer_methods_parameters_are_exactly_these_in_this_order(method, exp
     # in it, `"2024"` matched no league, and every squad came back empty with nothing
     # raised anywhere. This pins the order itself, not the one call site.
     assert list(inspect.signature(getattr(EspnClient, method)).parameters) == expected
+
+
+def test_athlete_requests_overlap_but_the_result_keeps_leaders_order(tmp_path):
+    import threading
+    import time
+
+    ids = [11, 12, 13, 14]
+    barrier = threading.Barrier(len(ids), timeout=5)  # passes only if all are in flight at once
+    body = _athlete_stats_body(minutes=90.0)
+
+    def transport(url, headers, timeout):
+        if url.endswith("/leaders"):
+            return _soccer_leaders_body(*ids)
+        athlete_id = int(url.split("/athletes/")[1].split("/")[0])
+        barrier.wait()
+        time.sleep(0.05 if athlete_id == ids[0] else 0)  # finish the first one last
+        return body
+
+    client = EspnClient(str(tmp_path), transport=transport)
+    stats = client.get_player_stats(364, 2025, league_code="eng.1")
+    assert [s.player_id for s in stats] == ids
+
+
+def test_one_failing_athlete_request_costs_only_that_athlete(tmp_path):
+    body = _athlete_stats_body(minutes=90.0)
+
+    def transport(url, headers, timeout):
+        if url.endswith("/leaders"):
+            return _soccer_leaders_body(1, 2, 3)
+        if "/athletes/2/" in url:
+            raise OSError("reset")
+        return body
+
+    client = EspnClient(str(tmp_path), transport=transport)
+    stats = client.get_player_stats(364, 2025, league_code="eng.1")
+    assert [s.player_id for s in stats] == [1, 3]
+
+
+def test_the_network_guard_sentinel_escapes_the_parallel_fetch(tmp_path):
+    from tests.conftest import TransportLeak
+
+    def transport(url, headers, timeout):
+        if url.endswith("/leaders"):
+            return _soccer_leaders_body(1, 2, 3)
+        raise TransportLeak(url)
+
+    client = EspnClient(str(tmp_path), transport=transport)
+    with pytest.raises(TransportLeak):
+        client.get_player_stats(364, 2025, league_code="eng.1")
