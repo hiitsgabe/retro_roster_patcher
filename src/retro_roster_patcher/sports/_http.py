@@ -11,7 +11,9 @@ from __future__ import annotations
 
 import http.client
 import json
+import ssl
 import threading
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -71,36 +73,56 @@ def _urllib_transport(url: str, headers: Mapping[str, str], timeout: float) -> b
         raise ApiError(f"HTTP {exc.code} {exc.reason} from {url}: {_describe(exc.read())}") from exc
 
 
-# Idle keep-alive connections by (scheme, host, port). A league fetch makes
-# hundreds of requests to one host; a fresh TLS handshake for each is most of
-# its wall time.
+# Idle keep-alive connections by (scheme, host, port), each with the time it was
+# parked. A league fetch makes hundreds of requests to one host back to back; a
+# fresh TLS handshake for each is most of its wall time.
 _MAX_IDLE_PER_HOST = 16
-_idle: dict[tuple[str, str, int | None], list[http.client.HTTPConnection]] = {}
+# The app keeps one interpreter alive across suspend/resume and Wi-Fi changes, and
+# a socket whose path was silently dropped makes its next request wait out the
+# whole timeout. Requests inside one fetch are well under this apart.
+_MAX_IDLE_SECONDS = 10.0
+_Key = tuple[str, str, int | None]
+_idle: dict[_Key, list[tuple[http.client.HTTPConnection, float]]] = {}
 _idle_lock = threading.Lock()
 
 
-def _checkout(key: tuple[str, str, int | None], timeout: float) -> http.client.HTTPConnection:
+def _checkout(key: _Key, timeout: float) -> tuple[http.client.HTTPConnection, bool]:
+    """A connection for `key`, and whether it is a reused one."""
+    now = time.monotonic()
     with _idle_lock:
-        idle = _idle.get(key)
-        conn = idle.pop() if idle else None
-    scheme, host, port = key
-    cls = http.client.HTTPSConnection if scheme == "https" else http.client.HTTPConnection
+        idle = _idle.get(key, [])
+        stale = [c for c, parked in idle if now - parked > _MAX_IDLE_SECONDS]
+        idle[:] = [(c, parked) for c, parked in idle if now - parked <= _MAX_IDLE_SECONDS]
+        conn = idle.pop()[0] if idle else None
+    for old in stale:
+        old.close()
     if conn is not None:
         conn.timeout = timeout
         try:
             if conn.sock is not None:  # a live socket keeps the timeout it opened with
                 conn.sock.settimeout(timeout)
-            return conn
+            return conn, True
         except OSError:  # the socket died while idle
             conn.close()
-    return cls(host, port, timeout=timeout)
+    scheme, host, port = key
+    if scheme == "https":
+        # Pass the context in: left to itself each connection fetches the default
+        # one and then mutates it (ALPN), and under the app's certifi patch that is
+        # one context shared by every worker thread. Still the patched factory.
+        return (
+            http.client.HTTPSConnection(
+                host, port, timeout=timeout, context=ssl._create_default_https_context()
+            ),
+            False,
+        )
+    return http.client.HTTPConnection(host, port, timeout=timeout), False
 
 
-def _checkin(key: tuple[str, str, int | None], conn: http.client.HTTPConnection) -> None:
+def _checkin(key: _Key, conn: http.client.HTTPConnection) -> None:
     with _idle_lock:
         idle = _idle.setdefault(key, [])
         if len(idle) < _MAX_IDLE_PER_HOST:
-            idle.append(conn)
+            idle.append((conn, time.monotonic()))
             return
     conn.close()
 
@@ -109,10 +131,12 @@ def _pooled_transport(url: str, headers: Mapping[str, str], timeout: float) -> b
     """GET over a reused connection; `_urllib_transport` for anything it can't do.
 
     The fallback is deliberately wide: a proxy configured in the environment, a
-    redirect, or any connection-level failure (a keep-alive socket the server
-    closed while idle looks exactly like one) is retried by urllib, which does
-    all of that. Only an HTTP status of 400 or above is final here, because it
-    is an answer, not a transport fault.
+    redirect, or any connection-level failure is retried by urllib, which does
+    all of that. A failure on a *reused* connection -- a timeout included, since
+    a dead path looks exactly like a hung server -- is retried the same way; a
+    timeout on a fresh one is final, so a hung server costs one wait, not two.
+    Only an HTTP status of 400 or above is final here, because it is an answer,
+    not a transport fault.
     """
     parts = urllib.parse.urlsplit(url)
     scheme, host = parts.scheme, parts.hostname
@@ -125,17 +149,22 @@ def _pooled_transport(url: str, headers: Mapping[str, str], timeout: float) -> b
     target = parts.path or "/"
     if parts.query:
         target = f"{target}?{parts.query}"
-    conn = _checkout(key, timeout)
+    conn, reused = _checkout(key, timeout)
     try:
         conn.request("GET", target, headers=_with_default_user_agent(headers))
         response = conn.getresponse()
         body = response.read()
     except TimeoutError:
         conn.close()
-        raise  # a hung server, not a stale socket: retrying would double the wait
+        if reused:
+            return _urllib_transport(url, headers, timeout)
+        raise
     except (OSError, http.client.HTTPException):
         conn.close()
         return _urllib_transport(url, headers, timeout)
+    except BaseException:
+        conn.close()
+        raise
 
     if response.will_close:
         conn.close()

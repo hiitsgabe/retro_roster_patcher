@@ -12,6 +12,7 @@ from retro_roster_patcher.sports import _http
 # drag. The handler swallows the resulting disconnect, so nothing depends on this
 # sleep finishing before the suite does.
 SLOW_RESPONSE_SECONDS = 0.5
+BLACKHOLE_SECONDS = 1.5
 
 
 def test_get_json_parses_the_transport_response():
@@ -167,7 +168,17 @@ def test_the_default_transport_is_the_pooled_one():
 class _Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
+    def setup(self):
+        super().setup()
+        self.served = 0  # requests answered on this connection so far
+
     def do_GET(self):  # noqa: N802  (stdlib-mandated name)
+        self.served += 1
+        if self.path.startswith("/blackhole") and self.served > 1:
+            # A reused connection whose path went dead: no answer, no FIN.
+            time.sleep(BLACKHOLE_SECONDS)
+            self.close_connection = True
+            return
         if self.path.startswith("/slow"):
             time.sleep(SLOW_RESPONSE_SECONDS)
         if self.path.startswith("/redirect"):
@@ -198,6 +209,10 @@ class _Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
+            if self.path.startswith("/once"):
+                # Answered as keep-alive, then dropped -- what a server-side idle
+                # timeout does to a pooled connection.
+                self.close_connection = True
         except (BrokenPipeError, ConnectionResetError):
             # Expected: the timeout test hangs up mid-`/slow`. Left to propagate,
             # socketserver dumps a traceback to stderr from this daemon thread,
@@ -292,24 +307,82 @@ def test_a_redirect_is_followed_through_the_urllib_fallback(server_url):
     assert _http.get_json(f"{server_url}/redirect")["path"] == "/echo"
 
 
+@pytest.fixture
+def urllib_calls(monkeypatch):
+    """Count the requests the pooled transport hands to the urllib fallback."""
+    calls = []
+    real = _http._urllib_transport
+
+    def counting(*args):
+        calls.append(args[0])
+        return real(*args)
+
+    monkeypatch.setattr(_http, "_urllib_transport", counting)
+    return calls
+
+
+@pytest.fixture(autouse=True)
+def _empty_pool():
+    _http._idle.clear()
+    yield
+    _http._idle.clear()
+
+
 @pytest.mark.allow_default_transport
-def test_a_dropped_connection_falls_back_to_urllib_instead_of_failing(server_url):
-    # `/hangup` answers nothing on either transport, so it fails -- but as an
-    # ApiError from the fallback, and the next request still works.
+def test_a_dropped_connection_falls_back_to_urllib_instead_of_failing(server_url, urllib_calls):
+    # `/hangup` answers nothing on either transport, so it fails -- but only after
+    # the fallback has had its go, and the next request still works.
     with pytest.raises(ApiError):
         _http.get_json(f"{server_url}/hangup")
+    assert len(urllib_calls) == 1
     assert _http.get_json(f"{server_url}/echo")["path"] == "/echo"
 
 
 @pytest.mark.allow_default_transport
-def test_a_stale_pooled_connection_is_retried_transparently(server_url):
+def test_a_pooled_connection_the_server_dropped_is_retried_on_a_fresh_one(server_url, urllib_calls):
+    first = _http.get_json(f"{server_url}/once")["port"]
+    # The server has closed that socket; the pool does not know yet.
+    second = _http.get_json(f"{server_url}/echo")
+    assert second["path"] == "/echo"
+    assert second["port"] != first
+    assert len(urllib_calls) == 1
+
+
+@pytest.mark.allow_default_transport
+def test_a_timeout_on_a_reused_connection_is_retried_on_a_fresh_one(server_url, urllib_calls):
+    # The path went dead after the first answer: the server holds the next request
+    # without replying. A fresh connection answers, so the call must succeed.
+    assert _http.get_json(f"{server_url}/blackhole", timeout=0.5)["path"] == "/blackhole"
+    started = time.monotonic()
+    assert _http.get_json(f"{server_url}/blackhole", timeout=0.5)["path"] == "/blackhole"
+    assert len(urllib_calls) == 1
+    assert time.monotonic() - started < BLACKHOLE_SECONDS
+
+
+@pytest.mark.allow_default_transport
+def test_a_connection_idle_too_long_is_not_reused(server_url, urllib_calls, monkeypatch):
     first = _http.get_json(f"{server_url}/echo")["port"]
-    # Kill the idle socket from our side, as a server-side idle timeout would.
-    for conns in _http._idle.values():
-        for conn in conns:
-            conn.sock.close()
-    assert _http.get_json(f"{server_url}/echo")["path"] == "/echo"
-    assert first  # the first request did go through the pool
+    monkeypatch.setattr(_http, "_MAX_IDLE_SECONDS", 0.0)
+    second = _http.get_json(f"{server_url}/echo")["port"]
+    assert second != first
+    assert urllib_calls == []  # discarded up front, not discovered by failing
+
+
+@pytest.mark.allow_default_transport
+def test_a_request_that_cannot_be_sent_does_not_leak_its_connection(server_url):
+    with pytest.raises(ApiError):
+        _http.get_json(f"{server_url}/echo", headers={"X-Bad": "a\nb"})
+    assert all(not conns for conns in _http._idle.values())
+
+
+def test_https_connections_get_an_explicit_context_from_the_default_factory(monkeypatch):
+    import ssl
+
+    ctx = ssl.create_default_context()
+    monkeypatch.setattr(_http.ssl, "_create_default_https_context", lambda: ctx)
+    conn, reused = _http._checkout(("https", "example.test", None), 5.0)
+    assert reused is False
+    assert conn._context is ctx
 
 
 @pytest.mark.allow_default_transport
