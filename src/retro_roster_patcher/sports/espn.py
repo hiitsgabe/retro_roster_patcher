@@ -262,8 +262,9 @@ class EspnClient:
         """Ids of the athletes the team's leaders document names, in first-seen order.
 
         The categories name the same athletes repeatedly, so this deduplicates;
-        the order is stable so a cached run and a live one issue their
-        per-athlete requests in the same sequence.
+        the order is stable so the result list is the same whether the athlete
+        documents came from cache or from the network. It does not order the
+        per-athlete requests, which are issued concurrently.
         """
         cache_key = f"espn_soccer_leaders_{code}_{team_id}_{season}"
         document = self._load_cache(cache_key)

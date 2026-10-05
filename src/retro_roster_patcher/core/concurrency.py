@@ -18,8 +18,9 @@ R = TypeVar("R")
 DEFAULT_WORKERS = 8
 
 # One lock for every status sink, not one per sink: the CLI writes them all to
-# the same two streams.
-_STATUS_LOCK = threading.Lock()
+# the same two streams. Re-entrant, so a sink that forwards to another status
+# call cannot deadlock itself.
+_STATUS_LOCK = threading.RLock()
 
 
 def emit_status(callback: Callable[[str], None] | None, message: str) -> None:
@@ -36,8 +37,9 @@ def parallel_map(
     """`[fn(x) for x in items]`, with the calls overlapped; results keep input order.
 
     Runs inline for fewer than two items, so a fully-cached run spawns no threads.
-    The first exception propagates — a `BaseException` such as the test suite's
-    network-guard sentinel included — after the remaining calls finish.
+    The first exception propagates -- a `BaseException` such as the test suite's
+    network-guard sentinel included. Calls already running finish; queued ones
+    are cancelled.
     """
     work = list(items)
     if len(work) < 2 or max_workers < 2:
