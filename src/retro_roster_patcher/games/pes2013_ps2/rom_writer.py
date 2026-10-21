@@ -13,10 +13,12 @@ import unicodedata
 from collections.abc import Callable
 
 from ...core.errors import RomError
+from .emblems import CLUB_TABLE, Atlas, render_logo
 from .models import (
     CLUB_SQUAD_SIZE,
     DISPLAY_NAME_BYTES,
     DISPLAY_NAME_CHARS,
+    EMBLEM_ENTRIES,
     OVER_AFS,
     PART_CLUB_NUMBERS,
     PART_PLAYERS,
@@ -136,6 +138,32 @@ class RomWriter:
                         raw = text.encode("utf-8")
                     f.seek(base + slot.offset)
                     f.write(raw.ljust(slot.capacity, b"\0"))
+
+    # -- emblems -------------------------------------------------------------
+
+    def write_emblems(self, logos: dict[int, bytes]) -> int:
+        """Draw each club's PNG logo into every emblem atlas; returns crests written.
+
+        A club missing from an atlas's club table is skipped there. Needs
+        Pillow: the caller catches `ImportError`.
+        """
+        from .afs import unwrap, wrap
+
+        written = 0
+        for index in EMBLEM_ENTRIES:
+            header, payload = unwrap(self.reader.read(TEXT_AFS, index))
+            atlas = Atlas.parse(payload)
+            palette = atlas.palettes[CLUB_TABLE]
+            present = {rec.ident for rec in atlas.tables[CLUB_TABLE]}
+            count = 0
+            for club, png in logos.items():
+                if club in present:
+                    atlas.set_image(CLUB_TABLE, club, render_logo(png, atlas.side, palette))
+                    count += 1
+            if count:
+                self._write_entry(TEXT_AFS, index, wrap(header, atlas.build()))
+                written = max(written, count)
+        return written
 
     # -- archive plumbing ----------------------------------------------------
 

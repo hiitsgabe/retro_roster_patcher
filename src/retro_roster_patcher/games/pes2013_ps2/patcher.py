@@ -11,6 +11,7 @@ squad does not fill keep their original players.
 
 from __future__ import annotations
 
+import hashlib
 from collections import defaultdict
 from pathlib import Path
 from typing import Any
@@ -84,6 +85,9 @@ def squad_order(players: list[Player]) -> list[Player]:
     providers=("espn",),
 )
 class PES2013PS2Patcher(Patcher):
+    #: `patch` draws each team's logo into the emblem atlases unless `logos=False`.
+    supports_logos: bool = True
+
     def __init__(
         self,
         cache_dir: Path | str,
@@ -94,6 +98,7 @@ class PES2013PS2Patcher(Patcher):
         transport: _http.Transport | None = None,
     ) -> None:
         super().__init__(cache_dir, provider=provider, on_status=on_status, on_partial=on_partial)
+        self._transport = transport
         self.api: Any = EspnClient(str(self.cache_dir), on_status, transport=transport)
 
     # -- analyze -------------------------------------------------------------
@@ -238,6 +243,8 @@ class PES2013PS2Patcher(Patcher):
                 on_progress(0.8, "Compressing player tables...")
             for index, t in tables.items():
                 writer.write_player_tables(index, t)
+            if options.get("logos", True):
+                self._write_logos(writer, rosters, slots, on_progress)
             if on_progress is not None:
                 on_progress(0.9, "Writing team names...")
             for overlay in DATABASE_OVERLAYS:
@@ -253,6 +260,52 @@ class PES2013PS2Patcher(Patcher):
             teams_patched=len(slots),
             players_patched=players_patched,
         )
+
+    def _write_logos(
+        self,
+        writer: RomWriter,
+        rosters: MappedRosters,
+        slots: list[int],
+        on_progress: ProgressFn | None,
+    ) -> None:
+        """Download each mapped team's logo and draw it as the club's crest.
+
+        Without Pillow, or with a logo that will not download, the crests are
+        skipped with a status line; the roster patch stands.
+        """
+        logos: dict[int, bytes] = {}
+        for i, slot in enumerate(slots):
+            record = rosters.teams[slot]
+            if not record.logo_url:
+                continue
+            if on_progress is not None:
+                on_progress(0.85 + 0.1 * (i / max(len(slots), 1)), f"Logo for {record.name}...")
+            try:
+                logos[slot] = self._load_logo(record.logo_url)
+            except ApiError as exc:
+                self.status(f"{record.name}: logo skipped: {exc}")
+        if not logos:
+            return
+        try:
+            count = writer.write_emblems(logos)
+        except ImportError:
+            self.status("Pillow is not installed; team logos skipped")
+            return
+        self.status(f"Team logos drawn: {count}")
+
+    def _load_logo(self, url: str) -> bytes:
+        """The logo bytes, from `cache_dir/logos` or downloaded once."""
+        cache = self.cache_dir / "logos" / f"{hashlib.sha1(url.encode()).hexdigest()}.png"
+        if cache.is_file():
+            return cache.read_bytes()
+        tx = self._transport or _http.default_transport
+        try:
+            content = tx(url, {}, 15.0)
+        except Exception as exc:
+            raise ApiError(f"GET {url} failed: {exc}") from exc
+        cache.parent.mkdir(parents=True, exist_ok=True)
+        cache.write_bytes(content)
+        return content
 
     @staticmethod
     def _assign(

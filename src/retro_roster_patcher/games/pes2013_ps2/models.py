@@ -50,6 +50,10 @@ CLUB_SQUAD_SIZE = 32
 NATIONAL_COUNT = 75
 NATIONAL_SQUAD_SIZE = 23
 
+#: `0_TEXT.AFS` entries holding the emblem atlases: all teams at 64x64 and 32x32,
+#: then the club-only copies the game also reads.
+EMBLEM_ENTRIES = (604, 600, 606, 602)
+
 #: `OVER.AFS` entries that are language database overlays, and the English one
 #: the slot names are read from.
 DATABASE_OVERLAYS = tuple(range(5, 20))
