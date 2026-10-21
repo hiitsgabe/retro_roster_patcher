@@ -35,6 +35,7 @@ from .models import (
     CLUB_COUNT,
     CLUB_SQUAD_SIZE,
     DATABASE_OVERLAYS,
+    DISPLAY_NAME_CHARS,
     PLAYER_ENTRIES,
     POSITION_BYTE,
     POSITION_GROUPS,
@@ -55,6 +56,18 @@ def position_group(record: bytes) -> str:
 
 def player_group(player: Player) -> str:
     return ESPN_GROUPS.get(player.position, player.position) or "Midfielder"
+
+
+def pes_name(player: Player) -> str:
+    """The name the game shows: the full name when it fits the 15-character
+    field (Brazilian players go by nickname or first name), else initial and
+    surname, else the surname alone."""
+    full = player.name.strip() or player.last_name
+    if len(full) <= DISPLAY_NAME_CHARS:
+        return full.upper()
+    first, last = player.first_name.strip(), (player.last_name.strip() or full.split()[-1])
+    short = f"{first[0]}. {last}" if first else last
+    return (short if len(short) <= DISPLAY_NAME_CHARS else last).upper()
 
 
 def squad_order(players: list[Player]) -> list[Player]:
@@ -173,8 +186,8 @@ class PES2013PS2Patcher(Patcher):
                 code=(roster.team.code or ascii_fold(roster.team.name)[:3]).upper(),
                 players=[
                     PESPlayer(
-                        display_name=(p.last_name or p.name).upper(),
-                        shirt_name=(p.last_name or p.name).upper(),
+                        display_name=pes_name(p),
+                        shirt_name=pes_name(p),
                         number=p.number,
                         position=player_group(p),
                     )

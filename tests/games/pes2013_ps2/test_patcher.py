@@ -46,7 +46,14 @@ def roster(team_id, name, code, players):
     return TeamRoster(
         team=Team(id=team_id, name=name, code=code),
         players=[
-            Player(id=100 + i, name=n, last_name=n.split()[-1], position=pos, number=num)
+            Player(
+                id=100 + i,
+                name=n,
+                first_name=n.split()[0],
+                last_name=n.split()[-1],
+                position=pos,
+                number=num,
+            )
             for i, (n, pos, num) in enumerate(players)
         ],
     )
@@ -243,12 +250,12 @@ def test_patch_renames_the_squad_by_position_and_the_club_everywhere(iso, tmp_pa
         names = [tables.record(i)[:32].decode("utf-16-le").split("\0")[0] for i in squad[:11]]
         # The keeper took the keeper record (slot 0), defenders the defender
         # records (1..3), and so on; slots without a new player keep theirs.
-        assert names[0] == "RAYA"
-        assert names[1:3] == ["SALIBA", "MAGALHÃES"] and names[3] == "PLAYER 4"
-        assert names[4:6] == ["RICE", "ØDEGAARD"]
-        assert names[8:10] == ["SAKA", "HAVERTZ"] and names[10] == "PLAYER 11"
-        assert tables.record(squad[0])[32:48] == b"RAYA".ljust(16, b"\0")
-        assert tables.record(squad[5])[32:48] == b"ODEGAARD".ljust(16, b"\0")
+        assert names[0] == "DAVID RAYA"
+        assert names[1:3] == ["WILLIAM SALIBA", "G. MAGALHÃES"] and names[3] == "PLAYER 4"
+        assert names[4:6] == ["DECLAN RICE", "MARTIN ØDEGAARD"]
+        assert names[8:10] == ["BUKAYO SAKA", "KAI HAVERTZ"] and names[10] == "PLAYER 11"
+        assert tables.record(squad[0])[32:48] == b"DAVID RAYA".ljust(16, b"\0")
+        assert tables.record(squad[5])[32:48] == b"MARTIN ODEGAARD".ljust(16, b"\0")
         assert tables.club_numbers(0)[0] == 21 and tables.club_numbers(0)[4] == 40
         assert tables.record(squad[0])[48:] == tables.record(squad[0])[48:]  # abilities kept
     for overlay in (DATABASE_OVERLAY_ENGLISH, 5):
