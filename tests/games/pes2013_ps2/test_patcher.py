@@ -1,0 +1,277 @@
+"""PES 2013 (PS2): reader, writer and patcher against a fabricated disc.
+
+The image comes from `tests/fixtures/synthetic_pes2013_iso.py`; nothing here
+has seen a retail disc. What is checked is the plumbing the layouts hang on:
+the AFS/part-table round trip, where names land in a record, how squads are
+reassigned by position, and that team names fit their overlay slots.
+"""
+
+from __future__ import annotations
+
+import struct
+import zlib
+
+import pytest
+
+from retro_roster_patcher import get_patcher
+from retro_roster_patcher.core.errors import MappingError, RomError
+from retro_roster_patcher.core.models import SlotMapping
+from retro_roster_patcher.games.pes2013_ps2 import afs
+from retro_roster_patcher.games.pes2013_ps2.models import (
+    CLUB_COUNT,
+    DATABASE_OVERLAY_ENGLISH,
+    PLAYER_ENTRIES,
+    PLAYER_RECORD_SIZE,
+)
+from retro_roster_patcher.games.pes2013_ps2.patcher import PES2013PS2Patcher, squad_order
+from retro_roster_patcher.games.pes2013_ps2.rom_reader import RomReader
+from retro_roster_patcher.games.pes2013_ps2.rom_writer import (
+    RomWriter,
+    ascii_fold,
+    display_name_bytes,
+    shirt_name_bytes,
+)
+from retro_roster_patcher.sports.models import League, LeagueData, Player, Team, TeamRoster
+from tests.fixtures import synthetic_pes2013_iso as fixture
+
+
+@pytest.fixture
+def iso(tmp_path):
+    path = tmp_path / "pes.iso"
+    fixture.write_iso(path)
+    return path
+
+
+def roster(team_id, name, code, players):
+    return TeamRoster(
+        team=Team(id=team_id, name=name, code=code),
+        players=[
+            Player(id=100 + i, name=n, last_name=n.split()[-1], position=pos, number=num)
+            for i, (n, pos, num) in enumerate(players)
+        ],
+    )
+
+
+LEAGUE = LeagueData(
+    league=League(id=1, name="Fixture League", season=2026),
+    teams=[
+        roster(
+            10,
+            "Arsenal",
+            "ARS",
+            [
+                ("David Raya", "Goalkeeper", 22),
+                ("William Saliba", "Defender", 2),
+                ("Gabriel Magalhães", "Defender", 6),
+                ("Declan Rice", "Midfielder", 41),
+                ("Martin Ødegaard", "Midfielder", 8),
+                ("Bukayo Saka", "Forward", 7),
+                ("Kai Havertz", "Forward", 29),
+            ],
+        ),
+        roster(11, "Aston Villa", "AVL", [("Emiliano Martínez", "Goalkeeper", 1)]),
+    ],
+)
+
+
+# -- containers ------------------------------------------------------------
+
+
+def test_a_part_table_round_trips_with_the_games_padding():
+    parts = [b"a" * 10, b"", b"b" * 40]
+    data = afs.Table(4, [8, 48, 0, 64], parts).build()
+    table = afs.Table.parse(data)
+    assert table.offsets[0] == 8 and table.offsets[1] == 32  # 20-byte table, padded past it
+    # Parsed parts run up to the next offset, so they carry their padding.
+    assert [p.rstrip(b"\0") for p in table.parts] == parts
+    assert table.build() == data
+
+
+def test_wrap_and_unwrap_agree_on_both_block_kinds():
+    header = bytes([0, 6, 1, 0]) + b"\0" * 28
+    block = afs.wrap(header, b"payload" * 50)
+    head, payload = afs.unwrap(block)
+    assert payload == b"payload" * 50 and struct.unpack("<I", head[8:12])[0] == 350
+    raw = afs.wrap(bytes([0, 6, 0, 0]) + b"\0" * 28, b"xyz")
+    assert afs.unwrap(raw)[1] == b"xyz"
+    with pytest.raises(RomError):
+        afs.unwrap(header + b"not zlib at all")
+
+
+# -- reader ----------------------------------------------------------------
+
+
+def test_the_reader_lists_the_named_clubs_and_counts_players(iso):
+    reader = RomReader(str(iso))
+    info = reader.get_rom_info()
+    assert info.is_valid
+    assert [(c.index, c.name, c.code) for c in info.clubs] == [
+        (0, "NORTH LONDON", "NLN"),
+        (1, "WEST MIDLANDS VILLAGE", "WMV"),
+        (2, "FC BARCELONA", "FCB"),
+    ]
+    assert info.player_count == fixture.PLAYER_COUNT
+    tables = reader.player_tables()
+    assert tables.club_squad(0)[:3] == [1, 2, 3]
+    assert list(tables.club_numbers(0)[:3]) == [0, 1, 2]
+
+
+def test_a_disc_without_the_archives_is_not_valid(tmp_path):
+    path = tmp_path / "other.iso"
+    fixture.write_iso(path, boot_name="SLES_000.00")
+    assert not RomReader(str(path)).get_rom_info().is_valid
+
+
+def test_every_language_overlay_with_a_table_is_parsed(iso):
+    reader = RomReader(str(iso))
+    reader.load()
+    english = reader.overlay_teams(DATABASE_OVERLAY_ENGLISH)
+    assert english.clubs[2][0].text == "FC BARCELONA" and english.clubs[2][0].capacity == 16
+    assert english.clubs[2][1].text == "FCB" and english.clubs[2][1].capacity >= 8
+    with pytest.raises(RomError):
+        reader.overlay_teams(6)  # an empty entry is no overlay
+
+
+# -- writer ----------------------------------------------------------------
+
+
+def test_names_are_cut_to_their_fields_and_shirt_names_folded():
+    assert display_name_bytes("A" * 20) == ("A" * 15).encode("utf-16-le") + b"\0\0"
+    assert shirt_name_bytes("Ødegaard") == b"Odegaard".ljust(16, b"\0")
+    assert ascii_fold("Gabriel Magalhães") == "Gabriel Magalhaes"
+
+
+def test_the_writer_rewrites_the_player_entry_in_place(iso, tmp_path):
+    out = tmp_path / "out.iso"
+    writer = RomWriter(str(iso), str(out))
+    writer.copy_iso()
+    tables = writer.reader.player_tables()
+    RomWriter.set_player_names(tables, 1, "Raya", "RAYA")
+    RomWriter.set_club_number(tables, 0, 0, 22)
+    writer.write_player_tables(PLAYER_ENTRIES[0], tables)
+    again = RomReader(str(out))
+    again.load()
+    back = again.player_tables()
+    assert back.record(1)[:8] == "Raya".encode("utf-16-le")
+    assert back.record(1)[32:36] == b"RAYA"
+    assert back.record(1)[48:] == tables.record(1)[48:]  # abilities untouched
+    assert back.club_numbers(0)[0] == 21
+    # The other entry is as it was.
+    assert again.player_tables(PLAYER_ENTRIES[1]).record(1)[:16] == "PLAYER 1".encode("utf-16-le")
+
+
+def test_an_entry_that_outgrows_its_slot_is_refused(iso, tmp_path):
+    out = tmp_path / "out.iso"
+    writer = RomWriter(str(iso), str(out))
+    writer.copy_iso()
+    tables = writer.reader.player_tables()
+    # Random bytes do not compress: the entry no longer fits its slot.
+    import random
+
+    rng = random.Random(1)
+    tables.parts[0] = bytes(rng.randrange(256) for _ in range(len(tables.parts[0])))
+    with pytest.raises(RomError, match="available"):
+        writer.write_player_tables(PLAYER_ENTRIES[0], tables)
+
+
+def test_team_names_are_cut_to_the_room_before_the_next_string(iso, tmp_path):
+    out = tmp_path / "out.iso"
+    writer = RomWriter(str(iso), str(out))
+    writer.copy_iso()
+    teams = writer.reader.overlay_teams(DATABASE_OVERLAY_ENGLISH)
+    writer.write_team_names(
+        teams, {0: ("A VERY LONG CLUB NAME INDEED", "ARSENAL"), 2: ("BARÇA", "BAR")}
+    )
+    again = RomReader(str(out))
+    again.load()
+    clubs = again.overlay_teams(DATABASE_OVERLAY_ENGLISH).clubs
+    assert clubs[0][0].text == "A VERY LONG CLU" and clubs[0][1].text == "ARSENAL"
+    assert clubs[1][0].text == "WEST MIDLANDS VILLAGE"  # the neighbour survived
+    assert clubs[2][0].text == "BARÇA"
+
+
+# -- patcher ---------------------------------------------------------------
+
+
+def test_the_patcher_is_registered_with_its_capabilities():
+    cls = get_patcher("pes2013-ps2")
+    assert cls is PES2013PS2Patcher
+    assert cls.platform == "ps2" and cls.sport == "soccer" and cls.requires_slot_mapping
+    assert cls.providers == ("espn",)
+
+
+def test_squad_order_puts_keepers_first_and_keeps_group_order():
+    players = LEAGUE.teams[0].players
+    ordered = squad_order(players[::-1])
+    assert [p.position for p in ordered][:3] == ["Goalkeeper", "Defender", "Defender"]
+    assert ordered[0].name == "David Raya"
+
+
+def test_map_rosters_needs_a_mapping_inside_the_club_range(tmp_path):
+    patcher = PES2013PS2Patcher(tmp_path)
+    with pytest.raises(MappingError):
+        patcher.map_rosters(LEAGUE, [SlotMapping(slot_index=CLUB_COUNT, team_id=10)])
+    with pytest.raises(MappingError):
+        patcher.map_rosters(LEAGUE, [SlotMapping(slot_index=0, team_id=99)])
+
+
+def test_analyze_lists_the_clubs_as_slots(iso, tmp_path):
+    info = PES2013PS2Patcher(tmp_path).analyze_rom(iso)
+    assert info.is_valid and info.game_id == "pes2013-ps2"
+    assert [s.display_name for s in info.slots][:2] == [
+        "NORTH LONDON (NLN)",
+        "WEST MIDLANDS VILLAGE (WMV)",
+    ]
+    assert info.extra["player_count"] == fixture.PLAYER_COUNT
+
+
+def test_patch_renames_the_squad_by_position_and_the_club_everywhere(iso, tmp_path):
+    patcher = PES2013PS2Patcher(tmp_path)
+    rosters = patcher.map_rosters(
+        LEAGUE,
+        [SlotMapping(slot_index=0, team_id=10), SlotMapping(slot_index=2, team_id=11)],
+    )
+    out = tmp_path / "out.iso"
+    result = patcher.patch(rom_path=iso, output_path=out, rosters=rosters)
+    assert result.teams_patched == 2 and result.players_patched == 8
+
+    reader = RomReader(str(out))
+    reader.load()
+    for entry in PLAYER_ENTRIES:
+        tables = reader.player_tables(entry)
+        squad = tables.club_squad(0)
+        names = [tables.record(i)[:32].decode("utf-16-le").split("\0")[0] for i in squad[:11]]
+        # The keeper took the keeper record (slot 0), defenders the defender
+        # records (1..3), and so on; slots without a new player keep theirs.
+        assert names[0] == "RAYA"
+        assert names[1:3] == ["SALIBA", "MAGALHÃES"] and names[3] == "PLAYER 4"
+        assert names[4:6] == ["RICE", "ØDEGAARD"]
+        assert names[8:10] == ["SAKA", "HAVERTZ"] and names[10] == "PLAYER 11"
+        assert tables.record(squad[0])[32:48] == b"RAYA".ljust(16, b"\0")
+        assert tables.record(squad[5])[32:48] == b"ODEGAARD".ljust(16, b"\0")
+        assert tables.club_numbers(0)[0] == 21 and tables.club_numbers(0)[4] == 40
+        assert tables.record(squad[0])[48:] == tables.record(squad[0])[48:]  # abilities kept
+    for overlay in (DATABASE_OVERLAY_ENGLISH, 5):
+        clubs = reader.overlay_teams(overlay).clubs
+        assert (clubs[0][0].text, clubs[0][1].text) == ("ARSENAL", "ARS")
+        assert (clubs[2][0].text, clubs[2][1].text) == ("ASTON VILLA", "AVL")
+        assert clubs[1][0].text == "WEST MIDLANDS VILLAGE"
+
+
+def test_patch_refuses_rosters_mapped_for_another_game(iso, tmp_path):
+    from retro_roster_patcher.core.models import MappedRosters
+
+    patcher = PES2013PS2Patcher(tmp_path)
+    with pytest.raises(MappingError):
+        patcher.patch(
+            rom_path=iso, output_path=tmp_path / "o.iso", rosters=MappedRosters(game_id="we2002")
+        )
+
+
+def test_the_fixture_player_entry_is_what_the_reader_expects():
+    entry = fixture.build_player_entry()
+    head, payload = afs.unwrap(entry)
+    table = afs.Table.parse(payload)
+    _h, players = afs.unwrap(table.parts[0])
+    assert len(players) == fixture.PLAYER_COUNT * PLAYER_RECORD_SIZE
+    assert zlib.decompress(table.parts[2][32:])[:4] == struct.pack("<HH", 1, 2)

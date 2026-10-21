@@ -41,6 +41,7 @@ from .games import nhl05_ps2 as _nhl05_ps2  # noqa: E402,F401
 from .games import nhl07_psp as _nhl07_psp  # noqa: E402,F401
 from .games import nhl94_genesis as _nhl94_genesis  # noqa: E402,F401
 from .games import nhl94_snes as _nhl94_snes  # noqa: E402,F401
+from .games import pes2013_ps2 as _pes2013_ps2  # noqa: E402,F401
 from .games import we2002 as _we2002  # noqa: E402,F401
 
 __version__ = "0.2.1"
