@@ -10,6 +10,7 @@ the codes hardcoded pass every stub test.
 """
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -435,3 +436,110 @@ def test_blank_unused_on_a_game_without_it_is_a_usage_error(tmp_path, stubs, cap
 def test_we2002_draws_logos_and_blanks_slots():
     assert WE2002Patcher.supports_logos is True
     assert WE2002Patcher.supports_blank_unused is True
+
+
+# --- `--image`, resolved against `image_slots` the same way ------------------
+
+
+class ArtPatcher(LogoPatcher):
+    """A patcher with two image slots and an `export_images`."""
+
+    image_slots: tuple[str, ...] = ("one", "two")
+
+    def export_images(self, rom_path, out_dir):
+        paths = [Path(out_dir) / "one.png", Path(out_dir) / "two.png"]
+        for p in paths:
+            p.write_bytes(b"png")
+        return paths
+
+
+@pytest.fixture
+def art_stub():
+    SEEN.clear()
+    try:
+        registry.register("art-game", platform="test", sport="test")(ArtPatcher)
+        yield
+    finally:
+        registry._REGISTRY.pop("art-game", None)
+
+
+def test_image_pairs_reach_patch_as_paths(tmp_path, art_stub):
+    png = tmp_path / "x.png"
+    png.write_bytes(b"png")
+    code = main(_stub_argv(tmp_path, "art-game", "--image", f"one={png}", "--image", f"two={png}"))
+    assert code == 0
+    assert _options_seen() == {"images": {"one": str(png), "two": str(png)}}
+
+
+def test_an_unknown_image_slot_is_a_usage_error(tmp_path, art_stub, capsys):
+    png = tmp_path / "x.png"
+    png.write_bytes(b"png")
+    assert main(_stub_argv(tmp_path, "art-game", "--image", f"three={png}")) == 2
+    assert events(capsys)[-1]["msg"] == "art-game has no image slot 'three'; it has one, two"
+
+
+def test_a_missing_image_file_is_a_usage_error(tmp_path, art_stub, capsys):
+    assert main(_stub_argv(tmp_path, "art-game", "--image", "one=/nowhere/x.png")) == 2
+    assert events(capsys)[-1]["msg"] == "No such image: /nowhere/x.png"
+
+
+def test_a_malformed_image_spec_is_a_usage_error(tmp_path, art_stub, capsys):
+    assert main(_stub_argv(tmp_path, "art-game", "--image", "one")) == 2
+    assert events(capsys)[-1]["msg"] == "--image takes slot=path, not 'one'"
+
+
+def test_image_on_a_game_without_slots_is_a_usage_error(tmp_path, stubs, capsys):
+    png = tmp_path / "x.png"
+    png.write_bytes(b"png")
+    assert main(_stub_argv(tmp_path, "no-lang-game", "--image", f"one={png}")) == 2
+    assert events(capsys)[-1]["msg"] == "no-lang-game does not take --image"
+
+
+def test_the_images_verb_exports_every_slot(tmp_path, art_stub, capsys):
+    rom = tmp_path / "in.bin"
+    rom.write_bytes(b"\x00" * 16)
+    out = tmp_path / "art"
+    code = main(
+        [
+            "images",
+            "--game",
+            "art-game",
+            "--rom",
+            str(rom),
+            "--out",
+            str(out),
+            "--cache-dir",
+            str(tmp_path / "c"),
+            "--json",
+        ]
+    )
+    assert code == 0
+    last = events(capsys)[-1]
+    assert last["kind"] == "images" and sorted(last["paths"]) == sorted(
+        [str(out / "one.png"), str(out / "two.png")]
+    )
+
+
+def test_the_images_verb_refuses_a_game_without_slots(tmp_path, stubs, capsys):
+    rom = tmp_path / "in.bin"
+    rom.write_bytes(b"\x00" * 16)
+    code = main(
+        [
+            "images",
+            "--game",
+            "no-lang-game",
+            "--rom",
+            str(rom),
+            "--out",
+            str(tmp_path / "art"),
+            "--cache-dir",
+            str(tmp_path / "c"),
+            "--json",
+        ]
+    )
+    assert code == 2
+    assert events(capsys)[-1]["msg"] == "no-lang-game has no image slots"
+
+
+def test_we2002_has_the_three_slots():
+    assert WE2002Patcher.image_slots == ("title", "menu", "boot")

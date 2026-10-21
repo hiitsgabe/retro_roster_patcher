@@ -81,7 +81,8 @@ def build_parser() -> argparse.ArgumentParser:
         sub.add_argument(
             "--assets-dir",
             default="",
-            help="optional directory of user-supplied assets (WE2002 translation PPF)",
+            help="optional directory of user-supplied assets (WE2002: translation PPF, "
+            "logos/<team_id>.png, images/<slot>.png)",
         )
 
     p_fetch = subparsers.add_parser(
@@ -118,7 +119,27 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="empty the name and flag of every slot the slot map leaves out (we2002)",
     )
+    p_patch.add_argument(
+        "--image",
+        action="append",
+        default=None,
+        metavar="SLOT=PNG",
+        help="replace a screen's art with a PNG; repeatable (we2002: title, menu, boot)",
+    )
     p_patch.set_defaults(handler=commands.cmd_patch)
+
+    p_images = subparsers.add_parser(
+        "images", parents=[common], help="export a game's replaceable screen art as PNGs"
+    )
+    p_images.add_argument("--game", required=True, help="patcher id, as shown by `list`")
+    p_images.add_argument("--rom", required=True, help="path to the input ROM or ISO")
+    p_images.add_argument("--out", required=True, help="directory to write <slot>.png files to")
+    p_images.add_argument(
+        "--cache-dir",
+        default=str(commands.default_cache_dir()),
+        help="where caches and generated assets live",
+    )
+    p_images.set_defaults(handler=commands.cmd_images)
 
     return parser
 

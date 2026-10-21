@@ -50,6 +50,7 @@ from .models import WETeamRecord
 from .ppf import PPFError, apply_ppf
 from .rom_reader import RomReader
 from .rom_writer import _ML_COLOR_OFFSETS, _OFS_BANDIERE_FORMA1, RomWriter
+from .screen_art import SLOT_NAMES, SLOTS, apply_images, export_slot
 from .stat_mapper import StatMapper
 from .translations.we2002 import LANGUAGE_CODES, LANGUAGES, ensure_ppf
 
@@ -109,6 +110,9 @@ class WE2002Patcher(Patcher):
     #: `patch(blank_unused=True)` empties the name and flag of every slot the
     #: mapping leaves out, in both tables.
     supports_blank_unused: bool = True
+    #: Screen art `patch(images={name: png})` can replace; `export_images`
+    #: writes the current art of each as a PNG to edit.
+    image_slots: tuple[str, ...] = SLOT_NAMES
 
     def __init__(
         self,
@@ -354,12 +358,15 @@ class WE2002Patcher(Patcher):
 
             if blank_unused:
                 logos_queued += self._blank_unused(rosters, writer, used_styles)
+            images = self._collect_images(options.get("images"))
 
             # Every `write_team` above queued a 3D-jersey TEX patch; without this
             # they are discarded when the writer goes out of scope.
             writer.flush_tex_patches()
             if logos_queued:
                 self._flush_logos(writer)
+            if images:
+                self._apply_images(output_path, images)
 
             if on_progress is not None:
                 on_progress(1.0, "Saving patched ROM...")
@@ -440,6 +447,53 @@ class WE2002Patcher(Patcher):
             queued += 1
             used.add(styles[slot])
         return queued, used
+
+    def _collect_images(self, given: Any) -> dict[str, bytes]:
+        """Screen art to write: `patch(images=...)` first, then `<assets_dir>/images/<slot>.png`."""
+        images: dict[str, bytes] = {}
+        if self.assets_dir is not None:
+            for name in SLOTS:
+                candidate = self.assets_dir / "images" / f"{name}.png"
+                if candidate.is_file():
+                    images[name] = candidate.read_bytes()
+        for name, png in dict(given or {}).items():
+            if name not in SLOTS:
+                raise CapabilityError(f"Unknown image slot {name!r}. Slots: {', '.join(SLOTS)}")
+            images[name] = Path(png).read_bytes() if isinstance(png, str | Path) else bytes(png)
+        return images
+
+    def _apply_images(self, output_path: Path, images: dict[str, bytes]) -> None:
+        """Write the screen art; like the logos, a failure costs the art only."""
+        try:
+            report = apply_images(str(output_path), images)
+        except ImportError:
+            self.status("Pillow is not installed; screen images skipped")
+            return
+        except (RomError, ValueError, OSError) as exc:
+            self.status(f"Screen images skipped: {exc}")
+            return
+        for line in report.skipped:
+            self.status(f"Screen images: {line}")
+        self.status(f"Screen images written: {', '.join(sorted(images))}")
+
+    def export_images(self, rom_path: Path, out_dir: Path) -> list[Path]:
+        """Write each slot's current art as `<out_dir>/<slot>.png`, to edit and feed back.
+
+        Reads the image at `rom_path` only. Needs Pillow; raises `ImportError`
+        without it, `RomError` for an image without the data files.
+        """
+        if not Path(rom_path).exists():
+            raise RomError(f"ROM not found: {rom_path}")
+        out = Path(out_dir)
+        out.mkdir(parents=True, exist_ok=True)
+        written = []
+        with as_rom_error(rom_path):
+            for name, slot in SLOTS.items():
+                png = export_slot(str(rom_path), slot)
+                target = out / f"{name}.png"
+                target.write_bytes(png)
+                written.append(target)
+        return written
 
     def _blank_unused(self, rosters: MappedRosters, writer: Any, used_styles: set[int]) -> int:
         """Empty every slot the mapping left out, in both tables.

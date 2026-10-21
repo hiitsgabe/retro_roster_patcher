@@ -135,7 +135,7 @@ def test_the_readme_has_the_expected_mix_of_fenced_blocks():
     counted = {}
     for info, _ in _fences():
         counted[info] = counted.get(info, 0) + 1
-    assert counted == {"bash": 4, "python": 2, "python no-run": 2, "json": 1}
+    assert counted == {"bash": 5, "python": 2, "python no-run": 2, "json": 1}
 
 
 def test_every_runnable_python_example_executes(tmp_path, monkeypatch):
@@ -232,16 +232,16 @@ def test_the_flag_table_matches_the_parser_flag_for_flag():
     flag that became required while the table still called it optional.
     """
     expected = _parser_flags()
-    assert sorted(expected) == ["analyze", "fetch", "list", "patch"]
+    assert sorted(expected) == ["analyze", "fetch", "images", "list", "patch"]
 
-    header = ["Flag", "`list`", "`analyze`", "`fetch`", "`patch`", "Meaning"]
+    header = ["Flag", "`list`", "`analyze`", "`fetch`", "`patch`", "`images`", "Meaning"]
     rows = _table(header)
-    verbs = [cell.strip("`") for cell in header[1:5]]
+    verbs = [cell.strip("`") for cell in header[1:6]]
 
     documented: dict[str, dict[str, bool]] = {verb: {} for verb in verbs}
     for row in rows:
         flag = row[0].strip("`")
-        for verb, cell in zip(verbs, row[1:5], strict=True):
+        for verb, cell in zip(verbs, row[1:6], strict=True):
             if cell == "req":
                 documented[verb][flag] = True
             elif cell == "yes":
@@ -249,7 +249,7 @@ def test_the_flag_table_matches_the_parser_flag_for_flag():
             elif cell != "-":
                 raise LookupError(f"unreadable cell {cell!r} for {flag} under {verb}")
 
-    assert len(rows) == 15
+    assert len(rows) == 16
     assert documented == expected
 
 
@@ -279,8 +279,8 @@ def test_every_retro_roster_invocation_in_the_readme_parses():
             failures.append(line)
     assert failures == []
     # Derived, and it is what rules out a vacuous pass: an extractor that found
-    # no invocations yields an empty set, which is not the four verbs the parser
-    # offers. It also holds the README to showing all four.
+    # no invocations yields an empty set, which is not the five verbs the parser
+    # offers. It also holds the README to showing all five.
     assert verbs == set(_subparsers())
 
 
@@ -447,7 +447,7 @@ def _formatter_kinds() -> set[str]:
 
 
 def test_the_kind_table_matches_both_the_producers_and_the_formatters():
-    """Three lists of the same four strings, held equal.
+    """Three lists of the same five strings, held equal.
 
     `commands.py` puts a `kind` on every result payload and `render.py`
     dispatches the human output on it, so a verb whose payload gains a kind
@@ -456,24 +456,25 @@ def test_the_kind_table_matches_both_the_producers_and_the_formatters():
     """
     rows = _table(["`kind`", "Verb", "Payload keys"])
     documented = {row[0].strip("`") for row in rows}
-    assert len(documented) == 4
+    assert len(documented) == 5
     assert documented == _kinds_from_source(commands)
     assert documented == _formatter_kinds()
 
 
 def test_each_result_payloads_documented_keys_are_the_ones_it_carries():
-    """The four payload rows, against the four objects that build them."""
+    """The five payload rows, against the objects that build them."""
     empty_league = LeagueData(league=League(id=0, name="", season=0), teams=[])
     expected = {
         "patchers": {"patchers", *PatcherInfo("", "", "", False, ()).to_dict()},
         "rom_info": {"matches", *RomInfo(path="", size=0, game_id="").to_dict()},
         "rosters": set(commands._summarise(empty_league, "")) - {"kind"},
         "patch": set(PatchResult(output_path="").to_dict()),
+        "images": {"paths"},
     }
     rows = _table(["`kind`", "Verb", "Payload keys"])
     # `[]` marks a list-valued key in the table; the name is what is compared.
     documented = {row[0].strip("`"): set(_NAME.findall(row[2].replace("[]", ""))) for row in rows}
-    assert len(documented) == 4
+    assert len(documented) == 5
     assert documented == expected
 
 

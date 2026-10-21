@@ -114,6 +114,7 @@ class HumanRenderer:
             "rom_info": self._rom_info,
             "rosters": self._rosters,
             "patch": self._patch,
+            "images": self._images,
         }.get(str(payload.get("kind")), self._fallback)
         formatter(payload)
         self.out.flush()
@@ -163,6 +164,10 @@ class HumanRenderer:
         self._line(
             f"  {payload['teams_patched']} teams, {payload['players_patched']} players patched"
         )
+
+    def _images(self, payload: dict[str, Any]) -> None:
+        for path in payload["paths"]:
+            self._line(f"wrote {path}")
 
     def _fallback(self, payload: dict[str, Any]) -> None:
         for key, value in payload.items():

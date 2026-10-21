@@ -13,7 +13,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from ..core.errors import RomError, as_storage_error
+from ..core.errors import CapabilityError, RomError, as_storage_error
 from ..core.models import PartialFn, SlotMapping
 from ..core.patcher import Patcher
 from ..core.registry import get_patcher, list_patchers
@@ -204,7 +204,50 @@ def _patch_options(game_id: str, args: argparse.Namespace, patcher: Patcher) -> 
         if not getattr(patcher, "supports_blank_unused", False):
             raise UsageError(f"{game_id} does not take --blank-unused")
         options["blank_unused"] = True
+    images = _image_args(game_id, getattr(args, "image", None) or [], patcher)
+    if images:
+        options["images"] = images
     return options
+
+
+def _image_args(game_id: str, specs: list[str], patcher: Patcher) -> dict[str, str]:
+    """`--image slot=path` pairs, checked against the game's `image_slots`."""
+    slots: tuple[str, ...] = tuple(getattr(patcher, "image_slots", ()))
+    if specs and not slots:
+        raise UsageError(f"{game_id} does not take --image")
+    images: dict[str, str] = {}
+    for spec in specs:
+        name, sep, path = spec.partition("=")
+        if not sep or not name or not path:
+            raise UsageError(f"--image takes slot=path, not {spec!r}")
+        if name not in slots:
+            raise UsageError(f"{game_id} has no image slot {name!r}; it has {', '.join(slots)}")
+        if not Path(path).is_file():
+            raise UsageError(f"No such image: {path}")
+        images[name] = path
+    return images
+
+
+def cmd_images(args: argparse.Namespace, renderer: Renderer) -> None:
+    """Export each image slot's current art as a PNG."""
+    rom = Path(args.rom)
+    if not rom.is_file():
+        raise RomError(f"No such ROM: {rom}")
+    patcher = build_patcher(args.game, args, renderer)
+    export = getattr(patcher, "export_images", None)
+    if export is None or not getattr(patcher, "image_slots", ()):
+        raise UsageError(f"{args.game} has no image slots")
+    out = Path(args.out)
+    with as_storage_error(out):
+        out.mkdir(parents=True, exist_ok=True)
+    renderer.status(f"Exporting images to {out}...")
+    try:
+        written = export(rom, out)
+    except ImportError as exc:
+        raise CapabilityError(
+            "Pillow is required to export images: pip install 'retro-roster-patcher[images]'"
+        ) from exc
+    renderer.result({"kind": "images", "paths": [str(p) for p in written]})
 
 
 def _map_extras(patcher: Patcher, rom: Path) -> dict[str, Any]:

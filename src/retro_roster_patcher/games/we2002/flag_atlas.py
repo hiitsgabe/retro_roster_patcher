@@ -687,63 +687,67 @@ def _atlas_blocks(parsed: DataFile) -> list[Record]:
     return out
 
 
-def patch_flag_atlas(image_path: str, logos: Mapping[int, LogoImages]) -> AtlasReport:
-    """Paint `logos` (style -> images) into every copy of the flag atlas on the disc.
+@dataclass
+class BlockEdit:
+    """A replacement for one image block, matched by the block's current content.
 
-    Reads the atlas out of `DATSEL.BIN`, then for every 2D data file on the disc
-    re-encodes each atlas block whose original content it recognises. A file
-    whose re-encoded blocks no longer fit grows into the free sectors after it,
-    with its ISO directory record and its sector count in the main executable's
-    file table raised to match; a file that cannot grow raises `RomError` before
-    anything is written.
+    `original` is the decoded block as it is on the disc today; every record in
+    `files` (names, or prefixes ending in `_`) whose stream decodes to it is
+    re-encoded as `replacement`. Matching by content rather than by offset is
+    what makes the same edit land in every file that carries a copy.
     """
+
+    original: bytes
+    replacement: bytes
+    files: tuple[str, ...]
+
+
+@dataclass
+class RawEdit:
+    """An in-place overwrite of a raw (uncompressed) record's data, such as a CLUT."""
+
+    file: str
+    x: int
+    y: int
+    data: bytes
+
+
+def rewrite_blocks(
+    image_path: str,
+    block_edits: list[BlockEdit],
+    raw_edits: list[RawEdit] = (),  # type: ignore[assignment]
+) -> AtlasReport:
+    """Apply block and raw-record edits to every 2D data file on the disc.
+
+    A file whose re-encoded blocks no longer fit grows into the free sectors
+    after it, with its ISO directory record and its sector count in the main
+    executable's file table raised to match; a file that cannot grow is
+    reported and left alone.
+    """
+    report = AtlasReport()
+    if not block_edits and not raw_edits:
+        return report
+    by_original = {e.original: e for e in block_edits}
+    wanted_files: set[str] = set()
+    prefixes: set[str] = set()
+    for e in block_edits:
+        for name in e.files:
+            (prefixes if name.endswith("_") else wanted_files).add(name)
+    raw_by_file: dict[str, list[RawEdit]] = {}
+    for r in raw_edits:
+        raw_by_file.setdefault(r.file, []).append(r)
+        wanted_files.add(r.file)
     with open(image_path, "r+b") as f:
         files = _disc_files(f)
-        source = files.get(SOURCE_FILE)
         exe_entry = files.get(EXE_NAME)
-        if source is None or exe_entry is None:
-            raise RomError(f"{SOURCE_FILE} or {EXE_NAME} not found on the disc")
+        if exe_entry is None:
+            raise RomError(f"{EXE_NAME} not found on the disc")
         exe = bytearray(_read_user(f, exe_entry.lba, exe_entry.size))
-
-        source_data = _read_user(f, source.lba, source.size)
-        source_parsed = parse_data_file(source_data, infer_base(source_data))
-
-        original = Vram()
-        for rec in _atlas_blocks(source_parsed):
-            raw, _ = lz_decompress(source_parsed.data, rec.ptr - source_parsed.base)
-            original.put_block(rec.x, rec.y, rec.w, rec.h, raw)
-        painted = Vram()
-        painted.data[:] = original.data
-
-        touched: list[Rect] = []
-        for style, images in logos.items():
-            big, medium, mini = style_rects(style)
-            painted.paint(big, images.big)
-            painted.paint(medium, images.medium)
-            painted.paint(mini, images.mini)
-            touched += [_hw_rect(big), _hw_rect(medium), _hw_rect(mini)]
-
-        # Which blocks change, keyed by their original decoded content so every
-        # file's copy is recognised whatever offset it sits at.
-        new_blocks: dict[bytes, bytes] = {}
-        for rec in _atlas_blocks(source_parsed):
-            r = (rec.x, rec.y, rec.w, rec.h)
-            if not any(_overlaps(r, t) for t in touched):
-                continue
-            before = original.get_block(rec.x, rec.y, rec.w, rec.h)
-            after = painted.get_block(rec.x, rec.y, rec.w, rec.h)
-            if before != after:
-                new_blocks[before] = lz_compress(after)
-
-        report = AtlasReport()
-        if not new_blocks:
-            return report
-
         all_lbas = sorted(entry.lba for entry in files.values())
         candidates = [
             entry
             for name, entry in files.items()
-            if name in ATLAS_FILES or name.startswith(ATLAS_FILE_PREFIXES)
+            if name in wanted_files or any(name.startswith(p) for p in prefixes)
         ]
         exe_changed = False
         for entry in sorted(candidates, key=lambda e: e.lba):
@@ -755,18 +759,39 @@ def patch_flag_atlas(image_path: str, logos: Mapping[int, LogoImages]) -> AtlasR
                 report.skipped.append(f"{entry.name}: {exc}")
                 continue
             replacements: dict[int, bytes] = {}
-            for rec in _atlas_blocks(parsed):
+            for rec in parsed.records():
+                if rec.kind & 0xFF != KIND_IMAGE:
+                    continue
                 off = rec.ptr - base
                 try:
                     raw, _ = lz_decompress(data, off)
                 except ValueError:
                     continue
-                new = new_blocks.get(raw)
-                if new is not None:
-                    replacements[off] = new
-            if not replacements:
+                edit = by_original.get(raw)
+                if edit is not None and any(
+                    entry.name == n or (n.endswith("_") and entry.name.startswith(n))
+                    for n in edit.files
+                ):
+                    replacements[off] = edit.replacement
+            raw_here = raw_by_file.get(entry.name, [])
+            if not replacements and not raw_here:
                 continue
-            rebuilt = rebuild_data_file(parsed, replacements)
+            rebuilt = bytearray(rebuild_data_file(parsed, replacements))
+            if raw_here:
+                again = parse_data_file(bytes(rebuilt), base)
+                for raw_edit in raw_here:
+                    hit = [
+                        r
+                        for r in again.records()
+                        if r.kind & 0xFF != KIND_IMAGE and (r.x, r.y) == (raw_edit.x, raw_edit.y)
+                    ]
+                    if not hit:
+                        report.skipped.append(
+                            f"{entry.name}: no raw record at ({raw_edit.x},{raw_edit.y})"
+                        )
+                        continue
+                    off = hit[0].ptr - base
+                    rebuilt[off : off + len(raw_edit.data)] = raw_edit.data
             old_sectors = (entry.size + _USER - 1) // _USER
             new_sectors = (len(rebuilt) + _USER - 1) // _USER
             if new_sectors > old_sectors:
@@ -774,7 +799,7 @@ def patch_flag_atlas(image_path: str, logos: Mapping[int, LogoImages]) -> AtlasR
                 if new_sectors > budget:
                     report.skipped.append(
                         f"{entry.name}: needs {new_sectors} sectors, {budget} available; "
-                        f"its flags are left as they were"
+                        f"left as it was"
                     )
                     continue
                 for off, _addr, sectors in _file_table_entries(bytes(exe), entry.lba):
@@ -782,7 +807,7 @@ def patch_flag_atlas(image_path: str, logos: Mapping[int, LogoImages]) -> AtlasR
                         struct.pack_into("<I", exe, off + 8, new_sectors)
                         exe_changed = True
                 report.grown.append(entry.name)
-            _write_user(f, entry.lba, rebuilt)
+            _write_user(f, entry.lba, bytes(rebuilt))
             if len(rebuilt) != entry.size:
                 _set_record_size(f, entry.record_offset, len(rebuilt))
             report.files.append(entry.name)
@@ -790,3 +815,49 @@ def patch_flag_atlas(image_path: str, logos: Mapping[int, LogoImages]) -> AtlasR
             _write_user(f, exe_entry.lba, bytes(exe))
         f.flush()
     return report
+
+
+def read_data_file(image_path: str, name: str) -> tuple[DataFile, DiscFile]:
+    """Parse one 2D data file straight off the disc image."""
+    with open(image_path, "rb") as f:
+        files = _disc_files(f)
+        entry = files.get(name)
+        if entry is None:
+            raise RomError(f"{name} not found on the disc")
+        data = _read_user(f, entry.lba, entry.size)
+    return parse_data_file(data, infer_base(data)), entry
+
+
+def patch_flag_atlas(image_path: str, logos: Mapping[int, LogoImages]) -> AtlasReport:
+    """Paint `logos` (style -> images) into every copy of the flag atlas on the disc.
+
+    Reads the atlas out of `DATSEL.BIN`, then re-encodes each atlas block whose
+    original content it recognises, in every 2D data file that carries a copy;
+    see `rewrite_blocks` for how a file that grows is handled.
+    """
+    source_parsed, _entry = read_data_file(image_path, SOURCE_FILE)
+    original = Vram()
+    for rec in _atlas_blocks(source_parsed):
+        raw, _ = lz_decompress(source_parsed.data, rec.ptr - source_parsed.base)
+        original.put_block(rec.x, rec.y, rec.w, rec.h, raw)
+    painted = Vram()
+    painted.data[:] = original.data
+
+    touched: list[Rect] = []
+    for style, images in logos.items():
+        big, medium, mini = style_rects(style)
+        painted.paint(big, images.big)
+        painted.paint(medium, images.medium)
+        painted.paint(mini, images.mini)
+        touched += [_hw_rect(big), _hw_rect(medium), _hw_rect(mini)]
+
+    edits: list[BlockEdit] = []
+    for rec in _atlas_blocks(source_parsed):
+        r = (rec.x, rec.y, rec.w, rec.h)
+        if not any(_overlaps(r, t) for t in touched):
+            continue
+        before = original.get_block(rec.x, rec.y, rec.w, rec.h)
+        after = painted.get_block(rec.x, rec.y, rec.w, rec.h)
+        if before != after:
+            edits.append(BlockEdit(before, lz_compress(after), ATLAS_FILES + ATLAS_FILE_PREFIXES))
+    return rewrite_blocks(image_path, edits)

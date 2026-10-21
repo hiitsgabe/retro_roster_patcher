@@ -57,6 +57,7 @@ retro-roster list
 retro-roster analyze --rom nhl94.bin
 retro-roster fetch --game nhl94-genesis --provider nhl --season 2025 --out rosters.json
 retro-roster patch --game nhl94-genesis --rom nhl94.bin --out nhl94-2025.bin --rosters rosters.json
+retro-roster images --game we2002 --rom we2002.bin --out art/
 ```
 
 `fetch` and `patch` are separate verbs so you can inspect — or hand-edit — `rosters.json`
@@ -64,26 +65,27 @@ before anything touches a ROM. `patch --season N` does both in one run instead.
 
 ## Command line
 
-Four verbs: `list`, `analyze`, `fetch`, `patch`. `req` below means the verb refuses to run
-without the flag, `yes` means it accepts it, `-` means it does not.
+Five verbs: `list`, `analyze`, `fetch`, `patch`, `images`. `req` below means the verb refuses
+to run without the flag, `yes` means it accepts it, `-` means it does not.
 
-| Flag | `list` | `analyze` | `fetch` | `patch` | Meaning |
-| --- | --- | --- | --- | --- | --- |
-| `--help` | yes | yes | yes | yes | usage for that verb |
-| `--json` | yes | yes | yes | yes | newline-delimited JSON on stdout instead of human text |
-| `--game` | - | yes | req | req | patcher id from the table above |
-| `--rom` | - | req | - | req | input ROM or ISO |
-| `--out` | - | - | yes | req | where to write the rosters file / the patched ROM |
-| `--season` | - | - | req | yes | season year, e.g. `2025` |
-| `--rosters` | - | - | - | yes | patch from a `fetch` file instead of `--season` |
-| `--slot-map` | - | - | - | yes | JSON list of slot mappings |
-| `--language` | - | - | - | yes | menu language, for a game that ships translations |
-| `--no-logos` | - | - | - | yes | keep the game's own flags; by default `we2002` draws each team's logo |
-| `--blank-unused` | - | - | - | yes | `we2002`: empty the name and flag of every slot the slot map leaves out |
-| `--provider` | - | - | yes | yes | data provider, when the game offers more than one |
-| `--league-id` | - | - | yes | yes | provider league id |
-| `--cache-dir` | - | yes | yes | yes | where caches and generated assets live |
-| `--assets-dir` | - | - | yes | yes | directory of user-supplied assets, read only |
+| Flag | `list` | `analyze` | `fetch` | `patch` | `images` | Meaning |
+| --- | --- | --- | --- | --- | --- | --- |
+| `--help` | yes | yes | yes | yes | yes | usage for that verb |
+| `--json` | yes | yes | yes | yes | yes | newline-delimited JSON on stdout instead of human text |
+| `--game` | - | yes | req | req | req | patcher id from the table above |
+| `--rom` | - | req | - | req | req | input ROM or ISO |
+| `--out` | - | - | yes | req | req | where to write the rosters file / the patched ROM |
+| `--season` | - | - | req | yes | - | season year, e.g. `2025` |
+| `--rosters` | - | - | - | yes | - | patch from a `fetch` file instead of `--season` |
+| `--slot-map` | - | - | - | yes | - | JSON list of slot mappings |
+| `--language` | - | - | - | yes | - | menu language, for a game that ships translations |
+| `--no-logos` | - | - | - | yes | - | keep the game's own flags; by default `we2002` draws each team's logo |
+| `--blank-unused` | - | - | - | yes | - | `we2002`: empty the name and flag of every slot the slot map leaves out |
+| `--image` | - | - | - | yes | - | `SLOT=PNG`, repeatable: replace a screen's art (`we2002`: `title`, `menu`, `boot`) |
+| `--provider` | - | - | yes | yes | - | data provider, when the game offers more than one |
+| `--league-id` | - | - | yes | yes | - | provider league id |
+| `--cache-dir` | - | yes | yes | yes | yes | where caches and generated assets live |
+| `--assets-dir` | - | - | yes | yes | - | directory of user-supplied assets, read only |
 
 `--json` and `--help` are accepted on either side of the verb. `analyze` without `--game`
 probes every registered patcher and reports the ones that recognise the file. `patch` needs
@@ -167,6 +169,29 @@ select, match HUD and editor data files; those are re-encoded, and one that
 no longer fits grows into the free sectors after it, with the executable's own
 file table raised to match. The rewritten sectors carry fresh EDC checksums but
 not recomputed ECC, as with the jersey textures.
+
+### Screen art
+
+`we2002` can also swap the art of three screens for your own PNGs. Each is a
+*slot*: the texture page the game draws that screen from, with the pieces laid
+out exactly as the game keeps them, so the first step is to export what is
+there now and paint over it:
+
+```bash
+retro-roster images --game we2002 --rom we2002.bin --out art/
+```
+
+That writes `art/title.png` (the title logo, the ball and the credits),
+`art/menu.png` (the main menu's ball, "Winning Eleven" banner, "2002" and
+glow) and `art/boot.png` (the KONAMI logo and the JFA licence screen). Edit a
+file in place, keeping its size, and hand it back on the next patch, either as
+`--image menu=art/menu.png` (repeatable) or by leaving it at
+`<assets-dir>/images/<slot>.png`. Each piece is reduced to its palette's colour
+budget, 15 colours for the 4bpp title and menu, 255 for the 8bpp boot logos,
+plus transparency, and the palette records are rewritten with it. The menu
+ball's reflection is cleared whenever a menu image is given. The sky of the
+title screen and the dark field behind the main menu are not textures and stay
+as they are. Needs Pillow, like the logos.
 
 ## Library
 
@@ -283,6 +308,7 @@ The `kind` key says which payload a `result` carries.
 | `rom_info` | `analyze` | `matches[]`, each `path`, `size`, `game_id`, `is_valid`, `slots[]`, `extra` |
 | `rosters` | `fetch` | `league`, `season`, `teams`, `players`, `output_path` |
 | `patch` | `patch` | `output_path`, `teams_patched`, `players_patched` |
+| `images` | `images` | `paths[]`, the PNG files written |
 
 ### Exit codes
 
