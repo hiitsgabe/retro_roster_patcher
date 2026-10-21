@@ -704,12 +704,17 @@ class BlockEdit:
 
 @dataclass
 class RawEdit:
-    """An in-place overwrite of a raw (uncompressed) record's data, such as a CLUT."""
+    """An in-place overwrite of a raw (uncompressed) record's data, such as a CLUT.
+
+    `offset` is where in the record's data the bytes go: a CLUT row that holds
+    several 16-colour palettes is one record, and each palette is an offset.
+    """
 
     file: str
     x: int
     y: int
     data: bytes
+    offset: int = 0
 
 
 def rewrite_blocks(
@@ -790,7 +795,7 @@ def rewrite_blocks(
                             f"{entry.name}: no raw record at ({raw_edit.x},{raw_edit.y})"
                         )
                         continue
-                    off = hit[0].ptr - base
+                    off = hit[0].ptr - base + raw_edit.offset
                     rebuilt[off : off + len(raw_edit.data)] = raw_edit.data
             old_sectors = (entry.size + _USER - 1) // _USER
             new_sectors = (len(rebuilt) + _USER - 1) // _USER

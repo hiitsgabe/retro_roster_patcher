@@ -1,4 +1,4 @@
-"""Replaceable screen art: the title logo, the main-menu art and the boot logos.
+"""Replaceable screen art: the title logo, the main-menu art and the boot screens.
 
 Each *slot* is a texture page the game draws a screen's art from: a few LZSS
 image blocks in one 2D data file, laid out on a canvas the way they sit in
@@ -65,9 +65,11 @@ class Slot:
     height: int
     blocks: tuple[Block, ...]
     pieces: tuple[Piece, ...]
-    #: per group, the CLUT records (file, x, y) that receive the group's palette;
-    #: the first is also the one the export reads.
-    cluts: tuple[tuple[tuple[str, int, int], ...], ...]
+    #: per group, the CLUT records that receive the group's palette; the first
+    #: is also the one the export reads. A ref is (file, x, y) of the record,
+    #: or (file, x, y, entry) when the palette is one of several in a wider
+    #: CLUT row: `entry` is its first colour's index within the record.
+    cluts: tuple[tuple[tuple[int | str, ...], ...], ...]
 
 
 SLOTS: dict[str, Slot] = {
@@ -112,27 +114,43 @@ SLOTS: dict[str, Slot] = {
     "boot": Slot(
         name="boot",
         file="LOGO.BIN",
-        bpp=8,
-        width=384,
+        bpp=4,
+        width=768,
         height=256,
+        # Three texture pages side by side: the licence text (768..831), the
+        # JFA screen (832..895) and the KONAMI logo (960..1023, rows 256+).
         blocks=(
             Block(768, 0, 0, 0),
-            Block(800, 0, 64, 0),
-            Block(832, 0, 128, 0),
-            Block(864, 0, 192, 0),
-            Block(832, 128, 128, 128),
-            Block(864, 128, 192, 128),
-            Block(960, 256, 256, 0),
-            Block(992, 256, 320, 0),
-            Block(960, 384, 256, 128),
+            Block(800, 0, 128, 0),
+            Block(832, 0, 256, 0),
+            Block(864, 0, 384, 0),
+            Block(832, 128, 256, 128),
+            Block(864, 128, 384, 128),
+            Block(960, 256, 512, 0),
+            Block(992, 256, 640, 0),
+            Block(960, 384, 512, 128),
         ),
         pieces=(
-            Piece(0, 0, 256, 128, 0),  # KONAMI logo
-            Piece(128, 128, 128, 128, 0),
-            Piece(256, 0, 128, 128, 0),  # JFA licence screen
-            Piece(256, 128, 64, 128, 0),
+            Piece(0, 0, 128, 128, 0),  # licence text, left column
+            Piece(128, 0, 128, 128, 0),  # licence text, right column
+            Piece(256, 0, 128, 128, 1),  # JFA screen: frame strips, emblem
+            Piece(384, 0, 128, 128, 1),  # JFA screen: emblem, caption
+            Piece(256, 128, 128, 128, 1),
+            Piece(384, 128, 128, 128, 1),
+            Piece(512, 0, 72, 128, 2),  # KONAMI lettering
+            Piece(600, 64, 16, 32, 3),
+            Piece(616, 0, 24, 128, 3),
+            Piece(640, 0, 128, 128, 4),  # KONAMI logo, upper half
+            Piece(512, 128, 128, 128, 4),  # KONAMI logo, lower half
         ),
-        cluts=((("LOGO.BIN", 0, 494),),),
+        # One 256-entry CLUT row holds every palette; each group is 16 of them.
+        cluts=(
+            (("LOGO.BIN", 0, 494, 32),),
+            (("LOGO.BIN", 0, 494, 16),),
+            (("LOGO.BIN", 0, 494, 112),),
+            (("LOGO.BIN", 0, 494, 128),),
+            (("LOGO.BIN", 0, 494, 144),),
+        ),
     ),
 }
 
@@ -189,14 +207,20 @@ class _Canvas:
         return bytes(out)
 
 
-def _read_clut(image_path: str, ref: tuple[str, int, int], entries: int) -> list[RGB]:
-    parsed, _entry = read_data_file(image_path, ref[0])
+def _clut_entry(ref: tuple[int | str, ...]) -> int:
+    """The first colour index a CLUT ref addresses within its record."""
+    return int(ref[3]) if len(ref) > 3 else 0
+
+
+def _read_clut(image_path: str, ref: tuple[int | str, ...], entries: int) -> list[RGB]:
+    file, x, y = str(ref[0]), int(ref[1]), int(ref[2])
+    parsed, _entry = read_data_file(image_path, file)
     for rec in parsed.records():
-        if rec.kind & 0xFF != KIND_IMAGE and (rec.x, rec.y) == (ref[1], ref[2]):
-            off = rec.ptr - parsed.base
+        if rec.kind & 0xFF != KIND_IMAGE and (rec.x, rec.y) == (x, y):
+            off = rec.ptr - parsed.base + 2 * _clut_entry(ref)
             raw = parsed.data[off : off + 2 * entries]
             return [_rgb(int.from_bytes(raw[i : i + 2], "little")) for i in range(0, len(raw), 2)]
-    raise RomError(f"{ref[0]} has no CLUT record at ({ref[1]},{ref[2]})")
+    raise RomError(f"{file} has no CLUT record at ({x},{y})")
 
 
 def _load(image_path: str, slot: Slot) -> tuple[_Canvas, dict[tuple[int, int], bytes]]:
@@ -303,7 +327,9 @@ def import_slot(image_path: str, slot: Slot, png: bytes) -> tuple[list[BlockEdit
                     canvas.set(p.x + i, p.y + j, 0 if alpha[k] < 128 else idx[k] + 1)
         clut = b"\x00\x00" + b"".join(_bgr555(c).to_bytes(2, "little") for c in pal)
         for ref in clut_refs:
-            raw_edits.append(RawEdit(ref[0], ref[1], ref[2], clut))
+            raw_edits.append(
+                RawEdit(str(ref[0]), int(ref[1]), int(ref[2]), clut, offset=2 * _clut_entry(ref))
+            )
     for p in slot.pieces:
         if p.clear:
             for y in range(p.y, p.y + p.h):

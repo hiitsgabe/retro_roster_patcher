@@ -183,6 +183,36 @@ def test_a_clear_piece_is_emptied_whatever_the_png_shows(disc):
     assert first != _nibbles(0) and second == _nibbles(0)
 
 
+def test_a_clut_entry_offset_writes_inside_the_record(disc):
+    path, _title = disc
+    slot = Slot(
+        name="test",
+        file="TITLE.BIN",
+        bpp=4,
+        width=256,
+        height=256,
+        blocks=TEST_SLOT.blocks,
+        pieces=(Piece(0, 0, 128, 128, 0),),
+        cluts=((("TITLE.BIN", 0, 491, 4),),),  # the palette sits 4 colours in
+    )
+    img = Image.new("RGBA", (256, 256), (0, 0, 255, 255))
+    buf = io.BytesIO()
+    img.save(buf, "PNG")
+    blocks, raws = sa.import_slot(str(path), slot, buf.getvalue())
+    assert raws[0].offset == 8
+    fa.rewrite_blocks(str(path), blocks, raws)
+    with open(path, "rb") as f:
+        entry = fa._disc_files(f)["TITLE.BIN"]
+    data = _read_file(path, entry.lba, entry.size)
+    recs = {(r.x, r.y): r for r in fa.parse_data_file(data, BASE).records()}
+    off = recs[(0, 491)].ptr - BASE
+    assert data[off : off + 8] == _clut(
+        [(0, 0, 0), (255, 0, 0), (0, 255, 0), (0, 0, 255)]
+    )  # untouched
+    assert data[off + 8 : off + 10] == b"\x00\x00"  # the palette's transparent entry
+    assert sa._read_clut(str(path), ("TITLE.BIN", 0, 491, 4), 2)[1][2] > 200  # blue, read back
+
+
 def test_an_unknown_slot_is_refused(disc):
     path, _title = disc
     with pytest.raises(ValueError):
