@@ -182,17 +182,24 @@ def _patch_options(game_id: str, args: argparse.Namespace, patcher: Patcher) -> 
     or a request for Spanish menus silently reports success in Japanese.
 
     Duck-typed on a `languages` attribute — `**options` has no signature to
-    inspect. Absent means the game ships no translations.
+    inspect. Absent means the game ships no translations. `supports_logos`
+    plays the same role for `--no-logos`.
     """
+    options: dict[str, Any] = {}
     language = getattr(args, "language", "")
-    if not language:
-        return {}
-    codes: tuple[str, ...] = tuple(getattr(patcher, "languages", ()))
-    if not codes:
-        raise UsageError(f"{game_id} does not take --language")
-    if language not in codes:
-        raise UsageError(f"{game_id} has no language {language!r}; it has {', '.join(codes)}")
-    return {"language": language}
+    if language:
+        codes: tuple[str, ...] = tuple(getattr(patcher, "languages", ()))
+        if not codes:
+            raise UsageError(f"{game_id} does not take --language")
+        if language not in codes:
+            raise UsageError(f"{game_id} has no language {language!r}; it has {', '.join(codes)}")
+        options["language"] = language
+    # Same shape for `--no-logos`: absent means the game draws no logos.
+    if getattr(args, "no_logos", False):
+        if not getattr(patcher, "supports_logos", False):
+            raise UsageError(f"{game_id} does not take --no-logos")
+        options["logos"] = False
+    return options
 
 
 def _map_extras(patcher: Patcher, rom: Path) -> dict[str, Any]:

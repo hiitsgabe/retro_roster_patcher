@@ -384,3 +384,42 @@ def test_the_language_help_names_exactly_the_codes_we2002_ships(capsys, monkeypa
 
     assert "menu language, for a game that ships translations (we2002: en, es, fr, pt)" in help_text
     assert f"(we2002: {', '.join(WE2002Patcher.languages)})" in help_text
+
+
+# --- `--no-logos`, which `_patch_options` resolves the same way -------------
+
+
+class LogoPatcher(NoLanguagePatcher):
+    """A patcher that draws logos, so `--no-logos` has something to switch off."""
+
+    supports_logos: bool = True
+
+
+@pytest.fixture
+def logo_stub():
+    SEEN.clear()
+    try:
+        registry.register("logo-game", platform="test", sport="test")(LogoPatcher)
+        yield
+    finally:
+        registry._REGISTRY.pop("logo-game", None)
+
+
+def test_no_logos_reaches_patch_as_logos_false(tmp_path, logo_stub):
+    assert main(_stub_argv(tmp_path, "logo-game", "--no-logos")) == 0
+    assert _options_seen() == {"logos": False}
+
+
+def test_without_the_flag_no_logos_option_is_forwarded(tmp_path, logo_stub):
+    assert main(_stub_argv(tmp_path, "logo-game")) == 0
+    assert _options_seen() == {}
+
+
+def test_no_logos_on_a_game_that_draws_none_is_a_usage_error(tmp_path, stubs, capsys):
+    code = main(_stub_argv(tmp_path, "no-lang-game", "--no-logos"))
+    assert code == 2
+    assert events(capsys)[-1]["msg"] == "no-lang-game does not take --no-logos"
+
+
+def test_we2002_draws_logos():
+    assert WE2002Patcher.supports_logos is True

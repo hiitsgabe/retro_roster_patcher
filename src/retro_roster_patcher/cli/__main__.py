@@ -108,6 +108,11 @@ def build_parser() -> argparse.ArgumentParser:
         default="",
         help="menu language, for a game that ships translations (we2002: en, es, fr, pt)",
     )
+    p_patch.add_argument(
+        "--no-logos",
+        action="store_true",
+        help="keep the game's own flags instead of drawing each team's logo (we2002)",
+    )
     p_patch.set_defaults(handler=commands.cmd_patch)
 
     return parser

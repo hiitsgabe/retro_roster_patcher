@@ -16,6 +16,7 @@ while giving two of the thirty-two no palette at all.
 from retro_roster_patcher.games.we2002.models import WEPlayerRecord, WETeamRecord
 from retro_roster_patcher.games.we2002.rom_writer import (
     _ML_COLOR_OFFSETS,
+    _OFS_BANDIERE_COLORE1,
     _OFS_BANDIERE_FORMA1,
     _OFS_BANDIERE_FORMA2,
     _OFS_BANDIERE_FORMA3,
@@ -148,13 +149,15 @@ def test_the_two_master_league_capacities_are_not_the_same_number(tmp_path):
     assert _slot_player_range(31) == (0, 15)
 
 
-def test_two_master_league_slots_have_no_known_colour_offset():
-    # `_compute_ml_color_offsets` traces the upstream C++ write sequence, and
-    # that sequence never writes ml[5] or ml[22]. The count and the two indices
+def test_one_master_league_slot_has_no_colour_offset_of_its_own():
+    # `_compute_ml_color_offsets` traces the upstream C++ write sequence, which
+    # never writes ml[5] or ml[22]; ml[5] was then read off the game (raw slot
+    # 36), and ml[22] draws through ml[10]'s palette. The count and the index
     # are asserted separately because the comments in `rom_writer.py` state
-    # both, and a table that lost a different slot would still have 30 entries.
-    assert len(_ML_COLOR_OFFSETS) == 30
-    assert sorted(set(range(32)) - set(_ML_COLOR_OFFSETS)) == [5, 22]
+    # both, and a table that lost a different slot would still have 31 entries.
+    assert len(_ML_COLOR_OFFSETS) == 31
+    assert sorted(set(range(32)) - set(_ML_COLOR_OFFSETS)) == [22]
+    assert _ML_COLOR_OFFSETS[5] == [(_OFS_BANDIERE_COLORE1 + 678, 32)]
 
 
 def test_a_slot_with_a_colour_offset_gets_a_style_byte_and_a_palette(tmp_path):
@@ -173,24 +176,23 @@ def test_a_slot_with_a_colour_offset_gets_a_style_byte_and_a_palette(tmp_path):
 
 
 def test_a_slot_with_no_colour_offset_gets_the_style_byte_and_no_palette(tmp_path):
-    # The consequence the `rom_writer.py` comments have to state: slots 5 and 22
-    # take a new geometric flag pattern over whatever palette the original disc
-    # held, and `patcher.py` counts them as patched. Inventing an offset for
-    # them would write colour bytes into an unidentified ISO structure, so
-    # leaving them alone is the safe behaviour and is meant to stay.
+    # The consequence the `rom_writer.py` comments have to state: slot 22 takes
+    # a new geometric flag pattern over the palette slot 10 was given, because
+    # the game draws it through slot 10's CLUT, and `patcher.py` counts it as
+    # patched. Writing colour bytes for it would land on slot 10's palette.
     path = _synthetic_iso(tmp_path)
     writer = RomWriter(str(path), str(path))
     team = _team()
 
-    writer.write_flag(5, team)
+    writer.write_flag(22, team)
     data = path.read_bytes()
 
     style, _ = _build_flag_data(team)
-    assert [data[base + _SQUADRE_NAZ + 5] for base in _FORMA_BASES] == [style] * 5
+    assert [data[base + _SQUADRE_NAZ + 22] for base in _FORMA_BASES] == [style] * 5
     # The image started empty, so the five style bytes are the only thing in it:
     # 32 palette bytes would have gone somewhere, and there is nowhere for them.
     assert len(data) - data.count(b"\x00") == 5
-    assert path.stat().st_size == max(_FORMA_BASES) + _SQUADRE_NAZ + 5 + 1
+    assert path.stat().st_size == max(_FORMA_BASES) + _SQUADRE_NAZ + 22 + 1
 
 
 def test_the_slot_that_straddles_a_sector_boundary_is_written_in_two_pieces(tmp_path):

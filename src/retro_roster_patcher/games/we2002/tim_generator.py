@@ -59,10 +59,10 @@ class TimGenerator:
         tim_pixel_width = _tim_row_words(width, bpp)
 
         img = Image.open(png_path).convert("RGB")
-        img = img.resize((width, height), Image.LANCZOS)
+        img = img.resize((width, height), Image.Resampling.LANCZOS)
 
         img_quantized = img.quantize(colors=num_colors, method=Image.Quantize.MEDIANCUT)
-        palette = img_quantized.getpalette()
+        palette = img_quantized.getpalette() or []
         pixel_data_raw = list(img_quantized.getdata())
 
         # Build CLUT (Color Look-Up Table) in BGR555 format

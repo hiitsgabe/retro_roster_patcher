@@ -135,7 +135,7 @@ def test_the_readme_has_the_expected_mix_of_fenced_blocks():
     counted = {}
     for info, _ in _fences():
         counted[info] = counted.get(info, 0) + 1
-    assert counted == {"bash": 3, "python": 2, "python no-run": 2, "json": 1}
+    assert counted == {"bash": 4, "python": 2, "python no-run": 2, "json": 1}
 
 
 def test_every_runnable_python_example_executes(tmp_path, monkeypatch):
@@ -249,7 +249,7 @@ def test_the_flag_table_matches_the_parser_flag_for_flag():
             elif cell != "-":
                 raise LookupError(f"unreadable cell {cell!r} for {flag} under {verb}")
 
-    assert len(rows) == 13
+    assert len(rows) == 14
     assert documented == expected
 
 

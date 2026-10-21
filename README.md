@@ -78,6 +78,7 @@ without the flag, `yes` means it accepts it, `-` means it does not.
 | `--rosters` | - | - | - | yes | patch from a `fetch` file instead of `--season` |
 | `--slot-map` | - | - | - | yes | JSON list of slot mappings |
 | `--language` | - | - | - | yes | menu language, for a game that ships translations |
+| `--no-logos` | - | - | - | yes | keep the game's own flags; by default `we2002` draws each team's logo |
 | `--provider` | - | - | yes | yes | data provider, when the game offers more than one |
 | `--league-id` | - | - | yes | yes | provider league id |
 | `--cache-dir` | - | yes | yes | yes | where caches and generated assets live |
@@ -131,6 +132,37 @@ dropped.
 WE2002 menu translation `w202-english.ppf`, which this project does not redistribute: drop
 that file in and its menu records are merged into whichever language PPF `--language`
 selected. Without it the roster patch still applies and the menus stay Japanese.
+
+### Team logos
+
+`we2002` draws every mapped team's logo where the game draws its flag: the
+team-select grid, the small flag beside the selected team, and the large flag of
+the match intro and scoreboard. The logo is the one the provider publishes for
+the team (ESPN's `Team.logo_url`), downloaded once into `--cache-dir` and
+rendered with Pillow, so this needs the `images` extra:
+
+```bash
+pip install "retro-roster-patcher[images]"
+```
+
+Without Pillow the roster patch still applies and the flags stay the striped
+default, with one status line saying so. `--no-logos` turns the logos off on
+purpose. To use your own image for a team, put a PNG at
+`<assets-dir>/logos/<team_id>.png` (ESPN's team id, the one in the slot map)
+and pass `--assets-dir`; it wins over the download.
+
+How it works, and the limits that follow. A WE2002 flag is a *style* byte per
+team (one of 61 shapes drawn as 4bpp bitmaps) plus a 16-colour palette per
+team, so each logo needs a style of its own: the patcher picks styles no
+untouched team uses first, then the least-used ones, and 53 styles exist, so a
+league of more than 53 teams leaves the rest striped. Fifteen opaque colours
+and a transparent background is what a style holds, which is what the logo is
+reduced to. Master League slot 22 draws through slot 10's palette and keeps the
+striped flag. The bitmaps live LZSS-compressed in the team
+select, match HUD and editor data files; those are re-encoded, and one that
+no longer fits grows into the free sectors after it, with the executable's own
+file table raised to match. The rewritten sectors carry fresh EDC checksums but
+not recomputed ECC, as with the jersey textures.
 
 ## Library
 

@@ -131,7 +131,15 @@ def test_core_assets_declares_its_own_surface():
 
 
 def test_the_we2002_package_exports_exactly_these_names():
-    expected = {"AfsHandler", "CsvHandler", "TimGenerator", "WE2002Patcher"}
+    expected = {
+        "AfsHandler",
+        "CsvHandler",
+        "LogoImages",
+        "TimGenerator",
+        "WE2002Patcher",
+        "patch_flag_atlas",
+        "render_logo",
+    }
     assert set(games.we2002.__all__) == expected
     assert [name for name in games.we2002.__all__ if not hasattr(games.we2002, name)] == []
 

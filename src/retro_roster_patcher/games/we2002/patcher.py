@@ -22,6 +22,7 @@ the JSON-serialisable `core.models` one crosses this interface.
 
 from __future__ import annotations
 
+import hashlib
 import struct
 from pathlib import Path
 from typing import Any
@@ -43,10 +44,12 @@ from ...core.registry import register
 from ...sports import _http
 from ...sports.espn import EspnClient
 from ...sports.models import LeagueData, Team, TeamRoster
+from .flag_atlas import assign_styles
+from .logo_render import render_logo
 from .models import WETeamRecord
 from .ppf import PPFError, apply_ppf
 from .rom_reader import RomReader
-from .rom_writer import RomWriter
+from .rom_writer import _ML_COLOR_OFFSETS, _OFS_BANDIERE_FORMA1, RomWriter
 from .stat_mapper import StatMapper
 from .translations.we2002 import LANGUAGE_CODES, LANGUAGES, ensure_ppf
 
@@ -101,6 +104,8 @@ class WE2002Patcher(Patcher):
     #: must be able to ask before calling `patch`, and absent means "ships no
     #: translations".
     languages: tuple[str, ...] = tuple(LANGUAGE_CODES)
+    #: `patch` draws each team's logo into the flag slots unless `logos=False`.
+    supports_logos: bool = True
 
     def __init__(
         self,
@@ -118,8 +123,10 @@ class WE2002Patcher(Patcher):
             on_status=on_status,
             on_partial=on_partial,
         )
-        # User-supplied, read-only: holds the community `w202-english.ppf`.
+        # User-supplied, read-only: holds the community `w202-english.ppf` and
+        # any `logos/<team_id>.png` overrides.
         self.assets_dir = Path(assets_dir) if assets_dir is not None else None
+        self._transport = transport
         self.mapper = StatMapper()
         # Keep it `Any`: tests substitute a stand-in implementing only the
         # methods `fetch` calls.
@@ -256,6 +263,8 @@ class WE2002Patcher(Patcher):
                 roster, data.teams, order_as_given=order_as_given
             )
             self._apply_kit_colours(record, roster.team)
+            record.team_id = roster.team.id
+            record.logo_url = roster.team.logo_url
             teams[entry.slot_index] = record
         return MappedRosters(game_id=self.game_id, teams=teams)
 
@@ -310,6 +319,12 @@ class WE2002Patcher(Patcher):
             # out in slot order regardless of insertion order.
             slots = sorted(slot for slot in rosters.teams if 0 <= slot < MAX_NAT_SLOTS)
 
+            # Logos go first: they decide each team's flag style and palette,
+            # which the per-team writes below put into the ROM.
+            logos_queued = 0
+            if options.get("logos", True):
+                logos_queued = self._prepare_logos(rom_path, rosters, slots, writer)
+
             teams_patched = 0
             players_patched = 0
             for i, slot in enumerate(slots):
@@ -333,6 +348,8 @@ class WE2002Patcher(Patcher):
             # Every `write_team` above queued a 3D-jersey TEX patch; without this
             # they are discarded when the writer goes out of scope.
             writer.flush_tex_patches()
+            if logos_queued:
+                self._flush_logos(writer)
 
             if on_progress is not None:
                 on_progress(1.0, "Saving patched ROM...")
@@ -348,6 +365,101 @@ class WE2002Patcher(Patcher):
             teams_patched=teams_patched,
             players_patched=players_patched,
         )
+
+    def _prepare_logos(
+        self,
+        rom_path: Path,
+        rosters: MappedRosters,
+        slots: list[int],
+        writer: Any,
+    ) -> int:
+        """Give every mapped team with a logo a flag style of its own.
+
+        Downloads (or reads from `assets_dir/logos/<team_id>.png`) each team's
+        logo, renders it into the style's three bitmaps and queues them on the
+        writer; the record's style byte and palette are set so the per-team
+        writes carry them. Without Pillow every logo is skipped, with a single
+        status line. One team's bad logo costs that team its logo and nothing
+        else. Master League slot 22 draws through slot 10's palette, so a logo
+        there would take slot 10's colours: that slot keeps the striped flag.
+        Returns how many logos were queued.
+        """
+        wanted = []
+        for slot in slots:
+            record = rosters.teams[slot]
+            if not (record.logo_url or self._logo_override(record)):
+                continue
+            if slot < MAX_ML_SLOTS and slot not in _ML_COLOR_OFFSETS:
+                self.status(
+                    f"{record.name}: logo skipped, Master League slot {slot} has no "
+                    f"palette of its own"
+                )
+                continue
+            wanted.append(slot)
+        if not wanted:
+            return 0
+        with open(rom_path, "rb") as f:
+            f.seek(_OFS_BANDIERE_FORMA1)
+            forma = f.read(95)
+        patched = set(slots) | {MAX_NAT_SLOTS + s for s in slots if s < MAX_ML_SLOTS}
+        styles = assign_styles(forma, patched, wanted)
+        queued = 0
+        for slot in wanted:
+            record = rosters.teams[slot]
+            if slot not in styles:
+                self.status(f"{record.name}: logo skipped, no flag styles left")
+                continue
+            try:
+                png = self._load_logo(record)
+                images = render_logo(png)
+            except ImportError:
+                self.status("Pillow is not installed; team logos skipped")
+                return queued
+            except Exception as exc:  # a bad download or an unreadable image
+                self.status(f"{record.name}: logo skipped: {exc}")
+                continue
+            record.logo_png = png
+            record.flag_style = styles[slot]
+            record.flag_palette = list(images.palette) + [(0, 0, 0)]
+            writer.queue_logo(styles[slot], images)
+            queued += 1
+        return queued
+
+    def _logo_override(self, record: WETeamRecord) -> Path | None:
+        if self.assets_dir is None or record.team_id is None:
+            return None
+        candidate = self.assets_dir / "logos" / f"{record.team_id}.png"
+        return candidate if candidate.is_file() else None
+
+    def _load_logo(self, record: WETeamRecord) -> bytes:
+        """The logo bytes: the user's override, the cache, or a download."""
+        override = self._logo_override(record)
+        if override is not None:
+            return override.read_bytes()
+        digest = hashlib.sha1(record.logo_url.encode()).hexdigest()
+        cache = self.cache_dir / "logos" / f"{digest}.png"
+        if cache.is_file():
+            return cache.read_bytes()
+        tx = self._transport or _http.default_transport
+        try:
+            content = tx(record.logo_url, {}, 15.0)
+        except Exception as exc:
+            raise ApiError(f"GET {record.logo_url} failed: {exc}") from exc
+        cache.parent.mkdir(parents=True, exist_ok=True)
+        cache.write_bytes(content)
+        return content
+
+    def _flush_logos(self, writer: Any) -> None:
+        """Write the queued logos into the atlas; a failure costs the logos only."""
+        try:
+            report = writer.flush_logo_patches()
+        except (RomError, ValueError, OSError) as exc:
+            self.status(f"Team logos skipped: {exc}")
+            return
+        for line in report.skipped:
+            self.status(f"Logo atlas: {line}")
+        if report.files:
+            self.status(f"Team logos written to {len(report.files)} data files")
 
     def default_slot_mapping(self, data: LeagueData) -> list[SlotMapping]:
         """Sequential mapping: team 0 to slot 0, team 1 to slot 1, and so on.

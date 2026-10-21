@@ -27,6 +27,7 @@ import shutil
 import struct
 import unicodedata
 
+from .flag_atlas import AtlasReport, LogoImages, patch_flag_atlas
 from .models import WEPlayerRecord, WETeamRecord
 
 
@@ -1345,6 +1346,11 @@ def _build_flag_data(team: "WETeamRecord") -> tuple[int, bytes]:
     if team.flag_style is not None and team.flag_palette and len(team.flag_palette) == 16:
         style = team.flag_style
         palette = [_rgb_to_ps1_color(*c) for c in team.flag_palette]
+        if team.logo_png is not None:
+            # A logo's colours are opaque, black included: set STP so 0x0000
+            # (transparent) is never produced. The last entry is the next
+            # slot's transparent index 0 and stays clear.
+            palette = [c | 0x8000 for c in palette[:15]] + [0]
     else:
         style = 1  # 3 vertical stripes (see flag style table above)
         primary = _rgb_to_ps1_color(*team.kit_home)
@@ -1506,6 +1512,20 @@ def _write_chunks(f, data: bytes, chunks: list[tuple[int, int]]) -> None:
         f.seek(offset)
         f.write(data[pos : pos + size])
         pos += size
+
+
+def _write_transparent_index(f, team: WETeamRecord, chunks: list[tuple[int, int]]) -> None:
+    """Clear the halfword before a slot's 16 colours when it draws a logo.
+
+    The game builds each slot's CLUT from the 32 bytes starting one halfword
+    *before* its colour entry, so index 0 of a slot is the previous slot's last
+    colour. A logo needs index 0 transparent (0x0000); its own last colour is
+    cleared by `_build_flag_data` for the slot after it.
+    """
+    if team.logo_png is None or not chunks:
+        return
+    f.seek(chunks[0][0] - 2)
+    f.write(b"\x00\x00")
 
 
 # Names are written sequentially: 32 ML teams (reversed) then 63 national. The
@@ -1672,10 +1692,10 @@ _NAT_COLOR_OFFSETS = _compute_nat_color_offsets()
 
 
 def _compute_ml_color_offsets() -> dict:
-    """Compute {ml_index: [(offset, nbytes)]} for 30 of the 32 ML teams.
+    """Compute {ml_index: [(offset, nbytes)]} for 31 of the 32 ML teams.
 
-    ml[5] and ml[22] have no known offset and are absent from the result.
-    ml[26] straddles a sector boundary and comes back as two chunks.
+    ml[22] shares ml[10]'s palette and is absent from the result. ml[26]
+    straddles a sector boundary and comes back as two chunks.
     """
     # Trace the file pointer through OnWriteCD lines 5989-6055.
     pos = _OFS_BANDIERE_COLORE
@@ -1788,10 +1808,13 @@ def _compute_ml_color_offsets() -> dict:
         result[idx] = [(pos, 32)]
         pos += 32
 
-    # ml[5] and ml[22] are never reached by the write sequence above, so
-    # `result` holds 30 of the 32. Leave both out: a guessed offset writes 32
-    # colour bytes into an unidentified ISO structure, which is worse than an
-    # unpatched palette.
+    # ml[5] is never reached by the write sequence above: its palette is raw
+    # slot 36 of the colour table, the entry the national loop skips. Read off
+    # the game: on the Master League team select the slot's CLUT bytes match the
+    # table at `DAT2D.BIN` data offset 74406, sector 36 + 678 (slot 26 found the
+    # same way lands on its chunk above). ml[22] has no palette of its own: the
+    # game draws it through ml[10]'s, so it stays out.
+    result[5] = [(_OFS_BANDIERE_COLORE1 + 678, 32)]
 
     return result
 
@@ -2035,6 +2058,8 @@ class RomWriter:
         self._tex_dir_offsets = None  # ISO9660 directory record offsets for size patching
         # Queued (tex_index, target_rgb) for batch apply
         self._pending_tex_patches: list[tuple[int, tuple[int, int, int]]] = []
+        # Queued style -> logo bitmaps for the flag atlas
+        self._pending_logos: dict[int, LogoImages] = {}
 
     def write_team(
         self,
@@ -2276,10 +2301,10 @@ class RomWriter:
     def _write_flag_impl(self, f, slot_index, team):
         """Write team flag data.
 
-        The style byte goes to all 32 ML slots; the 32-byte palette to 30 of
-        them. `_ML_COLOR_OFFSETS` has no entry for ml[5] or ml[22] — no offset
-        is known — so those two take a new pattern over the original Japanese
-        palette. Do not guess an offset for them.
+        The style byte goes to all 32 ML slots; the 32-byte palette to 31 of
+        them. `_ML_COLOR_OFFSETS` has no entry for ml[22], which the game draws
+        through ml[10]'s palette, so that slot takes a new pattern over
+        whatever ml[10] was given.
         """
         if slot_index < 0 or slot_index >= _SQUADRE_ML:
             return
@@ -2297,9 +2322,10 @@ class RomWriter:
         if slot_index in _ML_COLOR_OFFSETS:
             chunks = _ML_COLOR_OFFSETS[slot_index]
             _write_chunks(f, color_data, chunks)
+            _write_transparent_index(f, team, chunks)
 
     def write_flag(self, slot_index: int, team: WETeamRecord):
-        """Write team flag (style byte, and 16 colors for 30 of the 32 slots)."""
+        """Write team flag (style byte, and 16 colors for 31 of the 32 slots)."""
         if not os.path.exists(self.output_path):
             return
         with open(self.output_path, "r+b") as f:
@@ -2476,6 +2502,7 @@ class RomWriter:
         if nat_index in _NAT_COLOR_OFFSETS:
             chunks = _NAT_COLOR_OFFSETS[nat_index]
             _write_chunks(f, color_data, chunks)
+            _write_transparent_index(f, team, chunks)
 
     def write_nat_flag(self, nat_index: int, team: WETeamRecord):
         if not os.path.exists(self.output_path):
@@ -2600,6 +2627,25 @@ class RomWriter:
             _sync(f)
 
         self._pending_tex_patches = []
+
+    def queue_logo(self, style: int, images: LogoImages) -> None:
+        """Draw `images` under `style` in every copy of the flag atlas at flush."""
+        self._pending_logos[style] = images
+
+    def flush_logo_patches(self) -> AtlasReport:
+        """Re-encode the flag atlas blocks with every queued logo painted in.
+
+        Rewrites the 2D data files that carry the atlas (team select, match
+        HUD, editor), growing a file into the free sectors after it when its
+        blocks no longer fit, and raising the sector counts the executable loads
+        by. Raises `RomError` when the image has no such files.
+        """
+        if not self._pending_logos or not os.path.exists(self.output_path):
+            return AtlasReport()
+        try:
+            return patch_flag_atlas(self.output_path, self._pending_logos)
+        finally:
+            self._pending_logos = {}
 
     def verify_patches(self, original_path: str, slot_mapping, we_teams) -> str:
         """Compare original vs patched ROM AND read-back the output to confirm.

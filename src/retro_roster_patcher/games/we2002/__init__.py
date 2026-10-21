@@ -11,9 +11,19 @@ from typing import Any
 
 from .afs_handler import AfsHandler
 from .csv_handler import CsvHandler
+from .flag_atlas import LogoImages, patch_flag_atlas
+from .logo_render import render_logo
 from .patcher import WE2002Patcher
 
-__all__ = ["AfsHandler", "CsvHandler", "TimGenerator", "WE2002Patcher"]
+__all__ = [
+    "AfsHandler",
+    "CsvHandler",
+    "LogoImages",
+    "TimGenerator",
+    "WE2002Patcher",
+    "patch_flag_atlas",
+    "render_logo",
+]
 
 
 def __getattr__(name: str) -> Any:

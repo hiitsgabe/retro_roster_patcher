@@ -52,8 +52,12 @@ class WETeamRecord:
     kit_gk: tuple[int, int, int] = (0, 128, 0)  # RGB
     players: list[WEPlayerRecord] = field(default_factory=list)  # Exactly 22
     jersey_data: bytes | None = None  # Raw 64-byte jersey to copy from ROM
-    flag_style: int | None = None  # Geometric pattern byte (0-15); None = solid
+    flag_style: int | None = None  # Flag/emblem style byte (0-60); None = default stripes
     flag_palette: list[tuple[int, int, int]] | None = None  # 16 RGB colors; None = auto
+    # Where a logo for the flag slots comes from; `patch` fills `logo_png`.
+    team_id: int | None = None
+    logo_url: str = ""
+    logo_png: bytes | None = None
 
 
 @dataclass
