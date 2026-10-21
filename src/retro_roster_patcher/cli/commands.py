@@ -182,8 +182,9 @@ def _patch_options(game_id: str, args: argparse.Namespace, patcher: Patcher) -> 
     or a request for Spanish menus silently reports success in Japanese.
 
     Duck-typed on a `languages` attribute — `**options` has no signature to
-    inspect. Absent means the game ships no translations. `supports_logos`
-    plays the same role for `--no-logos`.
+    inspect. Absent means the game ships no translations. `supports_logos` and
+    `supports_blank_unused` play the same role for `--no-logos` and
+    `--blank-unused`.
     """
     options: dict[str, Any] = {}
     language = getattr(args, "language", "")
@@ -194,11 +195,15 @@ def _patch_options(game_id: str, args: argparse.Namespace, patcher: Patcher) -> 
         if language not in codes:
             raise UsageError(f"{game_id} has no language {language!r}; it has {', '.join(codes)}")
         options["language"] = language
-    # Same shape for `--no-logos`: absent means the game draws no logos.
+    # Same shape for the two switches: absent means the game has no such thing.
     if getattr(args, "no_logos", False):
         if not getattr(patcher, "supports_logos", False):
             raise UsageError(f"{game_id} does not take --no-logos")
         options["logos"] = False
+    if getattr(args, "blank_unused", False):
+        if not getattr(patcher, "supports_blank_unused", False):
+            raise UsageError(f"{game_id} does not take --blank-unused")
+        options["blank_unused"] = True
     return options
 
 

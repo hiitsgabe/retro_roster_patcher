@@ -113,6 +113,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="keep the game's own flags instead of drawing each team's logo (we2002)",
     )
+    p_patch.add_argument(
+        "--blank-unused",
+        action="store_true",
+        help="empty the name and flag of every slot the slot map leaves out (we2002)",
+    )
     p_patch.set_defaults(handler=commands.cmd_patch)
 
     return parser

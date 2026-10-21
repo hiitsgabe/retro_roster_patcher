@@ -249,7 +249,7 @@ def test_the_flag_table_matches_the_parser_flag_for_flag():
             elif cell != "-":
                 raise LookupError(f"unreadable cell {cell!r} for {flag} under {verb}")
 
-    assert len(rows) == 14
+    assert len(rows) == 15
     assert documented == expected
 
 

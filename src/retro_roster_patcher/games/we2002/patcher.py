@@ -44,7 +44,7 @@ from ...core.registry import register
 from ...sports import _http
 from ...sports.espn import EspnClient
 from ...sports.models import LeagueData, Team, TeamRoster
-from .flag_atlas import assign_styles
+from .flag_atlas import VALID_STYLES, LogoImages, assign_styles
 from .logo_render import render_logo
 from .models import WETeamRecord
 from .ppf import PPFError, apply_ppf
@@ -106,6 +106,9 @@ class WE2002Patcher(Patcher):
     languages: tuple[str, ...] = tuple(LANGUAGE_CODES)
     #: `patch` draws each team's logo into the flag slots unless `logos=False`.
     supports_logos: bool = True
+    #: `patch(blank_unused=True)` empties the name and flag of every slot the
+    #: mapping leaves out, in both tables.
+    supports_blank_unused: bool = True
 
     def __init__(
         self,
@@ -321,9 +324,13 @@ class WE2002Patcher(Patcher):
 
             # Logos go first: they decide each team's flag style and palette,
             # which the per-team writes below put into the ROM.
+            blank_unused = bool(options.get("blank_unused", False))
             logos_queued = 0
+            used_styles: set[int] = set()
             if options.get("logos", True):
-                logos_queued = self._prepare_logos(rom_path, rosters, slots, writer)
+                logos_queued, used_styles = self._prepare_logos(
+                    rom_path, rosters, slots, writer, blank_unused
+                )
 
             teams_patched = 0
             players_patched = 0
@@ -344,6 +351,9 @@ class WE2002Patcher(Patcher):
                 # in-range slot has changed the ROM even with an empty squad.
                 teams_patched += 1
                 players_patched += written
+
+            if blank_unused:
+                logos_queued += self._blank_unused(rosters, writer, used_styles)
 
             # Every `write_team` above queued a 3D-jersey TEX patch; without this
             # they are discarded when the writer goes out of scope.
@@ -372,7 +382,8 @@ class WE2002Patcher(Patcher):
         rosters: MappedRosters,
         slots: list[int],
         writer: Any,
-    ) -> int:
+        blank_unused: bool = False,
+    ) -> tuple[int, set[int]]:
         """Give every mapped team with a logo a flag style of its own.
 
         Downloads (or reads from `assets_dir/logos/<team_id>.png`) each team's
@@ -397,13 +408,17 @@ class WE2002Patcher(Patcher):
                 continue
             wanted.append(slot)
         if not wanted:
-            return 0
+            return 0, set()
         with open(rom_path, "rb") as f:
             f.seek(_OFS_BANDIERE_FORMA1)
             forma = f.read(95)
-        patched = set(slots) | {MAX_NAT_SLOTS + s for s in slots if s < MAX_ML_SLOTS}
+        if blank_unused:
+            patched = set(range(MAX_NAT_SLOTS + MAX_ML_SLOTS))
+        else:
+            patched = set(slots) | {MAX_NAT_SLOTS + s for s in slots if s < MAX_ML_SLOTS}
         styles = assign_styles(forma, patched, wanted)
         queued = 0
+        used: set[int] = set()
         for slot in wanted:
             record = rosters.teams[slot]
             if slot not in styles:
@@ -414,7 +429,7 @@ class WE2002Patcher(Patcher):
                 images = render_logo(png)
             except ImportError:
                 self.status("Pillow is not installed; team logos skipped")
-                return queued
+                return queued, used
             except Exception as exc:  # a bad download or an unreadable image
                 self.status(f"{record.name}: logo skipped: {exc}")
                 continue
@@ -423,7 +438,44 @@ class WE2002Patcher(Patcher):
             record.flag_palette = list(images.palette) + [(0, 0, 0)]
             writer.queue_logo(styles[slot], images)
             queued += 1
-        return queued
+            used.add(styles[slot])
+        return queued, used
+
+    def _blank_unused(self, rosters: MappedRosters, writer: Any, used_styles: set[int]) -> int:
+        """Empty every slot the mapping left out, in both tables.
+
+        An empty name, a black kit and a flag style whose three bitmaps are
+        fully transparent; the style is one no mapped team draws, and never 1,
+        the striped default a team without a logo keeps. Returns 1 when a
+        blank style was queued on the writer, so the caller flushes it.
+        """
+        style = next(s for s in VALID_STYLES if s not in used_styles and s != 1)
+        blank = WETeamRecord(
+            name="",
+            short_name="",
+            kit_home=(0, 0, 0),
+            kit_away=(0, 0, 0),
+            kit_third=(0, 0, 0),
+            flag_style=style,
+            flag_palette=[(0, 0, 0)] * 16,
+            logo_png=b"",
+        )
+        writer.queue_logo(
+            style,
+            LogoImages(
+                palette=[(0, 0, 0)] * 15,
+                big=[[0] * 64 for _ in range(28)],
+                medium=[[0] * 24 for _ in range(16)],
+                mini=[[0] * 24 for _ in range(8)],
+            ),
+        )
+        for slot in range(MAX_NAT_SLOTS):
+            if slot in rosters.teams:
+                continue
+            if slot < MAX_ML_SLOTS:
+                writer.write_team(slot, blank, include_flag=True)
+            writer.write_nat_team(slot, blank, include_flag=True)
+        return 1
 
     def _logo_override(self, record: WETeamRecord) -> Path | None:
         if self.assets_dir is None or record.team_id is None:

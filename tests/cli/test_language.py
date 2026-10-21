@@ -390,9 +390,10 @@ def test_the_language_help_names_exactly_the_codes_we2002_ships(capsys, monkeypa
 
 
 class LogoPatcher(NoLanguagePatcher):
-    """A patcher that draws logos, so `--no-logos` has something to switch off."""
+    """A patcher that draws logos and can blank slots, so both switches apply."""
 
     supports_logos: bool = True
+    supports_blank_unused: bool = True
 
 
 @pytest.fixture
@@ -421,5 +422,16 @@ def test_no_logos_on_a_game_that_draws_none_is_a_usage_error(tmp_path, stubs, ca
     assert events(capsys)[-1]["msg"] == "no-lang-game does not take --no-logos"
 
 
-def test_we2002_draws_logos():
+def test_blank_unused_reaches_patch(tmp_path, logo_stub):
+    assert main(_stub_argv(tmp_path, "logo-game", "--blank-unused", "--no-logos")) == 0
+    assert _options_seen() == {"logos": False, "blank_unused": True}
+
+
+def test_blank_unused_on_a_game_without_it_is_a_usage_error(tmp_path, stubs, capsys):
+    assert main(_stub_argv(tmp_path, "no-lang-game", "--blank-unused")) == 2
+    assert events(capsys)[-1]["msg"] == "no-lang-game does not take --blank-unused"
+
+
+def test_we2002_draws_logos_and_blanks_slots():
     assert WE2002Patcher.supports_logos is True
+    assert WE2002Patcher.supports_blank_unused is True

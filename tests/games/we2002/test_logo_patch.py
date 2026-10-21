@@ -240,6 +240,51 @@ def test_an_atlas_failure_is_reported_and_the_roster_patch_still_succeeds(
     assert any("Team logos skipped: no DATSEL.BIN" in line for line in status)
 
 
+def test_blank_unused_empties_every_unmapped_slot_in_both_tables(tmp_path, valid_rom, writers):
+    patcher = _patcher(tmp_path, transport=lambda *a: _png())
+    rosters = _rosters(patcher, [0, 1])
+    patcher.patch(
+        rom_path=valid_rom, output_path=tmp_path / "out.bin", rosters=rosters, blank_unused=True
+    )
+    log = writers[0].log
+    ml = {e[1]: e for e in log if e[0] == "ml"}
+    nat = {e[1]: e for e in log if e[0] == "nat"}
+    assert sorted(ml) == list(range(32)) and sorted(nat) == list(range(63))
+    logo_styles = {ml[0][2], ml[1][2]}
+    blank_style = ml[2][2]
+    assert blank_style not in logo_styles and blank_style != 1
+    for slot, entry in ml.items():
+        if slot >= 2:
+            assert entry[2] == blank_style and entry[3] == [(0, 0, 0)] * 16 and entry[4] == b""
+    for slot, entry in nat.items():
+        if slot >= 2:
+            assert entry[2] == blank_style
+    queued = {e[1]: e[2] for e in log if e[0] == "queue"}
+    assert set(queued) == logo_styles | {blank_style}
+    assert all(v == 0 for row in queued[blank_style].big for v in row)
+    assert ("flush_logos",) in log
+
+
+def test_blank_unused_without_logos_still_queues_the_blank_style(tmp_path, valid_rom, writers):
+    patcher = _patcher(tmp_path)
+    rosters = _rosters(patcher, [0], logo_url="")
+    patcher.patch(
+        rom_path=valid_rom, output_path=tmp_path / "out.bin", rosters=rosters, blank_unused=True
+    )
+    log = writers[0].log
+    queued = [e for e in log if e[0] == "queue"]
+    assert len(queued) == 1 and queued[0][1] != 1
+    assert [e for e in log if e[0] == "nat" and e[1] == 0][0][2] is None  # the mapped team: default
+    assert ("flush_logos",) in log
+
+
+def test_without_blank_unused_the_other_slots_are_not_touched(tmp_path, valid_rom, writers):
+    patcher = _patcher(tmp_path, transport=lambda *a: _png())
+    rosters = _rosters(patcher, [0])
+    patcher.patch(rom_path=valid_rom, output_path=tmp_path / "out.bin", rosters=rosters)
+    assert {e[1] for e in writers[0].log if e[0] in ("ml", "nat")} == {0}
+
+
 # --- the writer's side ------------------------------------------------------
 
 

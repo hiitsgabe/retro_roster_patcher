@@ -79,6 +79,7 @@ without the flag, `yes` means it accepts it, `-` means it does not.
 | `--slot-map` | - | - | - | yes | JSON list of slot mappings |
 | `--language` | - | - | - | yes | menu language, for a game that ships translations |
 | `--no-logos` | - | - | - | yes | keep the game's own flags; by default `we2002` draws each team's logo |
+| `--blank-unused` | - | - | - | yes | `we2002`: empty the name and flag of every slot the slot map leaves out |
 | `--provider` | - | - | yes | yes | data provider, when the game offers more than one |
 | `--league-id` | - | - | yes | yes | provider league id |
 | `--cache-dir` | - | yes | yes | yes | where caches and generated assets live |
@@ -147,7 +148,10 @@ pip install "retro-roster-patcher[images]"
 
 Without Pillow the roster patch still applies and the flags stay the striped
 default, with one status line saying so. `--no-logos` turns the logos off on
-purpose. To use your own image for a team, put a PNG at
+purpose. `--blank-unused` deals with the slots a league does not fill: every
+national and Master League slot outside the slot map gets an empty name, a
+black kit and a fully transparent flag, so the menus show the mapped teams and
+blank entries rather than the 2002 squads. To use your own image for a team, put a PNG at
 `<assets-dir>/logos/<team_id>.png` (ESPN's team id, the one in the slot map)
 and pass `--assets-dir`; it wins over the download.
 
