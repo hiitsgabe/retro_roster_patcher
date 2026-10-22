@@ -14,12 +14,13 @@ from collections.abc import Callable
 
 from ...core.errors import RomError
 from .afs import Table, unwrap, wrap
-from .emblems import CLUB_TABLE, Atlas, paint_logos
+from .emblems import CLUB_TABLE, Atlas, copy_club_table, paint_logos
 from .models import (
     CLUB_SQUAD_SIZE,
     DISPLAY_NAME_BYTES,
     DISPLAY_NAME_CHARS,
     EMBLEM_ENTRIES,
+    EMBLEM_PAIRS,
     LEAGUE_NAME_ANCHOR,
     LEAGUE_NAME_ENTRIES,
     NATIONAL_SLOT_BASE,
@@ -161,26 +162,42 @@ class RomWriter:
     def write_emblems(self, logos: dict[int, bytes]) -> int:
         """Draw each club's PNG logo into every emblem atlas; returns crests written.
 
-        A club missing from an atlas's club table is skipped there. Needs
-        Pillow: the caller catches `ImportError`.
+        The four atlases are one texture to the game: the 64x64 ones (full
+        and club-only) are level 0, the 32x32 ones its mipmap, all read
+        through one CLUT, so a palette is built once, on the full 64x64
+        atlas, and every other atlas is drawn through it (the club-only
+        copies take the club table as is). Fewer colours compress smaller:
+        they are traded away only when a rebuilt atlas would not fit the room
+        the original took. A club missing from an atlas is skipped there.
+        Needs Pillow: the caller catches `ImportError`.
         """
+        blocks: dict[int, bytes] = {}
         written = 0
-        for index in EMBLEM_ENTRIES:
-            header, payload = unwrap(self.reader.read(TEXT_AFS, index))
-            room = self.room(TEXT_AFS, index)
-            # Fewer colours compress smaller: trade them away only when the
-            # rebuilt atlas would not fit the room the original took.
-            for colours in (None, 192, 160, 128, 96, 64, 48):
-                atlas = Atlas.parse(payload)
-                count = paint_logos(atlas, CLUB_TABLE, logos, colours)
-                if not count:
-                    break
-                block = wrap(header, atlas.build())
-                if len(block) <= room:
-                    break
-            if count:
-                self._write_entry(TEXT_AFS, index, block)
-                written = max(written, count)
+        parsed = {
+            index: unwrap(self.reader.read(TEXT_AFS, index))
+            for pair in EMBLEM_PAIRS
+            for index in pair
+        }
+        (big, big_copy), (small, small_copy) = EMBLEM_PAIRS
+        for colours in (None, 96, 64, 48):
+            atlas = Atlas.parse(parsed[big][1])
+            written = paint_logos(atlas, CLUB_TABLE, logos, colours)
+            if not written:
+                return 0
+            palette = atlas.palettes[CLUB_TABLE]
+            small_atlas = Atlas.parse(parsed[small][1])
+            paint_logos(small_atlas, CLUB_TABLE, logos, palette=palette)
+            copies = {}
+            for source, index in ((atlas, big_copy), (small_atlas, small_copy)):
+                copy = Atlas.parse(parsed[index][1])
+                copy_club_table(source, copy)
+                copies[index] = copy
+            built = {big: atlas, small: small_atlas, **copies}
+            blocks = {index: wrap(parsed[index][0], a.build()) for index, a in built.items()}
+            if all(len(b) <= self.room(TEXT_AFS, i) for i, b in blocks.items()):
+                break
+        for index, block in blocks.items():
+            self._write_entry(TEXT_AFS, index, block)
         return written
 
     def blank_emblems(self, clubs: list[int]) -> int:

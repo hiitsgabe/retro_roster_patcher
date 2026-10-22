@@ -8,6 +8,12 @@ palette (256 x RGBA, alpha 0x80 = opaque, entry 0 transparent), but the three
 hold the same colours: the atlas is drawn through one palette, so a repaint
 rewrites every table's. The 64x64 images only ever index entries 0..127.
 
+The palette is stored the way the GS wants its CLUT (CSM1): within every 32
+entries, 8..15 and 16..23 are swapped, like the UI textures' palettes. A
+palette written in index order comes out with half its colours exchanged
+(a red crest turned blue on the real disc), so `Atlas.colours` gives the
+linear view and `paint_logos` swizzles what it writes.
+
 Layout of an atlas payload (after the entry's 32-byte block header):
 
     0x00  u32 image bytes | u16 ?, u8 w, u8 h, u8 w, u8 h, u32 1|1
@@ -29,6 +35,7 @@ from dataclasses import dataclass, field
 
 from ...core.errors import RomError
 from .afs import deflate
+from .textures import clut_swizzle
 
 RGB = tuple[int, int, int]
 
@@ -80,6 +87,10 @@ class Atlas:
             tables.append(recs)
             palettes.append(data[pal_off : pal_off + PALETTE_BYTES] if count else b"")
         return cls(data[:0x10], side, tables, palettes)
+
+    def colours(self, table: int) -> bytes:
+        """The table's palette in index order (the disc keeps it GS-swizzled)."""
+        return clut_swizzle(self.palettes[table]) if self.palettes[table] else b""
 
     def image(self, table: int, ident: int) -> bytes | None:
         for rec in self.tables[table]:
@@ -140,7 +151,11 @@ def used_indices(atlas: Atlas, table: int) -> set[int]:
 
 
 def paint_logos(
-    atlas: Atlas, table: int, logos: dict[int, bytes], colours: int | None = None
+    atlas: Atlas,
+    table: int,
+    logos: dict[int, bytes],
+    colours: int | None = None,
+    palette: bytes | None = None,
 ) -> int:
     """Draw each PNG as the record `ident`'s image, with colours of their own.
 
@@ -152,7 +167,9 @@ def paint_logos(
     every image is drawn through it. Index 0 stays transparent, and a 64x64
     atlas keeps to the 128 entries its images ever index; `colours` caps the
     palette lower still, which makes the streams smaller when the rebuilt
-    atlas outgrows its room. Returns the logos drawn.
+    atlas outgrows its room. With `palette` (1024 bytes, as stored on the
+    disc) no palette is built: every image is drawn through that one, so the
+    atlases of both sizes agree index for index. Returns the logos drawn.
     """
     targets = {
         ident: png
@@ -170,19 +187,26 @@ def paint_logos(
             highest = max(highest, max(indices))
             if t == table and rec.ident in targets:
                 continue
-            kept.append((rec, _through(indices, atlas.palettes[t])))
+            kept.append((rec, _through(indices, atlas.colours(t))))
     entries = 128 if highest < 128 else 256
     if colours is not None:
         entries = min(entries, colours + 1)
     opaque = [px[:3] for canvas in fitted.values() for px in canvas.getdata() if px[3] >= 128]
     opaque += [px[:3] for _rec, pixels in kept for px in pixels if px[3] >= 128]
-    chosen = _median_cut(opaque, entries - 1)
-    palette = bytearray(1024)
-    palette[0:4] = bytes((255, 255, 255, 0))
     lookup: dict[int, RGB] = {}
-    for idx, (r, g, b) in enumerate(chosen, start=1):
-        palette[4 * idx : 4 * idx + 4] = bytes((r, g, b, 0x80))
-        lookup[idx] = (r, g, b)
+    if palette is None:
+        chosen = _median_cut(opaque, entries - 1)
+        linear = bytearray(1024)
+        linear[0:4] = bytes((255, 255, 255, 0))
+        for idx, (r, g, b) in enumerate(chosen, start=1):
+            linear[4 * idx : 4 * idx + 4] = bytes((r, g, b, 0x80))
+            lookup[idx] = (r, g, b)
+        palette = clut_swizzle(bytes(linear))
+    else:
+        linear = bytearray(clut_swizzle(palette))
+        for idx in range(1, 256):
+            if linear[4 * idx + 3]:
+                lookup[idx] = (linear[4 * idx], linear[4 * idx + 1], linear[4 * idx + 2])
     for t in range(len(atlas.palettes)):
         if atlas.palettes[t]:
             atlas.palettes[t] = bytes(palette)
@@ -193,8 +217,20 @@ def paint_logos(
     return len(fitted)
 
 
+def copy_club_table(source: Atlas, target: Atlas) -> None:
+    """Give `target` the club crests and palette of `source` (same size), so
+    the two atlases of a size agree on every index."""
+    streams = {rec.ident: rec.stream for rec in source.tables[CLUB_TABLE]}
+    for rec in target.tables[CLUB_TABLE]:
+        if rec.ident in streams:
+            rec.stream = streams[rec.ident]
+    for t in range(len(target.palettes)):
+        if target.palettes[t]:
+            target.palettes[t] = source.palettes[CLUB_TABLE]
+
+
 def _through(indices: bytes, palette: bytes) -> list[tuple[int, int, int, int]]:
-    """An image's pixels as RGBA through its palette (alpha 0x80 = opaque)."""
+    """An image's pixels as RGBA through a palette in index order (alpha 0x80 = opaque)."""
     return [
         (palette[4 * v], palette[4 * v + 1], palette[4 * v + 2], min(255, palette[4 * v + 3] * 2))
         for v in indices

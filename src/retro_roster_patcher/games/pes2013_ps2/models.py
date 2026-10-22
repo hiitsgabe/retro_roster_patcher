@@ -60,6 +60,8 @@ GROUP_POSITIONS = {"Goalkeeper": 0, "Defender": 3, "Midfielder": 7, "Attacker": 
 #: `0_TEXT.AFS` entries holding the emblem atlases: all teams at 64x64 and 32x32,
 #: then the club-only copies the game also reads.
 EMBLEM_ENTRIES = (604, 600, 606, 602)
+#: (full atlas, club-only copy) of each size; a pair shares one palette.
+EMBLEM_PAIRS = ((604, 606), (600, 602))
 
 #: Screen art the patch can replace: slot name -> texture name in the UI
 #: bundles (every occurrence, in every language archive, is rewritten).

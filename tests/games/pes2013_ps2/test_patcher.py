@@ -313,13 +313,19 @@ def test_the_atlas_round_trips_and_takes_a_logo_with_free_colours(iso, tmp_path)
     assert paint_logos(atlas, CLUB_TABLE, {1: png.getvalue(), 99: png.getvalue()}) == 1
     image = atlas.image(CLUB_TABLE, 1)
     used = {v for v in image if v}
-    # The logo's own red is in the palette (its sharpened rim adds shades of it).
-    palette = atlas.palettes[CLUB_TABLE]
+    # The logo's own red is in the palette (its sharpened rim adds shades of it);
+    # `colours` is the index-order view of the GS-swizzled bytes on the disc.
+    palette = atlas.colours(CLUB_TABLE)
     assert any(palette[4 * i : 4 * i + 4] == bytes((200, 30, 30, 0x80)) for i in used)
+    # Index 8's colour lives at raw position 16 on the disc (GS CSM1 layout).
+    atlas.palettes[CLUB_TABLE] = bytes(i % 256 for i in range(1024))
+    linear = atlas.colours(CLUB_TABLE)
+    assert linear[4 * 8 : 4 * 9] == atlas.palettes[CLUB_TABLE][4 * 16 : 4 * 17]
+    assert linear[4 * 1 : 4 * 2] == atlas.palettes[CLUB_TABLE][4 * 1 : 4 * 2]
     assert image[0] != 0  # the 10x10 logo is trimmed and scaled to fill the square
     # One palette for the whole atlas, and the crest that stays keeps its colour
     # through it: it was drawn with entry 3, whose colour the fixture sets.
-    assert all(pal == palette for pal in atlas.palettes if pal)
+    assert all(pal == atlas.palettes[CLUB_TABLE] for pal in atlas.palettes if pal)
     kept = atlas.image(CLUB_TABLE, 2)
     assert len(set(kept)) == 1 and palette[4 * kept[0] : 4 * kept[0] + 3] == bytes((3, 252, 128))
 
