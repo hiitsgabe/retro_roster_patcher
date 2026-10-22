@@ -295,6 +295,7 @@ def test_the_fixture_player_entry_is_what_the_reader_expects():
 
 
 def test_the_atlas_round_trips_and_takes_a_logo_with_free_colours(iso, tmp_path):
+    pytest.importorskip("PIL")
     import io
 
     from PIL import Image
@@ -335,6 +336,7 @@ def test_the_atlas_round_trips_and_takes_a_logo_with_free_colours(iso, tmp_path)
 
 
 def test_textures_round_trip_and_paint(iso):
+    pytest.importorskip("PIL")
     import io
 
     from PIL import Image
@@ -365,6 +367,7 @@ def unwrap_payload(reader, afs_name, index):
 
 
 def test_patch_writes_crests_league_art_and_screen_images(iso, tmp_path):
+    pytest.importorskip("PIL")
     import io
 
     from PIL import Image
@@ -429,6 +432,7 @@ def test_patch_writes_crests_league_art_and_screen_images(iso, tmp_path):
 
 
 def test_export_images_writes_one_png_per_slot(iso, tmp_path):
+    pytest.importorskip("PIL")
     from PIL import Image
 
     paths = PES2013PS2Patcher(tmp_path).export_images(iso, tmp_path / "art")
@@ -723,6 +727,7 @@ def test_the_patcher_declares_kits_slot_groups_and_nationals():
 
 
 def test_a_picture_of_a_kit_overrides_a_slots_kit(iso, tmp_path):
+    pytest.importorskip("PIL")
     from retro_roster_patcher.core.errors import CapabilityError
     from retro_roster_patcher.core.kits import KitSpec, render_kit
     from retro_roster_patcher.games.pes2013_ps2.kits import AWAY, HOME, SHIRT, STRIPES
@@ -758,6 +763,7 @@ def test_a_picture_of_a_kit_overrides_a_slots_kit(iso, tmp_path):
 
 
 def test_a_crest_in_assets_dir_is_drawn_instead_of_the_download(iso, tmp_path):
+    pytest.importorskip("PIL")
     from PIL import Image
 
     from retro_roster_patcher.games.pes2013_ps2.emblems import CLUB_TABLE, Atlas

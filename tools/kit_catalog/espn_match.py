@@ -8,7 +8,6 @@ import unicodedata
 import urllib.request
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from extract import fetch  # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 LEAGUES = {
@@ -42,8 +41,50 @@ LEAGUES = {
     "Scotland": ["sco.1"],
     "Mexico": ["mex.1"],
 }
-EXTRA = ["uefa.champions", "uefa.europa", "uefa.europa.conf", "conmebol.libertadores", "conmebol.sudamericana", "afc.champions", "caf.champions"]
-DROP = {"fc", "cf", "sc", "ac", "as", "afc", "sk", "fk", "cd", "cr", "ss", "ssc", "rc", "the", "club", "de", "da", "do", "del", "futebol", "football", "calcio", "1907", "1909", "bc", "kv", "sfc", "ec", "ca", "se", "spc", "cp", "sl"}
+EXTRA = [
+    "uefa.champions",
+    "uefa.europa",
+    "uefa.europa.conf",
+    "conmebol.libertadores",
+    "conmebol.sudamericana",
+    "afc.champions",
+    "caf.champions",
+]
+DROP = {
+    "fc",
+    "cf",
+    "sc",
+    "ac",
+    "as",
+    "afc",
+    "sk",
+    "fk",
+    "cd",
+    "cr",
+    "ss",
+    "ssc",
+    "rc",
+    "the",
+    "club",
+    "de",
+    "da",
+    "do",
+    "del",
+    "futebol",
+    "football",
+    "calcio",
+    "1907",
+    "1909",
+    "bc",
+    "kv",
+    "sfc",
+    "ec",
+    "ca",
+    "se",
+    "spc",
+    "cp",
+    "sl",
+}
 ALIAS = {
     "bayern munchen": "bayern munich",
     "inter milan": "internazionale",
@@ -75,7 +116,11 @@ def teams(code: str) -> list[dict]:
 
     url = f"https://site.api.espn.com/apis/site/v2/sports/soccer/{code}/teams"
     try:
-        d = json.loads(urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": DEFAULT_USER_AGENT}), timeout=20).read())
+        d = json.loads(
+            urllib.request.urlopen(
+                urllib.request.Request(url, headers={"User-Agent": DEFAULT_USER_AGENT}), timeout=20
+            ).read()
+        )
     except Exception:
         return []
     out = []
@@ -86,7 +131,11 @@ def teams(code: str) -> list[dict]:
 
 
 def main():
-    clubs = [line.rstrip("\n").split("\t") for line in open(os.path.join(HERE, "clubs.tsv")) if line.strip()]
+    clubs = [
+        line.rstrip("\n").split("\t")
+        for line in open(os.path.join(HERE, "clubs.tsv"))
+        if line.strip()
+    ]
     pool: dict[str, dict] = {}
     for codes in LEAGUES.values():
         for c in codes:
@@ -96,20 +145,46 @@ def main():
         for t in teams(c):
             pool.setdefault(t["id"], t | {"_league": c})
     print("espn teams in pool:", len(pool))
-    known = {"Athletico-PR": "3458", "Atlético PR": "3458", "Atlético Mineiro": "7632", "Bahia": "9967", "Botafogo": "6086", "Chapecoense": "9318",
-             "Corinthians": "874", "Coritiba": "3456", "Cruzeiro": "2022", "Flamengo": "819", "Fluminense FC": "3445", "Grêmio": "6273",
-             "Internacional": "1936", "Mirassol": "9169", "Palmeiras": "2029", "Red Bull Bragantino": "6079", "Remo": "4936", "Santos FC": "2674",
-             "São Paulo": "2026", "Vasco da Gama": "3454", "Vitória": "3457"}
+    known = {
+        "Athletico-PR": "3458",
+        "Atlético PR": "3458",
+        "Atlético Mineiro": "7632",
+        "Bahia": "9967",
+        "Botafogo": "6086",
+        "Chapecoense": "9318",
+        "Corinthians": "874",
+        "Coritiba": "3456",
+        "Cruzeiro": "2022",
+        "Flamengo": "819",
+        "Fluminense FC": "3445",
+        "Grêmio": "6273",
+        "Internacional": "1936",
+        "Mirassol": "9169",
+        "Palmeiras": "2029",
+        "Red Bull Bragantino": "6079",
+        "Remo": "4936",
+        "Santos FC": "2674",
+        "São Paulo": "2026",
+        "Vasco da Gama": "3454",
+        "Vitória": "3457",
+    }
     result, missing = {}, []
     for rank, name, country, title in clubs:
         if name in known:
-            result[name] = {"espn": known[name], "espn_name": pool.get(known[name], {}).get("displayName", name), "how": "brasileirao rosters"}
+            result[name] = {
+                "espn": known[name],
+                "espn_name": pool.get(known[name], {}).get("displayName", name),
+                "how": "brasileirao rosters",
+            }
             continue
         want = norm(ALIAS.get(norm(name), name))
         want_t = norm(title)
         best, score = None, 0
         for t in pool.values():
-            names = {norm(t.get(k, "")) for k in ("displayName", "shortDisplayName", "name", "location", "nickname")}
+            names = {
+                norm(t.get(k, ""))
+                for k in ("displayName", "shortDisplayName", "name", "location", "nickname")
+            }
             names.discard("")
             for n in names:
                 s = 0
@@ -117,12 +192,19 @@ def main():
                     s = 3
                 elif want and (want in n or n in want) and min(len(n), len(want)) >= 4:
                     s = 2
-                elif set(want.split()) & set(n.split()) and len(set(want.split()) & set(n.split())) >= max(1, len(want.split()) - 1):
+                elif set(want.split()) & set(n.split()) and len(
+                    set(want.split()) & set(n.split())
+                ) >= max(1, len(want.split()) - 1):
                     s = 1
                 if s > score:
                     best, score = t, s
         if best is not None and score >= 2:
-            result[name] = {"espn": best["id"], "espn_name": best["displayName"], "league": best["_league"], "how": f"name score {score}"}
+            result[name] = {
+                "espn": best["id"],
+                "espn_name": best["displayName"],
+                "league": best["_league"],
+                "how": f"name score {score}",
+            }
         else:
             missing.append((rank, name, country, best and best["displayName"], score))
     json.dump(result, open(os.path.join(HERE, "espn_ids.json"), "w"), indent=1, ensure_ascii=False)

@@ -54,8 +54,14 @@ for c in catalog:
             "names": names[1:],
             "wikipedia": c["title"],
             "ranking": int(c["rank"]) if c["rank"].isdigit() else None,
-            "home": {k: c["home"][k] for k in ("shirt", "secondary", "pattern", "shorts", "socks", "sleeves")},
-            "away": {k: c["away"][k] for k in ("shirt", "secondary", "pattern", "shorts", "socks", "sleeves")},
+            "home": {
+                k: c["home"][k]
+                for k in ("shirt", "secondary", "pattern", "shorts", "socks", "sleeves")
+            },
+            "away": {
+                k: c["away"][k]
+                for k in ("shirt", "secondary", "pattern", "shorts", "socks", "sleeves")
+            },
         }
     )
 ids = [c["espn_id"] for c in clubs if c["espn_id"] is not None]
@@ -71,8 +77,14 @@ doc = {
         "Serie A 2026 club (ranking null)."
     ),
     "patterns": ["plain", "stripes", "hoops", "halves", "sash", "pinstripes", "chevron", "sleeves"],
-    "source": "Kit colours and patterns read from each club's English Wikipedia infobox kit fields (2026-27 season), then reviewed by eye against Wikipedia's kit drawings.",
-    "license": "Derived from Wikipedia, CC BY-SA 4.0 (https://creativecommons.org/licenses/by-sa/4.0/); attribute Wikipedia contributors.",
+    "source": (
+        "Kit colours and patterns read from each club's English Wikipedia infobox kit fields "
+        "(2026-27 season), then reviewed by eye against Wikipedia's kit drawings."
+    ),
+    "license": (
+        "Derived from Wikipedia, CC BY-SA 4.0 (https://creativecommons.org/licenses/by-sa/4.0/); "
+        "attribute Wikipedia contributors."
+    ),
     "clubs": clubs,
 }
 json.dump(doc, open(OUT, "w"), indent=1, ensure_ascii=False)
@@ -88,7 +100,9 @@ if "--sheet" in sys.argv:
     for i, c in enumerate(clubs):
         x, y = (i % cols) * cell[0] * 2, (i // cols) * cell[1]
         for j, side in enumerate(("home", "away")):
-            img = Image.open(io.BytesIO(render_kit(KitSpec.from_dict(c[side]), 96, 128))).convert("RGBA")
+            img = Image.open(io.BytesIO(render_kit(KitSpec.from_dict(c[side]), 96, 128))).convert(
+                "RGBA"
+            )
             sheet.alpha_composite(img, (x + j * cell[0] + 2, y + 2))
         d.text((x + 4, y + 134), c["name"][:30], fill=(255, 255, 0, 255))
     sheet.save(os.path.join(HERE, "final_sheet.png"))

@@ -930,11 +930,9 @@ def test_an_athlete_whose_document_has_no_categories_yields_no_record(tmp_path):
     client = EspnClient(str(tmp_path), transport=transport)
     stats = client.get_player_stats(364, 2025, league_code="eng.1")
     assert [s.player_id for s in stats] == [1]
-    assert transport.calls == [
-        SOCCER_LEADERS_URL,
-        _soccer_stats_url(1),
-        _soccer_stats_url(2),
-    ]
+    # The athletes' documents are fetched concurrently: their order is not fixed.
+    assert transport.calls[0] == SOCCER_LEADERS_URL
+    assert sorted(transport.calls[1:]) == sorted([_soccer_stats_url(1), _soccer_stats_url(2)])
 
 
 def test_a_null_stat_value_costs_that_field_and_not_the_record(tmp_path):

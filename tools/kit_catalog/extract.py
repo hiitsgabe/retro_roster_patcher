@@ -28,7 +28,9 @@ RAW = os.path.join(HERE, "raw")
 SHEETS = os.path.join(HERE, "sheets")
 for d in (CACHE, RAW, SHEETS):
     os.makedirs(d, exist_ok=True)
-UA = {"User-Agent": "retro-roster-patcher kit catalogue (https://github.com/hiitsgabe/retro_roster_patcher)"}
+UA = {
+    "User-Agent": "retro-roster-patcher kit catalogue (https://github.com/hiitsgabe/retro_roster_patcher)"
+}
 API = "https://en.wikipedia.org/w/api.php?"
 PARTS = {  # infobox key -> Commons file prefix
     "la": "Kit_left_arm",
@@ -47,7 +49,9 @@ def fetch(url: str, binary: bool = False):
     else:
         for attempt in range(4):
             try:
-                data = urllib.request.urlopen(urllib.request.Request(url, headers=UA), timeout=30).read()
+                data = urllib.request.urlopen(
+                    urllib.request.Request(url, headers=UA), timeout=30
+                ).read()
                 break
             except Exception:
                 if attempt == 3:
@@ -59,7 +63,19 @@ def fetch(url: str, binary: bool = False):
 
 
 def wikitext(title: str) -> tuple[str, str]:
-    q = fetch(API + urllib.parse.urlencode({"action": "parse", "page": title, "prop": "wikitext", "section": 0, "format": "json", "redirects": 1}))
+    q = fetch(
+        API
+        + urllib.parse.urlencode(
+            {
+                "action": "parse",
+                "page": title,
+                "prop": "wikitext",
+                "section": 0,
+                "format": "json",
+                "redirects": 1,
+            }
+        )
+    )
     if "error" in q:
         raise KeyError(f"{title}: {q['error'].get('info')}")
     return q["parse"]["title"], q["parse"]["wikitext"]["*"]
@@ -67,7 +83,10 @@ def wikitext(title: str) -> tuple[str, str]:
 
 def kit_fields(text: str) -> dict[str, str]:
     out = {}
-    for k, v in re.findall(r"\|\s*((?:pattern_(?:la|b|ra|sh|so)|leftarm|body|rightarm|shorts|socks)[123])\s*=\s*([^\n|}]*)", text):
+    for k, v in re.findall(
+        r"\|\s*((?:pattern_(?:la|b|ra|sh|so)|leftarm|body|rightarm|shorts|socks)[123])\s*=\s*([^\n|}]*)",
+        text,
+    ):
         out[k] = re.sub(r"<!--.*?-->", "", v).strip()
     return out
 
@@ -75,7 +94,15 @@ def kit_fields(text: str) -> dict[str, str]:
 def hexrgb(v: str) -> tuple[int, int, int] | None:
     m = re.search(r"([0-9A-Fa-f]{6})", v or "")
     if not m:
-        named = {"white": "FFFFFF", "black": "000000", "red": "FF0000", "blue": "0000FF", "navy": "000080", "green": "008000", "yellow": "FFFF00"}
+        named = {
+            "white": "FFFFFF",
+            "black": "000000",
+            "red": "FF0000",
+            "blue": "0000FF",
+            "navy": "000080",
+            "green": "008000",
+            "yellow": "FFFF00",
+        }
         h = named.get((v or "").strip().lower())
         if not h:
             return None
@@ -88,7 +115,18 @@ def overlay_urls(names: list[str]) -> dict[str, str]:
     urls = {}
     for i in range(0, len(names), 40):
         chunk = names[i : i + 40]
-        q = fetch(API + urllib.parse.urlencode({"action": "query", "titles": "|".join("File:" + n for n in chunk), "prop": "imageinfo", "iiprop": "url", "format": "json"}))
+        q = fetch(
+            API
+            + urllib.parse.urlencode(
+                {
+                    "action": "query",
+                    "titles": "|".join("File:" + n for n in chunk),
+                    "prop": "imageinfo",
+                    "iiprop": "url",
+                    "format": "json",
+                }
+            )
+        )
         norm = {n["to"]: n["from"] for n in q.get("query", {}).get("normalized", [])}
         for page in q.get("query", {}).get("pages", {}).values():
             info = page.get("imageinfo")
@@ -117,7 +155,7 @@ def part_image(base, img, size):
 
 
 def dist(a, b):
-    return sum((x - y) ** 2 for x, y in zip(a, b)) ** 0.5
+    return sum((x - y) ** 2 for x, y in zip(a, b, strict=False)) ** 0.5
 
 
 def contrast(rgb):
@@ -202,10 +240,13 @@ def classify_body(img: Image.Image, mask, shirt, secondary):
 
     def transitions(line):
         vals = [v for v in line if v is not None]
-        return sum(1 for a, b in zip(vals, vals[1:]) if a != b), vals
+        return sum(1 for a, b in zip(vals, vals[1:], strict=False) if a != b), vals
 
     rows = [transitions([lab(x, int(h * f)) for x in range(w)]) for f in (0.4, 0.55, 0.7, 0.85)]
-    cols = [transitions([lab(int(w * f), y) for y in range(int(h * 0.25), h)]) for f in (0.35, 0.5, 0.65)]
+    cols = [
+        transitions([lab(int(w * f), y) for y in range(int(h * 0.25), h)])
+        for f in (0.35, 0.5, 0.65)
+    ]
     across = sorted(t for t, _ in rows)[len(rows) // 2]
     down = sorted(t for t, _ in cols)[len(cols) // 2]
     sec = [lab(x, y) for y in range(h) for x in range(w)]
@@ -234,7 +275,9 @@ def classify_body(img: Image.Image, mask, shirt, secondary):
     if abs(frac(left) - frac(right)) > 0.5:
         return "halves"
     diag = [lab(round(i * (w - 1) / 30), round(h * 0.2 + i * (h * 0.75) / 30)) for i in range(31)]
-    anti = [lab(round((30 - i) * (w - 1) / 30), round(h * 0.2 + i * (h * 0.75) / 30)) for i in range(31)]
+    anti = [
+        lab(round((30 - i) * (w - 1) / 30), round(h * 0.2 + i * (h * 0.75) / 30)) for i in range(31)
+    ]
     if 0.1 < share < 0.45 and max(frac(diag), frac(anti)) > 0.7:
         return "sash"
     return "plain"
@@ -266,7 +309,12 @@ def side(fields, n, urls):
     secondary = next((c for c, s in body[1:] if s >= 0.1 and dist(c, shirt) > 70), None)
     pattern = "plain"
     if secondary is not None and imgs["b"] is not None:
-        pattern = classify_body(part_image(base["b"], imgs["b"], imgs["b"].size), MASKS[("b", imgs["b"].size)], shirt, secondary)
+        pattern = classify_body(
+            part_image(base["b"], imgs["b"], imgs["b"].size),
+            MASKS[("b", imgs["b"].size)],
+            shirt,
+            secondary,
+        )
     sleeve = colours("la")[0][0]
     sleeves = sleeve if dist(sleeve, shirt) > 70 and pattern not in ("halves",) else None
     if pattern == "plain" and sleeves is not None:
@@ -275,9 +323,32 @@ def side(fields, n, urls):
     socks = colours("so")[0][0]
     if secondary is None:
         secondary = sleeves or (shorts if dist(shorts, shirt) > 70 else contrast(shirt))
-    spec = KitSpec(shirt=shirt, secondary=secondary, pattern=pattern, shorts=shorts, socks=socks, sleeves=sleeves)
-    parts = {p: part_image(base[p], imgs[p], size) for p, size in (("la", (31, 59)), ("b", (38, 59)), ("ra", (31, 59)), ("sh", (100, 36)), ("so", (100, 26)))}
-    return spec.to_dict(), parts, {"body_colours": [("#%02x%02x%02x" % c, round(s, 2)) for c, s in body[:4]], "patterns": pats}
+    spec = KitSpec(
+        shirt=shirt,
+        secondary=secondary,
+        pattern=pattern,
+        shorts=shorts,
+        socks=socks,
+        sleeves=sleeves,
+    )
+    parts = {
+        p: part_image(base[p], imgs[p], size)
+        for p, size in (
+            ("la", (31, 59)),
+            ("b", (38, 59)),
+            ("ra", (31, 59)),
+            ("sh", (100, 36)),
+            ("so", (100, 26)),
+        )
+    }
+    return (
+        spec.to_dict(),
+        parts,
+        {
+            "body_colours": [("#{:02x}{:02x}{:02x}".format(*c), round(s, 2)) for c, s in body[:4]],
+            "patterns": pats,
+        },
+    )
 
 
 def wiki_kit(parts):
@@ -292,7 +363,11 @@ def wiki_kit(parts):
 
 
 def main(only):
-    clubs = [line.rstrip("\n").split("\t") for line in open(os.path.join(HERE, "clubs.tsv")) if line.strip()]
+    clubs = [
+        line.rstrip("\n").split("\t")
+        for line in open(os.path.join(HERE, "clubs.tsv"))
+        if line.strip()
+    ]
     if only:
         clubs = [c for c in clubs if c[0] in only]
     # Pass 1: every club's kit fields and overlay drawings, for the cloth masks.
@@ -321,7 +396,7 @@ def main(only):
     build_masks(by_part)
     print("masks:", {f"{k[0]}{k[1]}": len(v) for k, v in by_part.items()})
     catalog = []
-    for rank, name, country, title, real, text, fields, urls in found:
+    for rank, name, country, _title, real, _text, fields, urls in found:
         slug = re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_")
         entry = {"rank": rank, "name": name, "country": country, "title": real}
         drawings = []
@@ -330,12 +405,20 @@ def main(only):
             entry[key] = spec
             entry[f"{key}_info"] = info
             drawings.append(parts)
-        json.dump({"entry": entry, "fields": fields}, open(os.path.join(RAW, f"{slug}.json"), "w"), indent=1)
+        json.dump(
+            {"entry": entry, "fields": fields},
+            open(os.path.join(RAW, f"{slug}.json"), "w"),
+            indent=1,
+        )
         entry["_drawings"] = drawings
         catalog.append(entry)
         h, a = entry["home"], entry["away"]
+
         def brief(k):
-            return f"{k['pattern']:<10} {k['shirt']} {k['secondary']}" if k else "-- no kit fields --"
+            return (
+                f"{k['pattern']:<10} {k['shirt']} {k['secondary']}" if k else "-- no kit fields --"
+            )
+
         print(f"{rank:>3} {name:<26} home {brief(h)} | away {brief(a)}")
     # contact sheets: per club, wiki home, ours home, wiki away, ours away
     cell = (110, 140)
@@ -346,14 +429,20 @@ def main(only):
         for i, e in enumerate(batch):
             y = i * cell[1]
             d.text((4, y + 4), f"{e['rank']} {e['name']}"[:24], fill=(255, 255, 0, 255))
-            for j, (key, parts) in enumerate(zip(("home", "away"), e["_drawings"])):
+            for j, (key, parts) in enumerate(zip(("home", "away"), e["_drawings"], strict=False)):
                 x = 160 + j * 2 * cell[0]
                 if parts:
                     sheet.alpha_composite(wiki_kit(parts), (x + 5, y + 10))
                 if e[key]:
-                    ours = Image.open(io.BytesIO(render_kit(KitSpec.from_dict(e[key]), 96, 128))).convert("RGBA")
+                    ours = Image.open(
+                        io.BytesIO(render_kit(KitSpec.from_dict(e[key]), 96, 128))
+                    ).convert("RGBA")
                     sheet.alpha_composite(ours, (x + cell[0] + 5, y + 6))
-                    d.text((x + cell[0] + 5, y + cell[1] - 12), e[key]["pattern"], fill=(255, 255, 255, 255))
+                    d.text(
+                        (x + cell[0] + 5, y + cell[1] - 12),
+                        e[key]["pattern"],
+                        fill=(255, 255, 255, 255),
+                    )
         sheet.save(os.path.join(SHEETS, f"sheet_{s // 12:02d}.png"))
     for e in catalog:
         e.pop("_drawings")

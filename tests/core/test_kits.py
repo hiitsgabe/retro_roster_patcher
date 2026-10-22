@@ -1,6 +1,7 @@
 """`render_kit` and `kit_from_image` need Pillow, the optional `images` extra."""
 
 import io
+from typing import Any
 
 import pytest
 
@@ -21,8 +22,10 @@ RED = (200, 16, 46)
 WHITE = (255, 255, 255)
 
 
-def _spec(pattern: str, **overrides) -> KitSpec:
-    fields = dict(shirt=RED, secondary=WHITE, pattern=pattern, shorts=WHITE, socks=RED)
+def _spec(pattern: str, **overrides: Any) -> KitSpec:
+    fields: dict[str, Any] = dict(
+        shirt=RED, secondary=WHITE, pattern=pattern, shorts=WHITE, socks=RED
+    )
     fields.update(overrides)
     return KitSpec(**fields)
 

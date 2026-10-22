@@ -95,6 +95,7 @@ def test_the_cipher_round_trips_and_masks_the_stream():
 
 
 def test_a_package_parses_into_three_linear_levels_and_rebuilds():
+    pytest.importorskip("PIL")
     from PIL import Image
 
     payload = build_package()
@@ -111,6 +112,7 @@ def test_a_package_parses_into_three_linear_levels_and_rebuilds():
 
 
 def test_paint_fills_every_level_from_the_picture():
+    pytest.importorskip("PIL")
     package = kt.KitPackage.parse(build_package())
     assert package.paint(half_red()) is package
     assert len(package.to_bytes()) == kt.PACKAGE_SIZE
@@ -140,7 +142,8 @@ class Stub:
     """Reader and writer in one: the fixture's kit table, one package entry."""
 
     def __init__(self, entry: bytes = b"", licensed_nation: bool = False) -> None:
-        self.entry, self.written = entry, None
+        self.entry = entry
+        self.written: tuple[int, bytes] | None = None
         self.table = KitTable.parse(fixture.build_kit_entry())
         if licensed_nation:
             for kit in self.table.nationals[0]:
@@ -159,7 +162,7 @@ class Stub:
 
     @property
     def index(self) -> int:
-        return kt.kit_entry(kt.licensed_slots(self)[1], HOME)
+        return kt.kit_entry(kt.licensed_slots(self)[1], HOME)  # type: ignore[arg-type]  # a stand-in reader
 
 
 def test_licensed_slots_rank_nations_first_then_clubs():
@@ -180,6 +183,7 @@ def test_deflate_to_pads_a_stream_to_the_exact_size():
 
 
 def test_write_kit_png_keeps_the_entry_as_it_was_and_cuts_the_palette_to_fit():
+    pytest.importorskip("PIL")
     entry = build_entry(build_package(), csize=150_000)
     stub = Stub(entry)
     assert kt.write_kit_png(stub, 1, HOME, half_red()) == 255
@@ -197,6 +201,7 @@ def test_write_kit_png_keeps_the_entry_as_it_was_and_cuts_the_palette_to_fit():
 
 
 def test_the_template_is_the_texture_size():
+    pytest.importorskip("PIL")
     from PIL import Image
 
     img = Image.open(io.BytesIO(kt.template_png()))
