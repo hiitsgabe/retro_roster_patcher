@@ -16,8 +16,22 @@ MINI = (24, 8)
 COLOURS = 15
 
 
+WHITE = (255, 255, 255)
+
+
 def render_logo(png: bytes) -> LogoImages:
+    """The menu rendering of `png` (see `render_logos`)."""
+    return render_logos(png)[0]
+
+
+def render_logos(png: bytes) -> tuple[LogoImages, LogoImages]:
     """Fit `png` into each slot, sharing one 15-colour palette across all three.
+
+    Two renderings come back on the same palette: the menu one, with index 0
+    (transparent) around the logo, and the stadium one, with the logo on a
+    white ground, for the flags the match draws (crowd, sideline, scoreboard),
+    which look like torn cloth when their background is see-through. White is
+    always the palette's last colour so both renderings share one CLUT.
 
     The logo is cropped to its opaque pixels and scaled to fit each slot without
     distortion, centred on a transparent background. One palette serves all
@@ -53,26 +67,36 @@ def render_logo(png: bytes) -> LogoImages:
         opaque = [(0, 0, 0)]
     strip = Image.new("RGB", (len(opaque), 1))
     strip.putdata(opaque)
-    quantised = strip.quantize(colors=COLOURS, method=Image.Quantize.MEDIANCUT)
+    quantised = strip.quantize(colors=COLOURS - 1, method=Image.Quantize.MEDIANCUT)
     flat = quantised.getpalette() or []
     palette: list[tuple[int, int, int]] = [
-        (flat[i], flat[i + 1], flat[i + 2]) for i in range(0, min(len(flat), COLOURS * 3), 3)
+        (flat[i], flat[i + 1], flat[i + 2]) for i in range(0, min(len(flat), (COLOURS - 1) * 3), 3)
     ]
-    palette += [(0, 0, 0)] * (COLOURS - len(palette))
+    palette += [(0, 0, 0)] * (COLOURS - 1 - len(palette))
+    palette.append(WHITE)  # the stadium flags' ground, index COLOURS
 
     # A 256-entry palette image for the nearest-colour pass: the fifteen colours
     # repeated, so whatever entry the quantiser picks maps back with `% 15`.
     lookup = Image.new("P", (1, 1))
     lookup.putpalette([c for i in range(256) for c in palette[i % COLOURS]])
 
-    def indices(img: Image.Image) -> list[list[int]]:
+    def indices(img: Image.Image, ground: int) -> list[list[int]]:
         snapped = img.convert("RGB").quantize(palette=lookup, dither=Image.Dither.NONE)
         idx = snapped.tobytes()
         alpha = img.getchannel("A").tobytes()
         w, h = img.size
         return [
-            [0 if alpha[y * w + x] < 128 else (idx[y * w + x] % COLOURS) + 1 for x in range(w)]
+            [ground if alpha[y * w + x] < 128 else (idx[y * w + x] % COLOURS) + 1 for x in range(w)]
             for y in range(h)
         ]
 
-    return LogoImages(palette=palette, big=indices(big), medium=indices(medium), mini=indices(mini))
+    menu = LogoImages(
+        palette=palette, big=indices(big, 0), medium=indices(medium, 0), mini=indices(mini, 0)
+    )
+    stadium = LogoImages(
+        palette=palette,
+        big=indices(big, COLOURS),
+        medium=indices(medium, COLOURS),
+        mini=indices(mini, COLOURS),
+    )
+    return menu, stadium

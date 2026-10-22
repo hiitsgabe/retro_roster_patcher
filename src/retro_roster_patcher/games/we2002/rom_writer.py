@@ -2144,6 +2144,7 @@ class RomWriter:
         self.kit_problems: list[str] = []
         # Queued style -> logo bitmaps for the flag atlas
         self._pending_logos: dict[int, LogoImages] = {}
+        self._pending_stadium: dict[int, LogoImages] = {}
 
     def write_team(
         self,
@@ -2701,9 +2702,14 @@ class RomWriter:
         if tex_index in offsets:
             _update_iso_dir_size_in_handle(f, offsets[tex_index], len(data))
 
-    def queue_logo(self, style: int, images: LogoImages) -> None:
-        """Draw `images` under `style` in every copy of the flag atlas at flush."""
+    def queue_logo(self, style: int, images: LogoImages, stadium: LogoImages | None = None) -> None:
+        """Draw `images` under `style` in every copy of the flag atlas at flush;
+        the stadium files get `stadium` instead when given (the logo on white)."""
         self._pending_logos[style] = images
+        if stadium is not None:
+            self._pending_stadium[style] = stadium
+        else:
+            self._pending_stadium.pop(style, None)
 
     def flush_logo_patches(self) -> AtlasReport:
         """Re-encode the flag atlas blocks with every queued logo painted in.
@@ -2716,7 +2722,10 @@ class RomWriter:
         if not self._pending_logos or not os.path.exists(self.output_path):
             return AtlasReport()
         try:
-            return patch_flag_atlas(self.output_path, self._pending_logos)
+            stadium = (
+                {**self._pending_logos, **self._pending_stadium} if self._pending_stadium else None
+            )
+            return patch_flag_atlas(self.output_path, self._pending_logos, stadium)
         finally:
             self._pending_logos = {}
 

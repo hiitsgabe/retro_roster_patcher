@@ -722,6 +722,11 @@ class RawEdit:
     offset: int = 0
 
 
+def _names_file(edit: BlockEdit, name: str) -> bool:
+    """Whether `edit.files` (names, or prefixes ending in `_`) covers `name`."""
+    return any(name == n or (n.endswith("_") and name.startswith(n)) for n in edit.files)
+
+
 def rewrite_blocks(
     image_path: str,
     block_edits: list[BlockEdit],
@@ -737,7 +742,10 @@ def rewrite_blocks(
     report = AtlasReport()
     if not block_edits and not raw_edits:
         return report
-    by_original = {e.original: e for e in block_edits if e.at is None}
+    by_original: dict[bytes, list[BlockEdit]] = {}
+    for e in block_edits:
+        if e.at is None:
+            by_original.setdefault(e.original, []).append(e)
     by_position = {(n, e.at): e for e in block_edits if e.at is not None for n in e.files}
     wanted_files: set[str] = set()
     prefixes: set[str] = set()
@@ -778,13 +786,15 @@ def rewrite_blocks(
                     raw, _ = lz_decompress(data, off)
                 except ValueError:
                     continue
+
                 edit = by_position.get((entry.name, (rec.x, rec.y)))
                 if edit is None:
-                    edit = by_original.get(raw)
-                if edit is not None and any(
-                    entry.name == n or (n.endswith("_") and entry.name.startswith(n))
-                    for n in edit.files
-                ):
+                    # Several edits may share an original (the menu and the
+                    # stadium copies get different art): the one for this file.
+                    edit = next(
+                        (e for e in by_original.get(raw, ()) if _names_file(e, entry.name)), None
+                    )
+                if edit is not None and _names_file(edit, entry.name):
                     replacements[off] = edit.replacement
             raw_here = raw_by_file.get(entry.name, [])
             if not replacements and not raw_here:
@@ -841,36 +851,51 @@ def read_data_file(image_path: str, name: str) -> tuple[DataFile, DiscFile]:
     return parse_data_file(data, infer_base(data)), entry
 
 
-def patch_flag_atlas(image_path: str, logos: Mapping[int, LogoImages]) -> AtlasReport:
+def patch_flag_atlas(
+    image_path: str,
+    logos: Mapping[int, LogoImages],
+    stadium: Mapping[int, LogoImages] | None = None,
+) -> AtlasReport:
     """Paint `logos` (style -> images) into every copy of the flag atlas on the disc.
 
     Reads the atlas out of `DATSEL.BIN`, then re-encodes each atlas block whose
     original content it recognises, in every 2D data file that carries a copy;
-    see `rewrite_blocks` for how a file that grows is handled.
+    see `rewrite_blocks` for how a file that grows is handled. `stadium`, when
+    given, is what the stadium files (`GDC_*`, the flags a match draws) get
+    instead of `logos`: the same logos on a white ground.
     """
     source_parsed, _entry = read_data_file(image_path, SOURCE_FILE)
     original = Vram()
     for rec in _atlas_blocks(source_parsed):
         raw, _ = lz_decompress(source_parsed.data, rec.ptr - source_parsed.base)
         original.put_block(rec.x, rec.y, rec.w, rec.h, raw)
-    painted = Vram()
-    painted.data[:] = original.data
 
-    touched: list[Rect] = []
-    for style, images in logos.items():
-        big, medium, mini = style_rects(style)
-        painted.paint(big, images.big)
-        painted.paint(medium, images.medium)
-        painted.paint(mini, images.mini)
-        touched += [_hw_rect(big), _hw_rect(medium), _hw_rect(mini)]
+    def paint(images_by_style: Mapping[int, LogoImages]) -> tuple[Vram, list[Rect]]:
+        painted = Vram()
+        painted.data[:] = original.data
+        touched: list[Rect] = []
+        for style, images in images_by_style.items():
+            big, medium, mini = style_rects(style)
+            painted.paint(big, images.big)
+            painted.paint(medium, images.medium)
+            painted.paint(mini, images.mini)
+            touched += [_hw_rect(big), _hw_rect(medium), _hw_rect(mini)]
+        return painted, touched
 
+    targets: list[tuple[Mapping[int, LogoImages], tuple[str, ...]]] = (
+        [(logos, ATLAS_FILES + ATLAS_FILE_PREFIXES)]
+        if stadium is None
+        else [(logos, ATLAS_FILES), (stadium, ATLAS_FILE_PREFIXES)]
+    )
     edits: list[BlockEdit] = []
-    for rec in _atlas_blocks(source_parsed):
-        r = (rec.x, rec.y, rec.w, rec.h)
-        if not any(_overlaps(r, t) for t in touched):
-            continue
-        before = original.get_block(rec.x, rec.y, rec.w, rec.h)
-        after = painted.get_block(rec.x, rec.y, rec.w, rec.h)
-        if before != after:
-            edits.append(BlockEdit(before, lz_compress(after), ATLAS_FILES + ATLAS_FILE_PREFIXES))
+    for images_by_style, files in targets:
+        painted, touched = paint(images_by_style)
+        for rec in _atlas_blocks(source_parsed):
+            r = (rec.x, rec.y, rec.w, rec.h)
+            if not any(_overlaps(r, t) for t in touched):
+                continue
+            before = original.get_block(rec.x, rec.y, rec.w, rec.h)
+            after = painted.get_block(rec.x, rec.y, rec.w, rec.h)
+            if before != after:
+                edits.append(BlockEdit(before, lz_compress(after), files))
     return rewrite_blocks(image_path, edits)

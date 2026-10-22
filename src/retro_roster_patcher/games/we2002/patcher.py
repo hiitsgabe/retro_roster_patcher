@@ -48,7 +48,7 @@ from ...sports.espn import EspnClient
 from ...sports.models import LeagueData, Team, TeamRoster
 from .flag_atlas import VALID_STYLES, LogoImages, assign_styles
 from .jersey_tex import JERSEY_TEMPLATES, apply_choice, is_page_png, page_png, template_preview
-from .logo_render import render_logo
+from .logo_render import render_logos
 from .models import WETeamRecord
 from .ppf import PPFError, apply_ppf
 from .rom_reader import RomReader
@@ -475,7 +475,7 @@ class WE2002Patcher(Patcher):
                 continue
             try:
                 png = self._load_logo(record)
-                images = render_logo(png)
+                images, stadium = render_logos(png)
             except ImportError:
                 self.status("Pillow is not installed; team logos skipped")
                 return queued, used
@@ -485,7 +485,7 @@ class WE2002Patcher(Patcher):
             record.logo_png = png
             record.flag_style = styles[slot]
             record.flag_palette = list(images.palette) + [(0, 0, 0)]
-            writer.queue_logo(styles[slot], images)
+            writer.queue_logo(styles[slot], images, stadium)
             queued += 1
             used.add(styles[slot])
         return queued, used

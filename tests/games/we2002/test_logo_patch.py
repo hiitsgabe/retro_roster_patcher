@@ -53,8 +53,10 @@ class RecordingWriter:
     def flush_tex_patches(self):
         self.log.append(("flush_tex",))
 
-    def queue_logo(self, style, images):
+    def queue_logo(self, style, images, stadium=None):
         self.log.append(("queue", style, images))
+        self.stadium = getattr(self, "stadium", {})
+        self.stadium[style] = stadium
 
     def flush_logo_patches(self):
         self.log.append(("flush_logos",))
@@ -202,7 +204,7 @@ def test_without_pillow_logos_are_skipped_with_one_status_line(
     def no_pillow(png):
         raise ImportError("No module named PIL")
 
-    monkeypatch.setattr(patcher_module, "render_logo", no_pillow)
+    monkeypatch.setattr(patcher_module, "render_logos", no_pillow)
     status = []
     patcher = _patcher(tmp_path, transport=lambda *a: b"png")
     patcher.on_status = status.append

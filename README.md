@@ -165,11 +165,14 @@ team, so each logo needs a style of its own: the patcher picks styles no
 untouched team uses first, then the least-used ones, and 53 styles exist, so a
 league of more than 53 teams leaves the rest striped. Fifteen opaque colours
 and a transparent background is what a style holds, which is what the logo is
-reduced to. Master League slot 22 draws through slot 10's palette and keeps the
-striped flag. The bitmaps live LZSS-compressed in the team
-select, match HUD and editor data files; those are re-encoded, and one that
-no longer fits grows into the free sectors after it, with the executable's own
-file table raised to match. The rewritten sectors carry fresh EDC checksums but
+reduced to: fourteen of its own colours plus white, because the copies of the
+atlas in the stadium files (the sideline and crowd flags a match draws) get
+the logo on a white ground, where the menu copies keep it on transparency.
+Master League slot 22 draws through slot 10's palette and keeps the striped
+flag. The bitmaps live LZSS-compressed in the team select, match HUD, editor
+and stadium data files; those are re-encoded, and one that no longer fits
+grows into the free sectors after it, with the executable's own file table
+raised to match. The rewritten sectors carry fresh EDC checksums but
 not recomputed ECC, as with the jersey textures.
 
 ### Screen art

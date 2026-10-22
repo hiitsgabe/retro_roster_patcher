@@ -613,3 +613,32 @@ def test_nothing_is_written_when_no_block_changes(tmp_path):
     report = patch_flag_atlas(str(path), {36: same})
     assert report.files == []
     assert path.read_bytes() == before
+
+
+def test_the_stadium_files_get_their_own_rendering_of_the_logo(tmp_path):
+    """The menu copies take `logos`, the GDC_ copies `stadium` (the logo on
+    white): two edits for one original block, each landing in its own files."""
+    datsel = _data_file(_atlas_files())
+    datsel3 = _data_file(_atlas_files()[4:])
+    gdc = _data_file(_atlas_files()[4:8], base=0x800C8000)
+    files = {"DATSEL.BIN": (100, datsel), "DATSEL3.BIN": (300, datsel3), "GDC_AD.BIN": (400, gdc)}
+    table = [(100, BASE, (len(datsel) + USER - 1) // USER), (999, 0x800C8000, 50)]
+    path = _build_disc(tmp_path, files, table)
+
+    menu, stadium = _logo(5), _logo(7)
+    report = patch_flag_atlas(str(path), {36: menu}, {36: stadium})
+    assert sorted(report.files) == ["DATSEL.BIN", "DATSEL3.BIN", "GDC_AD.BIN"]
+
+    with open(path, "rb") as f:
+        disc = fa._disc_files(f)
+    for name, expected in (("DATSEL.BIN", menu), ("DATSEL3.BIN", menu), ("GDC_AD.BIN", stadium)):
+        entry = disc[name]
+        data = _read_file(path, entry.lba, entry.size)
+        parsed = parse_data_file(data, infer_base(data))
+        vram = Vram()
+        for rec in fa._atlas_blocks(parsed):
+            vram.put_block(
+                rec.x, rec.y, rec.w, rec.h, lz_decompress(data, rec.ptr - parsed.base)[0]
+            )
+        assert vram.pixels(big_rect(36)) == expected.big, name
+        assert vram.pixels(mini_rect(36)) == expected.mini, name

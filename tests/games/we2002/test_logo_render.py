@@ -67,3 +67,14 @@ def test_a_wide_logo_is_centred_without_distortion():
 def test_garbage_bytes_raise():
     with pytest.raises(OSError):
         render_logo(b"not a png")
+
+
+def test_the_stadium_rendering_sits_on_white_and_shares_the_menu_palette():
+    from retro_roster_patcher.games.we2002.logo_render import COLOURS, render_logos
+
+    menu, stadium = render_logos(_png())
+    assert menu.palette == stadium.palette and menu.palette[-1] == (255, 255, 255)
+    assert menu.big[0][0] == 0 and stadium.big[0][0] == COLOURS  # the corner: see-through vs white
+    assert menu.big[14][32] == stadium.big[14][32] != 0  # the logo itself is the same
+    assert all(v != 0 for row in stadium.big for v in row)
+    assert all(v != 0 for row in stadium.mini for v in row)
