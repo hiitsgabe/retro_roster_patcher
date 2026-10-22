@@ -13,12 +13,15 @@ import unicodedata
 from collections.abc import Callable
 
 from ...core.errors import RomError
-from .emblems import CLUB_TABLE, Atlas, render_logo
+from .afs import Table, unwrap, wrap
+from .emblems import CLUB_TABLE, Atlas, paint_logos
 from .models import (
     CLUB_SQUAD_SIZE,
     DISPLAY_NAME_BYTES,
     DISPLAY_NAME_CHARS,
     EMBLEM_ENTRIES,
+    LEAGUE_NAME_ANCHOR,
+    LEAGUE_NAME_ENTRIES,
     OVER_AFS,
     PART_CLUB_NUMBERS,
     PART_PLAYERS,
@@ -26,8 +29,10 @@ from .models import (
     SHIRT_NAME_BYTES,
     SHIRT_NAME_CHARS,
     TEXT_AFS,
+    TEXT_LANGUAGE_AFS,
 )
 from .rom_reader import OverlayTeams, PlayerTables, RomReader
+from .textures import Bundle
 
 ProgressFn = Callable[[float, str], None]
 
@@ -132,12 +137,8 @@ class RomWriter:
                 if slots is None:
                     continue
                 for slot, text in zip(slots, (name, code), strict=True):
-                    raw = text.encode("utf-8")
-                    while len(raw) > slot.capacity - 1:
-                        text = text[:-1]
-                        raw = text.encode("utf-8")
                     f.seek(base + slot.offset)
-                    f.write(raw.ljust(slot.capacity, b"\0"))
+                    f.write(shorten(text, slot.capacity - 1).ljust(slot.capacity, b"\0"))
 
     # -- emblems -------------------------------------------------------------
 
@@ -147,22 +148,82 @@ class RomWriter:
         A club missing from an atlas's club table is skipped there. Needs
         Pillow: the caller catches `ImportError`.
         """
-        from .afs import unwrap, wrap
-
         written = 0
         for index in EMBLEM_ENTRIES:
             header, payload = unwrap(self.reader.read(TEXT_AFS, index))
             atlas = Atlas.parse(payload)
-            palette = atlas.palettes[CLUB_TABLE]
-            present = {rec.ident for rec in atlas.tables[CLUB_TABLE]}
-            count = 0
-            for club, png in logos.items():
-                if club in present:
-                    atlas.set_image(CLUB_TABLE, club, render_logo(png, atlas.side, palette))
-                    count += 1
+            count = paint_logos(atlas, CLUB_TABLE, logos)
             if count:
                 self._write_entry(TEXT_AFS, index, wrap(header, atlas.build()))
                 written = max(written, count)
+        return written
+
+    # -- leagues -------------------------------------------------------------
+
+    def write_league_name(self, name_offset: int, name: str) -> int:
+        """Rename one league in every language's string tables; returns tables written.
+
+        The tables list the leagues around "Ligue 1"; the string `name_offset`
+        places from it is the one to replace, wherever else it appears in the
+        same table, cut to the room the original took.
+        """
+        written = 0
+        for afs_name in TEXT_LANGUAGE_AFS:
+            if not self.reader.has(afs_name):
+                continue
+            for index in LEAGUE_NAME_ENTRIES:
+                try:
+                    block = self.reader.read(afs_name, index)
+                    header, payload = unwrap(block)
+                    table = Table.parse(payload)
+                except RomError:
+                    continue
+                changed = False
+                for k, part in enumerate(table.parts):
+                    if not part or b"Ligue 1\0" not in part:
+                        continue
+                    ph, leaf = unwrap(part)
+                    new = _rename_league(leaf, name_offset, name)
+                    if new is not None and new != leaf:
+                        table.parts[k] = wrap(ph, new)
+                        changed = True
+                if changed:
+                    self._write_entry(afs_name, index, wrap(header, table.build()))
+                    written += 1
+        return written
+
+    def write_league_icon(self, icon: str, png: bytes) -> int:
+        """Paint `png` over every texture named `icon` in every language's bundles."""
+        written = 0
+        for afs_name in TEXT_LANGUAGE_AFS:
+            if not self.reader.has(afs_name):
+                continue
+            extent = self.reader.extent(afs_name)
+            needle = icon.encode("ascii").ljust(16, b"\0")
+            with open(self.output_path, "rb") as f:
+                entries = self.reader.entries(afs_name)
+                for entry in entries:
+                    if entry.size < 1024:
+                        continue
+                    f.seek(extent.offset + entry.offset)
+                    block = f.read(entry.size)
+                    if block[0] != 0 or block[2] not in (0, 1):
+                        continue
+                    try:
+                        header, payload = unwrap(block)
+                    except RomError:
+                        continue
+                    if needle not in payload:
+                        continue
+                    try:
+                        bundle = Bundle.parse(payload)
+                        tex = bundle.texture(icon)
+                    except (RomError, ValueError):
+                        continue
+                    tex.paint(png)
+                    bundle.set_texture(icon, tex)
+                    self._write_entry(afs_name, entry.index, wrap(header, bundle.build()))
+                    written += 1
         return written
 
     # -- archive plumbing ----------------------------------------------------
@@ -175,12 +236,51 @@ class RomWriter:
         disc), so a rebuilt block has to fit the room the original took.
         """
         extent = self.reader.extent(afs_name)
-        entry = self.reader.entry(afs_name, index)
-        if len(block) > entry.size:
+        entries = self.reader.entries(afs_name)
+        entry = entries[index]
+        # The game reads whole sectors, so a block may run a little past the
+        # entry's size into the padding before the next entry (checked on the
+        # real disc); the size field itself is never changed.
+        following = [e.offset for e in entries if e.offset > entry.offset]
+        room = (min(following) if following else extent.size) - entry.offset
+        if len(block) > room:
             raise RomError(
-                f"{afs_name} entry {index} needs {len(block)} bytes, {entry.size} available; "
+                f"{afs_name} entry {index} needs {len(block)} bytes, {room} available; "
                 f"the new names did not compress small enough"
             )
         with open(self.output_path, "r+b") as f:
             f.seek(extent.offset + entry.offset)
-            f.write(block.ljust(entry.size, b"\0"))
+            f.write(block.ljust(max(entry.size, len(block)), b"\0"))
+
+
+def _rename_league(leaf: bytes, name_offset: int, name: str) -> bytes | None:
+    """`leaf` with the league `name_offset` strings from the anchor renamed in place."""
+    strings = leaf.split(b"\0")
+    try:
+        anchor = strings.index(LEAGUE_NAME_ANCHOR.encode())
+    except ValueError:
+        return None
+    target = anchor + name_offset
+    if not 0 <= target < len(strings) or not strings[target]:
+        return None
+    old = strings[target]
+    raw = shorten(name, len(old)).ljust(len(old), b"\0")
+    return b"\0".join(raw if s == old else s for s in strings)
+
+
+def shorten(text: str, room: int) -> bytes:
+    """UTF-8 of `text` in at most `room` bytes: whole trailing words dropped
+    first ("BRIGHTON & HOVE ALBION" -> "BRIGHTON"), then characters."""
+    words = text.split()
+    while words:
+        raw = " ".join(words).encode("utf-8")
+        if len(raw) <= room:
+            return raw
+        words.pop()
+        if words and words[-1] in ("&", "-", "DE", "DA", "DO", "E"):
+            words.pop()
+    raw = text.encode("utf-8")
+    while len(raw) > room:
+        text = text[:-1]
+        raw = text.encode("utf-8")
+    return raw

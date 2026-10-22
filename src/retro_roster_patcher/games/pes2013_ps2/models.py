@@ -54,6 +54,36 @@ NATIONAL_SQUAD_SIZE = 23
 #: then the club-only copies the game also reads.
 EMBLEM_ENTRIES = (604, 600, 606, 602)
 
+#: The UI text archives, one per language of the US release.
+TEXT_LANGUAGE_AFS = ("U_TEXT.AFS", "B_TEXT.AFS", "F_TEXT.AFS", "M_TEXT.AFS")
+#: Entries of those archives whose string tables carry the league names.
+LEAGUE_NAME_ENTRIES = (15, 17)
+#: The league-name tables list the leagues around "Ligue 1", the one string
+#: every language shares: a group's name sits this many strings from it.
+LEAGUE_NAME_ANCHOR = "Ligue 1"
+
+
+@dataclass(frozen=True)
+class LeagueGroup:
+    """A run of club slots the game shows as one league."""
+
+    first: int
+    count: int
+    icon: str  # texture name of the team-select icon
+    name_offset: int  # strings from "Ligue 1" in the league-name tables
+
+    def holds(self, slot: int) -> bool:
+        return self.first <= slot < self.first + self.count
+
+
+LEAGUE_GROUPS = (
+    LeagueGroup(0, 20, "mn_ts_eng_l", -1),
+    LeagueGroup(20, 20, "mn_ts_fra_l", 0),
+    LeagueGroup(40, 20, "mn_ts_ita_l", 2),
+    LeagueGroup(60, 18, "mn_ts_net_l", 3),
+    LeagueGroup(78, 20, "mn_ts_spa_l", 4),
+)
+
 #: `OVER.AFS` entries that are language database overlays, and the English one
 #: the slot names are read from.
 DATABASE_OVERLAYS = tuple(range(5, 20))
@@ -102,6 +132,9 @@ class PESTeamRecord:
     players: list[PESPlayer] = field(default_factory=list)
     team_id: int | None = None
     logo_url: str = ""
+    #: The league the team came from: written as the slot group's league.
+    league_name: str = ""
+    league_logo_url: str = ""
 
 
 @dataclass

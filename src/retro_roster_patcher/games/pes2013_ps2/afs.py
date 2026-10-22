@@ -64,9 +64,23 @@ def unwrap(block: bytes) -> tuple[bytes, bytes]:
     return header, payload
 
 
+def deflate(payload: bytes) -> bytes:
+    """The smallest zlib stream a few strategies give: an entry must not outgrow
+    the room the original took, and a handful of bytes decide that."""
+    best = None
+    for strategy in (zlib.Z_DEFAULT_STRATEGY, zlib.Z_FILTERED):
+        for mem in (9, 8):
+            c = zlib.compressobj(9, zlib.DEFLATED, 15, mem, strategy)
+            out = c.compress(payload) + c.flush()
+            if best is None or len(out) < len(best):
+                best = out
+    assert best is not None
+    return best
+
+
 def wrap(header: bytes, payload: bytes) -> bytes:
     """A block carrying `payload`, deflated when `header` says so; sizes updated."""
-    body = zlib.compress(payload, 9) if header[2] == 1 else payload
+    body = deflate(payload) if header[2] == 1 else payload
     head = bytearray(header)
     struct.pack_into("<II", head, 4, len(body), len(payload) if header[2] == 1 else 0)
     return bytes(head) + body

@@ -30,6 +30,7 @@ from .models import (
     PLAYER_RECORD_SIZE,
     TEAM_ENTRY_SIZE,
     TEXT_AFS,
+    TEXT_LANGUAGE_AFS,
     ClubSlot,
     PESRomInfo,
 )
@@ -136,13 +137,18 @@ class RomReader:
             root = iso9660.read_root(f)
             if root is None:
                 return False
-            for name in (BOOT_FILE, TEXT_AFS, OVER_AFS):
+            for name in (BOOT_FILE, TEXT_AFS, OVER_AFS, *TEXT_LANGUAGE_AFS):
                 found = iso9660.find_entry_with_next_lba(f, root, name)
                 if found is None:
+                    if name in TEXT_LANGUAGE_AFS:
+                        continue  # a language archive may be absent on another release
                     return False
                 entry, next_lba = found
                 self._extents[name] = FileExtent(entry.extent.lba, entry.extent.size, next_lba)
         return True
+
+    def has(self, name: str) -> bool:
+        return name in self._extents
 
     def extent(self, name: str) -> FileExtent:
         if name not in self._extents:

@@ -176,7 +176,9 @@ def test_an_entry_that_outgrows_its_slot_is_refused(iso, tmp_path):
     import random
 
     rng = random.Random(1)
-    tables.parts[0] = bytes(rng.randrange(256) for _ in range(len(tables.parts[0])))
+    # Random bytes do not compress, and ten times the table is more than the
+    # sector padding after the entry can absorb.
+    tables.parts[0] = bytes(rng.randrange(256) for _ in range(10 * len(tables.parts[0])))
     with pytest.raises(RomError, match="available"):
         writer.write_player_tables(PLAYER_ENTRIES[0], tables)
 
@@ -192,7 +194,8 @@ def test_team_names_are_cut_to_the_room_before_the_next_string(iso, tmp_path):
     again = RomReader(str(out))
     again.load()
     clubs = again.overlay_teams(DATABASE_OVERLAY_ENGLISH).clubs
-    assert clubs[0][0].text == "A VERY LONG CLU" and clubs[0][1].text == "ARSENAL"
+    # Whole words are dropped before characters are.
+    assert clubs[0][0].text == "A VERY LONG" and clubs[0][1].text == "ARSENAL"
     assert clubs[1][0].text == "WEST MIDLANDS VILLAGE"  # the neighbour survived
     assert clubs[2][0].text == "BARÇA"
 

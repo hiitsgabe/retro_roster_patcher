@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import hashlib
 from collections import defaultdict
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -37,6 +38,7 @@ from .models import (
     CLUB_SQUAD_SIZE,
     DATABASE_OVERLAYS,
     DISPLAY_NAME_CHARS,
+    LEAGUE_GROUPS,
     PLAYER_ENTRIES,
     POSITION_BYTE,
     POSITION_GROUPS,
@@ -71,10 +73,61 @@ def pes_name(player: Player) -> str:
     return (short if len(short) <= DISPLAY_NAME_CHARS else last).upper()
 
 
-def squad_order(players: list[Player]) -> list[Player]:
-    """Goalkeepers, defenders, midfielders, attackers; stable within a group."""
+#: ESPN lineup position codes, by group.
+LINEUP_GROUPS = {
+    "G": "Goalkeeper",
+    "CD": "Defender",
+    "CD-L": "Defender",
+    "CD-R": "Defender",
+    "LB": "Defender",
+    "RB": "Defender",
+    "LWB": "Defender",
+    "RWB": "Defender",
+    "SW": "Defender",
+    "DM": "Midfielder",
+    "CM": "Midfielder",
+    "CM-L": "Midfielder",
+    "CM-R": "Midfielder",
+    "LM": "Midfielder",
+    "RM": "Midfielder",
+    "AM": "Midfielder",
+    "AM-L": "Midfielder",
+    "AM-R": "Midfielder",
+    "F": "Attacker",
+    "CF": "Attacker",
+    "CF-L": "Attacker",
+    "CF-R": "Attacker",
+    "LW": "Attacker",
+    "RW": "Attacker",
+}
+
+
+def squad_order(players: list[Player], lineup: dict[str, Any] | None = None) -> list[Player]:
+    """Starters first, each group in formation order, then the bench by group.
+
+    `lineup` is what `EspnClient.get_lineup` returns (or `TeamRoster.extra["lineup"]`);
+    without it the squad is just grouped goalkeepers, defenders, midfielders,
+    attackers, keeping the provider's order within a group.
+    """
     rank = {g: i for i, g in enumerate(GROUP_ORDER)}
-    return sorted(players, key=lambda p: rank.get(player_group(p), 2))
+    starters: dict[int, tuple[int, int]] = {}
+    for s in (lineup or {}).get("starters") or []:
+        group = LINEUP_GROUPS.get(str(s.get("position", "")).upper())
+        starters[int(s["id"])] = (rank.get(group, 2) if group else 2, int(s.get("place") or 0))
+    by_id = {p.id: p for p in players}
+    first = [by_id[i] for i, _ in sorted(starters.items(), key=lambda kv: kv[1]) if i in by_id]
+    rest = sorted(
+        (p for p in players if p.id not in starters), key=lambda p: rank.get(player_group(p), 2)
+    )
+    return first + rest
+
+
+def lineup_group(player: Player, lineup: dict[str, Any] | None) -> str:
+    """The player's group, from the lineup position when he started, else ESPN's."""
+    for s in (lineup or {}).get("starters") or []:
+        if int(s["id"]) == player.id:
+            return LINEUP_GROUPS.get(str(s.get("position", "")).upper(), player_group(player))
+    return player_group(player)
 
 
 @register(
@@ -136,6 +189,8 @@ class PES2013PS2Patcher(Patcher):
         league = next(iter(self.api.get_leagues(id=league_id, season=season)), None)
         if league is None:
             raise ApiError(f"League {league_id} not found for season {season}")
+        if not league.logo_url and hasattr(self.api, "get_league_logo"):
+            league = replace(league, logo_url=self.api.get_league_logo(league_id))
         if on_progress is not None:
             on_progress(0.1, f"Fetching teams for {league.name}...")
         teams = self.api.get_teams(league_id, season)
@@ -151,6 +206,13 @@ class PES2013PS2Patcher(Patcher):
             roster = TeamRoster(team=team)
             try:
                 roster.players = self.api.get_squad(team.id, season)
+                # The latest match's starting eleven decides who fills the
+                # first squad places; optional, and plain data for the JSON
+                # boundary.
+                if hasattr(self.api, "get_lineup"):
+                    lineup = self.api.get_lineup(team.id, league_id)
+                    if lineup:
+                        roster.extra["lineup"] = lineup
             except ApiError as exc:
                 roster.error = str(exc)
             rosters.append(roster)
@@ -159,7 +221,7 @@ class PES2013PS2Patcher(Patcher):
         return LeagueData(league=league, teams=rosters)
 
     def suggest_squad_order(self, team_roster: TeamRoster) -> list[Player]:
-        return squad_order(team_roster.players)
+        return squad_order(team_roster.players, team_roster.extra.get("lineup"))
 
     # -- map -----------------------------------------------------------------
 
@@ -184,7 +246,8 @@ class PES2013PS2Patcher(Patcher):
                     f"Slot {entry.slot_index} maps to team {entry.team_id}, "
                     f"which is not in the fetched league data"
                 )
-            players = roster.players if order_as_given else squad_order(roster.players)
+            lineup = roster.extra.get("lineup")
+            players = roster.players if order_as_given else squad_order(roster.players, lineup)
             teams[entry.slot_index] = PESTeamRecord(
                 # The game's own names are upper case throughout.
                 name=roster.team.name.upper(),
@@ -194,12 +257,14 @@ class PES2013PS2Patcher(Patcher):
                         display_name=pes_name(p),
                         shirt_name=pes_name(p),
                         number=p.number,
-                        position=player_group(p),
+                        position=lineup_group(p, lineup),
                     )
                     for p in players[:CLUB_SQUAD_SIZE]
                 ],
                 team_id=roster.team.id,
                 logo_url=roster.team.logo_url,
+                league_name=data.league.name,
+                league_logo_url=data.league.logo_url,
             )
         return MappedRosters(game_id=self.game_id, teams=teams)
 
@@ -245,6 +310,7 @@ class PES2013PS2Patcher(Patcher):
                 writer.write_player_tables(index, t)
             if options.get("logos", True):
                 self._write_logos(writer, rosters, slots, on_progress)
+            self._write_leagues(writer, rosters, slots, options.get("logos", True))
             if on_progress is not None:
                 on_progress(0.9, "Writing team names...")
             for overlay in DATABASE_OVERLAYS:
@@ -292,6 +358,29 @@ class PES2013PS2Patcher(Patcher):
             self.status("Pillow is not installed; team logos skipped")
             return
         self.status(f"Team logos drawn: {count}")
+
+    def _write_leagues(
+        self, writer: RomWriter, rosters: MappedRosters, slots: list[int], logos: bool
+    ) -> None:
+        """Give each slot group that received teams the league's name and icon."""
+        for group in LEAGUE_GROUPS:
+            record = next((rosters.teams[s] for s in slots if group.holds(s)), None)
+            if record is None or not record.league_name:
+                continue
+            tables = writer.write_league_name(group.name_offset, record.league_name.upper())
+            self.status(f"League name {record.league_name!r}: {tables} tables")
+            if not logos or not record.league_logo_url:
+                continue
+            try:
+                png = self._load_logo(record.league_logo_url)
+                icons = writer.write_league_icon(group.icon, png)
+            except ApiError as exc:
+                self.status(f"League logo skipped: {exc}")
+                continue
+            except ImportError:
+                self.status("Pillow is not installed; league logo skipped")
+                continue
+            self.status(f"League icon {group.icon}: {icons} bundles")
 
     def _load_logo(self, url: str) -> bytes:
         """The logo bytes, from `cache_dir/logos` or downloaded once."""

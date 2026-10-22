@@ -12,7 +12,7 @@ from collections.abc import Callable
 from typing import Any
 
 from ..core.concurrency import emit_status, parallel_map
-from ..core.errors import ensure_cache_dir
+from ..core.errors import ApiError, ensure_cache_dir
 from . import _http
 from .models import League, Player, PlayerStats, Team
 
@@ -636,6 +636,86 @@ class EspnClient:
             if "/athletes/" in ref:
                 return ref.split("/athletes/")[-1].split("?")[0]
         return None
+
+    def get_lineup(self, team_id: int, league_id: int) -> dict[str, Any] | None:
+        """The team's starting eleven from its latest completed match, or None.
+
+        Two requests: the team schedule for the newest finished event, then
+        that match's summary, whose `rosters` carry each side's formation and
+        who started where. Returned as plain data (`{"formation": "4-2-3-1",
+        "event": id, "starters": [{"id", "position", "number", "place"}, ...]}`)
+        so it rides along in `TeamRoster.extra` through the JSON boundary.
+        Cached per event, so a new match means one fresh fetch.
+        """
+        item = _ID_TO_LEAGUE.get(league_id)
+        if item is None:
+            return None
+        code = item["code"]
+        try:
+            schedule = self._request(f"/{code}/teams/{team_id}/schedule", sport="soccer")
+        except ApiError:
+            return None
+        done = [
+            e
+            for e in schedule.get("events") or []
+            if (e.get("competitions") or [{}])[0].get("status", {}).get("type", {}).get("completed")
+        ]
+        if not done:
+            return None
+        event = max(done, key=lambda e: str(e.get("date", "")))
+        cache_key = f"espn_lineup_{code}_{team_id}_{event.get('id')}"
+        cached = self._load_cache(cache_key)
+        if cached:
+            return dict(cached)
+        try:
+            summary = self._request(f"/{code}/summary?event={event['id']}", sport="soccer")
+        except ApiError:
+            return None
+        for side in summary.get("rosters") or []:
+            if str(side.get("team", {}).get("id")) != str(team_id):
+                continue
+            starters = [
+                {
+                    "id": int(p["athlete"]["id"]),
+                    "position": str(p.get("position", {}).get("abbreviation", "")),
+                    "number": int(p["jersey"]) if str(p.get("jersey", "")).isdigit() else None,
+                    "place": int(p.get("formationPlace") or 0),
+                }
+                for p in side.get("roster") or []
+                if p.get("starter") and p.get("athlete", {}).get("id")
+            ]
+            lineup = {
+                "formation": str(side.get("formation", "")),
+                "event": event.get("id"),
+                "starters": starters,
+            }
+            self._save_cache(cache_key, lineup)
+            return lineup
+        return None
+
+    def get_league_logo(self, league_id: int) -> str:
+        """The league's logo URL from its scoreboard, "" when ESPN has none.
+
+        The leagues catalog carries no artwork, so this is one extra request,
+        cached under its own key; a failed request is an empty string, not an
+        error, because a logo is decoration.
+        """
+        item = _ID_TO_LEAGUE.get(league_id)
+        if item is None:
+            return ""
+        cache_key = f"espn_league_logo_{league_id}"
+        cached = self._load_cache(cache_key)
+        if cached is not None and "logo" in cached:
+            return str(cached["logo"])
+        try:
+            data = self._request(f"/{item['code']}/scoreboard", sport="soccer")
+        except ApiError:
+            return ""
+        leagues = data.get("leagues") or []
+        logos = (leagues[0].get("logos") or []) if leagues else []
+        logo = str(logos[0].get("href", "")) if logos else ""
+        self._save_cache(cache_key, {"logo": logo})
+        return logo
 
     def _league_from_item(self, item: dict, season: int | None = None) -> League:
         """One `ESPN_LEAGUES` entry as a `League`.

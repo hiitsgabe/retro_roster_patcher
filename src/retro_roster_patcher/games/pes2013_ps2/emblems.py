@@ -27,6 +27,8 @@ from dataclasses import dataclass, field
 
 from ...core.errors import RomError
 
+RGB = tuple[int, int, int]
+
 TABLE_COUNT = 3
 #: Table index of the club crests inside the full atlases.
 CLUB_TABLE = 1
@@ -124,6 +126,102 @@ class Atlas:
                 )
         assert len(out) == data_off
         return bytes(out) + bytes(body)
+
+
+def used_indices(atlas: Atlas, table: int) -> set[int]:
+    """Every palette index some image of the table draws with."""
+    used: set[int] = set()
+    for rec in atlas.tables[table]:
+        used.update(zlib.decompress(rec.stream))
+    return used
+
+
+def paint_logos(atlas: Atlas, table: int, logos: dict[int, bytes]) -> int:
+    """Draw each PNG as the record `ident`'s image, with colours of their own.
+
+    The table's palette is shared by every crest in it, so the new logos get
+    the palette entries no remaining crest uses (half the palette on the real
+    disc): one median-cut palette over all the logos, written into those free
+    entries, and each logo mapped to it. Returns the logos drawn.
+    """
+
+    targets = {
+        ident: png
+        for ident, png in logos.items()
+        if any(r.ident == ident for r in atlas.tables[table])
+    }
+    if not targets:
+        return 0
+    keep = {rec.ident for rec in atlas.tables[table]} - set(targets)
+    used: set[int] = {0}
+    for rec in atlas.tables[table]:
+        if rec.ident in keep:
+            used.update(zlib.decompress(rec.stream))
+    free = sorted(set(range(1, 256)) - used)
+    if not free:
+        raise RomError("The emblem palette has no free entries")
+    fitted = {ident: _fit(png, atlas.side) for ident, png in targets.items()}
+    opaque = [px[:3] for canvas in fitted.values() for px in canvas.getdata() if px[3] >= 128]
+    colours = _median_cut(opaque, min(len(free), 128))
+    palette = bytearray(atlas.palettes[table])
+    for idx, (r, g, b) in zip(free, colours, strict=False):
+        palette[4 * idx : 4 * idx + 4] = bytes((r, g, b, 0x80))
+    atlas.palettes[table] = bytes(palette)
+    lookup = {free[i]: colours[i] for i in range(len(colours))}
+    for ident, canvas in fitted.items():
+        atlas.set_image(table, ident, _map_to(list(canvas.getdata()), lookup))
+    return len(fitted)
+
+
+def _fit(png: bytes, side: int):  # type: ignore[no-untyped-def]
+    import io
+
+    from PIL import Image
+
+    img = Image.open(io.BytesIO(png)).convert("RGBA")
+    img.thumbnail((side, side), Image.Resampling.LANCZOS)
+    canvas = Image.new("RGBA", (side, side), (0, 0, 0, 0))
+    canvas.paste(img, ((side - img.width) // 2, (side - img.height) // 2))
+    return canvas
+
+
+def _median_cut(pixels: list[tuple[int, int, int]], count: int) -> list[RGB]:
+    """Up to `count` representative colours of `pixels` (Pillow's median cut)."""
+    from PIL import Image
+
+    if not pixels:
+        return []
+    strip = Image.new("RGB", (len(pixels), 1))
+    strip.putdata(pixels)
+    q = strip.quantize(colors=count, method=Image.Quantize.MEDIANCUT)
+    flat = q.getpalette() or []
+    n = min(count, len(flat) // 3)
+    return [(flat[3 * i], flat[3 * i + 1], flat[3 * i + 2]) for i in range(n)]
+
+
+def _map_to(pixels: list[tuple[int, int, int, int]], lookup: dict[int, RGB]) -> bytes:
+    """Nearest of the given palette entries per pixel; transparent pixels take 0."""
+    indices = list(lookup)
+    colours = [lookup[i] for i in indices]
+    cache: dict[tuple[int, int, int], int] = {}
+    out = bytearray()
+    for r, g, b, a in pixels:
+        if a < 128:
+            out.append(0)
+            continue
+        key = (r, g, b)
+        idx = cache.get(key)
+        if idx is None:
+            best = min(
+                range(len(colours)),
+                key=lambda i: (
+                    (colours[i][0] - r) ** 2 + (colours[i][1] - g) ** 2 + (colours[i][2] - b) ** 2
+                ),
+            )
+            idx = indices[best]
+            cache[key] = idx
+        out.append(idx)
+    return bytes(out)
 
 
 def quantise(pixels: list[tuple[int, int, int, int]], palette: bytes) -> bytes:
