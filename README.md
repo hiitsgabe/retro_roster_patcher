@@ -45,6 +45,16 @@ speaks newline-delimited JSON so another process can drive it. It was extracted 
 pygame launcher for exactly that reason; a Flutter app over embedded CPython is the other
 consumer.
 
+## Patch without code: Retro Toolbox
+
+[Retro Toolbox](https://github.com/hiitsgabe/retro_toolbox) is the app for this library, a
+graphical way to patch a game with no code and no terminal. Pick the game, the league and
+the season, check or edit the teams, choose the screen art, and it writes the patched ROM.
+It finds the game file already on your device, works with a gamepad, and runs on Android,
+macOS, Windows and Linux handhelds. Get it from its
+[releases](https://github.com/hiitsgabe/retro_toolbox/releases) or
+[website](https://hiitsgabe.github.io/retro_toolbox/).
+
 ## Install
 
 ```bash
