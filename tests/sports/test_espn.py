@@ -434,6 +434,9 @@ NETWORK_CALLS = {
     "get_nba_teams": ((), {}),
     "get_basketball_squad": ((1,), {}),
     "get_basketball_team_leaders": ((1,), {}),
+    # The team's schedule is the first request; an empty one ends the lookup.
+    "get_lineup": ((359, 2001), {}),
+    "get_league_logo": ((2001,), {}),
 }
 
 # Public members that answer from module constants and never make a request.
