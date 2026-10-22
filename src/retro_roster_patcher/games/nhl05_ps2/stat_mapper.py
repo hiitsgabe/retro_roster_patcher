@@ -182,15 +182,9 @@ GOALIE_DEFAULTS = NHL05GoalieAttributes(
 # raw pounds.
 DEFAULT_WEIGHT = 190
 
-# The encoded `HEIG` every player gets, about 5'10". Upstream behaviour, known
-# wrong, preserved deliberately: the branch that would compute another one cannot
-# run. See `map_player`.
+# The encoded `HEIG` every player gets, about 5'10" if NHL 05 encodes heights
+# as NHL 07 does. See `map_player`.
 DEFAULT_HEIGHT = 16
-
-# `HEIG` is five bits and encodes inches above `HEIGHT_BASE_INCHES`, so the
-# scale runs 5'6" to 8'1".
-HEIGHT_BASE_INCHES = 66
-HEIGHT_MAX = 31
 
 # Default jersey number. 1 is a goalie's number and is handed to skaters too; the
 # disc's own number is overwritten either way.
@@ -277,14 +271,11 @@ class NHL05StatMapper:
 
         weight = int(player.weight) if player.weight > 0 else DEFAULT_WEIGHT
 
-        # Upstream behaviour, known wrong, preserved deliberately: `Player` has
-        # no `height`, so this branch never runs and every record leaves at
-        # `DEFAULT_HEIGHT`, which the writer stamps over the disc's own heights.
-        # Do not delete the dead branch and do not stop writing `HEIG`.
+        # Every player is written at `DEFAULT_HEIGHT`, even when the provider
+        # reports a height. NHL 07's retail disc encodes inches above 54, not the
+        # 66 this module assumes; NHL 05's encoding has not been checked on a
+        # disc, so it keeps the constant until it is.
         height = DEFAULT_HEIGHT
-        player_height = getattr(player, "height", 0) or 0
-        if player_height > 0:
-            height = max(0, min(HEIGHT_MAX, int(player_height) - HEIGHT_BASE_INCHES))
 
         record = NHL05PlayerRecord(
             first_name=first_name[:NAME_FIELD_CHARS],
@@ -323,8 +314,10 @@ class NHL05StatMapper:
         pts = _stat(stats, "PTS")
         pm = _stat(stats, "+/-")
         pim = _stat(stats, "PIM")
-        shots = _stat(stats, "SOG", "Shots")
+        shots = _stat(stats, "SOG", "Shots", "S")
         fop = _stat(stats, "FO%", "FOW%")
+        if fop <= 1:  # the NHL API sends a fraction, ESPN a percentage
+            fop *= 100
 
         base = _defaults_for(pos)
 

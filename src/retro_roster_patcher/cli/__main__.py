@@ -124,7 +124,7 @@ def build_parser() -> argparse.ArgumentParser:
         action="append",
         default=None,
         metavar="SLOT=PNG",
-        help="replace a screen's art with a PNG; repeatable (we2002: title, menu, boot)",
+        help="replace a screen's art with a PNG; repeatable (a wrong slot lists the slots)",
     )
     p_patch.set_defaults(handler=commands.cmd_patch)
 

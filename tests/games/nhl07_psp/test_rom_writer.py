@@ -383,8 +383,9 @@ def test_a_goalie_bio_write_lands_the_goalie_position_code(tmp_path):
     assert _write_and_read(tmp_path, 5, GOALIE)["POS_"] == 4
 
 
-def test_a_bio_write_lands_the_weight(tmp_path):
-    assert _write_and_read(tmp_path, 3, SKATER)["WEIG"] == 213
+def test_a_bio_write_lands_the_weight_as_pounds_above_150(tmp_path):
+    # Checked on the retail disc: a raw 194 shows in the game as 344 lb.
+    assert _write_and_read(tmp_path, 3, SKATER)["WEIG"] == 213 - 150
 
 
 def test_a_bio_write_leaves_the_records_index_alone(tmp_path):
@@ -853,10 +854,10 @@ def _shrink_slot(writer, member: str) -> None:
     writer._db_viv = bytes(viv)
 
 
-def test_a_tdb_too_large_for_its_slot_is_relocated_not_skipped(tmp_path):
+def test_a_tdb_too_large_for_its_slot_is_repacked_not_skipped(tmp_path):
     # DELIBERATE DIVERGENCE, both from the source (which skipped the table and
-    # left the TDBs disagreeing) and from refusing the patch: the table moves to
-    # the end of the archive and every edit still lands.
+    # left the TDBs disagreeing) and from refusing the patch: the archive is
+    # rebuilt and every edit still lands.
     from pathlib import Path
 
     writer = prepared(tmp_path)
@@ -869,28 +870,80 @@ def test_a_tdb_too_large_for_its_slot_is_relocated_not_skipped(tmp_path):
     assert fixture.read_member(Path(writer.output_path).read_bytes(), TDB_ROSTER) == expected
 
 
-def test_the_master_is_relocated_too_and_the_other_tables_stay_put(tmp_path):
-    # Too-large-for-the-disc is still refused, by the archive-level bound in
-    # `test_an_archive_larger_than_its_iso_allocation_raises`.
+def test_a_tdb_too_large_for_its_slot_repacks_the_archive_without_gaps(tmp_path):
+    # On a real disc nhlrost.tdb grew 706 bytes. Moving it to the end of the
+    # archive cost its whole 29 KB and pushed db.viv 22 KB past its allocation;
+    # a compact rebuild costs only the growth. Too-large-for-the-disc is still
+    # refused, by `test_an_archive_larger_than_its_iso_allocation_raises`.
     from pathlib import Path
 
     from retro_roster_patcher.formats.ea_tdb import bigf_parse
 
     writer = prepared(tmp_path)
-    before = {e.name: e.offset for e in bigf_parse(writer.db_viv)}
+    others = {
+        e.name: writer.db_viv[e.offset : e.offset + e.size]
+        for e in bigf_parse(writer.db_viv)
+        if e.name != TDB_MASTER
+    }
     expected = master(writer).serialize()
     _shrink_slot(writer, TDB_MASTER)
 
     writer.rebuild_and_write({TDB_MASTER: master(writer)})
 
     image = Path(writer.output_path).read_bytes()
+    viv = fixture.iso_read_file(image, fixture.DB_VIV_ISO_PATH)
+    entries = bigf_parse(viv)
     assert fixture.read_member(image, TDB_MASTER) == expected
-    after = {
-        e.name: e.offset for e in bigf_parse(fixture.iso_read_file(image, fixture.DB_VIV_ISO_PATH))
-    }
-    assert {n: o for n, o in after.items() if n != TDB_MASTER} == {
-        n: o for n, o in before.items() if n != TDB_MASTER
-    }
+    assert {
+        e.name: viv[e.offset : e.offset + e.size] for e in entries if e.name != TDB_MASTER
+    } == others
+    for prev, nxt in zip(entries, entries[1:], strict=False):
+        assert nxt.offset == -(-(prev.offset + prev.size) // 128) * 128
+
+
+def _fapt_after_rebuild(tmp_path, spec, shrink: bool):
+    from pathlib import Path
+
+    from retro_roster_patcher.formats.ea_tdb import bigf_extract, refpack_decompress
+    from retro_roster_patcher.games.nhl07_psp import rom_writer
+
+    writer = prepared(tmp_path, spec)
+    original = rom_writer.bigf_replace_inplace
+    if shrink:
+        # Refuse the in-place write, as a table that outgrew its slot does, without
+        # touching the archive's own directory (which the cache was built from).
+        rom_writer.bigf_replace_inplace = lambda archive, filename, new_data: False
+    try:
+        writer.rebuild_and_write({TDB_MASTER: master(writer)})
+    finally:
+        rom_writer.bigf_replace_inplace = original
+    image = Path(writer.output_path).read_bytes()
+    viv = fixture.iso_read_file(image, fixture.DB_VIV_ISO_PATH)
+    fapt = fixture.iso_read_file(image, fixture.FAPT_ISO_PATH)
+    assert viv is not None and fapt is not None
+    raw = bigf_extract(fapt, "db.bh")
+    assert raw is not None
+    return viv, fapt, refpack_decompress(raw)
+
+
+def test_a_repacked_archive_rewrites_the_games_cached_directory(tmp_path):
+    # The retail disc keeps a copy of db.viv's directory as db.bh in
+    # PRELOAD/FAPT.VIV. A rebuild moves every member, so the copy must follow.
+    viv, fapt, cached = _fapt_after_rebuild(tmp_path, fixture.DiscSpec(with_fapt=True), True)
+    assert cached == viv[: struct.unpack_from(">I", viv, 12)[0]]
+    assert struct.unpack_from("<I", fapt, 4)[0] == len(fapt)
+
+
+def test_an_in_place_rebuild_leaves_the_cache_alone(tmp_path):
+    spec = fixture.DiscSpec(with_fapt=True)
+    viv, fapt, _ = _fapt_after_rebuild(tmp_path, spec, False)
+    assert fapt == fixture.build_fapt_viv(fixture.build_db_viv(spec))
+
+
+def test_a_cache_that_is_not_the_old_directory_is_left_alone(tmp_path):
+    spec = fixture.DiscSpec(with_fapt=True, fapt_db_bh=b"BIGF something else")
+    _, _, cached = _fapt_after_rebuild(tmp_path, spec, True)
+    assert cached == b"BIGF something else"
 
 
 def test_a_member_the_archive_does_not_hold_raises(tmp_path):
@@ -1032,3 +1085,24 @@ def test_a_shorter_archive_zero_fills_bytes_that_were_not_already_zero(tmp_path)
     image = Path(writer.output_path).read_bytes()
     start = fixture.DB_VIV_SECTOR * ISO_SECTOR_SIZE + len(original) - 10_000
     assert image[start : start + 10_000] == b"\x00" * 10_000
+
+
+def test_the_room_after_a_file_counts_files_in_other_directories():
+    # On the retail disc the file after PRELOAD/GMISC.VIV is GAMEDATA/AIDATA.VIV;
+    # a same-directory answer overstated GMISC's room by 64 KB.
+    import io
+
+    from retro_roster_patcher.formats import iso9660
+    from retro_roster_patcher.games.nhl07_psp.rom_writer import iso_entry
+
+    f = io.BytesIO(fixture.build_iso(fixture.DiscSpec(with_fapt=True)))
+    root = iso9660.read_root(f)
+    assert root is not None
+    db = iso9660.walk(f, root, ["PSP_GAME", "USRDIR", "DB"])
+    assert db is not None
+    same_directory = iso9660.find_entry_with_next_lba(f, db, fixture.PAD_FILE_NAME)
+    assert same_directory is not None and same_directory[1] == 0
+    found = iso_entry(f, f"PSP_GAME/USRDIR/DB/{fixture.PAD_FILE_NAME}")
+    assert found is not None
+    pad, next_lba = found
+    assert next_lba > pad.extent.lba  # the PRELOAD directory, which USRDIR holds

@@ -230,3 +230,29 @@ def find_entry_with_next_lba(
             next_lba = entries[i + 1].extent.lba if i + 1 < len(entries) else 0
             return entry, next_lba
     return None
+
+
+def next_extent_lba(f: BinaryIO, root: Extent, lba: int) -> int:
+    """The lowest LBA above `lba` that any file or directory on the disc starts at.
+
+    Zero when nothing starts after it. The whole tree, unlike
+    `find_entry_with_next_lba`: on NHL 07 (PSP) the file after
+    `PRELOAD/GMISC.VIV` is `GAMEDATA/AIDATA.VIV`, in another directory, and a
+    same-directory answer overstates the room by 64 KB. Each directory is
+    visited once, so a malformed tree that loops terminates.
+    """
+    best = 0
+    seen: set[int] = set()
+    pending = [root]
+    while pending:
+        directory = pending.pop()
+        if directory.lba in seen:
+            continue
+        seen.add(directory.lba)
+        for entry in _records(_read_extent(f, directory), directory.offset, min_name_length=2):
+            start = entry.extent.lba
+            if start > lba and (best == 0 or start < best):
+                best = start
+            if entry.is_dir:
+                pending.append(entry.extent)
+    return best

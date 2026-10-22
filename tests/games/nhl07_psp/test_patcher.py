@@ -1415,15 +1415,15 @@ def test_breaking_four_rows_costs_the_one_player_the_spares_cannot_absorb(tmp_pa
     assert result.players_patched == fixture.TEAM_COUNT * 22 - 1
 
 
-def test_a_mirror_that_outgrows_its_slot_is_relocated_and_every_player_lands(tmp_path):
+def test_a_mirror_that_outgrows_its_slot_is_repacked_and_every_player_lands(tmp_path):
     # The source skipped a table that did not fit, leaving the TDBs disagreeing
     # about the same roster. Here the roster mirror does not fit in place
-    # (stub), so it is relocated, and the patch still writes every player.
+    # (stub), so the archive is rebuilt, and the patch still writes every player.
     #
     # Driven by a stub rather than by shrinking a BIGF entry, because whether a
     # recompressed table grows depends on how the new roster's names compress. The
     # real size condition is pinned in
-    # `test_rom_writer.py::test_a_tdb_too_large_for_its_slot_is_relocated_not_skipped`.
+    # `test_rom_writer.py::test_a_tdb_too_large_for_its_slot_is_repacked_not_skipped`.
     from retro_roster_patcher.games.nhl07_psp import rom_writer
 
     source = iso(tmp_path)
@@ -1691,3 +1691,82 @@ def test_without_order_as_given_the_input_order_is_ignored(tmp_path):
     (forward,) = patcher.map_rosters(_ranked_league(squad)).teams.values()
     (backward,) = patcher.map_rosters(_ranked_league(squad[::-1])).teams.values()
     assert [r.jersey_number for r in forward] == [r.jersey_number for r in backward]
+
+
+PNG_BODY = b"\x89PNG\r\n\x1a\n" + b"rest of the picture"
+
+
+def test_a_head_shot_is_downloaded_once_and_cached(tmp_path):
+    calls = []
+
+    def transport(url, headers, timeout):
+        calls.append(url)
+        return PNG_BODY
+
+    patcher = NHL07PSPPatcher(tmp_path, transport=transport)
+    assert patcher._load_headshot("https://example.test/1.png") == PNG_BODY
+    assert patcher._load_headshot("https://example.test/1.png") == PNG_BODY
+    assert calls == ["https://example.test/1.png"]
+
+
+def test_a_body_that_is_not_a_picture_is_neither_used_nor_cached(tmp_path):
+    bodies = [b"<html>captive portal</html>", b"", PNG_BODY]
+
+    def transport(url, headers, timeout):
+        return bodies.pop(0)
+
+    patcher = NHL07PSPPatcher(tmp_path, transport=transport)
+    assert patcher._load_headshot("https://example.test/3.png") is None
+    assert patcher._load_headshot("https://example.test/3.png") is None
+    assert patcher._load_headshot("https://example.test/3.png") == PNG_BODY
+
+
+def test_a_cache_that_cannot_be_written_does_not_fail_the_patch(tmp_path):
+    (tmp_path / "headshots").write_bytes(b"a file where the folder should be")
+    patcher = NHL07PSPPatcher(tmp_path, transport=lambda url, headers, timeout: PNG_BODY)
+    assert patcher._load_headshot("https://example.test/4.png") == PNG_BODY
+
+
+def test_a_head_shot_that_fails_to_download_gives_none(tmp_path):
+    def transport(url, headers, timeout):
+        raise OSError("offline")
+
+    patcher = NHL07PSPPatcher(tmp_path, transport=transport)
+    assert patcher._load_headshot("https://example.test/2.png") is None
+
+
+def test_a_head_shot_pillow_cannot_read_gives_no_portrait(monkeypatch):
+    pytest.importorskip("PIL")
+    from retro_roster_patcher.games.nhl07_psp import patcher as module
+
+    assert NHL07PSPPatcher._portrait_from(b"not a picture") is None
+    assert NHL07PSPPatcher._portrait_from(None) is None
+
+    class Bomb(Exception):  # Pillow's DecompressionBombError derives from Exception
+        pass
+
+    def explode(png):
+        raise Bomb("too many pixels")
+
+    monkeypatch.setattr(module, "headshot_portrait", explode)
+    assert NHL07PSPPatcher._portrait_from(PNG_BODY) is None
+
+
+@pytest.mark.parametrize(
+    ("options", "message"),
+    [
+        ({"images": {"titel": b"x"}}, "Unknown image slot"),
+        ({"images": {"title": b"not a picture"}}, "'title' image is not a picture"),
+        ({"texts": {"\u00c9A_COPYRIGHT": "x"}}, "String ids are ASCII"),
+    ],
+)
+def test_bad_options_are_refused_before_the_disc_is_copied(tmp_path, options, message):
+    pytest.importorskip("PIL")
+    source = iso(tmp_path)
+    patcher = build(tmp_path)
+    out = tmp_path / "out.iso"
+    with pytest.raises(CapabilityError, match=message):
+        patcher.patch(
+            rom_path=source, output_path=out, rosters=patcher.map_rosters(league()), **options
+        )
+    assert not out.exists()

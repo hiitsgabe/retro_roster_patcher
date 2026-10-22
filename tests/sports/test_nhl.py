@@ -129,6 +129,9 @@ def test_get_hockey_squad_parses_the_recorded_roster(tmp_path, replay):
     assert (pastrnak.first_name, pastrnak.last_name) == ("David", "Pastrnak")
     assert pastrnak.name == "David Pastrnak"
     assert pastrnak.position == "RW"  # the R -> RW mapping, on a named player
+    # Height and head shot, which NHL 07 writes to `HEIG` and the portrait.
+    assert pastrnak.height == 72.0
+    assert pastrnak.photo_url == "https://assets.nhle.com/mugs/nhl/20252026/BOS/8477956.png"
 
 
 def test_each_squad_team_and_season_caches_separately(tmp_path, replay):

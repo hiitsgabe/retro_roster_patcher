@@ -600,6 +600,11 @@ class DiscSpec:
         list `DB.VIV` after the padding file in the `DB` directory. With
         `db_dir_exact_size` it becomes the flush-final record, which is the one
         a scan breaking on `pos + rec_len >= len` rather than `>` loses.
+    `with_fapt`
+        add `PRELOAD/FAPT.VIV`, the retail disc's archive of cached headers:
+        `cafeapt.bh` (filler) then `db.bh`, a copy of `db.viv`'s directory.
+    `fapt_db_bh`
+        what `db.bh` holds instead of that copy, for the stale-cache case.
     """
 
     height: int = DEFAULT_DISC_HEIGHT
@@ -615,6 +620,23 @@ class DiscSpec:
     root_dir_size: int | None = None
     db_dir_exact_size: bool = False
     db_viv_last: bool = False
+    with_fapt: bool = False
+    fapt_db_bh: bytes | None = None
+
+
+FAPT_ISO_PATH = "PSP_GAME/USRDIR/PRELOAD/FAPT.VIV"
+
+
+def build_fapt_viv(db_viv: bytes, db_bh: bytes | None = None) -> bytes:
+    """A BIGF of RefPack-compressed headers, `db.bh` last as on the retail disc."""
+    from retro_roster_patcher.formats.ea_tdb import BigfEntry, bigf_build, refpack_compress
+
+    header = db_viv[: struct.unpack_from(">I", db_viv, 12)[0]]
+    contents = {
+        "cafeapt.bh": refpack_compress(b"BIGF" + bytes(range(60))),
+        "db.bh": refpack_compress(header if db_bh is None else db_bh),
+    }
+    return bigf_build([BigfEntry(name, 0, 0) for name in contents], contents)
 
 
 def build_db_viv(spec: DiscSpec | None = None) -> bytes:
@@ -743,6 +765,10 @@ def build_iso(spec: DiscSpec | None = None) -> bytes:
 
     pad_lba = DB_VIV_SECTOR + _sectors_for(len(viv)) + GAP_SECTORS
     total_sectors = pad_lba + _sectors_for(len(PAD_FILE_BYTES))
+    fapt = build_fapt_viv(viv, spec.fapt_db_bh) if spec.with_fapt else b""
+    preload_lba = total_sectors
+    if spec.with_fapt:
+        total_sectors += 1 + _sectors_for(len(fapt))
 
     declared = spec.declared_db_viv_size
     if declared is None:
@@ -803,9 +829,24 @@ def build_iso(spec: DiscSpec | None = None) -> bytes:
                     db_dir_used,
                     is_dir=True,
                 )
-            ],
+            ]
+            + (
+                [_dir_record(b"PRELOAD", preload_lba, ISO_SECTOR_SIZE, is_dir=True)]
+                if spec.with_fapt
+                else []
+            ),
         )[0],
     )
+    if spec.with_fapt:
+        put(
+            preload_lba,
+            _directory_sector(
+                preload_lba,
+                USRDIR_SECTOR,
+                [_dir_record(b"FAPT.VIV;1", preload_lba + 1, len(fapt), is_dir=False)],
+            )[0],
+        )
+        put(preload_lba + 1, fapt)
     put(DB_DIR_SECTOR, db_dir_sector)
     put(DB_VIV_SECTOR, viv)
     put(pad_lba, PAD_FILE_BYTES)

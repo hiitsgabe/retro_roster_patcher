@@ -253,12 +253,8 @@ def test_a_player_without_a_weight_gets_the_league_average():
 
 
 def test_every_mapped_player_gets_the_same_constant_height():
-    # PINS UPSTREAM FIDELITY DELIBERATELY, and this is the bug itself: the
-    # height comes from `getattr(player, "height", 0)` against a `Player` that
-    # has never had the attribute, so the derivation is dead and every patched
-    # player is written at `DEFAULT_HEIGHT`, over whatever the disc knew.
-    # Preserved because the source put these bytes on a disc and this port's
-    # output has never been checked against one.
+    # Kept until NHL 05's `HEIG` encoding is checked on a disc: NHL 07's is
+    # inches above 54, not the 66 the upstream tool assumed for both games.
     heights = [
         MAPPER.map_player(player(id=1, position="D"), "COL").height,
         MAPPER.map_player(player(id=2, position="G"), "BOS").height,
@@ -266,10 +262,8 @@ def test_every_mapped_player_gets_the_same_constant_height():
     assert heights == [DEFAULT_HEIGHT, DEFAULT_HEIGHT]
 
 
-def test_a_provider_player_has_no_height_for_the_derivation_to_read():
-    # Why the test above holds: `getattr`'s default is the only value that
-    # expression can produce, so the `inches - 66` branch is unreachable.
-    assert hasattr(player(), "height") is False
+def test_a_reported_height_still_writes_the_constant():
+    assert MAPPER.map_player(player(height=73.0), "COL").height == DEFAULT_HEIGHT
 
 
 def test_a_goalie_is_flagged_as_one():
@@ -445,6 +439,17 @@ def test_a_centres_checking_stays_at_the_default():
 
 def test_a_faceoff_percentage_replaces_the_position_default():
     assert skater(**{"FO%": 60}).faceoffs == 63
+
+
+def test_a_faceoff_fraction_reads_as_a_percentage():
+    # The NHL API sends 0.6 where ESPN sends 60.
+    assert skater(**{"FO%": 0.6}).faceoffs == skater(**{"FO%": 60}).faceoffs == 63
+
+
+def test_the_nhl_apis_shots_key_counts():
+    # The NHL API calls shots `S`: 10 goals on 50 shots is 20%, the top of the
+    # accuracy window.
+    assert skater(G=10, S=50).shot_accuracy == 63
 
 
 def test_no_faceoff_percentage_leaves_the_position_default():

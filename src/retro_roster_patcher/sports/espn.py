@@ -1019,6 +1019,9 @@ class EspnClient:
                         first_name = " ".join(parts[:-1])
 
                 wt = athlete.get("weight", 0) or 0
+                ht = athlete.get("height", 0) or 0
+                headshot = athlete.get("headshot")
+                photo = headshot.get("href", "") if isinstance(headshot, dict) else ""
                 hand_info = athlete.get("hand", {})
                 hand = hand_info.get("abbreviation", "") if isinstance(hand_info, dict) else ""
 
@@ -1032,8 +1035,9 @@ class EspnClient:
                         nationality=athlete.get("citizenship", ""),
                         position=pos_abbrev,
                         number=number,
-                        photo_url="",
+                        photo_url=photo,
                         weight=float(wt),
+                        height=float(ht),
                         handedness=hand,
                     )
                 )

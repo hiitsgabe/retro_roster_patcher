@@ -1,4 +1,4 @@
-"""Turn provider roster and stat data into NHL 07's 0-63 attribute scale.
+"""Turn provider roster and stat data into NHL 07's 0-49 attribute scale.
 
 NHL 94 stores a rating in four bits and NHL 07 in six, so none of that game's
 arithmetic carries over and none of it is shared.
@@ -21,10 +21,13 @@ from .models import (
     NHL07SkaterAttributes,
 )
 
-# Attribute floor and ceiling. Six bits, so 0-63 for everything except `FIGH`,
-# which is two bits and is clamped separately where it is computed.
+# Attribute floor and ceiling. The fields are six bits wide, but the game rates
+# on 0-49 and shows a stored value plus 50 (0-49 as 50-99): every one of the
+# 3,100 skaters on the retail disc is 49 or less, and a stored 63 shows as a
+# raw 63 and drags the overall down. `FIGH` is two bits and is clamped
+# separately where it is computed.
 ATTR_MIN = 0
-ATTR_MAX = 63
+ATTR_MAX = 49
 
 # How many players a mapped roster holds. NHL 07 dresses 20 and carries
 # scratches; 25 is what a team's ROST slots hold, and anything larger is
@@ -169,18 +172,17 @@ GOALIE_DEFAULTS = NHL07GoalieAttributes(
     stick_low=35,
 )
 
-# Default weight in pounds, about the 2006 league average. Written to `WEIG` as
-# raw pounds.
+# Default weight in pounds, about the 2006 league average. The writer stores
+# it as `WEIG`, pounds above `WEIGHT_BASE_POUNDS`.
 DEFAULT_WEIGHT = 190
 
-# The encoded `HEIG` every player gets, about 5'10". Upstream behaviour, known
-# wrong, preserved deliberately: the branch that would compute another one cannot
-# run. See `map_player`.
+# The encoded `HEIG` a player gets when the provider reports no height, 5'10".
 DEFAULT_HEIGHT = 16
 
 # `HEIG` is five bits and encodes inches above `HEIGHT_BASE_INCHES`, so the
-# scale runs 5'6" to 8'1".
-HEIGHT_BASE_INCHES = 66
+# scale runs 4'6" to 7'1". Checked on the retail disc: Chara is 27 (6'9") and
+# Gionta 13 (5'7").
+HEIGHT_BASE_INCHES = 54
 HEIGHT_MAX = 31
 
 # Default jersey number. 1 is a goalie's number and is handed to skaters too; the
@@ -199,16 +201,16 @@ def _clamp(val: int, lo: int = ATTR_MIN, hi: int = ATTR_MAX) -> int:
 
 
 def _scale(value: float, low: float, high: float) -> int:
-    """Map `value` from the window [low, high] onto 0-63.
+    """Map `value` from the window [low, high] onto 0-`ATTR_MAX`.
 
-    An empty or inverted window answers 32, the midpoint, rather than dividing
+    An empty or inverted window answers the midpoint rather than dividing
     by zero. Values outside the window are clamped, so the window's ends are
     where the scale saturates and not where it starts to lie.
     """
     if high <= low:
-        return 32
+        return (ATTR_MAX + 1) // 2
     ratio = (value - low) / (high - low)
-    return _clamp(round(ratio * 63))
+    return _clamp(round(ratio * ATTR_MAX))
 
 
 def _stat(stats: dict, *names: str, default: float = 0.0) -> float:
@@ -267,14 +269,9 @@ class NHL07StatMapper:
 
         weight = int(player.weight) if player.weight > 0 else DEFAULT_WEIGHT
 
-        # Upstream behaviour, known wrong, preserved deliberately: `Player` has
-        # no `height`, so this branch never runs and every record leaves at
-        # `DEFAULT_HEIGHT`, which the writer stamps over the disc's own heights.
-        # Do not delete the dead branch and do not stop writing `HEIG`.
         height = DEFAULT_HEIGHT
-        player_height = getattr(player, "height", 0) or 0
-        if player_height > 0:
-            height = max(0, min(HEIGHT_MAX, int(player_height) - HEIGHT_BASE_INCHES))
+        if player.height > 0:
+            height = max(0, min(HEIGHT_MAX, round(player.height) - HEIGHT_BASE_INCHES))
 
         record = NHL07PlayerRecord(
             first_name=first_name[:NAME_FIELD_CHARS],
@@ -287,6 +284,7 @@ class NHL07StatMapper:
             team_index=MODERN_NHL_TO_NHL07.get(team_abbrev.upper(), 0),
             player_id=player.id if player.id else 0,
             is_goalie=is_goalie,
+            photo_url=player.photo_url or "",
         )
 
         if is_goalie:
@@ -313,8 +311,10 @@ class NHL07StatMapper:
         pts = _stat(stats, "PTS")
         pm = _stat(stats, "+/-")
         pim = _stat(stats, "PIM")
-        shots = _stat(stats, "SOG", "Shots")
+        shots = _stat(stats, "SOG", "Shots", "S")
         fop = _stat(stats, "FO%", "FOW%")
+        if fop <= 1:  # the NHL API sends a fraction, ESPN a percentage
+            fop *= 100
 
         base = _defaults_for(pos)
 
@@ -345,7 +345,7 @@ class NHL07StatMapper:
             checking=_clamp(def_rating if pos == "D" else base.checking),
             toughness=tough_rating,
             # Two bits, so 0-3, and clamped here rather than by `_clamp`, whose
-            # ceiling is the six-bit 63. 40 penalty minutes to the point.
+            # ceiling is the rating scale's 49. 40 penalty minutes to the point.
             fighting=min(3, max(0, int(pim / 40))),
             puck_control=off_rating,
             agility=_clamp(base.agility + speed_boost),

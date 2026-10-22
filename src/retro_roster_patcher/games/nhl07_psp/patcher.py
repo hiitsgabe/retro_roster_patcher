@@ -27,13 +27,16 @@ harmonise them. See `analyze_rom`.
 
 from __future__ import annotations
 
+import hashlib
+import importlib.util
 import os
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from ...core.errors import ApiError, RomError, as_rom_error
+from ...core.concurrency import parallel_map
+from ...core.errors import ApiError, CapabilityError, RomError, as_rom_error
 from ...core.models import (
     MappedRosters,
     PartialFn,
@@ -46,7 +49,7 @@ from ...core.models import (
 )
 from ...core.patcher import Patcher
 from ...core.registry import register
-from ...formats.ea_tdb import TDBFile, TDBTable, bigf_parse
+from ...formats.ea_tdb import EaTdbError, TDBFile, TDBTable, bigf_parse
 from ...sports import _http
 from ...sports.espn import EspnClient
 from ...sports.models import League, LeagueData, TeamRoster
@@ -59,9 +62,41 @@ from .models import (
     TDB_ROSTER,
     NHL07PlayerRecord,
 )
+from .portraits import (
+    PORTAPT_PATH,
+    SILHOUETTE_ART,
+    headshot_portrait,
+    portrait_targets,
+    read_portrait,
+    repack_portraits,
+)
 from .rom_reader import ISO_SECTOR_SIZE, NHL07PSPRomReader
-from .rom_writer import PROGRESS_COPY_END, PROGRESS_RECORDS_END, NHL07PSPRomWriter
+from .rom_writer import (
+    PROGRESS_COPY_END,
+    PROGRESS_RECORDS_END,
+    NHL07PSPRomWriter,
+    iso_entry,
+    sync_header_cache,
+    write_in_place,
+)
+from .screens import (
+    IMAGE_SLOT_NAMES,
+    SLOTS,
+    SLOTS_BY_NAME,
+    Slot,
+    plan_writes,
+    read_archives,
+    read_picture,
+    slot_archives,
+)
 from .stat_mapper import MAX_PLAYERS, NHL07StatMapper
+from .strings import (
+    FMISC_VIV_PATH,
+    LOCAL_BH_NAME,
+    LOCAL_VIV_PATH,
+    StringTableError,
+    replace_strings,
+)
 
 # Magic of the four compressed PSP disc containers, and the name to put in the
 # error. Each wraps an ISO 9660 image; refuse them by name rather than
@@ -259,6 +294,10 @@ class _MirrorTables:
             self.roster_rost.write_record(index, values)
 
 
+# What a head shot body must start with to be kept: PNG or JPEG.
+_IMAGE_MAGIC = (b"\x89PNG\r\n\x1a\n", b"\xff\xd8\xff")
+
+
 @register(
     "nhl07-psp",
     platform="psp",
@@ -274,6 +313,10 @@ class NHL07PSPPatcher(Patcher):
 
     Providers: `espn` for the current season, `nhl` for seasons back to 1993.
     """
+
+    #: Screen art `patch(images={name: png})` can replace; `export_images`
+    #: writes the disc's current art for each. See `screens.SLOTS`.
+    image_slots: tuple[str, ...] = IMAGE_SLOT_NAMES
 
     def __init__(
         self,
@@ -291,6 +334,7 @@ class NHL07PSPPatcher(Patcher):
             on_partial=on_partial,
         )
         self.mapper = NHL07StatMapper()
+        self._transport = transport
         # `Any`: `get_hockey_squad` takes a team id on ESPN and an abbreviation
         # on the NHL API, and `get_hockey_team_leaders` splits the same way, so
         # no single type describes both clients.
@@ -421,6 +465,134 @@ class NHL07PSPPatcher(Patcher):
             teams=rosters,
         )
 
+    def export_images(self, rom_path: Path, out_dir: Path) -> list[Path]:
+        """Write each slot's current art as `<out_dir>/<slot>.png`, to edit and feed back."""
+        if not Path(rom_path).exists():
+            raise RomError(f"ROM not found: {rom_path}")
+        out = Path(out_dir)
+        written = []
+        with as_rom_error(rom_path), open(rom_path, "rb") as f:
+            archives = read_archives(f, slot_archives())
+            out.mkdir(parents=True, exist_ok=True)
+            for slot in SLOTS:
+                picture = self._first_picture(archives, slot)
+                if picture is None:
+                    continue
+                target = out / f"{slot.name}.png"
+                picture.save(target)
+                written.append(target)
+        return written
+
+    @staticmethod
+    def _first_picture(archives: Mapping[str, bytes], slot: Slot) -> Any:
+        for copy in slot.copies:
+            archive = archives.get(copy.archive)
+            if archive is None:
+                continue
+            for entry in bigf_parse(archive):
+                if entry.name.lower() == copy.member.lower():
+                    picture = read_picture(archive[entry.offset : entry.offset + entry.size], copy)
+                    if picture is not None:
+                        return picture
+        return None
+
+    def _collect_images(self, given: Any) -> dict[str, bytes]:
+        """Screen art to write: `patch(images=...)`, slot name to PNG path or bytes."""
+        images: dict[str, bytes] = {}
+        for name, png in dict(given or {}).items():
+            if name not in SLOTS_BY_NAME:
+                raise CapabilityError(
+                    f"Unknown image slot {name!r}. Slots: {', '.join(IMAGE_SLOT_NAMES)}"
+                )
+            images[name] = Path(png).read_bytes() if isinstance(png, str | Path) else bytes(png)
+        return images
+
+    def _decode_images(self, images: Mapping[str, bytes]) -> dict[str, Any]:
+        """Each slot's picture, decoded; {} without Pillow (with a status line).
+
+        Raises:
+            CapabilityError: a picture Pillow cannot read, named by its slot.
+        """
+        if not images:
+            return {}
+        if importlib.util.find_spec("PIL") is None:
+            self.status("Pillow is not installed; screen images skipped")
+            return {}
+        import io
+
+        from PIL import Image
+
+        pictures = {}
+        for name, png in images.items():
+            try:
+                picture = Image.open(io.BytesIO(png))
+                picture.load()
+            except Exception as e:  # noqa: BLE001 - Pillow's errors share no base class
+                raise CapabilityError(f"The {name!r} image is not a picture: {e}") from e
+            pictures[name] = picture
+        return pictures
+
+    @staticmethod
+    def _collect_texts(given: Any) -> dict[str, str | Mapping[str, str]]:
+        """Front-end strings to write, from `patch(texts=...)`; none by default.
+
+        EA's notice stays as the disc has it unless asked: the title shows
+        `$EA_COPYRIGHT` in a word-wrapped field 225 px wide with room for two
+        lines, which EA's two already fill (seen in PPSSPP).
+
+        Raises:
+            CapabilityError: a string id that is not plain ASCII.
+        """
+        texts: dict[str, str | Mapping[str, str]] = dict(given or {})
+        for string_id in texts:
+            if not string_id.isascii():
+                raise CapabilityError(f"String ids are ASCII, like EA_COPYRIGHT: {string_id!r}")
+        return texts
+
+    def _write_images(self, writer: NHL07PSPRomWriter, pictures: Mapping[str, Any]) -> None:
+        """Draw each given slot into every copy of it, in place. See `screens`."""
+        with open(writer.output_path, "r+b") as f:
+            archives = read_archives(f, slot_archives(set(pictures)))
+            edited, written, skipped = plan_writes(archives, pictures)
+            for path, data in edited.items():
+                found = iso_entry(f, path)
+                if found is not None:
+                    f.seek(found[0].extent.offset)
+                    f.write(data)
+        for name, count in written.items():
+            self.status(f"Screen image {name}: {count} copies")
+        for name in skipped:
+            self.status(f"Screen image {name} skipped: it does not fit every copy's slot")
+
+    def _write_texts(
+        self, writer: NHL07PSPRomWriter, texts: Mapping[str, str | Mapping[str, str]]
+    ) -> None:
+        """Replace front-end strings in `FE/LOCAL.VIV` and its cached directory.
+
+        `texts` maps a string id (`EA_COPYRIGHT`, `LICENSE_NHL`, ...) to one text
+        or to `{language: text}` for en, fr and de. See `strings`.
+
+        Raises:
+            RomError: the rebuilt `LOCAL.VIV`, or `FMISC.VIV` holding its cached
+                directory, does not fit before the next file.
+        """
+        with open(writer.output_path, "r+b") as f:
+            found = iso_entry(f, LOCAL_VIV_PATH)
+            if found is None:
+                return
+            f.seek(found[0].extent.offset)
+            old = f.read(found[0].extent.size)
+            try:
+                new, changed = replace_strings(old, texts)
+            except (EaTdbError, StringTableError) as e:
+                self.status(f"Front-end text skipped: {e}")
+                return
+            if changed:
+                write_in_place(f, *found, new)
+                sync_header_cache(f, FMISC_VIV_PATH, LOCAL_BH_NAME, old, new)
+        if changed:
+            self.status(f"Front-end strings replaced: {changed}")
+
     def suggest_squad_order(self, team_roster):
         leaders = team_roster.extra.get("leaders") or {}
         ordered = self.mapper.select_roster(team_roster.players, leaders, max_players=MAX_PLAYERS)
@@ -484,6 +656,10 @@ class NHL07PSPPatcher(Patcher):
             MappingError: `rosters` was produced by a different patcher.
         """
         rosters.require_game(self.game_id)
+        # Every option is checked before the disc is touched, so a bad picture or
+        # string id never leaves a half-written output behind.
+        pictures = self._decode_images(self._collect_images(options.get("images")))
+        texts = self._collect_texts(options.get("texts"))
 
         with as_rom_error(rom_path):
             compressed = _compressed_image_format(rom_path)
@@ -524,8 +700,9 @@ class NHL07PSPPatcher(Patcher):
             mirrors = _MirrorTables.of(bioatt_tdb, roster_tdb)
 
             self.status("Writing rosters...")
+            photos: dict[int, str] = {}
             teams_patched, players_patched = self._write_all_teams(
-                writer, rosters, tables, mirrors, on_progress
+                writer, rosters, tables, mirrors, on_progress, photos
             )
 
             self.status("Rebuilding db.viv...")
@@ -533,6 +710,15 @@ class NHL07PSPPatcher(Patcher):
                 self._archive_spelling(writer, master_tdb, bioatt_tdb, roster_tdb),
                 on_progress,
             )
+
+            if options.get("portraits", True):
+                self._write_portraits(writer, master_tdb, photos)
+
+            if pictures:
+                self._write_images(writer, pictures)
+
+            if texts:
+                self._write_texts(writer, texts)
 
         return PatchResult(
             output_path=str(output_path),
@@ -594,8 +780,11 @@ class NHL07PSPPatcher(Patcher):
         tables: _MasterTables,
         mirrors: _MirrorTables,
         on_progress: ProgressFn | None,
+        photos: dict[int, str],
     ) -> tuple[int, int]:
         """Write every mapped slot, returning (teams patched, players patched).
+
+        `photos` collects each written bio record's head shot URL, "" for none.
 
         Re-check the slot range here as well as in `map_rosters`: the keys come
         from a plain dict that may have crossed a JSON boundary since.
@@ -614,7 +803,7 @@ class NHL07PSPPatcher(Patcher):
                     PROGRESS_COPY_END + (i / len(targets)) * span,
                     f"Writing {NHL07_TEAM_NAMES[slot]} ({len(players)} players)...",
                 )
-            written = self._write_team(writer, slot, players, tables, mirrors)
+            written = self._write_team(writer, slot, players, tables, mirrors, photos)
             players_patched += written
             # A slot that placed no player record did not get patched.
             if written > 0:
@@ -629,6 +818,7 @@ class NHL07PSPPatcher(Patcher):
         players: list[NHL07PlayerRecord],
         tables: _MasterTables,
         mirrors: _MirrorTables,
+        photos: dict[int, str],
     ) -> int:
         """Write one team's players into the rows the disc already has for it.
 
@@ -655,6 +845,7 @@ class NHL07PSPPatcher(Patcher):
         for position, (player, roster_slot) in enumerate(pairs):
             used.add(roster_slot.rost_index)
             self._write_player(writer, player, roster_slot, tables, mirrors)
+            photos[roster_slot.bio_index] = player.photo_url
 
             line_flags = all_line_flags[position] if position < len(all_line_flags) else {}
             # CAPT: 2 is the captain, 1 an alternate, 0 neither. Position in the
@@ -679,6 +870,90 @@ class NHL07PSPPatcher(Patcher):
             mirrors.write_rost(rost_index, {"DRES": 0})
 
         return len(pairs)
+
+    def _write_portraits(
+        self, writer: NHL07PSPRomWriter, master_tdb: TDBFile, photos: Mapping[int, str]
+    ) -> int:
+        """Put each written player's head shot in his portrait, or the silhouette.
+
+        A portrait is the entry `ART_` names in `FE/PORTAPT.VIV`. Only a bio
+        whose `ART_` no other bio shares is drawn: the disc gives the same id to
+        dozens of European players. A player without a head shot, or whose head
+        shot fails to download or decode, gets entry 0000, the game's own
+        silhouette, so no 2006 face stays on a new player. Needs Pillow; skipped
+        with a status line without it. Returns how many portraits went in.
+        """
+        if importlib.util.find_spec("PIL") is None:
+            self.status("Portraits skipped: Pillow is not installed")
+            return 0
+        spbt = master_tdb.get_table("SPBT")
+        if spbt is None or not photos:
+            return 0
+        art_of = {i: spbt.read_record(i).get("ART_") for i in _live_records(spbt)}
+        wanted = portrait_targets(art_of, photos)
+        if not wanted:
+            return 0
+
+        with open(writer.output_path, "rb") as f:
+            found = iso_entry(f, PORTAPT_PATH)
+            if found is None:
+                return 0
+            f.seek(found[0].extent.offset)
+            archive = f.read(found[0].extent.size)
+
+        self.status(f"Drawing {len(wanted)} portraits...")
+        silhouette = read_portrait(archive, SILHOUETTE_ART)
+        urls = sorted({url for url in wanted.values() if url})
+        heads = dict(zip(urls, parallel_map(self._load_headshot, urls), strict=True))
+        images = {}
+        for art, url in wanted.items():
+            image = self._portrait_from(heads.get(url)) or silhouette
+            if image is not None:
+                images[art] = image
+        new_archive, drawn = repack_portraits(archive, images)
+        if drawn:
+            writer.write_portraits(archive, new_archive)
+        self.status(f"Portraits drawn: {drawn}")
+        return drawn
+
+    @staticmethod
+    def _portrait_from(png: bytes | None) -> Any:
+        if not png:
+            return None
+        try:
+            return headshot_portrait(png)
+        except Exception:  # noqa: BLE001 - Pillow's errors (a decompression bomb among them) share no base
+            return None
+
+    def _load_headshot(self, url: str) -> bytes | None:
+        """The head shot, from `cache_dir/headshots` or downloaded once; None on failure.
+
+        Only a PNG or JPEG body is kept, so an empty 200 or an HTML error page is
+        refetched next time rather than cached as the player's photo. No failure
+        here, cache I/O included, fails the patch: the player gets the
+        silhouette instead.
+        """
+        cache = self.cache_dir / "headshots" / f"{hashlib.sha1(url.encode()).hexdigest()}.png"
+        try:
+            cached = cache.read_bytes() if cache.is_file() else b""
+        except OSError:
+            cached = b""
+        if cached.startswith(_IMAGE_MAGIC):
+            return cached
+        try:
+            content = (self._transport or _http.default_transport)(url, {}, 15.0)
+        except Exception:  # noqa: BLE001 - a missing photo must not fail the patch
+            return None
+        if not content.startswith(_IMAGE_MAGIC):
+            return None
+        try:
+            cache.parent.mkdir(parents=True, exist_ok=True)
+            partial = cache.with_suffix(".part")
+            partial.write_bytes(content)
+            partial.replace(cache)
+        except OSError:
+            pass
+        return content
 
     @staticmethod
     def _classify_slots(

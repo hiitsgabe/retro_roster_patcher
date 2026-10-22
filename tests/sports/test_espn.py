@@ -230,6 +230,16 @@ def test_two_seasons_get_two_hockey_squads_and_a_repeat_gets_the_cache(tmp_path)
     assert transport.calls == [HOCKEY_ROSTER_URL, HOCKEY_ROSTER_URL]
 
 
+def test_a_hockey_squad_carries_height_and_head_shot(tmp_path):
+    body = json.loads(_hockey_roster("Auston Matthews"))
+    body["athletes"][0]["items"][0].update(
+        {"height": 75.0, "headshot": {"href": "https://a.espncdn.com/x.png", "alt": ""}}
+    )
+    client = EspnClient(str(tmp_path), transport=_sequence_transport(json.dumps(body).encode()))
+    (player,) = client.get_hockey_squad(5, 2026)
+    assert (player.height, player.photo_url) == (75.0, "https://a.espncdn.com/x.png")
+
+
 def test_the_hockey_squad_key_names_the_season_on_disk(tmp_path):
     """The file name is the whole mechanism, so it is asserted directly."""
     transport = _sequence_transport(_hockey_roster("Mats Sundin"))

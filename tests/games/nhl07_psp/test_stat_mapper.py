@@ -60,21 +60,6 @@ def player(pid=1, name="Connor McDavid", position="C", **kw):
     return Player(**fields)
 
 
-class _WithHeight:
-    """A `Player` that also carries a `height`, which no provider model does.
-
-    `map_player` reads its input by attribute, so delegating is enough. This
-    exists only to drive the height branch that the real models make dead.
-    """
-
-    def __init__(self, wrapped, height):
-        self._wrapped = wrapped
-        self.height = height
-
-    def __getattr__(self, name):
-        return getattr(self._wrapped, name)
-
-
 def test_clamp_leaves_a_value_inside_the_range():
     assert _clamp(31) == 31
 
@@ -87,8 +72,10 @@ def test_clamp_lowers_an_over_range_value_to_the_six_bit_maximum():
     assert _clamp(400) == ATTR_MAX
 
 
-def test_the_attribute_maximum_is_six_bits():
-    assert ATTR_MAX == 63
+def test_the_attribute_maximum_is_the_games_own_49():
+    # The fields are six bits, but every skater on the retail disc is 49 or
+    # less and the game shows a stored value plus 50.
+    assert ATTR_MAX == 49
 
 
 def test_scale_maps_the_bottom_of_the_window_to_zero():
@@ -96,16 +83,16 @@ def test_scale_maps_the_bottom_of_the_window_to_zero():
 
 
 def test_scale_maps_the_top_of_the_window_to_the_maximum():
-    assert _scale(90, 0, 90) == 63
+    assert _scale(90, 0, 90) == 49
 
 
 def test_scale_maps_the_middle_of_the_window_to_about_half():
-    # 45/90 of 63 is 31.5, which rounds to 32 under banker's rounding.
-    assert _scale(45, 0, 90) == 32
+    # 45/90 of 49 is 24.5, which rounds to 24 under banker's rounding.
+    assert _scale(45, 0, 90) == 24
 
 
 def test_scale_clamps_a_value_above_the_window():
-    assert _scale(200, 0, 90) == 63
+    assert _scale(200, 0, 90) == 49
 
 
 def test_scale_clamps_a_value_below_the_window():
@@ -113,19 +100,18 @@ def test_scale_clamps_a_value_below_the_window():
 
 
 def test_an_empty_window_answers_the_midpoint():
-    # Rather than dividing by zero. 32 and not 31, which is the midpoint of
-    # 0..63 rounded up.
-    assert _scale(5, 7, 7) == 32
+    # Rather than dividing by zero: the midpoint of 0..49, rounded up.
+    assert _scale(5, 7, 7) == 25
 
 
 def test_an_inverted_window_answers_the_midpoint():
-    assert _scale(5, 9, 4) == 32
+    assert _scale(5, 9, 4) == 25
 
 
 def test_a_narrow_window_still_spans_the_whole_scale():
     # The goalie save-percentage window is 0.05 wide, so a scale that lost
     # precision here would flatten every goalie.
-    assert _scale(0.905, 0.880, 0.930) == 32
+    assert _scale(0.905, 0.880, 0.930) == 24
 
 
 def test_a_stat_present_and_non_zero_is_returned():
@@ -346,40 +332,25 @@ def test_mutating_one_defaulted_players_attributes_leaves_the_other_alone():
     assert b.skater_attrs.speed == SKATER_DEFAULTS["C"].speed
 
 
-def test_every_mapped_player_gets_the_same_constant_height():
-    # PINS UPSTREAM FIDELITY DELIBERATELY, and this is the bug itself: the
-    # height comes from `getattr(player, "height", 0)` against a `Player` that
-    # has never had the attribute, so the derivation below it is dead and every
-    # patched player is written at `DEFAULT_HEIGHT`. Preserved because the
-    # source put these bytes on a disc. See `rom_writer.write_player_bio`.
+def test_a_player_without_a_reported_height_gets_the_default():
     tall = MAPPER.map_player(player(pid=1, position="D"), "BOS")
     small = MAPPER.map_player(player(pid=2, position="G"), "TOR")
     assert [tall.height, small.height] == [DEFAULT_HEIGHT, DEFAULT_HEIGHT]
 
 
-def test_a_provider_player_has_no_height_for_the_derivation_to_read():
-    # Why the test above holds. `getattr`'s default is the only value that
-    # expression can produce, so the `inches - 66` branch is unreachable.
-    assert hasattr(player(pid=1), "height") is False
+def test_a_reported_height_is_encoded_as_inches_above_54():
+    # Checked on the retail disc: Chara is stored as 27 (6'9"), Gionta as 13
+    # (5'7"), and the game shows a stored 16 as 5'10".
+    assert HEIGHT_BASE_INCHES == 54
+    assert MAPPER.map_player(player(height=73.0), "EDM").height == 19
 
 
-def test_the_height_derivation_still_encodes_inches_when_it_is_given_some():
-    # The dead branch, driven directly by a stand-in that does carry a height.
-    # Nothing in this library can reach it; it is here so the constant above is
-    # read as a consequence of the missing input and not as the encoding being
-    # absent.
-    stand_in = _WithHeight(player(pid=1, position="D"), 78)
-    assert MAPPER.map_player(stand_in, "BOS").height == 78 - HEIGHT_BASE_INCHES
+def test_a_giant_is_clamped_to_the_five_bit_ceiling():
+    assert MAPPER.map_player(player(height=200.0), "BOS").height == HEIGHT_MAX
 
 
-def test_the_height_derivation_clamps_a_giant_to_the_five_bit_ceiling():
-    stand_in = _WithHeight(player(pid=1, position="D"), 200)
-    assert MAPPER.map_player(stand_in, "BOS").height == HEIGHT_MAX
-
-
-def test_the_height_derivation_floors_someone_shorter_than_the_base():
-    stand_in = _WithHeight(player(pid=1, position="D"), 60)
-    assert MAPPER.map_player(stand_in, "BOS").height == 0
+def test_someone_shorter_than_the_base_is_floored_at_zero():
+    assert MAPPER.map_player(player(height=50.0), "BOS").height == 0
 
 
 ELITE = {"G": 40, "A": 55, "PTS": 95, "+/-": 40, "PIM": 80, "SOG": 300, "FO%": 60}
@@ -387,7 +358,7 @@ POOR = {"G": 1, "A": 1, "PTS": 2, "+/-": -30, "PIM": 0, "SOG": 40, "FO%": 32}
 
 
 def test_an_elite_scorer_saturates_the_offensive_ratings():
-    assert MAPPER.map_player(player(), "BOS", ELITE).skater_attrs.deking == 63
+    assert MAPPER.map_player(player(), "BOS", ELITE).skater_attrs.deking == 49
 
 
 def test_a_poor_scorer_does_not():
@@ -405,13 +376,13 @@ def test_the_two_scorers_differ_on_every_points_derived_rating():
 
 
 def test_penalty_minutes_drive_toughness():
-    assert MAPPER.map_player(player(), "BOS", ELITE).skater_attrs.toughness == 63
+    assert MAPPER.map_player(player(), "BOS", ELITE).skater_attrs.toughness == 49
 
 
 def test_penalty_minutes_also_drive_aggression():
     # One stat feeding three ratings, which is the source's design and worth
     # naming: `PIM` decides toughness, aggression and fighting on its own.
-    assert MAPPER.map_player(player(), "BOS", ELITE).skater_attrs.aggression == 63
+    assert MAPPER.map_player(player(), "BOS", ELITE).skater_attrs.aggression == 49
 
 
 def test_penalty_minutes_drive_the_two_bit_fighting_rating():
@@ -448,7 +419,7 @@ def test_the_two_faceoff_answers_differ():
 
 def test_a_defenceman_takes_his_checking_from_plus_minus():
     record = MAPPER.map_player(player(position="D"), "BOS", {"+/-": 40, "PTS": 1})
-    assert record.skater_attrs.checking == 63
+    assert record.skater_attrs.checking == 49
 
 
 def test_a_forward_keeps_his_positional_checking():
@@ -481,7 +452,21 @@ def test_a_player_with_no_shots_is_given_a_ten_per_cent_shooting_rate():
 
 def test_shot_accuracy_takes_the_better_of_goals_and_shooting_rate():
     record = MAPPER.map_player(player(), "BOS", {"G": 40, "SOG": 400})
-    assert record.skater_attrs.shot_accuracy == 63
+    assert record.skater_attrs.shot_accuracy == 49
+
+
+def test_the_nhl_apis_shots_key_counts():
+    # The NHL API calls shots `S`. 10 goals on 50 shots is 20%, the top of the
+    # accuracy window, where 10 goals alone rate 12.
+    record = MAPPER.map_player(player(), "BOS", {"G": 10, "S": 50})
+    assert record.skater_attrs.shot_accuracy == 49
+
+
+def test_a_faceoff_fraction_reads_as_a_percentage():
+    # The NHL API sends 0.6 where ESPN sends 60; both are the top of the window.
+    as_fraction = MAPPER.map_player(player(), "BOS", {"PTS": 1, "FO%": 0.6})
+    as_percent = MAPPER.map_player(player(), "BOS", {"PTS": 1, "FO%": 60})
+    assert as_fraction.skater_attrs.faceoffs == as_percent.skater_attrs.faceoffs == 49
 
 
 def test_wrist_accuracy_sits_two_below_the_goal_rating_when_that_wins():
@@ -514,7 +499,7 @@ def test_no_derived_skater_rating_falls_below_zero():
 
 def test_an_elite_save_percentage_saturates_the_save_ratings():
     record = MAPPER.map_player(player(position="G"), "BOS", {"SV%": 0.930})
-    assert record.goalie_attrs.rebound_ctrl == 63
+    assert record.goalie_attrs.rebound_ctrl == 49
 
 
 def test_a_poor_save_percentage_bottoms_them_out():
@@ -525,7 +510,7 @@ def test_a_poor_save_percentage_bottoms_them_out():
 def test_all_five_save_zones_move_together():
     record = MAPPER.map_player(player(position="G"), "BOS", {"SV%": 0.905})
     attrs = record.goalie_attrs
-    assert [attrs.five_hole, attrs.glove_high, attrs.glove_low] == [32, 32, 32]
+    assert [attrs.five_hole, attrs.glove_high, attrs.glove_low] == [24, 24, 24]
 
 
 def test_the_stick_zones_sit_two_below_the_glove_zones():
@@ -535,7 +520,7 @@ def test_the_stick_zones_sit_two_below_the_glove_zones():
 
 def test_a_low_goals_against_average_raises_the_poke_check():
     assert (
-        MAPPER.map_player(player(position="G"), "BOS", {"GAA": 2.0}).goalie_attrs.poke_check == 63
+        MAPPER.map_player(player(position="G"), "BOS", {"GAA": 2.0}).goalie_attrs.poke_check == 49
     )
 
 
@@ -565,7 +550,7 @@ def test_a_percentage_save_line_saturates_the_scale():
     # PINS UPSTREAM FIDELITY DELIBERATELY. Stated with the module's own `_scale`
     # so the tests below are a consequence and not a claim: the window is a
     # fraction and `91.2` is far off the top of it.
-    assert _scale(91.2, 0.880, 0.930) == 63
+    assert _scale(91.2, 0.880, 0.930) == 49
 
 
 def test_a_percentage_save_line_maxes_the_five_ratings_that_take_it_raw():
@@ -581,13 +566,12 @@ def test_a_percentage_save_line_maxes_the_five_ratings_that_take_it_raw():
         attrs.five_hole,
         attrs.glove_high,
         attrs.glove_low,
-    ] == [63, 63, 63, 63, 63]
+    ] == [49, 49, 49, 49, 49]
 
 
 def test_the_offset_save_ratings_saturate_at_their_own_offsets():
-    # The other five of the **ten** `SV%` drives. They are not all 63: three
-    # have a constant subtracted, which is why the divergence note that said
-    # "63 for all eight" was wrong twice over.
+    # The other five of the **ten** `SV%` drives. They are not all 49: three
+    # have a constant subtracted.
     attrs = MAPPER.map_player(player(position="G"), "BOS", {"SV%": 91.2}).goalie_attrs
     assert [
         attrs.shot_recovery,
@@ -595,7 +579,7 @@ def test_the_offset_save_ratings_saturate_at_their_own_offsets():
         attrs.stick_low,
         attrs.intensity,
         attrs.potential,
-    ] == [60, 61, 61, 58, 63]
+    ] == [46, 47, 47, 44, 49]
 
 
 def test_exactly_ten_goalie_ratings_move_with_the_save_percentage():
@@ -630,7 +614,7 @@ def test_a_fraction_save_line_still_lands_in_the_middle_of_the_window():
     # Pins the test above: the fraction reading is unchanged by this revert, so
     # "they differ" is not satisfied by a mapper that broke both.
     attrs = MAPPER.map_player(player(position="G"), "BOS", {"SV%": 0.912}).goalie_attrs
-    assert attrs.rebound_ctrl == 40
+    assert attrs.rebound_ctrl == 31
 
 
 def test_goalies_reported_in_percentages_outrank_every_fraction_goalie():

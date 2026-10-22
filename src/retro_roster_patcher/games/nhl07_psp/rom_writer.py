@@ -4,12 +4,13 @@
     -> overwrite them inside `db.viv` where they already sit -> write `db.viv`
     back into the image at its original LBA
 
-Patch the archive in place where possible; never use `bigf_replace`, which
-reassembles the directory and so moves every offset after the replaced file.
-`bigf_replace_inplace` keeps every offset and zero-pads the slack. A
-recompressed table that outgrew its slot is moved to the end of the archive by
-`bigf_relocate` instead, which rewrites only that table's own directory entry,
-so every other table stays where it was.
+When every recompressed table fits its slot, `bigf_replace_inplace` writes it
+there, keeping every offset and zero-padding the slack. When one does not,
+the archive is rebuilt compactly from the original with every new table
+(`bigf_replace`), so a table that grew takes the room the others freed. Moving
+the grown table to the end of the archive instead cost its whole size: on a
+real NHL 07 disc a 706-byte growth of `nhlrost.tdb` pushed `db.viv` 22 KB past
+its allocation.
 
 The size check that remains: the resulting `db.viv` must fit the sector gap
 before the next file on the ISO -- `find_db_viv_location`'s `max_size`.
@@ -20,17 +21,38 @@ from __future__ import annotations
 import os
 import struct
 from collections.abc import Callable, Mapping
+from typing import BinaryIO
 
 from ...core.errors import RomError
-from ...formats.ea_tdb import TDBFile, bigf_relocate, bigf_replace_inplace, refpack_compress
+from ...formats import iso9660
+from ...formats.ea_tdb import (
+    EaTdbError,
+    TDBFile,
+    bigf_parse,
+    bigf_replace,
+    bigf_replace_inplace,
+    refpack_compress,
+    refpack_decompress,
+)
 from .models import (
     NAME_FIELD_CHARS,
     POSITION_REVERSE,
+    WEIGHT_BASE_POUNDS,
     NHL07GoalieAttributes,
     NHL07PlayerRecord,
     NHL07SkaterAttributes,
 )
+from .portraits import PORTAPT_PATH
 from .rom_reader import ISO_SECTOR_SIZE, NHL07PSPRomReader
+
+# The game's cached copy of `db.viv`'s directory: `PRELOAD/FAPT.VIV` holds, as
+# `db.bh`, the first header-size bytes of `db.viv` (total size included),
+# RefPack-compressed, as it does for the front-end archives.
+FAPT_VIV_PATH = "PSP_GAME/USRDIR/PRELOAD/FAPT.VIV"
+DB_BH_NAME = "db.bh"
+# Every holder of `portapt.bh`, the cached directory of `FE/PORTAPT.VIV`.
+HEADER_CACHE_HOLDERS = (FAPT_VIV_PATH, "PSP_GAME/USRDIR/PRELOAD/GMISC.VIV")
+PORTAPT_BH_NAME = "portapt.bh"
 
 # Every single-bit line-assignment flag in a ROST record, and the complete set:
 # `roster_values` zeroes all of them before setting the ones a player has, so a
@@ -165,13 +187,8 @@ class NHL07PSPRomWriter:
 
         Write `WEIG` and `HEIG` only when positive, so a provider that reports
         no weight leaves the disc's own value alone rather than flattening the
-        player to zero pounds.
-
-        Upstream behaviour, known wrong, preserved deliberately: `HEIG` is
-        written and it is always 16, about 5'10", because
-        `stat_mapper.map_player` reads a `Player.height` that does not exist.
-        Every patched player overwrites the disc's per-player height with that
-        one value.
+        player to zero pounds. `WEIG` is stored as pounds above
+        `WEIGHT_BASE_POUNDS`.
         """
         spbt = tdb.get_table("SPBT")
         if spbt is None or record_idx >= spbt.capacity:
@@ -186,7 +203,7 @@ class NHL07PSPRomWriter:
             "POS_": POSITION_REVERSE.get(player.position, 0),
         }
         if player.weight > 0:
-            values["WEIG"] = player.weight
+            values["WEIG"] = max(0, player.weight - WEIGHT_BASE_POUNDS)
         if player.height > 0:
             values["HEIG"] = player.height
 
@@ -317,9 +334,10 @@ class NHL07PSPRomWriter:
         `modified_tdbs` is keyed by the archive's *own* spelling of each member,
         which the caller reads out of `bigf_parse` -- see `patcher.py`.
 
-        Every table is written: one that no longer fits its slot is relocated,
-        never skipped. Skipping (what the original tool did) left `db.viv`
-        with its three TDBs disagreeing about the same roster.
+        Every table is written: when one no longer fits its slot the archive is
+        rebuilt compactly, and no table is skipped. Skipping (what the original
+        tool did) left `db.viv` with its three TDBs disagreeing about the same
+        roster.
 
         Raises:
             RomError: a TDB is not in `db.viv`; `db.viv` cannot be located on the
@@ -329,8 +347,8 @@ class NHL07PSPRomWriter:
         if self._db_viv is None or self.reader is None:
             raise RomError("db.viv was never loaded; call copy_iso() and load() first")
 
-        new_viv = bytearray(self._db_viv)
         total = len(modified_tdbs)
+        compressed: dict[str, bytes] = {}
 
         for i, (tdb_name, tdb_file) in enumerate(modified_tdbs.items()):
             if on_progress is not None:
@@ -340,15 +358,19 @@ class NHL07PSPRomWriter:
                     f"Compressing {tdb_name}...",
                 )
 
-            compressed = refpack_compress(tdb_file.serialize())
-            # In place when it fits. Otherwise move it to the end of the archive
-            # rather than skip it (the original tool skipped, leaving the TDBs
-            # disagreeing about the roster); the size check below still refuses
-            # an archive that outgrows its allocation on the disc.
-            if not bigf_replace_inplace(new_viv, tdb_name, compressed) and not bigf_relocate(
-                new_viv, tdb_name, compressed
-            ):
-                raise RomError(f"db.viv holds no {tdb_name}; the patched roster cannot be written")
+            compressed[tdb_name] = refpack_compress(tdb_file.serialize())
+
+        new_viv = bytearray(self._db_viv)
+        if not all(bigf_replace_inplace(new_viv, n, data) for n, data in compressed.items()):
+            rebuilt = bytes(self._db_viv)
+            for tdb_name, data in compressed.items():
+                try:
+                    rebuilt = bigf_replace(rebuilt, tdb_name, data)
+                except EaTdbError as e:
+                    raise RomError(
+                        f"db.viv holds no {tdb_name}; the patched roster cannot be written"
+                    ) from e
+            new_viv = bytearray(rebuilt)
 
         if on_progress is not None:
             on_progress(PROGRESS_COMPRESS_END, "Writing db.viv to ISO...")
@@ -397,5 +419,130 @@ class NHL07PSPRomWriter:
                     f.flush()
                     os.fsync(f.fileno())
 
+        self._sync_db_header_cache(self._db_viv, new_viv_bytes)
+
         if on_progress is not None:
             on_progress(1.0, "Complete")
+
+    def _sync_db_header_cache(self, old_viv: bytes, new_viv: bytes) -> None:
+        """Rewrite `db.bh` in `FAPT.VIV` when `db.viv`'s directory changed.
+
+        A rebuild that moves `db.viv`'s members leaves the cached copy pointing
+        at the old offsets. See `sync_header_cache`.
+
+        Raises:
+            RomError: the rewritten `FAPT.VIV` does not fit before the next file.
+        """
+        with open(self.output_path, "r+b") as f:
+            sync_header_cache(f, FAPT_VIV_PATH, DB_BH_NAME, old_viv, new_viv)
+            f.flush()
+            os.fsync(f.fileno())
+
+    def write_portraits(self, old_archive: bytes, new_archive: bytes) -> None:
+        """Write a repacked `PORTAPT.VIV` and every cached copy of its directory.
+
+        Raises:
+            RomError: the archive, or a holder of its cached directory, does not
+                fit before the next file.
+        """
+        with open(self.output_path, "r+b") as f:
+            found = iso_entry(f, PORTAPT_PATH)
+            if found is None:
+                raise RomError(f"Cannot find {PORTAPT_PATH} inside {self.output_path}")
+            write_in_place(f, *found, new_archive)
+            for holder in HEADER_CACHE_HOLDERS:
+                sync_header_cache(f, holder, PORTAPT_BH_NAME, old_archive, new_archive)
+            f.flush()
+            os.fsync(f.fileno())
+
+
+def iso_entry(f: BinaryIO, path: str) -> tuple[iso9660.DirEntry, int] | None:
+    """A file's directory record and the LBA of whatever starts next on the disc.
+
+    Next anywhere on the disc, not only in the file's own directory (see
+    `iso9660.next_extent_lba`); 0 when nothing follows. None when the file is
+    not there.
+    """
+    *dirs, name = path.split("/")
+    root = iso9660.read_root(f)
+    if root is None:
+        return None
+    directory = iso9660.walk(f, root, dirs)
+    entry = iso9660.find_entry(f, directory, name) if directory is not None else None
+    if entry is None or entry.is_dir:
+        return None
+    return entry, iso9660.next_extent_lba(f, root, entry.extent.lba)
+
+
+def write_in_place(f: BinaryIO, entry: iso9660.DirEntry, next_lba: int, data: bytes) -> None:
+    """Overwrite a file at its LBA and correct both copies of its length.
+
+    The room is the gap to the next file, or the file's own last sector when
+    nothing follows it in its directory. A shorter file is zero-padded over
+    what it replaces.
+
+    Raises:
+        RomError: `data` does not fit that room.
+    """
+    if next_lba > entry.extent.lba:
+        room = (next_lba - entry.extent.lba) * ISO_SECTOR_SIZE
+    else:
+        room = -(-entry.extent.size // ISO_SECTOR_SIZE) * ISO_SECTOR_SIZE
+    if len(data) > room:
+        raise RomError(
+            f"Rewritten {entry.name} is {len(data)} bytes and its allocation on the ISO "
+            f"is {room}; writing it would overwrite the next file"
+        )
+    f.seek(entry.extent.offset)
+    f.write(data + b"\x00" * max(0, entry.extent.size - len(data)))
+    if len(data) != entry.extent.size:
+        # ISO 9660 records every length twice, little-endian at +10 and
+        # big-endian at +14.
+        f.seek(entry.record_offset + 10)
+        f.write(struct.pack("<I", len(data)))
+        f.seek(entry.record_offset + 14)
+        f.write(struct.pack(">I", len(data)))
+
+
+def sync_header_cache(
+    f: BinaryIO, holder_path: str, bh_name: str, old_archive: bytes, new_archive: bytes
+) -> None:
+    """Rewrite one cached copy of an archive's directory, if it is the old one.
+
+    The PRELOAD archives hold, as `<name>.bh`, the first header-size bytes of
+    several archives (their directory, total size included), RefPack-
+    compressed. Nothing happens when the directory did not change, when the
+    disc has no such holder or member, or when the cached copy is not the old
+    directory, so a disc laid out some other way is left as it was. The copy
+    is rewritten where it sits when it fits there, else the holder is rebuilt.
+
+    Raises:
+        RomError: the rewritten holder does not fit before the next file.
+    """
+    old_header = old_archive[: struct.unpack_from(">I", old_archive, 12)[0]]
+    new_header = new_archive[: struct.unpack_from(">I", new_archive, 12)[0]]
+    if old_header == new_header:
+        return
+    found = iso_entry(f, holder_path)
+    if found is None:
+        return
+    entry, next_lba = found
+    f.seek(entry.extent.offset)
+    holder = f.read(entry.extent.size)
+    try:
+        member = next((e for e in bigf_parse(holder) if e.name.lower() == bh_name), None)
+        if member is None:
+            return
+        cached = refpack_decompress(holder[member.offset : member.offset + member.size])
+    except (EaTdbError, IndexError, ValueError):
+        return
+    if cached != old_header:
+        return
+    # In the cached copy's own slot when it fits, so the holder keeps its
+    # layout (FMISC.VIV is 64-byte aligned, and a rebuild would align it to 128).
+    data = refpack_compress(new_header)
+    in_place = bytearray(holder)
+    if bigf_replace_inplace(in_place, member.name, data):
+        write_in_place(f, entry, next_lba, bytes(in_place))
+    else:
+        write_in_place(f, entry, next_lba, bigf_replace(holder, member.name, data))

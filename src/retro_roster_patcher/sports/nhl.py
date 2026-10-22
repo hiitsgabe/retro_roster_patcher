@@ -166,6 +166,7 @@ class NhlApiClient:
 
                 number = athlete.get("sweaterNumber")
                 weight = athlete.get("weightInPounds", 0) or 0
+                height = athlete.get("heightInInches", 0) or 0
                 hand = athlete.get("shootsCatches", "")
 
                 players.append(
@@ -178,8 +179,9 @@ class NhlApiClient:
                         nationality="",
                         position=pos,
                         number=number,
-                        photo_url="",
+                        photo_url=athlete.get("headshot", "") or "",
                         weight=float(weight),
+                        height=float(height),
                         handedness=hand,
                     )
                 )

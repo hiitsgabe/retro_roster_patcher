@@ -176,16 +176,20 @@ TDB_ROSTER = "nhlrost.tdb"
 # The longest name that survives a write to SPBT's `FNME` or `LNME`. The field is
 # 20 bytes and `TDBTable.write_record` NUL-pads to fill it, so 20 characters
 # would leave no terminator.
+# `WEIG` stores pounds above this. Checked on the retail disc: Chara is 110
+# (260 lb) and Gionta 25 (175 lb); a raw 194 shows in the game as 344 lb.
+WEIGHT_BASE_POUNDS = 150
+
 NAME_FIELD_CHARS = 19
 
 
 @dataclass
 class NHL07SkaterAttributes:
-    """Skater ratings on NHL 07's 0-63 scale, one six-bit TDB field each.
+    """Skater ratings on NHL 07's 0-49 scale, one six-bit TDB field each.
 
-    `FIGH` is the exception at two bits, so 0-3. Every other default is 30, the
-    middle of the six-bit range; `stat_mapper.SKATER_DEFAULTS` overrides them per
-    position.
+    The game shows a stored value plus 50, so 0-49 reads as 50-99. `FIGH` is the
+    exception at two bits, so 0-3. Every other default is 30, which shows as 80;
+    `stat_mapper.SKATER_DEFAULTS` overrides them per position.
     """
 
     balance: int = 30  # BALA
@@ -214,7 +218,7 @@ class NHL07SkaterAttributes:
 
 @dataclass
 class NHL07GoalieAttributes:
-    """Goalie ratings on the same 0-63 scale, and the same two-bit `FIGH`.
+    """Goalie ratings on the same 0-49 scale, and the same two-bit `FIGH`.
 
     `5HOL`, `GSH_`, `SSH_`, `GSL_` and `SSL_` are the five save zones: five-hole,
     glove high, stick high, glove low, stick low.
@@ -246,11 +250,6 @@ class NHL07PlayerRecord:
     Exactly one of `skater_attrs` and `goalie_attrs` is set, following
     `is_goalie`. Both default to `None` and must not default to a shared mutable
     instance.
-
-    Upstream behaviour, known wrong, preserved deliberately: `height` is the
-    encoded five-bit `HEIG` and nothing ever overrides this default, because
-    `stat_mapper.map_player` derives it from a `Player.height` no provider model
-    here has. Every patched player is written at 16, about 5'10".
     """
 
     first_name: str = ""
@@ -258,11 +257,12 @@ class NHL07PlayerRecord:
     position: str = "C"
     jersey_number: int = 1
     handedness: int = 1  # 0 = left, 1 = right
-    weight: int = 190  # raw pounds
-    height: int = 16  # encoded five-bit HEIG, ~5'10"
+    weight: int = 190  # pounds; the writer stores pounds above WEIGHT_BASE_POUNDS
+    height: int = 16  # encoded five-bit HEIG, inches above 54: 16 is 5'10"
     team_index: int = 0
     player_id: int = 0
     is_goalie: bool = False
+    photo_url: str = ""  # the provider's head shot, for the portrait
     skater_attrs: NHL07SkaterAttributes | None = None
     goalie_attrs: NHL07GoalieAttributes | None = None
 
