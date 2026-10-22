@@ -463,7 +463,9 @@ def test_the_preview_palette_follows_the_spec(tmp_path):
     with open(path, "rb") as f:
         f.seek(_OFS_ANT_MAGLIE2 + SLOT * 64)
         home = struct.unpack("<16H", f.read(32))
-    assert home[2] == _bgr555(RED) and home[3] == _bgr555(WHITE) and home[10] == _bgr555(WHITE)
+    # Body zones 3/4/6 keep the shirt; the striped spec's contrast goes on the
+    # collar and shoulder zones 2/5/7/8; shorts on 10-15.
+    assert home[3] == _bgr555(RED) and home[2] == _bgr555(WHITE) and home[10] == _bgr555(WHITE)
     assert home[1] == _bgr555((16, 16, 16)) and home[9] == _bgr555((152, 152, 152))
 
 
@@ -652,7 +654,7 @@ def test_black_cloth_in_the_preview_palette_keeps_its_stp_bit():
     black = KitSpec(BLACK, WHITE, "stripes", BLACK, BLACK)
     home = struct.unpack("<16H", rw._maglia_half(black, BLACK, BLACK))
     assert home[0] == 0
-    assert all(v == 0x8000 for k, v in enumerate(home) if k in (2, 5, 7, 8, 10, 11, 12, 13, 14, 15))
+    assert all(v == 0x8000 for k, v in enumerate(home) if k in (3, 4, 6, 10, 11, 12, 13, 14, 15))
     legacy = struct.unpack("<16H", rw._maglia_half(None, BLACK, BLACK))
     assert legacy[0] == 0 and all(v == 0x8000 for v in legacy[2:])
 

@@ -218,7 +218,7 @@ which, choice)` shows any such choice as a 96x128 kit photo before it is
 written (`choice=None` for the kit as it is). The goalkeeper shares the page through a palette of its
 own and is left alone, as are the shirt numbers. The 2D team-select preview is
 a 16-colour sprite palette, written from the same colours (striped kits put the
-contrast colour on the zones the disc's striped teams use). Needs Pillow; without
+contrast colour on the collar and shoulder zones). Needs Pillow; without
 it each slot takes the whole texture of the shipped team whose shirt colour is
 nearest, which is all earlier versions did.
 

@@ -2055,18 +2055,21 @@ def _build_tex_dir_map_from_dir(dir_data: bytearray) -> tuple[dict, dict]:
 
 _MAGLIA_OUTLINE = (16, 16, 16)
 _MAGLIA_GREY = (152, 152, 152)
-#: Patterns the preview sprite shows as stripes: its zones 3, 4 and 6 take the
-#: contrast colour, as the disc's striped teams (Milan, Inter) have them.
+#: Patterns whose contrast colour the preview sprite shows as trim: zones 2, 5,
+#: 7 and 8 (collar and shoulders, seen in the emulator) take it, while 3, 4
+#: and 6, the body, keep the shirt colour; the sprite has no stripe zones.
 _STRIPED_PATTERNS = ("stripes", "pinstripes", "hoops")
+_TRIM_ZONES = (2, 5, 7, 8)
 
 
 def _maglia_half(
     spec: KitSpec | None, shirt: tuple[int, int, int], other: tuple[int, int, int]
 ) -> bytes:
     """One 16-entry preview palette: [0] transparent, [1] the outline, 2-8 the
-    shirt sprite's zones, [9] a fixed grey, 10-15 the shorts. A spec paints its
-    shirt (and, striped, its contrast colour on zones 3, 4 and 6) and its
-    shorts; without one the shirt is `shirt` and the shorts `other`, as before."""
+    shirt sprite's zones (3, 4, 6 the body; 2, 5, 7, 8 collar and shoulders),
+    [9] a fixed grey, 10-15 the shorts. A spec paints its shirt (and, striped,
+    its contrast colour on the trim zones) and its shorts; without one the
+    shirt is `shirt` and the shorts `other`, as before."""
     if spec is None:
         pal = [0, 0] + [_rgb_to_ps1_color(*shirt)] * 8 + [_rgb_to_ps1_color(*other)] * 6
     else:
@@ -2077,7 +2080,7 @@ def _maglia_half(
             + [_rgb_to_ps1_color(*spec.shorts)] * 6
         )
         if spec.pattern in _STRIPED_PATTERNS:
-            for zone in (3, 4, 6):
+            for zone in _TRIM_ZONES:
                 pal[zone] = _rgb_to_ps1_color(*spec.secondary)
     # A true black packs to 0x0000, which the CLUT draws transparent: set the
     # STP bit so black cloth stays black. Entry 0 alone is the transparent one.
