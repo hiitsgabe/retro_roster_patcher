@@ -49,10 +49,29 @@ CLUB_COUNT = 139
 CLUB_SQUAD_SIZE = 32
 NATIONAL_COUNT = 75
 NATIONAL_SQUAD_SIZE = 23
+#: National teams are slots too: row `r` of the national squad table is slot
+#: `NATIONAL_SLOT_BASE + r`. Only the named rows (the first 67, which the
+#: overlay team table names) are offered.
+NATIONAL_SLOT_BASE = 1000
+NATIONAL_NAMED = 67
+#: Position nibble written into a record that changes hands between groups.
+GROUP_POSITIONS = {"Goalkeeper": 0, "Defender": 3, "Midfielder": 7, "Attacker": 12}
 
 #: `0_TEXT.AFS` entries holding the emblem atlases: all teams at 64x64 and 32x32,
 #: then the club-only copies the game also reads.
 EMBLEM_ENTRIES = (604, 600, 606, 602)
+
+#: Screen art the patch can replace: slot name -> texture name in the UI
+#: bundles (every occurrence, in every language archive, is rewritten).
+IMAGE_SLOTS = {
+    "title": "title_bgNS",  # the title screen (512x512)
+    "menu": "mo_sub_bgUS",  # behind the main menus (512x512)
+    "loading": "loading_bg00",  # the loading screen (256x256)
+    "match": "ts_match_bg",  # behind the match screens (512x512)
+}
+IMAGE_SLOT_NAMES: tuple[str, ...] = tuple(IMAGE_SLOTS)
+#: The language archive the exported art is read from.
+TEXT_ARCHIVE_PRIMARY = "U_TEXT.AFS"
 
 #: The UI text archives, one per language of the US release.
 TEXT_LANGUAGE_AFS = ("U_TEXT.AFS", "B_TEXT.AFS", "F_TEXT.AFS", "M_TEXT.AFS")
@@ -135,6 +154,8 @@ class PESTeamRecord:
     #: The league the team came from: written as the slot group's league.
     league_name: str = ""
     league_logo_url: str = ""
+    #: A national-team slot (`NATIONAL_SLOT_BASE` and up).
+    national: bool = False
 
 
 @dataclass
@@ -150,4 +171,5 @@ class PESRomInfo:
     size: int
     is_valid: bool
     clubs: list[ClubSlot] = field(default_factory=list)
+    nationals: list[ClubSlot] = field(default_factory=list)
     player_count: int = 0

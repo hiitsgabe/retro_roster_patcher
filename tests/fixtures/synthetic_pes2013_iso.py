@@ -36,6 +36,7 @@ CLUB_CODES = ["NLN", "WMV", "FCB"]
 #: Position nibble per squad slot: a keeper, three defenders, four midfielders,
 #: three attackers, then nothing.
 SLOT_POSITIONS = [0, 3, 3, 4, 5, 7, 7, 8, 11, 12, 12]
+NATIONAL_ROW_0 = [1, 2, 3, 34, 35, 36]
 
 
 def player_record(display: str, shirt: str, position: int) -> bytes:
@@ -82,11 +83,16 @@ def build_player_entry(names: list[tuple[str, str]] | None = None) -> bytes:
             idx = 1 + club * len(SLOT_POSITIONS) + slot
             struct.pack_into("<H", squads, (club * CLUB_SQUAD_SIZE + slot) * 2, idx)
             numbers[club * CLUB_SQUAD_SIZE + slot] = slot
-    nationals = bytes(NATIONAL_COUNT * NATIONAL_SQUAD_SIZE * 2)
+    # National row 0 ("NATION 0") shares players 1..3 with club 0 and owns
+    # players 34..36 (keeper, defender, attacker) that no club points at;
+    # players 37..39 belong to nobody.
+    nationals = bytearray(NATIONAL_COUNT * NATIONAL_SQUAD_SIZE * 2)
+    for slot, idx in enumerate(NATIONAL_ROW_0):
+        struct.pack_into("<H", nationals, slot * 2, idx)
     order = bytes(NATIONAL_COUNT * NATIONAL_SQUAD_SIZE)
     parts = [
         block(players, compress=True),
-        block(nationals, compress=True),
+        block(bytes(nationals), compress=True),
         block(bytes(squads), compress=True),
         block(order, compress=True),
         block(bytes(numbers), compress=True),
@@ -165,31 +171,27 @@ def build_iso(
     player_entry = player_entry or build_player_entry()
     if overlays is None:
         overlays = {DATABASE_OVERLAY_ENGLISH: build_overlay("u"), 5: build_overlay("b")}
-    text_afs = build_afs({46: player_entry, 47: player_entry}, 48)
+    entries = {46: player_entry, 47: player_entry}
+    for index, side in ((600, 32), (602, 32), (604, 64), (606, 64)):
+        entries[index] = block(build_atlas(side), compress=False) + b"\0" * 1024
+    text_afs = build_afs(entries, 610)
     over_afs = build_afs(overlays, 20)
     boot = b"\x7fELF" + b"\0" * 2044
+    languages = {"U_TEXT.AFS": build_text_afs("u"), "B_TEXT.AFS": build_text_afs("b")}
 
     root_sector = 17
     boot_sector = 18
-    text_sector = boot_sector + len(boot) // SECTOR
-    over_sector = text_sector + -(-len(text_afs) // SECTOR)
-    total = over_sector + -(-len(over_afs) // SECTOR) + 1
-    records = [
-        iso.dir_record(f"{boot_name};1".encode(), boot_sector, len(boot), is_dir=False),
-        iso.dir_record(b"0_TEXT.AFS;1", text_sector, len(text_afs), is_dir=False),
-        iso.dir_record(b"OVER.AFS;1", over_sector, len(over_afs), is_dir=False),
-    ]
-    image = iso.build_image(
-        {
-            iso.PVD_SECTOR: iso.pvd(total, root_sector, SECTOR, volume_id=b"PES2013_FIXTURE"),
-            root_sector: iso.directory_extent(root_sector, root_sector, records),
-            boot_sector: boot,
-            text_sector: text_afs,
-            over_sector: over_afs,
-        },
-        total,
-    )
-    return image
+    sectors: dict[int, bytes] = {boot_sector: boot}
+    records = [iso.dir_record(f"{boot_name};1".encode(), boot_sector, len(boot), is_dir=False)]
+    nxt = boot_sector + len(boot) // SECTOR
+    for name, data in [("0_TEXT.AFS", text_afs), ("OVER.AFS", over_afs), *languages.items()]:
+        sectors[nxt] = data
+        records.append(iso.dir_record(f"{name};1".encode(), nxt, len(data), is_dir=False))
+        nxt += -(-len(data) // SECTOR)
+    total = nxt + 1
+    sectors[iso.PVD_SECTOR] = iso.pvd(total, root_sector, SECTOR, volume_id=b"PES2013_FIXTURE")
+    sectors[root_sector] = iso.directory_extent(root_sector, root_sector, records)
+    return iso.build_image(sectors, total)
 
 
 def write_iso(path, **kwargs) -> int:  # type: ignore[no-untyped-def]
@@ -199,3 +201,130 @@ def write_iso(path, **kwargs) -> int:  # type: ignore[no-untyped-def]
         # Over the reader's size floor without real bytes.
         f.truncate(max(len(image), 5 * 1024 * 1024))
     return len(image)
+
+
+# -- emblem atlases and texture bundles ------------------------------------
+
+
+def build_atlas(side: int, clubs: int = 4) -> bytes:
+    """An emblem atlas: an empty flag table, `clubs` crests, no extras, one
+    palette for the club table. Crest k is filled with index k + 1."""
+    import zlib
+
+    header = (
+        struct.pack("<I", side * side)
+        + bytes([0, 0, side, side])
+        + struct.pack("<II", 0x00010001, 0)
+    )
+    tables = [[], [(k, zlib.compress(bytes([k + 1]) * (side * side), 9)) for k in range(clubs)], []]
+    table_off = 0x28
+    offsets = []
+    for recs in tables:
+        offsets.append((len(recs), table_off if recs else 0))
+        table_off += 16 * len(recs)
+    data = bytearray(header + struct.pack("<6I", *(v for pair in offsets for v in pair)))
+    assert len(data) == 0x28
+    body = bytearray()
+    stream_offs = []
+    for recs in tables:
+        offs = []
+        for _ident, stream in recs:
+            offs.append(table_off + len(body))
+            body += stream + b"\0" * (-len(stream) % 4)
+        stream_offs.append(offs)
+    palette = bytearray(1024)
+    for i in range(1, 256):
+        palette[4 * i : 4 * i + 4] = bytes((i, 255 - i, 128, 0x80))
+    pal_off = table_off + len(body)
+    body += palette
+    for t, recs in enumerate(tables):
+        for k, (ident, stream) in enumerate(recs):
+            flags = 0x04000000 if k == 0 else 0
+            data += struct.pack(
+                "<IIII",
+                ident,
+                flags | len(stream),
+                stream_offs[t][k],
+                pal_off if (k == 0 and t == 1) else 0,
+            )
+    return bytes(data) + bytes(body)
+
+
+def build_texture(w: int, h: int, fill: int = 3) -> bytes:
+    """A PSMT8 texture: 128-byte header, palette, pixels all `fill` (swizzle-free
+    because every pixel is the same)."""
+    header = bytearray(128)
+    struct.pack_into("<I", header, 0, 0x29857294)
+    struct.pack_into("<HH", header, 0x14, w, h)
+    header[0x19] = 0x13
+    palette = bytearray(1024)
+    for i in range(256):
+        palette[4 * i : 4 * i + 4] = bytes((i, i, i, 0x80 if i else 0))
+    return bytes(header) + bytes(palette) + bytes([fill]) * (w * h)
+
+
+def build_bundle(textures: dict[str, bytes]) -> bytes:
+    """A named texture bundle, each texture one zlib block."""
+    import zlib
+
+    names = list(textures)
+    count = len(names)
+    table = 16 + 4 * count
+    names_off = table + 4 * count + 4
+    head = bytearray(struct.pack("<IIII", count, 0x10, table, 0))
+    head += struct.pack(f"<{count}I", *(names_off + 16 * k for k in range(count)))
+    head += b"\0" * (4 * count + 4)  # the block offset table, filled below
+    for n in names:
+        head += n.encode("ascii").ljust(16, b"\0")
+    head += b"\0" * (-len(head) % 16)
+    body = bytearray()
+    for k, n in enumerate(names):
+        struct.pack_into("<I", head, table + 4 * k, len(head) + len(body))
+        comp = zlib.compress(textures[n], 9)
+        body += struct.pack("<BBBBII", 0, 3, 1, 0, len(comp), len(textures[n])) + b"\0" * 20 + comp
+        body += b"\0" * (-len(body) % 16)
+    return bytes(head) + bytes(body)
+
+
+def build_league_table(names: list[str]) -> bytes:
+    """A NUL-separated string table holding the league names in game order."""
+    return b"\0".join(n.encode("utf-8") for n in names) + b"\0"
+
+
+def build_text_afs(lang: str) -> bytes:
+    """A `*_TEXT.AFS`: entry 15 and 17 with the league names, entry 337 with the
+    team-select icon and the screen art textures."""
+    leagues = [
+        "League A",
+        "English League",
+        "Ligue 1",
+        "German League",
+        "Italian League",
+        "Eredivisie",
+        "LIGA BBVA",
+    ]
+    if lang == "b":
+        leagues = [
+            "Liga A",
+            "Liga inglesa",
+            "Ligue 1",
+            "Liga alemã",
+            "Liga italiana",
+            "Eredivisie",
+            "LIGA BBVA",
+        ]
+    names_part = block(build_league_table(leagues), compress=True)
+    entry15 = block(table([names_part, block(b"\0" * 64, compress=True)]), compress=True)
+    bundle = build_bundle(
+        {
+            "mn_ts_eng_l": build_texture(32, 32),
+            "title_bgNS": build_texture(64, 64, fill=5),
+            "mo_sub_bgUS": build_texture(64, 64, fill=6),
+            "loading_bg00": build_texture(32, 32),
+            "ts_match_bg": build_texture(32, 32),
+        }
+    )
+    entry337 = block(bundle, compress=False)
+    return build_afs(
+        {15: entry15 + b"\0" * 512, 17: entry15 + b"\0" * 512, 337: entry337 + b"\0" * 2048}, 340
+    )

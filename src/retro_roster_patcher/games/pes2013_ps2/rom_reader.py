@@ -10,26 +10,34 @@ from __future__ import annotations
 import os
 import struct
 from dataclasses import dataclass, field
-from typing import BinaryIO
+from typing import TYPE_CHECKING, BinaryIO
 
 from ...core.errors import RomError
 from ...formats import iso9660
 from .afs import AfsEntry, Table, read_afs_entries, read_entry, unwrap, wrap
+
+if TYPE_CHECKING:
+    from .textures import Bundle
 from .models import (
     BOOT_FILE,
     CLUB_COUNT,
     CLUB_SQUAD_SIZE,
     DATABASE_OVERLAY_ENGLISH,
     FIRST_CLUB_ENTRY,
+    NATIONAL_NAMED,
+    NATIONAL_SQUAD_SIZE,
     OVER_AFS,
     OVERLAY_LOAD_ADDRESS_OFFSET,
     PART_CLUB_NUMBERS,
     PART_CLUB_SQUADS,
+    PART_NATIONAL_ORDER,
+    PART_NATIONAL_SQUADS,
     PART_PLAYERS,
     PLAYER_ENTRY_LATIN,
     PLAYER_RECORD_SIZE,
     TEAM_ENTRY_SIZE,
     TEXT_AFS,
+    TEXT_ARCHIVE_PRIMARY,
     TEXT_LANGUAGE_AFS,
     ClubSlot,
     PESRomInfo,
@@ -97,6 +105,42 @@ class PlayerTables:
         part = self.parts[PART_CLUB_NUMBERS]
         return part[club * CLUB_SQUAD_SIZE : (club + 1) * CLUB_SQUAD_SIZE]
 
+    def national_squad(self, row: int) -> list[int]:
+        part = self.parts[PART_NATIONAL_SQUADS]
+        start = row * NATIONAL_SQUAD_SIZE * 2
+        return list(
+            struct.unpack(f"<{NATIONAL_SQUAD_SIZE}H", part[start : start + NATIONAL_SQUAD_SIZE * 2])
+        )
+
+    def set_national_squad(self, row: int, indices: list[int]) -> None:
+        part = bytearray(self.parts[PART_NATIONAL_SQUADS])
+        start = row * NATIONAL_SQUAD_SIZE * 2
+        part[start : start + NATIONAL_SQUAD_SIZE * 2] = struct.pack(
+            f"<{NATIONAL_SQUAD_SIZE}H", *indices[:NATIONAL_SQUAD_SIZE]
+        )
+        self.parts[PART_NATIONAL_SQUADS] = bytes(part)
+        order = bytearray(self.parts[PART_NATIONAL_ORDER])
+        order[row * NATIONAL_SQUAD_SIZE : (row + 1) * NATIONAL_SQUAD_SIZE] = bytes(
+            range(NATIONAL_SQUAD_SIZE)
+        )
+        self.parts[PART_NATIONAL_ORDER] = bytes(order)
+
+    def referenced(self) -> set[int]:
+        """Every record some club or national squad points at."""
+        used: set[int] = set()
+        for part, _size in (
+            (self.parts[PART_CLUB_SQUADS], CLUB_SQUAD_SIZE),
+            (self.parts[PART_NATIONAL_SQUADS], NATIONAL_SQUAD_SIZE),
+        ):
+            used.update(
+                v for v in struct.unpack(f"<{len(part) // 2}H", part[: len(part) // 2 * 2]) if v
+            )
+        return used
+
+    def club_referenced(self) -> set[int]:
+        part = self.parts[PART_CLUB_SQUADS]
+        return {v for v in struct.unpack(f"<{len(part) // 2}H", part[: len(part) // 2 * 2]) if v}
+
 
 @dataclass
 class TeamString:
@@ -115,6 +159,7 @@ class OverlayTeams:
     load_address: int
     table_offset: int
     clubs: dict[int, tuple[TeamString, TeamString]] = field(default_factory=dict)
+    nationals: dict[int, tuple[TeamString, TeamString]] = field(default_factory=dict)
 
 
 class RomReader:
@@ -225,6 +270,12 @@ class RomReader:
             off += TEAM_ENTRY_SIZE
         ordered = sorted(pointers) + [base + table_offset]
         room = {p: q - p for p, q in zip(ordered, ordered[1:], strict=False)}
+        nationals: dict[int, tuple[TeamString, TeamString]] = {}
+        for k, (name_ptr, code_ptr, _ident) in enumerate(rows[:NATIONAL_NAMED]):
+            nationals[k] = (
+                _team_string(data, name_ptr - base, room[name_ptr]),
+                _team_string(data, code_ptr - base, room[code_ptr]),
+            )
         clubs: dict[int, tuple[TeamString, TeamString]] = {}
         for k, (name_ptr, code_ptr, ident) in enumerate(rows[FIRST_CLUB_ENTRY:]):
             club = ident & 0xFF
@@ -234,7 +285,48 @@ class RomReader:
                 _team_string(data, name_ptr - base, room[name_ptr]),
                 _team_string(data, code_ptr - base, room[code_ptr]),
             )
-        return OverlayTeams(entry, base, table_offset, clubs)
+        return OverlayTeams(entry, base, table_offset, clubs, nationals)
+
+    # -- UI textures -------------------------------------------------------
+
+    def bundles_with(self, afs_name: str, texture: str) -> list[tuple[AfsEntry, bytes, Bundle]]:
+        """Every bundle of the archive holding a texture of that name, with its
+        entry and block header, in entry order."""
+        from .textures import Bundle
+
+        needle = texture.encode("ascii").ljust(16, b"\0")
+        extent = self.extent(afs_name)
+        found: list[tuple[AfsEntry, bytes, Bundle]] = []
+        with open(self.iso_path, "rb") as f:
+            for entry in self.entries(afs_name):
+                if entry.size < 1024:
+                    continue
+                f.seek(extent.offset + entry.offset)
+                block = f.read(entry.size)
+                if block[0] != 0 or block[2] not in (0, 1):
+                    continue
+                try:
+                    header, payload = unwrap(block)
+                except RomError:
+                    continue
+                if needle not in payload:
+                    continue
+                try:
+                    bundle = Bundle.parse(payload)
+                    bundle.texture(texture)
+                except (RomError, ValueError):
+                    continue
+                found.append((entry, header, bundle))
+        return found
+
+    def texture_png(self, name: str) -> bytes:
+        """The first texture of that name in the primary language archive, as PNG."""
+        if not self.has(TEXT_ARCHIVE_PRIMARY):
+            raise RomError(f"{TEXT_ARCHIVE_PRIMARY} is not on this disc")
+        found = self.bundles_with(TEXT_ARCHIVE_PRIMARY, name)
+        if not found:
+            raise RomError(f"No texture named {name!r} in {TEXT_ARCHIVE_PRIMARY}")
+        return found[0][2].texture(name).to_png()
 
     # -- summary -----------------------------------------------------------
 
@@ -248,11 +340,17 @@ class RomReader:
             for club, (name, code) in sorted(teams.clubs.items())
             if name.text
         ]
+        nationals = [
+            ClubSlot(index=row, name=name.text, code=code.text)
+            for row, (name, code) in sorted(teams.nationals.items())
+            if name.text
+        ]
         return PESRomInfo(
             path=self.iso_path,
             size=self.size,
             is_valid=True,
             clubs=clubs,
+            nationals=nationals,
             player_count=tables.player_count,
         )
 

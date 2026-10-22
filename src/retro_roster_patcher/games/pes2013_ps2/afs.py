@@ -22,6 +22,7 @@ from ...core.errors import RomError
 
 AFS_MAGIC = b"AFS\0"
 BLOCK_HEADER = 32
+SECTOR = 2048
 #: Alignment of parts inside a rebuilt table.
 PART_ALIGN = 16
 
@@ -45,8 +46,15 @@ def read_afs_entries(f: BinaryIO, base: int = 0) -> list[AfsEntry]:
 
 
 def read_entry(f: BinaryIO, base: int, entry: AfsEntry) -> bytes:
+    """The entry's bytes; a block whose header says it runs past the entry's
+    size (into the sector padding a rebuilt entry may use) is read whole."""
     f.seek(base + entry.offset)
-    return f.read(entry.size)
+    data = f.read(entry.size)
+    if len(data) >= BLOCK_HEADER and data[0] in (0, 1, 3) and data[2] in (0, 1) and data[3] == 0:
+        need = BLOCK_HEADER + struct.unpack_from("<I", data, 4)[0]
+        if entry.size < need <= entry.size + 16 * SECTOR:
+            data += f.read(need - entry.size)
+    return data
 
 
 def unwrap(block: bytes) -> tuple[bytes, bytes]:

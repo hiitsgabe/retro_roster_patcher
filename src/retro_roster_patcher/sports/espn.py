@@ -60,6 +60,14 @@ ESPN_LEAGUES = [
         "name": "FIFA Women's World Cup",
         "country": "World",
     },
+    # Every men's national side ESPN tracks, with current squads: the source for
+    # a game's national-team slots.
+    {
+        "id": 2021,
+        "code": "fifa.friendly",
+        "name": "International Friendlies",
+        "country": "World",
+    },
 ]
 
 # NHL team abbreviations mapping to ROM slots (28 teams: 26 NHL + 2 All-Star)

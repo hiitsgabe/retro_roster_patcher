@@ -121,6 +121,12 @@ class MappedRosters:
                 f"not for {game_id!r}; re-run map_rosters on the {game_id!r} patcher"
             )
 
+    def merge(self, other: MappedRosters) -> MappedRosters:
+        """These rosters plus `other`'s slots, for a patch drawing on several
+        leagues; a slot in both takes `other`'s. Both must be for one game."""
+        other.require_game(self.game_id)
+        return MappedRosters(game_id=self.game_id, teams={**self.teams, **other.teams})
+
     def filled_slots(self) -> list[int]:
         """Slot indices whose mapped value is truthy, in ascending order.
 

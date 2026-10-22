@@ -22,17 +22,18 @@ from .models import (
     EMBLEM_ENTRIES,
     LEAGUE_NAME_ANCHOR,
     LEAGUE_NAME_ENTRIES,
+    NATIONAL_SLOT_BASE,
     OVER_AFS,
     PART_CLUB_NUMBERS,
     PART_PLAYERS,
     PLAYER_RECORD_SIZE,
+    POSITION_BYTE,
     SHIRT_NAME_BYTES,
     SHIRT_NAME_CHARS,
     TEXT_AFS,
     TEXT_LANGUAGE_AFS,
 )
 from .rom_reader import OverlayTeams, PlayerTables, RomReader
-from .textures import Bundle
 
 ProgressFn = Callable[[float, str], None]
 
@@ -117,23 +118,38 @@ class RomWriter:
         tables.parts[PART_PLAYERS] = bytes(players)
 
     @staticmethod
+    def set_position(tables: PlayerTables, index: int, nibble: int) -> None:
+        """Set the registered position (the high nibble of byte 53)."""
+        players = bytearray(tables.players)
+        at = index * PLAYER_RECORD_SIZE + POSITION_BYTE
+        players[at] = (players[at] & 0x0F) | ((nibble & 0xF) << 4)
+        tables.parts[PART_PLAYERS] = bytes(players)
+
+    @staticmethod
     def set_club_number(tables: PlayerTables, club: int, slot: int, number: int) -> None:
         numbers = bytearray(tables.parts[PART_CLUB_NUMBERS])
         numbers[club * CLUB_SQUAD_SIZE + slot] = max(1, min(99, number)) - 1
         tables.parts[PART_CLUB_NUMBERS] = bytes(numbers)
 
-    def write_player_tables(self, index: int, tables: PlayerTables) -> None:
-        """Deflate the rebuilt part table back into `0_TEXT.AFS` entry `index`."""
-        self._write_entry(TEXT_AFS, index, tables.build())
+    def write_player_tables(
+        self, index: int, tables: PlayerTables, block: bytes | None = None
+    ) -> None:
+        """Deflate the rebuilt part table back into `0_TEXT.AFS` entry `index`
+        (or write `block`, the caller's already built copy)."""
+        self._write_entry(TEXT_AFS, index, tables.build() if block is None else block)
 
     # -- team names ----------------------------------------------------------
 
     def write_team_names(self, teams: OverlayTeams, names: dict[int, tuple[str, str]]) -> None:
-        """Overwrite club names and codes in one overlay, each cut to its room."""
+        """Overwrite team names and codes in one overlay, each cut to its room.
+        Keys are club slots, or `NATIONAL_SLOT_BASE` + row for national teams."""
         base = self.reader.extent(OVER_AFS).offset + teams.entry.offset
         with open(self.output_path, "r+b") as f:
-            for club, (name, code) in names.items():
-                slots = teams.clubs.get(club)
+            for slot_index, (name, code) in names.items():
+                if slot_index >= NATIONAL_SLOT_BASE:
+                    slots = teams.nationals.get(slot_index - NATIONAL_SLOT_BASE)
+                else:
+                    slots = teams.clubs.get(slot_index)
                 if slots is None:
                     continue
                 for slot, text in zip(slots, (name, code), strict=True):
@@ -158,14 +174,37 @@ class RomWriter:
                 written = max(written, count)
         return written
 
+    def blank_emblems(self, clubs: list[int]) -> int:
+        """Make each club's crest fully transparent in every atlas that has it."""
+        written = 0
+        for index in EMBLEM_ENTRIES:
+            header, payload = unwrap(self.reader.read(TEXT_AFS, index))
+            atlas = Atlas.parse(payload)
+            count = 0
+            for club in clubs:
+                try:
+                    atlas.set_image(CLUB_TABLE, club, bytes(atlas.side * atlas.side))
+                    count += 1
+                except RomError:
+                    continue
+            if count:
+                self._write_entry(TEXT_AFS, index, wrap(header, atlas.build()))
+                written = max(written, count)
+        return written
+
     # -- leagues -------------------------------------------------------------
 
     def write_league_name(self, name_offset: int, name: str) -> int:
-        """Rename one league in every language's string tables; returns tables written.
+        return self.write_league_names({name_offset: name})
 
-        The tables list the leagues around "Ligue 1"; the string `name_offset`
-        places from it is the one to replace, wherever else it appears in the
-        same table, cut to the room the original took.
+    def write_league_names(self, names: dict[int, str]) -> int:
+        """Rename leagues in every language's string tables; returns tables written.
+
+        The tables list the leagues around "Ligue 1"; `names` maps places from
+        it to the new name, each written over the old one wherever it appears
+        in the same table, cut to the room the original took. All of a table's
+        renames happen in one pass: a shorter name is NUL-padded to the old
+        one's room, which would shift the places of anything renamed after it.
         """
         written = 0
         for afs_name in TEXT_LANGUAGE_AFS:
@@ -180,10 +219,15 @@ class RomWriter:
                     continue
                 changed = False
                 for k, part in enumerate(table.parts):
-                    if not part or b"Ligue 1\0" not in part:
+                    if not part:
                         continue
-                    ph, leaf = unwrap(part)
-                    new = _rename_league(leaf, name_offset, name)
+                    try:
+                        ph, leaf = unwrap(part)
+                    except RomError:
+                        continue
+                    if LEAGUE_NAME_ANCHOR.encode() + b"\0" not in leaf:
+                        continue
+                    new = _rename_league(leaf, names)
                     if new is not None and new != leaf:
                         table.parts[k] = wrap(ph, new)
                         changed = True
@@ -194,39 +238,35 @@ class RomWriter:
 
     def write_league_icon(self, icon: str, png: bytes) -> int:
         """Paint `png` over every texture named `icon` in every language's bundles."""
+        return self.write_texture(icon, png)
+
+    def write_texture(self, name: str, png: bytes) -> int:
+        """Paint `png` over every texture called `name`, in every language
+        archive and every bundle that has one; returns the bundles rewritten."""
         written = 0
         for afs_name in TEXT_LANGUAGE_AFS:
             if not self.reader.has(afs_name):
                 continue
-            extent = self.reader.extent(afs_name)
-            needle = icon.encode("ascii").ljust(16, b"\0")
-            with open(self.output_path, "rb") as f:
-                entries = self.reader.entries(afs_name)
-                for entry in entries:
-                    if entry.size < 1024:
-                        continue
-                    f.seek(extent.offset + entry.offset)
-                    block = f.read(entry.size)
-                    if block[0] != 0 or block[2] not in (0, 1):
-                        continue
-                    try:
-                        header, payload = unwrap(block)
-                    except RomError:
-                        continue
-                    if needle not in payload:
-                        continue
-                    try:
-                        bundle = Bundle.parse(payload)
-                        tex = bundle.texture(icon)
-                    except (RomError, ValueError):
-                        continue
-                    tex.paint(png)
-                    bundle.set_texture(icon, tex)
-                    self._write_entry(afs_name, entry.index, wrap(header, bundle.build()))
-                    written += 1
+            for entry, header, bundle in self.reader.bundles_with(afs_name, name):
+                tex = bundle.texture(name)
+                tex.paint(png)
+                bundle.set_texture(name, tex)
+                self._write_entry(afs_name, entry.index, wrap(header, bundle.build()))
+                written += 1
         return written
 
     # -- archive plumbing ----------------------------------------------------
+
+    def room(self, afs_name: str, index: int) -> int:
+        """Bytes a rebuilt entry may take: the game reads whole sectors, so a
+        block may run a little past the entry's size into the padding before
+        the next entry (checked on the real disc); the size field itself is
+        never changed."""
+        extent = self.reader.extent(afs_name)
+        entries = self.reader.entries(afs_name)
+        entry = entries[index]
+        following = [e.offset for e in entries if e.offset > entry.offset]
+        return (min(following) if following else extent.size) - entry.offset
 
     def _write_entry(self, afs_name: str, index: int, block: bytes) -> None:
         """Put `block` where the entry sits, zero-padded to the entry's size.
@@ -236,13 +276,8 @@ class RomWriter:
         disc), so a rebuilt block has to fit the room the original took.
         """
         extent = self.reader.extent(afs_name)
-        entries = self.reader.entries(afs_name)
-        entry = entries[index]
-        # The game reads whole sectors, so a block may run a little past the
-        # entry's size into the padding before the next entry (checked on the
-        # real disc); the size field itself is never changed.
-        following = [e.offset for e in entries if e.offset > entry.offset]
-        room = (min(following) if following else extent.size) - entry.offset
+        entry = self.reader.entries(afs_name)[index]
+        room = self.room(afs_name, index)
         if len(block) > room:
             raise RomError(
                 f"{afs_name} entry {index} needs {len(block)} bytes, {room} available; "
@@ -253,19 +288,23 @@ class RomWriter:
             f.write(block.ljust(max(entry.size, len(block)), b"\0"))
 
 
-def _rename_league(leaf: bytes, name_offset: int, name: str) -> bytes | None:
-    """`leaf` with the league `name_offset` strings from the anchor renamed in place."""
+def _rename_league(leaf: bytes, names: dict[int, str]) -> bytes | None:
+    """`leaf` with the league strings `names` places from the anchor renamed in
+    place; None when the anchor is missing or no place holds a string."""
     strings = leaf.split(b"\0")
     try:
         anchor = strings.index(LEAGUE_NAME_ANCHOR.encode())
     except ValueError:
         return None
-    target = anchor + name_offset
-    if not 0 <= target < len(strings) or not strings[target]:
+    replacements: dict[bytes, bytes] = {}
+    for name_offset, name in names.items():
+        target = anchor + name_offset
+        if 0 <= target < len(strings) and strings[target]:
+            old = strings[target]
+            replacements[old] = shorten(name, len(old)).ljust(len(old), b"\0")
+    if not replacements:
         return None
-    old = strings[target]
-    raw = shorten(name, len(old)).ljust(len(old), b"\0")
-    return b"\0".join(raw if s == old else s for s in strings)
+    return b"\0".join(replacements.get(part, part) for part in strings)
 
 
 def shorten(text: str, room: int) -> bytes:
