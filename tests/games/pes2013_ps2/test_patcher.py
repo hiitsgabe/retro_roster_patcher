@@ -327,7 +327,11 @@ def test_the_atlas_round_trips_and_takes_a_logo_with_free_colours(iso, tmp_path)
     # through it: it was drawn with entry 3, whose colour the fixture sets.
     assert all(pal == atlas.palettes[CLUB_TABLE] for pal in atlas.palettes if pal)
     kept = atlas.image(CLUB_TABLE, 2)
-    assert len(set(kept)) == 1 and palette[4 * kept[0] : 4 * kept[0] + 3] == bytes((3, 252, 128))
+    assert len(set(kept)) == 1
+    # Colours within a few dE of each other share an entry, so the fixture's
+    # near-identical greens may merge: the kept crest stays that green.
+    got = palette[4 * kept[0] : 4 * kept[0] + 3]
+    assert max(abs(a - b) for a, b in zip(got, (3, 252, 128), strict=True)) <= 8
 
 
 def test_textures_round_trip_and_paint(iso):

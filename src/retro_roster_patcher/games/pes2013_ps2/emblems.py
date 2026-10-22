@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import struct
 import zlib
+from collections import Counter
 from dataclasses import dataclass, field
 
 from ...core.errors import RomError
@@ -38,6 +39,7 @@ from .afs import deflate
 from .textures import clut_swizzle
 
 RGB = tuple[int, int, int]
+RGBA = tuple[int, int, int, int]
 
 TABLE_COUNT = 3
 #: Table index of the club crests inside the full atlases.
@@ -150,6 +152,17 @@ def used_indices(atlas: Atlas, table: int) -> set[int]:
     return used
 
 
+#: How the shared palette is built and used (see `paint_logos`).
+NEUTRALS = (0, 255, 36, 72, 108, 146, 182, 218)  # a grey ramp, always present
+DOMINANT = 2  # dominant colours each new crest keeps exactly
+COVER = 0.04  # a dominant colour covers at least this share of its crest
+BOXES = 8  # the crest's own median cut, whose box modes are its candidates
+MERGE = 6.0  # colours closer than this (Lab dE) are one palette entry
+CHROMA = 9.0  # below this Lab chroma a colour is grey, and greys stay grey
+DESPECKLE = 20.0  # a lone pixel joins a neighbour entry this close to its colour
+KEY_SHIFT = 2  # the mapping cache ignores this many low bits per channel
+
+
 def paint_logos(
     atlas: Atlas,
     table: int,
@@ -162,14 +175,20 @@ def paint_logos(
     The atlas is one texture with one palette: every table's palette holds
     the same colours on the disc, and the game draws the club crests through
     the first one, so a palette written for the crests alone leaves them in
-    the flags' colours (seen on the real disc). So one median-cut palette is
-    built over the new logos and every image that stays, in every table, and
-    every image is drawn through it. Index 0 stays transparent, and a 64x64
-    atlas keeps to the 128 entries its images ever index; `colours` caps the
-    palette lower still, which makes the streams smaller when the rebuilt
-    atlas outgrows its room. With `palette` (1024 bytes, as stored on the
-    disc) no palette is built: every image is drawn through that one, so the
-    atlases of both sizes agree index for index. Returns the logos drawn.
+    the flags' colours (seen on the real disc). So one palette is built for
+    the new logos and every image that stays, in every table, and every
+    image is drawn through it: a grey ramp, then each new crest's dominant
+    colours kept exactly (merged when alike, the closest pairs merged further
+    when they outnumber the room), then a median cut over whatever those do
+    not cover. Pixels take the nearest entry in CIE Lab, and a grey pixel may
+    only take a grey entry, so a black-and-white crest never picks up
+    coloured specks; a lone pixel then joins a neighbour's entry when that is
+    close to its own colour. Index 0 stays transparent, a 64x64 atlas keeps
+    to the 128 entries its images ever index, and `colours` caps the palette
+    lower still, which makes the streams smaller when the rebuilt atlas
+    outgrows its room. With `palette` (1024 bytes, as stored on the disc) no
+    palette is built: every image is drawn through that one, so the atlases
+    of both sizes agree index for index. Returns the logos drawn.
     """
     targets = {
         ident: png
@@ -179,7 +198,7 @@ def paint_logos(
     if not targets:
         return 0
     fitted = {ident: fit_logo(png, atlas.side) for ident, png in targets.items()}
-    kept: list[tuple[Record, list[tuple[int, int, int, int]]]] = []
+    kept: list[tuple[Record, list[RGBA]]] = []
     highest = 0
     for t, recs in enumerate(atlas.tables):
         for rec in recs:
@@ -191,30 +210,198 @@ def paint_logos(
     entries = 128 if highest < 128 else 256
     if colours is not None:
         entries = min(entries, colours + 1)
-    opaque = [px[:3] for canvas in fitted.values() for px in canvas.getdata() if px[3] >= 128]
-    opaque += [px[:3] for _rec, pixels in kept for px in pixels if px[3] >= 128]
-    lookup: dict[int, RGB] = {}
     if palette is None:
-        chosen = _median_cut(opaque, entries - 1)
+        new_pixels = [list(canvas.getdata()) for canvas in fitted.values()]
+        chosen = _shared_palette(new_pixels, [pixels for _rec, pixels in kept], entries - 1)
         linear = bytearray(1024)
         linear[0:4] = bytes((255, 255, 255, 0))
         for idx, (r, g, b) in enumerate(chosen, start=1):
             linear[4 * idx : 4 * idx + 4] = bytes((r, g, b, 0x80))
-            lookup[idx] = (r, g, b)
         palette = clut_swizzle(bytes(linear))
     else:
         linear = bytearray(clut_swizzle(palette))
-        for idx in range(1, 256):
-            if linear[4 * idx + 3]:
-                lookup[idx] = (linear[4 * idx], linear[4 * idx + 1], linear[4 * idx + 2])
+    mapper = Mapper(
+        [
+            (idx, (linear[4 * idx], linear[4 * idx + 1], linear[4 * idx + 2]))
+            for idx in range(1, 256)
+            if linear[4 * idx + 3]
+        ]
+    )
     for t in range(len(atlas.palettes)):
         if atlas.palettes[t]:
             atlas.palettes[t] = bytes(palette)
     for rec, pixels in kept:
-        rec.stream = deflate(_map_to(pixels, lookup))
+        rec.stream = deflate(mapper.map(pixels))
     for ident, canvas in fitted.items():
-        atlas.set_image(table, ident, _map_to(list(canvas.getdata()), lookup))
+        pixels = list(canvas.getdata())
+        indices = mapper.despeckle(mapper.map(pixels), pixels, atlas.side)
+        atlas.set_image(table, ident, indices)
     return len(fitted)
+
+
+def _shared_palette(new: list[list[RGBA]], kept: list[list[RGBA]], room: int) -> list[RGB]:
+    """Up to `room` colours for the new crests and the images that stay."""
+    merge2 = MERGE * MERGE
+    anchors: list[tuple[RGB, int]] = [((v, v, v), 1 << 30) for v in NEUTRALS]
+    for pixels in new:
+        for rgb, weight in _dominant([px[:3] for px in pixels if px[3] >= 128]):
+            for i, (a, w) in enumerate(anchors):
+                if _de2(a, rgb) <= merge2:
+                    anchors[i] = (a, w + weight)
+                    break
+            else:
+                anchors.append((rgb, weight))
+    while len(anchors) > room:  # the closest pair becomes the heavier one
+        best = min(
+            (
+                (_de2(anchors[i][0], anchors[j][0]), i, j)
+                for i in range(len(anchors))
+                for j in range(i + 1, len(anchors))
+            ),
+        )
+        _d, i, j = best
+        if anchors[j][1] > anchors[i][1]:
+            i, j = j, i
+        anchors[i] = (anchors[i][0], anchors[i][1] + anchors[j][1])
+        del anchors[j]
+    chosen = [rgb for rgb, _w in anchors]
+    probe = Mapper(list(enumerate(chosen)))
+    rest = [
+        px[:3]
+        for pixels in new + kept
+        for px in pixels
+        if px[3] >= 128 and _de2(px[:3], chosen[probe.index(px[:3])]) > merge2
+    ]
+    return _fill(chosen, rest, room - len(chosen))
+
+
+def _dominant(pixels: list[RGB]) -> list[tuple[RGB, int]]:
+    """(colour, pixels) of a crest's dominant colours: the mode of each box of
+    its own median cut, for boxes covering at least COVER of its pixels."""
+    if not pixels:
+        return []
+    from PIL import Image
+
+    strip = Image.new("RGB", (len(pixels), 1))
+    strip.putdata(pixels)
+    boxes_of = list(strip.quantize(colors=BOXES, method=Image.Quantize.MEDIANCUT).getdata())
+    boxes: dict[int, Counter[RGB]] = {}
+    for px, k in zip(pixels, boxes_of, strict=True):
+        boxes.setdefault(k, Counter())[px] += 1
+    found = [
+        (box.most_common(1)[0][0], sum(box.values()))
+        for box in boxes.values()
+        if sum(box.values()) >= COVER * len(pixels)
+    ]
+    found.sort(key=lambda t: -t[1])
+    return found[:DOMINANT]
+
+
+def _fill(chosen: list[RGB], pixels: list[RGB], room: int) -> list[RGB]:
+    """Extend `chosen` by up to `room` colours for `pixels`: candidates from a
+    median cut twice as fine, taken greedily by (pixels covered) x (distance
+    from the palette so far)^2, so the room goes where it buys most."""
+    cands = _median_cut(pixels, min(256, 2 * room)) if room > 0 else []
+    gaps = [min(_de2(rgb, c) for c in chosen) for rgb, _n in cands]
+    while room > 0 and cands:
+        k = max(range(len(cands)), key=lambda i: cands[i][1] * gaps[i])
+        if gaps[k] <= 0:
+            break
+        rgb = cands.pop(k)[0]
+        gaps.pop(k)
+        chosen.append(rgb)
+        room -= 1
+        gaps = [min(g, _de2(c, rgb)) for (c, _n), g in zip(cands, gaps, strict=True)]
+    return chosen
+
+
+class Mapper:
+    """Nearest palette entry in Lab, greys kept to grey entries."""
+
+    def __init__(self, entries: list[tuple[int, RGB]]) -> None:
+        self.all = [(i, _lab(rgb)) for i, rgb in entries]
+        self.grey = [(i, lab) for i, lab in self.all if (lab[1] ** 2 + lab[2] ** 2) ** 0.5 < CHROMA]
+        self.cache: dict[tuple[int, int, int], int] = {}
+
+    def index(self, rgb: RGB) -> int:
+        key = (rgb[0] >> KEY_SHIFT, rgb[1] >> KEY_SHIFT, rgb[2] >> KEY_SHIFT)
+        idx = self.cache.get(key)
+        if idx is None:
+            light, a, b = _lab(rgb)
+            pool = self.grey if (a * a + b * b) ** 0.5 < CHROMA and self.grey else self.all
+            idx = min(
+                pool, key=lambda e: (light - e[1][0]) ** 2 + (a - e[1][1]) ** 2 + (b - e[1][2]) ** 2
+            )[0]
+            self.cache[key] = idx
+        return idx
+
+    def map(self, pixels: list[RGBA]) -> bytes:
+        return bytes(self.index((r, g, b)) if a >= 128 else 0 for r, g, b, a in pixels)
+
+    def despeckle(self, indices: bytes, pixels: list[RGBA], side: int) -> bytes:
+        """A pixel whose entry matches none of its 4 neighbours takes the
+        neighbour entry nearest its own colour, when that is within DESPECKLE;
+        a grey pixel only joins a grey entry."""
+        labs = dict(self.all)
+        grey = {i for i, _lab_ in self.grey}
+        out = bytearray(indices)
+        tol2 = DESPECKLE * DESPECKLE
+        for y in range(side):
+            for x in range(side):
+                i = y * side + x
+                v = indices[i]
+                if not v:
+                    continue
+                near = {
+                    indices[j]
+                    for j in (i - 1 if x else -1, i + 1 if x < side - 1 else -1, i - side, i + side)
+                    if 0 <= j < len(indices)
+                }
+                near.discard(0)
+                if v in near or not near:
+                    continue
+                light, a, b = _lab(pixels[i][:3])
+                if (a * a + b * b) ** 0.5 < CHROMA:
+                    near &= grey
+                best: tuple[float, int] | None = None
+                for k in near:
+                    l2, a2, b2 = labs[k]
+                    d = (light - l2) ** 2 + (a - a2) ** 2 + (b - b2) ** 2
+                    if d <= tol2 and (best is None or d < best[0]):
+                        best = (d, k)
+                if best is not None:
+                    out[i] = best[1]
+        return bytes(out)
+
+
+def _lab(rgb: RGB) -> tuple[float, float, float]:
+    """CIE Lab (D65) of an sRGB colour, cached: distances that match the eye."""
+    found = _LAB.get(rgb)
+    if found is None:
+
+        def lin(c: float) -> float:
+            c /= 255.0
+            return c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4
+
+        r, g, b = (lin(c) for c in rgb)
+        x = (0.4124 * r + 0.3576 * g + 0.1805 * b) / 0.95047
+        y = 0.2126 * r + 0.7152 * g + 0.0722 * b
+        z = (0.0193 * r + 0.1192 * g + 0.9505 * b) / 1.08883
+
+        def f(t: float) -> float:
+            return t ** (1 / 3) if t > 0.008856 else 7.787 * t + 16 / 116
+
+        fx, fy, fz = f(x), f(y), f(z)
+        found = _LAB[rgb] = (116 * fy - 16, 500 * (fx - fy), 200 * (fy - fz))
+    return found
+
+
+_LAB: dict[RGB, tuple[float, float, float]] = {}
+
+
+def _de2(a: RGB, b: RGB) -> float:
+    la, lb = _lab(a), _lab(b)
+    return (la[0] - lb[0]) ** 2 + (la[1] - lb[1]) ** 2 + (la[2] - lb[2]) ** 2
 
 
 def copy_club_table(source: Atlas, target: Atlas) -> None:
@@ -229,7 +416,7 @@ def copy_club_table(source: Atlas, target: Atlas) -> None:
             target.palettes[t] = source.palettes[CLUB_TABLE]
 
 
-def _through(indices: bytes, palette: bytes) -> list[tuple[int, int, int, int]]:
+def _through(indices: bytes, palette: bytes) -> list[RGBA]:
     """An image's pixels as RGBA through a palette in index order (alpha 0x80 = opaque)."""
     return [
         (palette[4 * v], palette[4 * v + 1], palette[4 * v + 2], min(255, palette[4 * v + 3] * 2))
@@ -264,43 +451,19 @@ def fit_logo(png: bytes, side: int):  # type: ignore[no-untyped-def]
 _fit = fit_logo
 
 
-def _median_cut(pixels: list[tuple[int, int, int]], count: int) -> list[RGB]:
-    """Up to `count` representative colours of `pixels` (Pillow's median cut)."""
+def _median_cut(pixels: list[RGB], count: int) -> list[tuple[RGB, int]]:
+    """(colour, pixels) per box of a median cut of `pixels` into `count` boxes."""
     from PIL import Image
 
-    if not pixels:
+    if not pixels or count <= 0:
         return []
     strip = Image.new("RGB", (len(pixels), 1))
     strip.putdata(pixels)
     q = strip.quantize(colors=count, method=Image.Quantize.MEDIANCUT)
     flat = q.getpalette() or []
+    hist = q.histogram()
     n = min(count, len(flat) // 3)
-    return [(flat[3 * i], flat[3 * i + 1], flat[3 * i + 2]) for i in range(n)]
-
-
-def _map_to(pixels: list[tuple[int, int, int, int]], lookup: dict[int, RGB]) -> bytes:
-    """Nearest of the given palette entries per pixel; transparent pixels take 0."""
-    indices = list(lookup)
-    colours = [lookup[i] for i in indices]
-    cache: dict[tuple[int, int, int], int] = {}
-    out = bytearray()
-    for r, g, b, a in pixels:
-        if a < 128:
-            out.append(0)
-            continue
-        key = (r, g, b)
-        idx = cache.get(key)
-        if idx is None:
-            best = min(
-                range(len(colours)),
-                key=lambda i: (
-                    (colours[i][0] - r) ** 2 + (colours[i][1] - g) ** 2 + (colours[i][2] - b) ** 2
-                ),
-            )
-            idx = indices[best]
-            cache[key] = idx
-        out.append(idx)
-    return bytes(out)
+    return [((flat[3 * i], flat[3 * i + 1], flat[3 * i + 2]), hist[i]) for i in range(n) if hist[i]]
 
 
 def quantise(pixels: list[tuple[int, int, int, int]], palette: bytes) -> bytes:
