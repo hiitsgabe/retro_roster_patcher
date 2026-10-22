@@ -119,17 +119,23 @@ class Texture:
         Image.frombytes("RGBA", (self.width, self.height), rgba).save(buf, "PNG")
         return buf.getvalue()
 
-    def paint(self, png: bytes) -> None:
-        """Replace palette and pixels with `png` fitted into this texture's size."""
+    def paint(self, png: bytes, *, icon: bool = False) -> None:
+        """Replace palette and pixels with `png` fitted into this texture's size;
+        an `icon` is trimmed and sharpened like a crest (`emblems.fit_logo`)."""
         import io
 
         from PIL import Image
 
         w, h = self.width, self.height
-        img = Image.open(io.BytesIO(png)).convert("RGBA")
-        img.thumbnail((w, h), Image.Resampling.LANCZOS)
-        canvas = Image.new("RGBA", (w, h), (0, 0, 0, 0))
-        canvas.paste(img, ((w - img.width) // 2, (h - img.height) // 2))
+        if icon and w == h:
+            from .emblems import fit_logo
+
+            canvas = fit_logo(png, w)
+        else:
+            img = Image.open(io.BytesIO(png)).convert("RGBA")
+            img.thumbnail((w, h), Image.Resampling.LANCZOS)
+            canvas = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+            canvas.paste(img, ((w - img.width) // 2, (h - img.height) // 2))
         alpha = canvas.getchannel("A").tobytes()
         # 255 opaque colours; index 0 is reserved for transparency.
         quant = canvas.convert("RGB").quantize(colors=255, method=Image.Quantize.MEDIANCUT)

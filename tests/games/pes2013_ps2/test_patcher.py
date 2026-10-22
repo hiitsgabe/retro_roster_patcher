@@ -315,9 +315,10 @@ def test_the_atlas_round_trips_and_takes_a_logo_with_free_colours(iso, tmp_path)
     used = {v for v in image if v}
     # Entries 1, 3 and 4 belong to the crests that stay; the new one may not touch them.
     assert used and not used & {1, 3, 4}
-    idx = next(iter(used))
-    assert atlas.palettes[CLUB_TABLE][4 * idx : 4 * idx + 4] == bytes((200, 30, 30, 0x80))
-    assert image[0] == 0  # outside the 10x10 logo: transparent
+    # The logo's own red is in the palette (its sharpened rim adds shades of it).
+    palette = atlas.palettes[CLUB_TABLE]
+    assert any(palette[4 * i : 4 * i + 4] == bytes((200, 30, 30, 0x80)) for i in used)
+    assert image[0] != 0  # the 10x10 logo is trimmed and scaled to fill the square
 
 
 def test_textures_round_trip_and_paint(iso):
@@ -407,8 +408,9 @@ def test_patch_writes_crests_league_art_and_screen_images(iso, tmp_path):
         assert b"English League" not in names and b"Liga inglesa" not in names
         assert b"Ligue 1" in names
         _e, _h2, bundle = reader.bundles_with(afs_name, "mn_ts_eng_l")[0]
-        # A 16x16 logo centred in the 32x32 icon: its colour, transparent around.
-        assert set(bundle.texture("mn_ts_eng_l").pixels) == {0, 1}
+        # The 16x16 logo is trimmed and scaled to fill the 32x32 icon.
+        icon = set(bundle.texture("mn_ts_eng_l").pixels)
+        assert 0 not in icon and icon != {3}
         assert set(bundle.texture("title_bgNS").pixels) == {1}  # the red title image
         assert set(bundle.texture("mo_sub_bgUS").pixels) == {6}  # untouched
 

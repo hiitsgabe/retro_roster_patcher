@@ -238,9 +238,9 @@ class RomWriter:
 
     def write_league_icon(self, icon: str, png: bytes) -> int:
         """Paint `png` over every texture named `icon` in every language's bundles."""
-        return self.write_texture(icon, png)
+        return self.write_texture(icon, png, icon=True)
 
-    def write_texture(self, name: str, png: bytes) -> int:
+    def write_texture(self, name: str, png: bytes, *, icon: bool = False) -> int:
         """Paint `png` over every texture called `name`, in every language
         archive and every bundle that has one; returns the bundles rewritten."""
         written = 0
@@ -249,7 +249,7 @@ class RomWriter:
                 continue
             for entry, header, bundle in self.reader.bundles_with(afs_name, name):
                 tex = bundle.texture(name)
-                tex.paint(png)
+                tex.paint(png, icon=icon)
                 bundle.set_texture(name, tex)
                 self._write_entry(afs_name, entry.index, wrap(header, bundle.build()))
                 written += 1

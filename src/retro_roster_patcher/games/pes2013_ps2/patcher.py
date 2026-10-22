@@ -426,11 +426,12 @@ class PES2013PS2Patcher(Patcher):
             for index, t in tables.items():
                 writer.write_player_tables(index, t, blocks[index])
             blank_unused = bool(options.get("blank_unused", False))
+            if blank_unused:
+                # Before the logos: a blanked crest frees its palette entries.
+                names.update(self._blank_unused(writer, rosters, slots, national_slots))
             if options.get("logos", True):
                 self._write_logos(writer, rosters, slots, on_progress)
             self._write_leagues(writer, rosters, slots, options.get("logos", True), blank_unused)
-            if blank_unused:
-                names.update(self._blank_unused(writer, rosters, slots, national_slots))
             images = self._collect_images(options.get("images"))
             if images:
                 self._write_images(writer, images)

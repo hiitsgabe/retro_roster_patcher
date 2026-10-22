@@ -141,8 +141,9 @@ def paint_logos(atlas: Atlas, table: int, logos: dict[int, bytes]) -> int:
 
     The table's palette is shared by every crest in it, so the new logos get
     the palette entries no remaining crest uses (half the palette on the real
-    disc): one median-cut palette over all the logos, written into those free
-    entries, and each logo mapped to it. Returns the logos drawn.
+    disc, all of it once every crest is replaced or blanked): one median-cut
+    palette over all the logos, written into those free entries, and each logo
+    mapped to it. Returns the logos drawn.
     """
 
     targets = {
@@ -162,7 +163,7 @@ def paint_logos(atlas: Atlas, table: int, logos: dict[int, bytes]) -> int:
         raise RomError("The emblem palette has no free entries")
     fitted = {ident: _fit(png, atlas.side) for ident, png in targets.items()}
     opaque = [px[:3] for canvas in fitted.values() for px in canvas.getdata() if px[3] >= 128]
-    colours = _median_cut(opaque, min(len(free), 128))
+    colours = _median_cut(opaque, len(free))
     palette = bytearray(atlas.palettes[table])
     for idx, (r, g, b) in zip(free, colours, strict=False):
         palette[4 * idx : 4 * idx + 4] = bytes((r, g, b, 0x80))
@@ -173,16 +174,31 @@ def paint_logos(atlas: Atlas, table: int, logos: dict[int, bytes]) -> int:
     return len(fitted)
 
 
-def _fit(png: bytes, side: int):  # type: ignore[no-untyped-def]
+def fit_logo(png: bytes, side: int):  # type: ignore[no-untyped-def]
+    """A PNG as a side x side RGBA canvas, the way the disc's own crests are
+    drawn: the transparent margin trimmed so the emblem fills the square, and
+    the downscaled image sharpened, since a plain resample to 32 pixels turns
+    outlines and lettering to mush next to the hand-pixelled originals.
+    Needs Pillow."""
     import io
 
-    from PIL import Image
+    from PIL import Image, ImageFilter
 
     img = Image.open(io.BytesIO(png)).convert("RGBA")
-    img.thumbnail((side, side), Image.Resampling.LANCZOS)
+    bbox = img.getchannel("A").point(lambda a: 255 if a >= 32 else 0).getbbox()
+    if bbox:
+        img = img.crop(bbox)
+    scale = side / max(img.width, img.height)  # up or down: the emblem fills the square
+    img = img.resize(
+        (max(1, round(img.width * scale)), max(1, round(img.height * scale))),
+        Image.Resampling.LANCZOS,
+    )
     canvas = Image.new("RGBA", (side, side), (0, 0, 0, 0))
     canvas.paste(img, ((side - img.width) // 2, (side - img.height) // 2))
-    return canvas
+    return canvas.filter(ImageFilter.UnsharpMask(radius=1, percent=150, threshold=0))
+
+
+_fit = fit_logo
 
 
 def _median_cut(pixels: list[tuple[int, int, int]], count: int) -> list[RGB]:
@@ -255,12 +271,4 @@ def quantise(pixels: list[tuple[int, int, int, int]], palette: bytes) -> bytes:
 
 def render_logo(png: bytes, side: int, palette: bytes) -> bytes:
     """A PNG fitted into a side x side square, as atlas indices. Needs Pillow."""
-    import io
-
-    from PIL import Image
-
-    img = Image.open(io.BytesIO(png)).convert("RGBA")
-    img.thumbnail((side, side), Image.Resampling.LANCZOS)
-    canvas = Image.new("RGBA", (side, side), (0, 0, 0, 0))
-    canvas.paste(img, ((side - img.width) // 2, (side - img.height) // 2))
-    return quantise(list(canvas.getdata()), palette)
+    return quantise(list(fit_logo(png, side).getdata()), palette)
