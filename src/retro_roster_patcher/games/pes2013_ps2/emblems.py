@@ -3,8 +3,10 @@ indexed image, one zlib stream each, drawn through a palette the atlas shares.
 
 `0_TEXT.AFS` entries 604 (64x64) and 600 (32x32) hold three tables each:
 national flags, club crests (record id = club index) and a few extras; entries
-606 and 602 repeat the club table alone. Each table ends with its own 1024-byte
-palette (256 x RGBA, alpha 0x80 = opaque, entry 0 transparent).
+606 and 602 repeat the club table alone. Each table ends with a 1024-byte
+palette (256 x RGBA, alpha 0x80 = opaque, entry 0 transparent), but the three
+hold the same colours: the atlas is drawn through one palette, so a repaint
+rewrites every table's. The 64x64 images only ever index entries 0..127.
 
 Layout of an atlas payload (after the entry's 32-byte block header):
 
@@ -26,6 +28,7 @@ import zlib
 from dataclasses import dataclass, field
 
 from ...core.errors import RomError
+from .afs import deflate
 
 RGB = tuple[int, int, int]
 
@@ -89,7 +92,7 @@ class Atlas:
             raise RomError(f"Emblem must be {self.side}x{self.side} indices")
         for rec in self.tables[table]:
             if rec.ident == ident:
-                rec.stream = zlib.compress(indices, 9)
+                rec.stream = deflate(indices)
                 return
         raise RomError(f"Emblem atlas table {table} has no record {ident}")
 
@@ -136,16 +139,21 @@ def used_indices(atlas: Atlas, table: int) -> set[int]:
     return used
 
 
-def paint_logos(atlas: Atlas, table: int, logos: dict[int, bytes]) -> int:
+def paint_logos(
+    atlas: Atlas, table: int, logos: dict[int, bytes], colours: int | None = None
+) -> int:
     """Draw each PNG as the record `ident`'s image, with colours of their own.
 
-    The table's palette is shared by every crest in it, so the new logos get
-    the palette entries no remaining crest uses (half the palette on the real
-    disc, all of it once every crest is replaced or blanked): one median-cut
-    palette over all the logos, written into those free entries, and each logo
-    mapped to it. Returns the logos drawn.
+    The atlas is one texture with one palette: every table's palette holds
+    the same colours on the disc, and the game draws the club crests through
+    the first one, so a palette written for the crests alone leaves them in
+    the flags' colours (seen on the real disc). So one median-cut palette is
+    built over the new logos and every image that stays, in every table, and
+    every image is drawn through it. Index 0 stays transparent, and a 64x64
+    atlas keeps to the 128 entries its images ever index; `colours` caps the
+    palette lower still, which makes the streams smaller when the rebuilt
+    atlas outgrows its room. Returns the logos drawn.
     """
-
     targets = {
         ident: png
         for ident, png in logos.items()
@@ -153,25 +161,44 @@ def paint_logos(atlas: Atlas, table: int, logos: dict[int, bytes]) -> int:
     }
     if not targets:
         return 0
-    keep = {rec.ident for rec in atlas.tables[table]} - set(targets)
-    used: set[int] = {0}
-    for rec in atlas.tables[table]:
-        if rec.ident in keep:
-            used.update(zlib.decompress(rec.stream))
-    free = sorted(set(range(1, 256)) - used)
-    if not free:
-        raise RomError("The emblem palette has no free entries")
-    fitted = {ident: _fit(png, atlas.side) for ident, png in targets.items()}
+    fitted = {ident: fit_logo(png, atlas.side) for ident, png in targets.items()}
+    kept: list[tuple[Record, list[tuple[int, int, int, int]]]] = []
+    highest = 0
+    for t, recs in enumerate(atlas.tables):
+        for rec in recs:
+            indices = zlib.decompress(rec.stream)
+            highest = max(highest, max(indices))
+            if t == table and rec.ident in targets:
+                continue
+            kept.append((rec, _through(indices, atlas.palettes[t])))
+    entries = 128 if highest < 128 else 256
+    if colours is not None:
+        entries = min(entries, colours + 1)
     opaque = [px[:3] for canvas in fitted.values() for px in canvas.getdata() if px[3] >= 128]
-    colours = _median_cut(opaque, len(free))
-    palette = bytearray(atlas.palettes[table])
-    for idx, (r, g, b) in zip(free, colours, strict=False):
+    opaque += [px[:3] for _rec, pixels in kept for px in pixels if px[3] >= 128]
+    chosen = _median_cut(opaque, entries - 1)
+    palette = bytearray(1024)
+    palette[0:4] = bytes((255, 255, 255, 0))
+    lookup: dict[int, RGB] = {}
+    for idx, (r, g, b) in enumerate(chosen, start=1):
         palette[4 * idx : 4 * idx + 4] = bytes((r, g, b, 0x80))
-    atlas.palettes[table] = bytes(palette)
-    lookup = {free[i]: colours[i] for i in range(len(colours))}
+        lookup[idx] = (r, g, b)
+    for t in range(len(atlas.palettes)):
+        if atlas.palettes[t]:
+            atlas.palettes[t] = bytes(palette)
+    for rec, pixels in kept:
+        rec.stream = deflate(_map_to(pixels, lookup))
     for ident, canvas in fitted.items():
         atlas.set_image(table, ident, _map_to(list(canvas.getdata()), lookup))
     return len(fitted)
+
+
+def _through(indices: bytes, palette: bytes) -> list[tuple[int, int, int, int]]:
+    """An image's pixels as RGBA through its palette (alpha 0x80 = opaque)."""
+    return [
+        (palette[4 * v], palette[4 * v + 1], palette[4 * v + 2], min(255, palette[4 * v + 3] * 2))
+        for v in indices
+    ]
 
 
 def fit_logo(png: bytes, side: int):  # type: ignore[no-untyped-def]

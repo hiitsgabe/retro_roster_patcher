@@ -167,10 +167,19 @@ class RomWriter:
         written = 0
         for index in EMBLEM_ENTRIES:
             header, payload = unwrap(self.reader.read(TEXT_AFS, index))
-            atlas = Atlas.parse(payload)
-            count = paint_logos(atlas, CLUB_TABLE, logos)
+            room = self.room(TEXT_AFS, index)
+            # Fewer colours compress smaller: trade them away only when the
+            # rebuilt atlas would not fit the room the original took.
+            for colours in (None, 192, 160, 128, 96, 64, 48):
+                atlas = Atlas.parse(payload)
+                count = paint_logos(atlas, CLUB_TABLE, logos, colours)
+                if not count:
+                    break
+                block = wrap(header, atlas.build())
+                if len(block) <= room:
+                    break
             if count:
-                self._write_entry(TEXT_AFS, index, wrap(header, atlas.build()))
+                self._write_entry(TEXT_AFS, index, block)
                 written = max(written, count)
         return written
 

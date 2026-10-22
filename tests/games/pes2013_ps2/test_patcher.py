@@ -313,12 +313,15 @@ def test_the_atlas_round_trips_and_takes_a_logo_with_free_colours(iso, tmp_path)
     assert paint_logos(atlas, CLUB_TABLE, {1: png.getvalue(), 99: png.getvalue()}) == 1
     image = atlas.image(CLUB_TABLE, 1)
     used = {v for v in image if v}
-    # Entries 1, 3 and 4 belong to the crests that stay; the new one may not touch them.
-    assert used and not used & {1, 3, 4}
     # The logo's own red is in the palette (its sharpened rim adds shades of it).
     palette = atlas.palettes[CLUB_TABLE]
     assert any(palette[4 * i : 4 * i + 4] == bytes((200, 30, 30, 0x80)) for i in used)
     assert image[0] != 0  # the 10x10 logo is trimmed and scaled to fill the square
+    # One palette for the whole atlas, and the crest that stays keeps its colour
+    # through it: it was drawn with entry 3, whose colour the fixture sets.
+    assert all(pal == palette for pal in atlas.palettes if pal)
+    kept = atlas.image(CLUB_TABLE, 2)
+    assert len(set(kept)) == 1 and palette[4 * kept[0] : 4 * kept[0] + 3] == bytes((3, 252, 128))
 
 
 def test_textures_round_trip_and_paint(iso):
@@ -397,7 +400,7 @@ def test_patch_writes_crests_league_art_and_screen_images(iso, tmp_path):
     for index in (600, 602, 604, 606):
         atlas = Atlas.parse(unwrap_payload(reader, "0_TEXT.AFS", index))
         image = atlas.image(CLUB_TABLE, 1)
-        assert image is not None and set(image) - {0} and not (set(image) & {1, 3, 4})
+        assert image is not None and set(image) - {0}
     for afs_name in ("U_TEXT.AFS", "B_TEXT.AFS"):
         _h, payload = unwrap(reader.read(afs_name, 15))
         table = Table.parse(payload)
