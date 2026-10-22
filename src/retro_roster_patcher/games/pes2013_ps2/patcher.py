@@ -167,11 +167,16 @@ LINEUP_GROUPS = {
     "CF-R": "Attacker",
     "LW": "Attacker",
     "RW": "Attacker",
+    "LF": "Attacker",
+    "RF": "Attacker",
+    "LCF": "Attacker",
+    "RCF": "Attacker",
 }
 
 #: ESPN lineup position codes as the game's registered-position nibble
 #: (byte 53 >> 4): GK 0, CB 3, SB 4, DMF 5, CMF 7, SMF 8, AMF 9, SS 10, WF 11,
-#: CF 12. The wide attacking midfielders of a 4-2-3-1 are side midfielders.
+#: CF 12. The wide attacking midfielders of a 4-2-3-1 are side midfielders;
+#: the wide forwards of a front three (LF/RF) are wing forwards.
 LINEUP_ROLES = {
     "G": 0,
     "CD": 3,
@@ -190,18 +195,27 @@ LINEUP_ROLES = {
     "SS": 10,
     "LW": 11,
     "RW": 11,
+    "LF": 11,
+    "RF": 11,
     "F": 12,
     "CF": 12,
     "ST": 12,
+    "LCF": 12,
+    "RCF": 12,
 }
 
 
 def lineup_role(player: Player, lineup: dict[str, Any] | None) -> int | None:
-    """The nibble of the position the lineup had the player start in, or None."""
+    """The nibble of the position the lineup had the player start in, or None
+    when he did not start. A code the table lacks plays his group's position,
+    so a listed starter is never sent to the bench."""
     for s in (lineup or {}).get("starters") or []:
         if int(s["id"]) == player.id:
             code = str(s.get("position", "")).upper()
-            return LINEUP_ROLES.get(code, LINEUP_ROLES.get(code.split("-")[0]))
+            role = LINEUP_ROLES.get(code, LINEUP_ROLES.get(code.split("-")[0]))
+            if role is None:
+                role = GROUP_POSITIONS.get(lineup_group(player, lineup), 7)
+            return role
     return None
 
 
@@ -882,9 +896,17 @@ class PES2013PS2Patcher(Patcher):
         there holds the position its place plays in the club's formation. A
         starter (a player with a `role`) takes the place whose record has his
         position, else one of his group, else any place still free in the
-        eleven. The bench then takes the remaining records by position group,
-        then whatever is left, in squad order. Returns (squad place, player
-        index, player) triples.
+        eleven that he can play, else he joins the bench. In the eleven a
+        keeper plays only in goal and an outfielder never there (two keepers
+        in a merged lineup, or none, must not put one up front or a forward
+        in goal). The places of the eleven still free go to the first bench
+        player of their group, then any left to the first bench player who can
+        play them, so the disc's old player stays in the lineup only when the
+        bench has nobody for it. The bench then takes the remaining
+        records by position group. Whoever is still left (more keepers than
+        the club has keeper records, say) takes a free bench place; one who
+        fits nowhere is not written. Returns (squad place, player index,
+        player) triples.
         """
         squad = [
             (s, idx)
@@ -905,6 +927,11 @@ class PES2013PS2Patcher(Patcher):
             return tables.record(free[s])[POSITION_BYTE] >> 4
 
         eleven = [s for s, _ in squad[:LINEUP_SIZE]]
+
+        def can_play(s: int, player: PESPlayer) -> bool:
+            keeper = player.position == "Goalkeeper"
+            return s not in eleven or (role_of(s) == 0) == keeper
+
         starters = [p for p in players if p.role is not None][:LINEUP_SIZE]
         bench = [p for p in players if p not in starters]
         for player in starters:
@@ -914,8 +941,16 @@ class PES2013PS2Patcher(Patcher):
                 for s in eleven
                 if s in free and position_group(tables.record(free[s])) == player.position
             ]
-            if not take(player, same_role + same_group + eleven):
+            anywhere = [s for s in eleven if s in free and can_play(s, player)]
+            if not take(player, same_role + same_group + anywhere):
                 bench.append(player)
+        for by_group in (True, False):
+            for s in [s for s in eleven if s in free]:
+                group = position_group(tables.record(free[s]))
+                fits = [p for p in bench if (p.position == group if by_group else can_play(s, p))]
+                if fits:
+                    take(fits[0], [s])
+                    bench.remove(fits[0])
         waiting: list[PESPlayer] = []
         for player in bench:
             same_group = [
@@ -923,7 +958,7 @@ class PES2013PS2Patcher(Patcher):
             ]
             if not take(player, same_group):
                 waiting.append(player)
-        for player, s in zip(waiting, sorted(free), strict=False):
-            out.append((s, free.pop(s), player))
+        for player in waiting:
+            take(player, [s for s in sorted(free) if can_play(s, player)])
         out.sort(key=lambda t: t[0])
         return out

@@ -24,9 +24,14 @@ from retro_roster_patcher.games.pes2013_ps2.models import (
     NATIONAL_SLOT_BASE,
     PLAYER_ENTRIES,
     PLAYER_RECORD_SIZE,
+    POSITION_BYTE,
     PESPlayer,
 )
-from retro_roster_patcher.games.pes2013_ps2.patcher import PES2013PS2Patcher, squad_order
+from retro_roster_patcher.games.pes2013_ps2.patcher import (
+    PES2013PS2Patcher,
+    lineup_role,
+    squad_order,
+)
 from retro_roster_patcher.games.pes2013_ps2.rom_reader import RomReader
 from retro_roster_patcher.games.pes2013_ps2.rom_writer import (
     RomWriter,
@@ -456,6 +461,21 @@ def test_squad_order_puts_the_lineup_first_in_formation_order():
     assert [p.id for p in squad_order(players, lineup)] == [4, 3, 0, 1, 2]
 
 
+def test_every_listed_starter_gets_a_lineup_role():
+    """ESPN's front-three codes are wing forwards and centre forwards, and a
+    code the table lacks plays the player's group, so no starter is benched."""
+    players = {
+        code: Player(id=i, name=code, position=group)
+        for i, (code, group) in enumerate(
+            [("LF", "Midfielder"), ("RF", "Attacker"), ("RCF", "Attacker"), ("XYZ", "Defender")]
+        )
+    }
+    lineup = {"starters": [{"id": p.id, "position": code} for code, p in players.items()]}
+    roles = {code: lineup_role(p, lineup) for code, p in players.items()}
+    assert roles == {"LF": 11, "RF": 11, "RCF": 12, "XYZ": 3}
+    assert lineup_role(Player(id=99, name="Bench", position="Goalkeeper"), lineup) is None
+
+
 NATIONS = LeagueData(
     league=League(id=2021, name="International Friendlies", season=2026),
     teams=[
@@ -645,10 +665,83 @@ def test_starters_take_the_formation_places_holding_their_position(iso):
     assert by_name["GK"] == 0 and by_name["RB"] == 3
     assert {by_name["CB1"], by_name["CB2"]} == {1, 2}
     assert by_name["AM"] in (4, 5, 6, 7) and by_name["ST"] in (9, 10)
-    # The bench fills what the starters left, by group: no keeper place is
-    # free, so the bench keeper waits for whatever is left.
+    # The bench fills what the starters left, by group, then anything an
+    # outfielder can play. No keeper place is free and the club has no bench,
+    # so the spare keeper is left out rather than sent up front.
     assert by_name["BENCH CB"] in (4, 5, 6, 7, 8, 9, 10)
-    assert by_name["BENCH GK"] in (4, 5, 6, 7, 8, 9, 10)
+    assert "BENCH GK" not in by_name
+
+
+class _Club:
+    """A club's squad table without a disc: one record per place, each holding
+    only its position nibble. A 4-4-2 eleven, then a bench of two keepers and
+    ten outfield records (32-place clubs on the real disc)."""
+
+    ROLES = [0, 4, 3, 3, 4, 8, 7, 7, 8, 12, 12] + [0, 0, 3, 3, 4, 7, 7, 8, 8, 12, 12, 12]
+    player_count = len(ROLES) + 1
+
+    def club_squad(self, club: int) -> list[int]:
+        return list(range(1, len(self.ROLES) + 1))
+
+    def record(self, index: int) -> bytes:
+        rec = bytearray(PLAYER_RECORD_SIZE)
+        rec[POSITION_BYTE] = self.ROLES[index - 1] << 4
+        return bytes(rec)
+
+
+def _placed(players: list[PESPlayer]) -> dict[str, int]:
+    out = PES2013PS2Patcher._assign(_Club(), 0, players)  # type: ignore[arg-type]
+    return {p.display_name: s for s, _idx, p in out}
+
+
+def _p(name: str, group: str, role: int | None = None) -> PESPlayer:
+    return PESPlayer(display_name=name, shirt_name=name, position=group, role=role)
+
+
+OUTFIELD_TEN = [
+    _p("LB", "Defender", 4),
+    _p("CB1", "Defender", 3),
+    _p("CB2", "Defender", 3),
+    _p("RB", "Defender", 4),
+    _p("LM", "Midfielder", 8),
+    _p("CM1", "Midfielder", 7),
+    _p("CM2", "Midfielder", 7),
+    _p("RM", "Midfielder", 8),
+    _p("CF1", "Attacker", 12),
+    _p("CF2", "Attacker", 12),
+]
+OUTFIELD_PLACES = set(range(1, 11))
+
+
+def test_a_spare_keeper_goes_to_the_bench_never_up_front():
+    """Atletico-MG had five keepers for the disc's three keeper records: the
+    fifth took the first free place, the eleven's centre forward."""
+    keepers = [_p("GK1", "Goalkeeper", 0)] + [_p(f"GK{i}", "Goalkeeper") for i in range(2, 6)]
+    starters = OUTFIELD_TEN[:9]  # one forward short: an eleven place is left
+    bench = [_p("SUB MF", "Midfielder")]
+    placed = _placed(keepers[:1] + starters + keepers[1:] + bench)
+    assert placed["GK1"] == 0
+    assert all(placed[f"GK{i}"] >= 11 for i in range(2, 6))  # bench, any record
+    assert placed["SUB MF"] in OUTFIELD_PLACES  # the free eleven place goes to an outfielder
+
+
+def test_a_second_starting_keeper_does_not_start_outfield():
+    """A five-match merge can list two keepers among the eleven."""
+    players = [_p("GK A", "Goalkeeper", 0), _p("GK B", "Goalkeeper", 0)] + OUTFIELD_TEN[:9]
+    placed = _placed(players + [_p("SUB FW", "Attacker")])
+    assert placed["GK A"] == 0 and placed["GK B"] in (11, 12)
+    assert placed["SUB FW"] in OUTFIELD_PLACES
+
+
+def test_a_lineup_without_a_keeper_does_not_put_a_forward_in_goal():
+    """Eleven outfield starters (the keeper missing from the roster) against a
+    4-4-2 with two forward places: the third forward has no outfield place
+    left and the goal goes to the bench keeper."""
+    players = OUTFIELD_TEN + [_p("WF", "Attacker", 11), _p("SUB GK", "Goalkeeper")]
+    placed = _placed(players)
+    assert placed["SUB GK"] == 0
+    assert placed["WF"] >= 11
+    assert {placed[p.display_name] for p in OUTFIELD_TEN} == OUTFIELD_PLACES
 
 
 def test_the_kit_table_round_trips_and_flips_a_licensed_kit(iso, tmp_path):
