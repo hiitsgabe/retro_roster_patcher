@@ -15,6 +15,7 @@ from collections.abc import Callable
 from ...core.errors import RomError
 from .afs import Table, unwrap, wrap
 from .emblems import CLUB_TABLE, Atlas, copy_club_table, paint_logos
+from .kits import KIT_ENTRY, KitTable
 from .models import (
     CLUB_SQUAD_SIZE,
     DISPLAY_NAME_BYTES,
@@ -222,6 +223,10 @@ class RomWriter:
 
     def write_league_name(self, name_offset: int, name: str) -> int:
         return self.write_league_names({name_offset: name})
+
+    def write_kits(self, kits: KitTable) -> None:
+        """Put the rebuilt kit records back into `0_TEXT.AFS` entry 54."""
+        self._write_entry(TEXT_AFS, KIT_ENTRY, kits.build())
 
     def write_league_names(self, names: dict[int, str]) -> int:
         """Rename leagues in every language's string tables; returns tables written.

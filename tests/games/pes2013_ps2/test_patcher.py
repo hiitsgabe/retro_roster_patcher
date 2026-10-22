@@ -645,3 +645,60 @@ def test_starters_take_the_formation_places_holding_their_position(iso):
     # free, so the bench keeper waits for whatever is left.
     assert by_name["BENCH CB"] in (4, 5, 6, 7, 8, 9, 10)
     assert by_name["BENCH GK"] in (4, 5, 6, 7, 8, 9, 10)
+
+
+def test_the_kit_table_round_trips_and_flips_a_licensed_kit(iso, tmp_path):
+    from retro_roster_patcher.games.pes2013_ps2.kits import AWAY, HOME, SHIRT, SHORTS
+
+    reader = RomReader(str(iso))
+    reader.load()
+    kits = reader.kits()
+    assert len(kits.clubs) == 3 and len(kits.nationals) == 1
+    assert kits.clubs[0][HOME].rgb(SHIRT) == (255, 0, 0) and kits.clubs[0][HOME].rgb(SHORTS) == (
+        255,
+        255,
+        255,
+    )
+    assert kits.clubs[0][HOME].parametric and not kits.clubs[1][HOME].parametric
+    assert kits.clubs[1][AWAY].rgb(SHIRT) == (255, 0, 0)
+    kits.clubs[1][HOME].set_rgb(SHIRT, (0, 128, 0))
+    kits.clubs[1][HOME].make_parametric()
+    writer = RomWriter(str(iso), str(tmp_path / "out.iso"))
+    writer.copy_iso()
+    writer.write_kits(kits)
+    again = RomReader(str(tmp_path / "out.iso"))
+    again.load()
+    home = again.kits().clubs[1][HOME]
+    assert home.parametric and home.rgb(SHIRT) == (0, 131, 0)  # 5-bit channels: 128 -> 131
+    assert bytes(home.params[34:37]) == b"\xff\xff\x04"
+    assert again.kits().clubs[2][HOME].rgb(SHIRT) == (0, 0, 0)  # untouched neighbours
+
+
+def test_a_kit_spec_lands_on_the_template_regions():
+    from retro_roster_patcher.core.kits import KitSpec
+    from retro_roster_patcher.games.pes2013_ps2.kits import (
+        COLLAR,
+        SHIRT,
+        SHORTS,
+        SLEEVES,
+        SOCKS,
+        STRIPES,
+        Kit,
+        apply_spec,
+    )
+
+    kit = Kit.parse(fixture.build_kit(0x8000, 0x8000, parametric=False))
+    red, white, black = (255, 0, 0), (255, 255, 255), (0, 0, 0)
+    apply_spec(kit, KitSpec(shirt=red, secondary=white, pattern="stripes", shorts=black, socks=red))
+    # 5-bit channels: 255 stays 255, 0 stays 0.
+    assert kit.rgb(SHIRT) == red and kit.rgb(STRIPES) == white and kit.rgb(SLEEVES) == red
+    assert kit.rgb(COLLAR) == white and kit.rgb(SHORTS) == black
+    assert all(kit.rgb(s) == red for s in SOCKS)
+    assert kit.parametric and bytes(kit.params[34:37]) == b"\xff\xff\x04"
+    # A sleeved kit keeps the body plain and colours the sleeves instead.
+    apply_spec(
+        kit, KitSpec(shirt=red, secondary=white, pattern="sleeves", shorts=white, socks=white)
+    )
+    assert kit.rgb(STRIPES) == red and kit.rgb(SLEEVES) == white
+    # Name and number colour contrasts with the shirt: white on red.
+    assert kit.rgb(12) == white

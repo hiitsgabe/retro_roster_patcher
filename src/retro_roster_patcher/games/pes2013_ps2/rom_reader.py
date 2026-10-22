@@ -15,9 +15,7 @@ from typing import TYPE_CHECKING, BinaryIO
 from ...core.errors import RomError
 from ...formats import iso9660
 from .afs import AfsEntry, Table, read_afs_entries, read_entry, unwrap, wrap
-
-if TYPE_CHECKING:
-    from .textures import Bundle
+from .kits import KIT_ENTRY, KitTable
 from .models import (
     BOOT_FILE,
     CLUB_COUNT,
@@ -42,6 +40,9 @@ from .models import (
     ClubSlot,
     PESRomInfo,
 )
+
+if TYPE_CHECKING:
+    from .textures import Bundle
 
 SECTOR = iso9660.SECTOR_SIZE
 #: A retail image is 2.1 GB; anything under a few MB cannot hold the archives.
@@ -318,6 +319,10 @@ class RomReader:
                     continue
                 found.append((entry, header, bundle))
         return found
+
+    def kits(self) -> KitTable:
+        """The team kit records (`kits.py`): four kits per club and national team."""
+        return KitTable.parse(self.read(TEXT_AFS, KIT_ENTRY))
 
     def texture_png(self, name: str) -> bytes:
         """The first texture of that name in the primary language archive, as PNG."""

@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from ...core.errors import ApiError, CapabilityError, MappingError, RomError, as_rom_error
+from ...core.kits import KitSpec, contrast
 from ...core.models import (
     MappedRosters,
     PartialFn,
@@ -32,7 +33,8 @@ from ...core.patcher import Patcher
 from ...core.registry import register
 from ...sports import _http
 from ...sports.espn import EspnClient
-from ...sports.models import LeagueData, Player, TeamRoster
+from ...sports.models import LeagueData, Player, Team, TeamRoster
+from .kits import AWAY, HOME, apply_spec
 from .models import (
     CLUB_COUNT,
     CLUB_SQUAD_SIZE,
@@ -57,6 +59,7 @@ from .models import (
 from .rom_reader import PlayerTables, RomReader
 from .rom_writer import RomWriter, ascii_fold
 
+RGB = tuple[int, int, int]
 GROUP_ORDER = ("Goalkeeper", "Defender", "Midfielder", "Attacker")
 #: Squad places that are the club's lineup.
 LINEUP_SIZE = 11
@@ -96,6 +99,41 @@ def pes_name(player: Player) -> str:
         if name and len(name) <= DISPLAY_NAME_CHARS:
             return name.upper()
     return full[:DISPLAY_NAME_CHARS].upper()
+
+
+def default_kits(team: Team) -> tuple[KitSpec | None, KitSpec | None]:
+    """Plain home and away kits from the provider's two team colours: the
+    first colour at home, the second away, each with the other as its trim,
+    white shorts unless the shirt is white, socks like the shirt. None when
+    the provider gave no usable colour."""
+    first = _hex_colour(team.color)
+    second = _hex_colour(team.alternate_color) or (contrast(first) if first else None)
+    if first is None or second is None:
+        return None, None
+
+    def plain(shirt: RGB, trim: RGB) -> KitSpec:
+        shorts = trim if shirt == (255, 255, 255) else (255, 255, 255)
+        return KitSpec(shirt=shirt, secondary=trim, pattern="plain", shorts=shorts, socks=shirt)
+
+    return plain(first, second), plain(second, first)
+
+
+def _hex_colour(value: str) -> RGB | None:
+    """A `RRGGBB` / `#RRGGBB` provider colour, else None."""
+    text = (value or "").lstrip("#")
+    if len(text) != 6:
+        return None
+    try:
+        return (int(text[0:2], 16), int(text[2:4], 16), int(text[4:6], 16))
+    except ValueError:
+        return None
+
+
+def _as_spec(value: Any) -> KitSpec | None:
+    """A `KitSpec` from the patch option: the object itself or its dict."""
+    if value is None or isinstance(value, KitSpec):
+        return value
+    return KitSpec.from_dict(dict(value))
 
 
 def shirt_name(player: Player) -> str:
@@ -356,6 +394,7 @@ class PES2013PS2Patcher(Patcher):
                 )
             lineup = roster.extra.get("lineup")
             players = roster.players if order_as_given else squad_order(roster.players, lineup)
+            home_kit, away_kit = default_kits(roster.team)
             teams[entry.slot_index] = PESTeamRecord(
                 # The game's own names are upper case throughout.
                 name=roster.team.name.upper(),
@@ -375,6 +414,8 @@ class PES2013PS2Patcher(Patcher):
                 league_name=data.league.name,
                 league_logo_url=data.league.logo_url,
                 national=national,
+                kit_home=home_kit,
+                kit_away=away_kit,
             )
         return MappedRosters(game_id=self.game_id, teams=teams)
 
@@ -432,6 +473,8 @@ class PES2013PS2Patcher(Patcher):
             if options.get("logos", True):
                 self._write_logos(writer, rosters, slots, on_progress)
             self._write_leagues(writer, rosters, slots, options.get("logos", True), blank_unused)
+            if options.get("kits", True):
+                self._write_kits(writer, rosters, slots + national_slots, options.get("kits"))
             images = self._collect_images(options.get("images"))
             if images:
                 self._write_images(writer, images)
@@ -706,6 +749,47 @@ class PES2013PS2Patcher(Patcher):
                 self.status("Pillow is not installed; league logos skipped")
                 return
             self.status(f"League icon {icon}: {count} bundles" + (" (blank)" if not url else ""))
+
+    def _write_kits(
+        self,
+        writer: RomWriter,
+        rosters: MappedRosters,
+        slots: list[int],
+        given: Any,
+    ) -> None:
+        """Draw each mapped team's home and away kits from colours.
+
+        The record's kits (the provider's two colours, plain) unless `given`,
+        `patch(kits={slot: {"home": KitSpec or its dict, "away": ...}})`,
+        names the slot. A kit so written is parametric: the game composes it
+        from the colours, licensed texture or not. Clubs past the last kit
+        record (slots 130 and up) are skipped with a status line.
+        """
+        overrides = given if isinstance(given, dict) else {}
+        table = writer.reader.kits()
+        written = 0
+        for slot in slots:
+            record = rosters.teams[slot]
+            chosen = overrides.get(slot) or overrides.get(str(slot)) or {}
+            specs = {
+                HOME: _as_spec(chosen.get("home")) or record.kit_home,
+                AWAY: _as_spec(chosen.get("away")) or record.kit_away,
+            }
+            if slot >= NATIONAL_SLOT_BASE:
+                rows, row = table.nationals, slot - NATIONAL_SLOT_BASE
+            else:
+                rows, row = table.clubs, slot
+            if row >= len(rows):
+                self.status(f"{record.name}: slot {slot} has no kit record, kit kept")
+                continue
+            kits = rows[row]
+            for which, spec in specs.items():
+                if spec is not None:
+                    apply_spec(kits[which], spec)
+                    written += 1
+        if written:
+            writer.write_kits(table)
+            self.status(f"Kits written: {written}")
 
     def _load_logo(self, url: str) -> bytes:
         """The logo bytes, from `cache_dir/logos` or downloaded once."""

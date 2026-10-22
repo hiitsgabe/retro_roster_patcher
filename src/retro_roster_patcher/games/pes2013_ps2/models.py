@@ -23,6 +23,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from ...core.kits import KitSpec
+
 BOOT_FILE = "SLUS_219.55"
 TEXT_AFS = "0_TEXT.AFS"
 OVER_AFS = "OVER.AFS"
@@ -162,6 +164,9 @@ class PESTeamRecord:
     league_logo_url: str = ""
     #: A national-team slot (`NATIONAL_SLOT_BASE` and up).
     national: bool = False
+    #: Home and away kits to draw from colours (`core.kits.KitSpec`); None keeps the disc's.
+    kit_home: KitSpec | None = None
+    kit_away: KitSpec | None = None
 
 
 @dataclass

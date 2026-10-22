@@ -103,6 +103,49 @@ def build_player_entry(names: list[tuple[str, str]] | None = None) -> bytes:
     return block(table(parts), compress=False) + b"\0" * 4096
 
 
+def build_kit(shirt: int, shorts: int, parametric: bool) -> bytes:
+    """One 88-byte kit: 23 RGBA5551 colours (shirt in slot 0, shorts in 5) and
+    42 parameter bytes, parametric (t[31] = 1, t[34..35] = ff ff) or licensed."""
+    colours = [shirt] * 5 + [shorts] + [shirt] * 17
+    params = bytearray(42)
+    if parametric:
+        params[31] = 1
+        params[34] = params[35] = 0xFF
+        params[36] = 4
+        params[1:5] = bytes((0x49, 0x3C, 0x11, 0x05))
+    else:
+        params[34] = 1
+        params[36] = 0x20
+    return struct.pack("<23H", *colours) + bytes(params)
+
+
+def build_kit_entry() -> bytes:
+    """Entry 54: part 0 = one national record (456 bytes), part 1 = three club
+    records (648 bytes): club 0 parametric red/white, club 1 licensed blue/white,
+    club 2 parametric black/black. Kit order: GK home, home, GK away, away."""
+    red, white, blue, black = 0x801F, 0xFFFF, 0xFC00, 0x8000
+    lime = 0x83E0
+
+    def record(shirt: int, shorts: int, away: int, parametric: bool, size: int) -> bytes:
+        kits = (
+            build_kit(lime, black, parametric)
+            + build_kit(shirt, shorts, parametric)
+            + build_kit(lime, black, parametric)
+            + build_kit(away, white, parametric)
+        )
+        return kits + b"\0" * (size - len(kits))
+
+    nationals = record(white, white, blue, True, 456)
+    clubs = (
+        record(red, white, blue, True, 648)
+        + record(blue, white, red, False, 648)
+        + record(black, black, white, True, 648)
+    )
+    return block(
+        table([block(nationals, compress=True), block(clubs, compress=True)]), compress=False
+    )
+
+
 def build_overlay(
     lang: str, names: list[str] | None = None, codes: list[str] | None = None
 ) -> bytes:
@@ -174,6 +217,7 @@ def build_iso(
     entries = {46: player_entry, 47: player_entry}
     for index, side in ((600, 32), (602, 32), (604, 64), (606, 64)):
         entries[index] = block(build_atlas(side), compress=False) + b"\0" * 1024
+    entries[54] = build_kit_entry() + b"\0" * 2048
     text_afs = build_afs(entries, 610)
     over_afs = build_afs(overlays, 20)
     boot = b"\x7fELF" + b"\0" * 2044
