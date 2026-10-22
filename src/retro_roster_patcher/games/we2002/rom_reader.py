@@ -18,10 +18,13 @@ _MIN_VALID_SIZE = 100 * 1024 * 1024  # 100 MB minimum sanity check
 _SQUADRE_ML = 32
 _SQUADRE_NAZ = 63
 
-# Jersey preview offsets (64 bytes per team: maglia1 + maglia2)
-_OFS_ANT_MAGLIE = 2_667_256  # National teams 0-29
-_OFS_ANT_MAGLIE1 = 2_669_544  # National teams 30-62 (after sector boundary)
+# Jersey preview offsets (64 bytes per team: maglia1 + maglia2). The first
+# table starts 64 bytes into sector 1134's user data, so 31 records (0-30) fit
+# before the sector boundary; 31-62 follow in the next sector.
+_OFS_ANT_MAGLIE = 2_667_256  # National teams 0-30
+_OFS_ANT_MAGLIE1 = 2_669_544  # National teams 31-62 (after sector boundary)
 _OFS_ANT_MAGLIE2 = 2_671_896  # ML teams 0-31
+_NAT_MAGLIE_SPLIT = 31
 
 
 def _bgr555_to_rgb(val: int) -> tuple[int, int, int]:
@@ -105,10 +108,10 @@ class RomReader:
         with open(self.rom_path, "rb") as f:
             # National slots 0-62
             for i in range(_SQUADRE_NAZ):
-                if i < 30:
+                if i < _NAT_MAGLIE_SPLIT:
                     off = _OFS_ANT_MAGLIE + i * 64
                 else:
-                    off = _OFS_ANT_MAGLIE1 + (i - 30) * 64
+                    off = _OFS_ANT_MAGLIE1 + (i - _NAT_MAGLIE_SPLIT) * 64
                 f.seek(off)
                 raw = f.read(64)  # maglia1 + maglia2
                 if len(raw) < 64:

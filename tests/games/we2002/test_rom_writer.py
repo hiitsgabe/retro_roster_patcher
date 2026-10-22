@@ -212,3 +212,40 @@ def test_the_slot_that_straddles_a_sector_boundary_is_written_in_two_pieces(tmp_
     head, tail = chunks
     assert data[head[0] : head[0] + 26] == colour[:26]
     assert data[tail[0] : tail[0] + 6] == colour[26:]
+
+
+# ---------------------------------------------------------------------------
+# The national 2D kit preview table and its sector boundary.
+# ---------------------------------------------------------------------------
+
+
+def test_the_national_preview_table_holds_thirty_one_records_before_the_boundary():
+    # The table starts 64 bytes into sector 1134's user data, so records 0-30
+    # fit before its EDC; 31 is the first in the next sector. A split at 30 put
+    # every national team from 30 up one record off and 62 into the EDC.
+    from retro_roster_patcher.games.we2002.rom_writer import (
+        _OFS_ANT_MAGLIE,
+        _OFS_ANT_MAGLIE1,
+        _nat_jersey_offset,
+    )
+
+    assert _OFS_ANT_MAGLIE - (2_667_168 + 24) == 64
+    assert _nat_jersey_offset(30) == _OFS_ANT_MAGLIE + 30 * 64
+    assert _nat_jersey_offset(30) + 64 == 2_667_168 + 24 + 2048  # the sector's user data ends
+    assert _nat_jersey_offset(31) == _OFS_ANT_MAGLIE1
+    assert _nat_jersey_offset(62) == _OFS_ANT_MAGLIE1 + 31 * 64
+
+
+def test_the_reader_and_the_writer_agree_on_where_national_team_31_is(tmp_path):
+    from retro_roster_patcher.games.we2002.rom_reader import RomReader
+
+    path = _synthetic_iso(tmp_path)
+    writer = RomWriter(str(path), str(path))
+    writer.write_nat_team(31, WETeamRecord(name="N", short_name="N", kit_home=(255, 0, 0)))
+    palettes = {
+        p.slot_index: p
+        for p in RomReader(str(path)).read_slot_palettes()
+        if p.slot_type == "national"
+    }
+    assert palettes[31].primary == (255, 0, 0)
+    assert palettes[30].primary == (0, 0, 0)

@@ -695,11 +695,16 @@ class BlockEdit:
     `files` (names, or prefixes ending in `_`) whose stream decodes to it is
     re-encoded as `replacement`. Matching by content rather than by offset is
     what makes the same edit land in every file that carries a copy.
+
+    `at` = the record's VRAM (x, y) pins the edit to that one record instead:
+    a screen's blocks are addressed by position, and two of them holding the
+    same art (two blank areas, say) must still each get their own replacement.
     """
 
     original: bytes
     replacement: bytes
     files: tuple[str, ...]
+    at: tuple[int, int] | None = None
 
 
 @dataclass
@@ -732,7 +737,8 @@ def rewrite_blocks(
     report = AtlasReport()
     if not block_edits and not raw_edits:
         return report
-    by_original = {e.original: e for e in block_edits}
+    by_original = {e.original: e for e in block_edits if e.at is None}
+    by_position = {(n, e.at): e for e in block_edits if e.at is not None for n in e.files}
     wanted_files: set[str] = set()
     prefixes: set[str] = set()
     for e in block_edits:
@@ -772,7 +778,9 @@ def rewrite_blocks(
                     raw, _ = lz_decompress(data, off)
                 except ValueError:
                     continue
-                edit = by_original.get(raw)
+                edit = by_position.get((entry.name, (rec.x, rec.y)))
+                if edit is None:
+                    edit = by_original.get(raw)
                 if edit is not None and any(
                     entry.name == n or (n.endswith("_") and entry.name.startswith(n))
                     for n in edit.files

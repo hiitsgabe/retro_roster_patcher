@@ -853,11 +853,15 @@ def test_a_bad_home_colour_does_not_suppress_a_good_away_colour(patcher):
 
 
 def test_a_bad_away_colour_does_not_suppress_a_good_home_colour(patcher):
+    # With one usable colour `default_kits` makes the away shirt the contrast
+    # of the home one, and the RGB fields follow the specs' shirts, so the
+    # away is white here rather than the record's black default.
     record = _map_one(patcher, _roster(100, color="C60000", alternate_color="orange"))
 
     assert record.kit_home == (198, 0, 0)
     assert record.kit_third == (198, 0, 0)
-    assert record.kit_away == (0, 0, 0)
+    assert record.kit_away == (255, 255, 255)
+    assert record.kit_away_spec.shirt == (255, 255, 255)
 
 
 def test_players_are_rated_against_the_whole_league_not_their_own_team(patcher):

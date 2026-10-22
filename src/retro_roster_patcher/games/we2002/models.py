@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass, field
 
+from ...core.kits import KitSpec
 from ...sports.models import (  # noqa: F401
     League,
     LeagueData,
@@ -50,6 +51,16 @@ class WETeamRecord:
     kit_away: tuple[int, int, int] = (0, 0, 0)  # RGB
     kit_third: tuple[int, int, int] = (0, 0, 0)  # RGB tertiary color
     kit_gk: tuple[int, int, int] = (0, 128, 0)  # RGB
+    # What the 3D kit textures and the 2D kit preview are drawn from, per kit:
+    # a spec (colours and pattern; `kit_home`/`kit_away` mirror its shirt), a
+    # picture, or one of the disc's 95 jersey designs by TEX index. All None
+    # means the texture whose known shirt colour is nearest `kit_home`, copied.
+    kit_home_spec: KitSpec | None = None
+    kit_away_spec: KitSpec | None = None
+    kit_home_image: bytes | None = None
+    kit_away_image: bytes | None = None
+    kit_home_template: int | None = None
+    kit_away_template: int | None = None
     players: list[WEPlayerRecord] = field(default_factory=list)  # Exactly 22
     jersey_data: bytes | None = None  # Raw 64-byte jersey to copy from ROM
     flag_style: int | None = None  # Flag/emblem style byte (0-60); None = default stripes

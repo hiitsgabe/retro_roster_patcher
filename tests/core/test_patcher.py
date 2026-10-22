@@ -242,3 +242,10 @@ def test_given_blocks_with_a_total_past_the_squad_return_everyone_once():
     squad = _squad("D", "G", "F")
     picked = Patcher._given_blocks(squad, [(_is("G"), 1)], total=10)
     assert [p.name for p in picked] == ["G1", "D0", "F2"]
+
+
+def test_the_base_declares_no_kits_slot_groups_or_nationals():
+    assert Patcher.supports_kits is False
+    assert Patcher.slot_groups == ()
+    assert Patcher.supports_nationals is False and Patcher.national_slot_base is None
+    assert FakePatcher(cache_dir=Path("/tmp")).kit_templates(Path("rom.bin")) == []

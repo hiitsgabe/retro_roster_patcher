@@ -21,6 +21,7 @@ from typing import Any
 from ..sports.models import LeagueData, Player, TeamRoster
 from .concurrency import emit_status
 from .errors import CapabilityError
+from .kits import KitTemplate
 from .models import (
     MappedRosters,
     PartialFn,
@@ -44,6 +45,20 @@ class Patcher(ABC):
     sport: str = ""
     requires_slot_mapping: bool = False
     providers: tuple[str, ...] = ()
+
+    #: `patch(kits=...)` is understood. Absent or True draws every mapped
+    #: team's kits from its colours (`core.kits.default_kits`); False keeps the
+    #: ROM's; a dict `{slot: {"home": KIT, "away": KIT}}` overrides a slot,
+    #: where KIT is a `KitSpec`, its dict, `{"image": png bytes or path}` (a
+    #: picture of the kit; a game that cannot take a texture derives a
+    #: `KitSpec` from it with `kit_from_image`), `{"template": n}` (one of the
+    #: game's own jersey designs, see `kit_templates`) or None (the default).
+    supports_kits: bool = False
+    #: (name, first slot, count) for games whose slots form named groups.
+    slot_groups: tuple[tuple[str, int, int], ...] = ()
+    #: National teams are slots `national_slot_base` and up.
+    supports_nationals: bool = False
+    national_slot_base: int | None = None
 
     def __init__(
         self,
@@ -119,6 +134,14 @@ class Patcher(ABC):
         this list as it stands.
         """
         return list(team_roster.players)
+
+    def kit_templates(self, rom_path: Path) -> list[KitTemplate]:
+        """The game's own jersey designs, for `patch(kits={slot: {"home": {"template": n}}})`.
+
+        None by default; a game whose ROM holds designs a kit can point at
+        reads them off `rom_path`.
+        """
+        return []
 
     @staticmethod
     def _given_blocks(

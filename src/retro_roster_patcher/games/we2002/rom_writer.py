@@ -27,7 +27,9 @@ import shutil
 import struct
 import unicodedata
 
+from ...core.kits import KitSpec
 from .flag_atlas import AtlasReport, LogoImages, patch_flag_atlas
+from .jersey_tex import apply_choice
 from .models import WEPlayerRecord, WETeamRecord
 
 
@@ -106,9 +108,13 @@ _OFS_CARAT_G7 = 2_194_440
 _OFS_CARAT_G8 = 2_196_792
 _OFS_CARAT_G9 = 2_199_144
 
-# National jersey preview colors (64 bytes per team: maglia1 + maglia2)
+# National jersey preview colors (64 bytes per team: maglia1 + maglia2). The
+# table starts 64 bytes into sector 1134's user data, so 31 records (0-30) fit
+# before the boundary; the C++ editor's split at 30 put teams 30-62 one record
+# off and team 62 into the sector's EDC.
 _OFS_ANT_MAGLIE = 2_667_256  # National + allstar jersey start
-_OFS_ANT_MAGLIE1 = 2_669_544  # Continuation after sector boundary (team 30)
+_OFS_ANT_MAGLIE1 = 2_669_544  # Continuation after sector boundary (team 31)
+_NAT_MAGLIE_SPLIT = 31
 
 # Kanji (2-byte encoded) team name section
 _OFS_NOMI_SQK = 2_002_316  # Kanji names start (ML reverse, then nationals reverse)
@@ -161,116 +167,121 @@ _POS_MAP = {0: 0, 1: 1, 2: 3, 3: 6}
 _TEX_BASE_LBA = 8400  # LBA of TEX_00.BIN on CD
 _TEX_LBA_STRIDE = 20  # Each TEX allocated 20 sectors
 _TEX_COUNT = 95  # 63 national + 32 ML teams
-_TEX_MAX_BYTES = 20 * 2048  # 40960 bytes max per TEX slot
+# The disc slot is 20 sectors, but the executable's file table entry for the
+# TEX files (SLPM_870.56 offset 0x43204) loads 18, so the game never reads
+# past 36864 bytes; a longer file is silently truncated unless the u32 count
+# at EXE offset 0x4320c is raised. The largest original is 34200 bytes.
+_TEX_MAX_BYTES = 18 * 2048
 
 # ISO9660 BIN directory location (for updating TEX file sizes)
 _BIN_DIR_LBA = 2925
 _BIN_DIR_SIZE = 12288
 
 # Home shirt colour per TEX slot, taken from the 2D maglia palette (entry 2,
-# BGR555→RGB888): the most frequent RGB among maglia entries 2-7.
+# BGR555→RGB888): the most frequent RGB among maglia entries 2-7. The teams
+# are named in `jersey_tex.JERSEY_TEMPLATES`.
 # TEX 0-62 = national/allstar (real 2001-02 kits), TEX 63-94 = Master League.
 _TEX_JERSEY_COLORS = {
     # --- National teams (0-53) ---
-    0: (0, 128, 48),  # Ireland — green
-    1: (0, 0, 102),  # Scotland — dark navy
-    2: (200, 0, 0),  # Wales — red
-    3: (255, 255, 255),  # England — white
-    4: (128, 0, 24),  # Portugal — dark red/maroon
-    5: (200, 0, 0),  # Spain — red
-    6: (0, 32, 160),  # France — blue
-    7: (200, 0, 0),  # Belgium — red
-    8: (255, 128, 0),  # Netherlands — orange
-    9: (200, 0, 0),  # Switzerland — red
-    10: (0, 82, 165),  # Italy — azzurri blue
-    11: (180, 0, 48),  # Czech Republic — dark red
-    12: (255, 255, 255),  # Germany — white
-    13: (200, 0, 0),  # Denmark — red
-    14: (200, 0, 0),  # Norway — red
-    15: (255, 204, 0),  # Sweden — yellow
-    16: (0, 0, 160),  # Iceland — blue
-    17: (255, 255, 255),  # Poland — white
-    18: (0, 0, 160),  # Slovakia — blue
-    19: (255, 255, 255),  # Austria — white
-    20: (200, 0, 0),  # Hungary — red
-    21: (200, 0, 0),  # Albania — red
-    22: (200, 50, 50),  # Croatia — red/white checkered
-    23: (0, 0, 160),  # Serbia — blue
-    24: (255, 204, 0),  # Romania — yellow
-    25: (0, 0, 160),  # Bosnia — blue
-    26: (255, 255, 255),  # Greece — white
-    27: (200, 0, 0),  # Turkey — red
-    28: (255, 204, 0),  # Ukraine — yellow
-    29: (255, 255, 255),  # Russia — white
-    30: (200, 0, 0),  # Morocco — red
-    31: (255, 128, 0),  # Ivory Coast — orange
-    32: (200, 0, 0),  # Egypt — red
-    33: (0, 128, 0),  # Nigeria — green
-    34: (0, 128, 0),  # Cameroon — green
-    35: (0, 128, 0),  # Algeria — green
-    36: (255, 255, 255),  # Ghana — white
-    37: (255, 255, 255),  # U.S.A. — white
-    38: (0, 128, 0),  # Mexico — green
-    39: (128, 0, 0),  # Venezuela — vinotinto (dark maroon)
-    40: (255, 204, 0),  # Colombia — yellow
-    41: (255, 204, 0),  # Brazil — yellow (canarinha)
-    42: (255, 255, 255),  # Peru — white (with red sash)
-    43: (200, 0, 0),  # Chile — red
-    44: (200, 0, 50),  # Paraguay — red/white stripes
-    45: (128, 180, 230),  # Uruguay — celeste (light blue)
-    46: (128, 180, 230),  # Argentina — albiceleste
-    47: (255, 204, 0),  # Ecuador — yellow
-    48: (0, 0, 180),  # Japan — blue
-    49: (200, 0, 0),  # South Korea — red
-    50: (200, 0, 0),  # China — red
-    51: (0, 0, 160),  # India — blue
-    52: (255, 255, 255),  # New Zealand — white (All Whites)
-    53: (255, 204, 0),  # Australia — gold/yellow
+    0: (0, 128, 48),
+    1: (0, 0, 102),
+    2: (200, 0, 0),
+    3: (255, 255, 255),
+    4: (128, 0, 24),
+    5: (200, 0, 0),
+    6: (0, 32, 160),
+    7: (200, 0, 0),
+    8: (255, 128, 0),
+    9: (200, 0, 0),
+    10: (0, 82, 165),
+    11: (180, 0, 48),
+    12: (255, 255, 255),
+    13: (200, 0, 0),
+    14: (200, 0, 0),
+    15: (255, 204, 0),
+    16: (0, 0, 160),
+    17: (255, 255, 255),
+    18: (0, 0, 160),
+    19: (255, 255, 255),
+    20: (200, 0, 0),
+    21: (200, 0, 0),
+    22: (200, 50, 50),
+    23: (0, 0, 160),
+    24: (255, 204, 0),
+    25: (0, 0, 160),
+    26: (255, 255, 255),
+    27: (200, 0, 0),
+    28: (255, 204, 0),
+    29: (255, 255, 255),
+    30: (200, 0, 0),
+    31: (255, 128, 0),
+    32: (200, 0, 0),
+    33: (0, 128, 0),
+    34: (0, 128, 0),
+    35: (0, 128, 0),
+    36: (255, 255, 255),
+    37: (255, 255, 255),
+    38: (0, 128, 0),
+    39: (128, 0, 0),
+    40: (255, 204, 0),
+    41: (255, 204, 0),
+    42: (255, 255, 255),
+    43: (200, 0, 0),
+    44: (200, 0, 50),
+    45: (128, 180, 230),
+    46: (128, 180, 230),
+    47: (255, 204, 0),
+    48: (0, 0, 180),
+    49: (200, 0, 0),
+    50: (200, 0, 0),
+    51: (0, 0, 160),
+    52: (255, 255, 255),
+    53: (255, 204, 0),
     # --- All-Star / Classic teams (54-62) ---
-    54: (255, 255, 255),  # Euro All Stars — white
-    55: (255, 255, 255),  # World All Stars — white
-    56: (255, 255, 255),  # Clas. England — white
-    57: (0, 32, 160),  # Clas. France — blue
-    58: (255, 128, 0),  # Clas. Netherlands — orange
-    59: (0, 82, 165),  # Clas. Italy — azzurri blue
-    60: (255, 255, 255),  # Clas. Germany — white
-    61: (255, 204, 0),  # Clas. Brazil — yellow
-    62: (128, 180, 230),  # Clas. Argentina — light blue
+    54: (255, 255, 255),
+    55: (255, 255, 255),
+    56: (255, 255, 255),
+    57: (0, 32, 160),
+    58: (255, 128, 0),
+    59: (0, 82, 165),
+    60: (255, 255, 255),
+    61: (255, 204, 0),
+    62: (128, 180, 230),
     # --- Master League teams (63-94) ---
     # These are FICTIONAL teams with custom kits — colors from maglia palette,
     # not real-world clubs.  Only override when maglia clearly wrong.
-    63: (156, 33, 33),  # Aragon (≈Man Utd) — red
-    64: (165, 33, 57),  # London (≈Arsenal) — red
-    65: (0, 57, 173),  # Europort (≈Chelsea) — blue
-    66: (173, 16, 49),  # Liguria (≈Liverpool) — red
-    67: (255, 255, 255),  # Yorkshire (≈Man City) — white kit in-game
-    68: (33, 41, 49),  # Highlands (≈Tottenham) — dark kit in-game
-    69: (165, 33, 57),  # Vascongadas (≈Atl. Madrid) — red
-    70: (148, 8, 57),  # Cataluna (≈Barcelona) — dark red/blue
-    71: (255, 255, 255),  # Navarra (≈Real Madrid) — white
-    72: (255, 255, 255),  # Andalucia (≈Valencia) — white
-    73: (57, 74, 148),  # Cantabria (≈Sevilla) — blue kit in-game
-    74: (132, 41, 33),  # Provence (≈Monaco) — red
-    75: (255, 255, 255),  # Languedoc (≈Porto) — white kit in-game
-    76: (57, 74, 148),  # Normandie (≈PSG) — blue
-    77: (255, 255, 255),  # Medoc (≈Benfica) — white kit in-game
-    78: (255, 255, 255),  # Rijnkanaal (≈Ajax) — white
-    79: (99, 0, 8),  # Noordzeekanaal (≈CSKA) — dark red
-    80: (255, 255, 255),  # Flandre (≈Zenit) — white/red kit in-game
-    81: (16, 57, 140),  # Marche (≈Inter) — dark blue
-    82: (40, 40, 40),  # Piemonte (≈Juventus) — black/white
-    83: (156, 8, 33),  # Lombardia (≈Milan) — red
-    84: (90, 132, 189),  # Umbria (≈Lazio) — sky blue
-    85: (41, 41, 123),  # Emilia (≈Napoli) — dark blue-purple
-    86: (66, 57, 123),  # Toscana (≈Fiorentina) — purple
-    87: (115, 41, 41),  # Abruzzi (≈Roma) — dark red
-    88: (41, 41, 41),  # Westfalen (≈Dortmund) — dark kit in-game
-    89: (41, 41, 41),  # Anhalt (≈Bayern) — dark kit in-game
-    90: (140, 33, 33),  # Ruhr (≈Leverkusen) — red
-    91: (255, 255, 255),  # Peloponnisos (≈Wolfsburg) — white kit in-game
-    92: (165, 165, 74),  # Byzantinobul (≈Galatasaray) — olive/yellow
-    93: (255, 255, 255),  # Marmara (≈Shakhtar) — white kit in-game
-    94: (16, 57, 140),  # Patagonia (≈Basel) — dark blue
+    63: (156, 33, 33),
+    64: (165, 33, 57),
+    65: (0, 57, 173),
+    66: (173, 16, 49),
+    67: (255, 255, 255),
+    68: (33, 41, 49),
+    69: (165, 33, 57),
+    70: (148, 8, 57),
+    71: (255, 255, 255),
+    72: (255, 255, 255),
+    73: (57, 74, 148),
+    74: (132, 41, 33),
+    75: (255, 255, 255),
+    76: (57, 74, 148),
+    77: (255, 255, 255),
+    78: (255, 255, 255),
+    79: (99, 0, 8),
+    80: (255, 255, 255),
+    81: (16, 57, 140),
+    82: (40, 40, 40),
+    83: (156, 8, 33),
+    84: (90, 132, 189),
+    85: (41, 41, 123),
+    86: (66, 57, 123),
+    87: (115, 41, 41),
+    88: (41, 41, 41),
+    89: (41, 41, 41),
+    90: (140, 33, 33),
+    91: (255, 255, 255),
+    92: (165, 165, 74),
+    93: (255, 255, 255),
+    94: (16, 57, 140),
 }
 
 # Name length tables from WE2002-editor-2.0 (edDlg.cpp lines 639-709).
@@ -1637,13 +1648,11 @@ def _nat_bar_offset(nat_index: int) -> list[tuple[int, int]]:
 def _nat_jersey_offset(nat_index: int) -> int:
     """Return the file offset for a national team's jersey preview (64 bytes).
 
-    Sector boundary at team 30: seeks to OFS_ANT_MAGLIE1.
+    Sector boundary after team 30: 31 and up continue at OFS_ANT_MAGLIE1.
     """
-    if nat_index < 30:
+    if nat_index < _NAT_MAGLIE_SPLIT:
         return _OFS_ANT_MAGLIE + nat_index * 64
-    else:
-        # Teams 30-62 continue from OFS_ANT_MAGLIE1
-        return _OFS_ANT_MAGLIE1 + (nat_index - 30) * 64
+    return _OFS_ANT_MAGLIE1 + (nat_index - _NAT_MAGLIE_SPLIT) * 64
 
 
 # OnWriteCD() writes national colors (i=0..55) then ML colors; each national
@@ -1883,6 +1892,8 @@ def _build_tex_dir_map(rom_data: bytes) -> tuple[dict, dict]:
         if rec_len == 0:
             pos = ((pos // 2048) + 1) * 2048
             continue
+        if pos + 33 > len(dir_data):  # a record cut short: nothing more to read
+            break
         name_len = dir_data[pos + 32]
         name = dir_data[pos + 33 : pos + 33 + name_len].decode("ascii", errors="replace")
         if name.startswith("TEX_") and name.endswith(".BIN;1"):
@@ -1990,6 +2001,27 @@ def _update_iso_dir_size_in_handle(f, dir_record_offset: int, new_size: int):
     f.write(struct.pack("<I", new_edc))
 
 
+def _read_tex_files(f) -> tuple[dict[int, int], dict[int, int], dict[int, bytes]]:
+    """Every listed TEX file off an open image: (sizes, directory record
+    offsets, file bytes), each keyed by TEX index."""
+    dir_data = bytearray()
+    for s in range((_BIN_DIR_SIZE + 2047) // 2048):
+        f.seek((_BIN_DIR_LBA + s) * 2352 + 24)
+        dir_data.extend(f.read(2048))
+    sizes, dir_offsets = _build_tex_dir_map_from_dir(dir_data)
+    files = {
+        idx: _read_cd_file_from_handle(f, _TEX_BASE_LBA + idx * _TEX_LBA_STRIDE, size)
+        for idx, size in sorted(sizes.items())
+    }
+    return sizes, dir_offsets, files
+
+
+def read_tex_files(rom_path: str) -> dict[int, bytes]:
+    """The 3D kit textures of the image at `rom_path`, by TEX index (0-94)."""
+    with open(rom_path, "rb") as f:
+        return _read_tex_files(f)[2]
+
+
 def _build_tex_dir_map_from_dir(dir_data: bytearray) -> tuple[dict, dict]:
     """`_build_tex_dir_map` against already-read directory data."""
     sizes = {}
@@ -2000,6 +2032,8 @@ def _build_tex_dir_map_from_dir(dir_data: bytearray) -> tuple[dict, dict]:
         if rec_len == 0:
             pos = ((pos // 2048) + 1) * 2048
             continue
+        if pos + 33 > len(dir_data):  # a record cut short: nothing more to read
+            break
         name_len = dir_data[pos + 32]
         name = dir_data[pos + 33 : pos + 33 + name_len].decode("ascii", errors="replace")
         if name.startswith("TEX_") and name.endswith(".BIN;1"):
@@ -2017,6 +2051,46 @@ def _build_tex_dir_map_from_dir(dir_data: bytearray) -> tuple[dict, dict]:
                 pass
         pos += rec_len
     return sizes, dir_offsets
+
+
+_MAGLIA_OUTLINE = (16, 16, 16)
+_MAGLIA_GREY = (152, 152, 152)
+#: Patterns the preview sprite shows as stripes: its zones 3, 4 and 6 take the
+#: contrast colour, as the disc's striped teams (Milan, Inter) have them.
+_STRIPED_PATTERNS = ("stripes", "pinstripes", "hoops")
+
+
+def _maglia_half(
+    spec: KitSpec | None, shirt: tuple[int, int, int], other: tuple[int, int, int]
+) -> bytes:
+    """One 16-entry preview palette: [0] transparent, [1] the outline, 2-8 the
+    shirt sprite's zones, [9] a fixed grey, 10-15 the shorts. A spec paints its
+    shirt (and, striped, its contrast colour on zones 3, 4 and 6) and its
+    shorts; without one the shirt is `shirt` and the shorts `other`, as before."""
+    if spec is None:
+        pal = [0, 0] + [_rgb_to_ps1_color(*shirt)] * 8 + [_rgb_to_ps1_color(*other)] * 6
+    else:
+        pal = (
+            [0, _rgb_to_ps1_color(*_MAGLIA_OUTLINE)]
+            + [_rgb_to_ps1_color(*spec.shirt)] * 7
+            + [_rgb_to_ps1_color(*_MAGLIA_GREY)]
+            + [_rgb_to_ps1_color(*spec.shorts)] * 6
+        )
+        if spec.pattern in _STRIPED_PATTERNS:
+            for zone in (3, 4, 6):
+                pal[zone] = _rgb_to_ps1_color(*spec.secondary)
+    # A true black packs to 0x0000, which the CLUT draws transparent: set the
+    # STP bit so black cloth stays black. Entry 0 alone is the transparent one.
+    return struct.pack("<16H", pal[0], *(v or 0x8000 for v in pal[1:]))
+
+
+def _maglia(team: WETeamRecord) -> bytes:
+    """The team's 64-byte 2D kit preview, home then away; `jersey_data` as it stands."""
+    if team.jersey_data and len(team.jersey_data) == 64:
+        return team.jersey_data
+    return _maglia_half(team.kit_home_spec, team.kit_home, team.kit_away) + _maglia_half(
+        team.kit_away_spec, team.kit_away, team.kit_home
+    )
 
 
 def _find_best_tex_match(target_rgb: tuple[int, int, int]) -> int | None:
@@ -2053,11 +2127,18 @@ class RomWriter:
             finally:
                 os.close(fd)
         self.output_path = output_path
-        self._tex_cache = None  # Original TEX file data (avoids re-read corruption)
-        self._tex_sizes = None  # TEX file sizes from ISO9660 directory
-        self._tex_dir_offsets = None  # ISO9660 directory record offsets for size patching
-        # Queued (tex_index, target_rgb) for batch apply
-        self._pending_tex_patches: list[tuple[int, tuple[int, int, int]]] = []
+        # Original TEX file data (avoids re-read corruption), their sizes from
+        # the ISO9660 directory and their directory record offsets, by index.
+        self._tex_cache: dict[int, bytes] | None = None
+        self._tex_sizes: dict[int, int] | None = None
+        self._tex_dir_offsets: dict[int, int] | None = None
+        # Queued (tex_index, team) for `flush_tex_patches`
+        self._pending_tex_patches: list[tuple[int, WETeamRecord]] = []
+        # False leaves every kit as the disc has it: no 2D preview, no 3D texture.
+        self.write_kits = True
+        # One line per kit `flush_tex_patches` could not paint (the other kit
+        # of the team still lands); the patcher reports them.
+        self.kit_problems: list[str] = []
         # Queued style -> logo bitmaps for the flag atlas
         self._pending_logos: dict[int, LogoImages] = {}
 
@@ -2098,8 +2179,8 @@ class RomWriter:
             _sync(f)
 
         # Queue 3D jersey TEX patch (ML teams are TEX indices 63-94)
-        tex_index = 63 + slot_index
-        self._pending_tex_patches.append((tex_index, team.kit_home))
+        if self.write_kits:
+            self._pending_tex_patches.append((63 + slot_index, team))
         return written
 
     def _write_team_names(self, f, slot_index: int, team: WETeamRecord):
@@ -2241,32 +2322,15 @@ class RomWriter:
         )
 
     def _write_jersey_colors(self, f, slot_index: int, team: WETeamRecord):
-        """Write jersey preview palette (maglia1 + maglia2) for an ML team.
+        """Write the 2D kit preview (maglia1 + maglia2) for an ML team.
 
-        The maglia controls the 2D menu preview and 3D shorts only.
-        The 3D shirt body is controlled by TEX files (patched separately
-        via patch_3d_jersey).  Indices 0-1 reserved, 2-9 = shirt preview,
-        10-15 = shorts.
+        The maglia is the team-select preview; the 3D kit is the TEX file,
+        queued separately. `team.jersey_data` is written as it stands.
         """
-        if team.jersey_data and len(team.jersey_data) == 64:
-            off = _OFS_ANT_MAGLIE2 + slot_index * 64
-            f.seek(off)
-            f.write(team.jersey_data)
+        if not self.write_kits:
             return
-
-        primary = _rgb_to_ps1_color(*team.kit_home)
-        secondary = _rgb_to_ps1_color(*team.kit_away)
-
-        home_palette = [0, 0] + [primary] * 8 + [secondary] * 6
-        away_palette = [0, 0] + [secondary] * 8 + [primary] * 6
-
-        maglia1 = struct.pack("<" + "H" * 16, *home_palette)
-        maglia2 = struct.pack("<" + "H" * 16, *away_palette)
-
-        off = _OFS_ANT_MAGLIE2 + slot_index * 64
-        f.seek(off)
-        f.write(maglia1)
-        f.write(maglia2)
+        f.seek(_OFS_ANT_MAGLIE2 + slot_index * 64)
+        f.write(_maglia(team))
 
     def _write_players_impl(self, f, slot_index, players) -> int:
         """Write player names + characteristics (uses existing file handle).
@@ -2364,7 +2428,8 @@ class RomWriter:
             _sync(f)
 
         # Queue 3D jersey TEX patch (national teams are TEX indices 0-62)
-        self._pending_tex_patches.append((nat_index, team.kit_home))
+        if self.write_kits:
+            self._pending_tex_patches.append((nat_index, team))
         return min(len(players), _PLAYERS_PER_NAT) if players is not None else 0
 
     def _write_nat_team_names(self, f, nat_index: int, team: WETeamRecord):
@@ -2441,26 +2506,11 @@ class RomWriter:
         _write_chunks(f, bar_data, chunks)
 
     def _write_nat_jersey_colors(self, f, nat_index: int, team: WETeamRecord):
-        """Write jersey preview palette (maglia1 + maglia2), as `_write_jersey_colors`."""
-        if team.jersey_data and len(team.jersey_data) == 64:
-            off = _nat_jersey_offset(nat_index)
-            f.seek(off)
-            f.write(team.jersey_data)
+        """Write the 2D kit preview (maglia1 + maglia2), as `_write_jersey_colors`."""
+        if not self.write_kits:
             return
-
-        primary = _rgb_to_ps1_color(*team.kit_home)
-        secondary = _rgb_to_ps1_color(*team.kit_away)
-
-        home_palette = [0, 0] + [primary] * 8 + [secondary] * 6
-        away_palette = [0, 0] + [secondary] * 8 + [primary] * 6
-
-        maglia1 = struct.pack("<" + "H" * 16, *home_palette)
-        maglia2 = struct.pack("<" + "H" * 16, *away_palette)
-
-        off = _nat_jersey_offset(nat_index)
-        f.seek(off)
-        f.write(maglia1)
-        f.write(maglia2)
+        f.seek(_nat_jersey_offset(nat_index))
+        f.write(_maglia(team))
 
     def _write_nat_players_impl(self, f, nat_index, players):
         first_nat_idx, count = _nat_slot_player_range(nat_index)
@@ -2524,24 +2574,7 @@ class RomWriter:
             return
 
         with open(self.output_path, "rb") as f:
-            dir_data = bytearray()
-            sectors = (_BIN_DIR_SIZE + 2047) // 2048
-            for s in range(sectors):
-                f.seek((_BIN_DIR_LBA + s) * 2352 + 24)
-                dir_data.extend(f.read(2048))
-
-            tex_sizes, tex_dir_offsets = _build_tex_dir_map_from_dir(dir_data)
-            self._tex_sizes = tex_sizes
-            self._tex_dir_offsets = tex_dir_offsets
-
-            tex_cache = {}
-            for idx in range(_TEX_COUNT):
-                size = tex_sizes.get(idx)
-                if size is None:
-                    continue
-                lba = _TEX_BASE_LBA + idx * _TEX_LBA_STRIDE
-                tex_cache[idx] = _read_cd_file_from_handle(f, lba, size)
-            self._tex_cache = tex_cache
+            self._tex_sizes, self._tex_dir_offsets, self._tex_cache = _read_tex_files(f)
 
     def patch_3d_jersey(self, tex_index: int, target_rgb: tuple[int, int, int]):
         """Patch a team's 3D jersey by copying the best color-matched TEX file.
@@ -2557,7 +2590,7 @@ class RomWriter:
         if not self._tex_cache:
             return
 
-        if tex_index not in self._tex_sizes:
+        if tex_index not in (self._tex_sizes or {}):
             return
 
         # Never log to a hard-coded /tmp path here: the Android consumer has no
@@ -2582,18 +2615,27 @@ class RomWriter:
         _write_cd_file_with_edc(rom, dst_lba, bytes(padded))
 
         # Update ISO9660 directory entry so game reads correct file size
-        if tex_index in self._tex_dir_offsets:
-            _update_iso_dir_size(rom, self._tex_dir_offsets[tex_index], src_size)
+        offsets = self._tex_dir_offsets or {}
+        if tex_index in offsets:
+            _update_iso_dir_size(rom, offsets[tex_index], src_size)
 
         with open(self.output_path, "wb") as f:
             f.write(rom)
             _sync(f)
 
     def flush_tex_patches(self):
-        """Apply all queued 3D jersey TEX patches using targeted file seeks.
+        """Write the queued 3D kits, one TEX file per team, by targeted seeks.
 
-        Write each patch straight to its sector offsets; never load the whole
-        image into memory.
+        Each team's file is rebuilt from the original by `_build_tex`: a kit
+        with a template is that design copied in, a spec or a picture is
+        painted over the template's art (the default white one without a
+        template), a 128x256 picture is the page itself painted over the slot's
+        own art, and a team with no choice at all takes the whole file whose
+        known shirt colour is nearest `kit_home`, as before. A kit that cannot
+        be painted, or would push the file over what the game loads, is
+        skipped with a line in `kit_problems`; the team's other kit still
+        lands. Painting needs Pillow; without it every kit takes that
+        nearest-colour copy.
         """
         if not self._pending_tex_patches or not os.path.exists(self.output_path):
             return
@@ -2604,29 +2646,57 @@ class RomWriter:
             return
 
         with open(self.output_path, "r+b") as f:
-            for tex_index, target_rgb in self._pending_tex_patches:
-                if tex_index not in self._tex_sizes:
+            for tex_index, team in self._pending_tex_patches:
+                if tex_index not in (self._tex_sizes or {}):
                     continue
-
-                best_idx = _find_best_tex_match(target_rgb)
-                if best_idx is None or best_idx == tex_index:
-                    continue
-
-                src_data = self._tex_cache[best_idx]
-                src_size = len(src_data)
-                dst_lba = _TEX_BASE_LBA + tex_index * _TEX_LBA_STRIDE
-
-                sectors_needed = (src_size + 2047) // 2048
-                padded = bytearray(src_data) + bytearray(sectors_needed * 2048 - src_size)
-                _write_cd_file_with_edc_to_handle(f, dst_lba, bytes(padded))
-
-                # Update the ISO9660 directory entry so the game reads the
-                # right file size.
-                if tex_index in self._tex_dir_offsets:
-                    _update_iso_dir_size_in_handle(f, self._tex_dir_offsets[tex_index], src_size)
+                data = self._build_tex(tex_index, team)
+                if data is not None and len(data) <= _TEX_MAX_BYTES:
+                    self._write_tex(f, tex_index, data)
             _sync(f)
 
         self._pending_tex_patches = []
+
+    def _build_tex(self, tex_index: int, team: WETeamRecord) -> bytes | None:
+        """The TEX file to write for `team` at `tex_index`, None to leave the slot."""
+        choices = (
+            ("home", team.kit_home_spec, team.kit_home_image, team.kit_home_template),
+            ("away", team.kit_away_spec, team.kit_away_image, team.kit_away_template),
+        )
+        if all(
+            spec is None and image is None and template is None
+            for _, spec, image, template in choices
+        ):
+            return self._nearest_tex(tex_index, team)
+        cache = self._tex_cache or {}
+        data = cache[tex_index]
+        for which, spec, image, template in choices:
+            try:
+                painted = apply_choice(data, which, spec, image, template, cache)
+            except ImportError:  # no Pillow
+                return self._nearest_tex(tex_index, team)
+            except (ValueError, OSError) as exc:  # unpaintable, or a bad picture
+                self.kit_problems.append(f"TEX_{tex_index:02d} {which} kit skipped: {exc}")
+                continue
+            if len(painted) > _TEX_MAX_BYTES:
+                self.kit_problems.append(
+                    f"TEX_{tex_index:02d} {which} kit skipped: {len(painted)} bytes, over the "
+                    f"{_TEX_MAX_BYTES} the game loads"
+                )
+                continue
+            data = painted
+        return data
+
+    def _nearest_tex(self, tex_index: int, team: WETeamRecord) -> bytes | None:
+        best = _find_best_tex_match(team.kit_home)
+        return None if best is None or best == tex_index else (self._tex_cache or {})[best]
+
+    def _write_tex(self, f, tex_index: int, data: bytes) -> None:
+        """`data` into the slot's sectors, zero-padded, and its directory size."""
+        padded = data + bytes(-len(data) % 2048)
+        _write_cd_file_with_edc_to_handle(f, _TEX_BASE_LBA + tex_index * _TEX_LBA_STRIDE, padded)
+        offsets = self._tex_dir_offsets or {}
+        if tex_index in offsets:
+            _update_iso_dir_size_in_handle(f, offsets[tex_index], len(data))
 
     def queue_logo(self, style: int, images: LogoImages) -> None:
         """Draw `images` under `style` in every copy of the flag atlas at flush."""

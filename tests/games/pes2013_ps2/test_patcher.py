@@ -702,3 +702,172 @@ def test_a_kit_spec_lands_on_the_template_regions():
     assert kit.rgb(STRIPES) == red and kit.rgb(SLEEVES) == white
     # Name and number colour contrasts with the shirt: white on red.
     assert kit.rgb(12) == white
+
+
+def test_the_patcher_declares_kits_slot_groups_and_nationals():
+    from retro_roster_patcher.core import kits
+    from retro_roster_patcher.games.pes2013_ps2 import patcher as module
+
+    assert PES2013PS2Patcher.supports_kits is True
+    assert PES2013PS2Patcher.supports_nationals is True
+    assert PES2013PS2Patcher.national_slot_base == NATIONAL_SLOT_BASE == 1000
+    assert PES2013PS2Patcher.slot_groups == (
+        ("England", 0, 20),
+        ("France", 20, 20),
+        ("Italy", 40, 20),
+        ("Netherlands", 60, 18),
+        ("Spain", 78, 20),
+        ("Other", 98, 41),
+    )
+    assert module.default_kits is kits.default_kits  # the old import path still works
+
+
+def test_a_picture_of_a_kit_overrides_a_slots_kit(iso, tmp_path):
+    from retro_roster_patcher.core.errors import CapabilityError
+    from retro_roster_patcher.core.kits import KitSpec, render_kit
+    from retro_roster_patcher.games.pes2013_ps2.kits import AWAY, HOME, SHIRT, STRIPES
+
+    red, white, blue = (255, 0, 0), (255, 255, 255), (0, 0, 255)
+    striped = render_kit(KitSpec(red, white, "stripes", white, red), 192, 256)
+    away = tmp_path / "away.png"
+    away.write_bytes(render_kit(KitSpec(blue, white, "plain", white, blue), 192, 256))
+    league = LeagueData(
+        league=League(id=1, name="Fixture League", season=2026),
+        teams=[roster(10, "Arsenal", "ARS", [("David Raya", "Goalkeeper", 22)])],
+    )
+    patcher = PES2013PS2Patcher(tmp_path)
+    rosters = patcher.map_rosters(league, [SlotMapping(slot_index=1, team_id=10)])
+    out = tmp_path / "out.iso"
+    overrides = {1: {"home": {"image": striped}, "away": {"image": str(away)}}}
+    patcher.patch(rom_path=iso, output_path=out, rosters=rosters, logos=False, kits=overrides)
+
+    reader = RomReader(str(out))
+    reader.load()
+    kits = reader.kits().clubs[1]
+    assert kits[HOME].parametric  # was the licensed blue kit
+    assert {kits[HOME].rgb(SHIRT), kits[HOME].rgb(STRIPES)} == {red, white}
+    assert kits[AWAY].rgb(SHIRT) == blue and kits[AWAY].rgb(STRIPES) == blue
+    with pytest.raises(CapabilityError, match="template"):
+        patcher.patch(
+            rom_path=iso,
+            output_path=out,
+            rosters=rosters,
+            logos=False,
+            kits={1: {"home": {"template": 1}}},
+        )
+
+
+def test_a_crest_in_assets_dir_is_drawn_instead_of_the_download(iso, tmp_path):
+    from PIL import Image
+
+    from retro_roster_patcher.games.pes2013_ps2.emblems import CLUB_TABLE, Atlas
+
+    assets = tmp_path / "assets"
+    (assets / "logos").mkdir(parents=True)
+    Image.new("RGBA", (16, 16), (10, 200, 10, 255)).save(assets / "logos" / "10.png")
+    served = []
+
+    def transport(url, headers, timeout):
+        served.append(url)
+        return b""
+
+    league = LeagueData(
+        league=League(id=1, name="Fixture League", season=2026),
+        teams=[
+            TeamRoster(
+                team=Team(id=10, name="Arsenal", code="ARS", logo_url="http://x/ars.png"),
+                players=[Player(id=100, name="David Raya", last_name="Raya", number=22)],
+            )
+        ],
+    )
+    patcher = PES2013PS2Patcher(tmp_path / "cache", assets_dir=assets, transport=transport)
+    assert patcher.assets_dir == assets
+    rosters = patcher.map_rosters(league, [SlotMapping(slot_index=1, team_id=10)])
+    out = tmp_path / "out.iso"
+    patcher.patch(rom_path=iso, output_path=out, rosters=rosters)
+    assert served == []
+
+    reader = RomReader(str(out))
+    reader.load()
+    atlas = Atlas.parse(unwrap_payload(reader, "0_TEXT.AFS", 600))
+    image = atlas.image(CLUB_TABLE, 1)
+    assert image is not None and set(image) - {0}
+
+
+def _png(size, colour, border=0):
+    """A PNG of one colour, optionally inside a white border (a kit on a backdrop)."""
+    import io
+
+    from PIL import Image, ImageDraw
+
+    img = Image.new("RGBA", size, (255, 255, 255, 255) if border else colour)
+    if border:
+        ImageDraw.Draw(img).rectangle(
+            (border, border, size[0] - border - 1, size[1] - border - 1), fill=colour
+        )
+    buf = io.BytesIO()
+    img.save(buf, "PNG")
+    return buf.getvalue()
+
+
+def test_a_texture_sized_picture_paints_the_licensed_kit_package(iso, tmp_path, monkeypatch):
+    pytest.importorskip("PIL")
+    from retro_roster_patcher.games.pes2013_ps2 import kit_textures
+    from retro_roster_patcher.games.pes2013_ps2.kits import HOME, SHIRT
+
+    calls = []
+    monkeypatch.setattr(kit_textures, "licensed_slots", lambda reader: {1: 0})
+    monkeypatch.setattr(
+        kit_textures,
+        "write_kit_png",
+        lambda writer, slot, which, png: calls.append((slot, which)) or 1,
+    )
+    patcher = PES2013PS2Patcher(tmp_path)
+    rosters = patcher.map_rosters(
+        LEAGUE, [SlotMapping(slot_index=0, team_id=10), SlotMapping(slot_index=1, team_id=11)]
+    )
+    out = tmp_path / "out.iso"
+    texture = _png((512, 256), (200, 0, 0, 255), border=24)
+    patcher.patch(
+        rom_path=iso,
+        output_path=out,
+        rosters=rosters,
+        kits={1: {"home": {"image": texture}}, 0: {"home": {"image": texture}}},
+    )
+    assert calls == [(1, HOME)]  # the licensed slot took the texture itself
+    reader = RomReader(str(out))
+    reader.load()
+    kits = reader.kits()
+    assert not kits.clubs[1][HOME].parametric  # its record stays licensed
+    r, g, b = kits.clubs[0][HOME].rgb(SHIRT)  # the parametric slot got the colour
+    assert kits.clubs[0][HOME].parametric and r > 150 and g < 40 and b < 40
+
+
+def test_a_bad_kit_picture_is_refused_before_the_disc_is_copied(iso, tmp_path):
+    from retro_roster_patcher.core.errors import CapabilityError
+
+    patcher = PES2013PS2Patcher(tmp_path)
+    rosters = patcher.map_rosters(LEAGUE, [SlotMapping(slot_index=0, team_id=10)])
+    out = tmp_path / "out.iso"
+    with pytest.raises(CapabilityError, match="slot 0 home kit"):
+        patcher.patch(
+            rom_path=iso, output_path=out, rosters=rosters, kits={0: {"home": {"image": b"nope"}}}
+        )
+    assert not out.exists()
+
+
+def test_kits_none_or_empty_draw_the_defaults_and_false_keeps_the_disc(iso, tmp_path):
+    from dataclasses import replace
+
+    from retro_roster_patcher.games.pes2013_ps2.kits import HOME
+
+    patcher = PES2013PS2Patcher(tmp_path)
+    coloured = replace(LEAGUE.teams[0], team=replace(LEAGUE.teams[0].team, color="C60000"))
+    league = LeagueData(league=LEAGUE.league, teams=[coloured])
+    rosters = patcher.map_rosters(league, [SlotMapping(slot_index=1, team_id=coloured.team.id)])
+    for given, expect_parametric in ((None, True), ({}, True), (False, False)):
+        out = tmp_path / f"out_{expect_parametric}_{given is None}.iso"
+        patcher.patch(rom_path=iso, output_path=out, rosters=rosters, kits=given)
+        reader = RomReader(str(out))
+        reader.load()
+        assert reader.kits().clubs[1][HOME].parametric is expect_parametric

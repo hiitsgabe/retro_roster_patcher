@@ -20,6 +20,7 @@ from .core.errors import (
     RomError,
     StorageError,
 )
+from .core.kits import PATTERNS, KitSpec, KitTemplate, default_kits, kit_from_image, render_kit
 from .core.models import MappedRosters, PatchResult, RomInfo, RomSlot, SlotMapping
 from .core.patcher import Patcher
 from .core.registry import PatcherInfo, get_patcher, list_patchers, register
@@ -44,16 +45,19 @@ from .games import nhl94_snes as _nhl94_snes  # noqa: E402,F401
 from .games import pes2013_ps2 as _pes2013_ps2  # noqa: E402,F401
 from .games import we2002 as _we2002  # noqa: E402,F401
 
-__version__ = "0.2.1"
+__version__ = "0.3.0"
 
 __all__ = [
     "ApiError",
     "CapabilityError",
+    "KitSpec",
+    "KitTemplate",
     "League",
     "LeagueData",
     "MappedRosters",
     "MappingError",
     "MissingAssetError",
+    "PATTERNS",
     "PatchResult",
     "Patcher",
     "PatcherInfo",
@@ -73,9 +77,12 @@ __all__ = [
     # The type of the `transport=` keyword both patcher constructors accept.
     "Transport",
     "__version__",
+    "default_kits",
     "get_patcher",
+    "kit_from_image",
     "league_data_from_dict",
     "league_data_to_dict",
     "list_patchers",
     "register",
+    "render_kit",
 ]

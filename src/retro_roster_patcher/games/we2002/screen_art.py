@@ -57,6 +57,19 @@ class Piece:
 
 
 @dataclass(frozen=True)
+class Guide:
+    """A canvas rectangle (pixels) that reaches the screen, for people painting
+    their own art: the game's sprites show only parts of some pieces, and show
+    a few of them somewhere else than the canvas suggests."""
+
+    x: int
+    y: int
+    w: int
+    h: int
+    label: str
+
+
+@dataclass(frozen=True)
 class Slot:
     name: str
     file: str
@@ -70,6 +83,9 @@ class Slot:
     #: or (file, x, y, entry) when the palette is one of several in a wider
     #: CLUT row: `entry` is its first colour's index within the record.
     cluts: tuple[tuple[tuple[int | str, ...], ...], ...]
+    #: where content shows up on screen (read off DuckStation with labelled
+    #: grids, Oct 2026); the rest of a piece is cropped, repeated or hidden.
+    guides: tuple[Guide, ...] = ()
 
 
 SLOTS: dict[str, Slot] = {
@@ -82,6 +98,11 @@ SLOTS: dict[str, Slot] = {
         blocks=(Block(960, 0, 0, 0), Block(992, 0, 128, 0), Block(960, 128, 0, 128)),
         pieces=(Piece(0, 0, 128, 128, 0), Piece(128, 0, 128, 128, 0), Piece(0, 128, 128, 128, 0)),
         cluts=((("TITLE.BIN", 0, 491), ("TITLE.BIN", 16, 491)),),
+        guides=(
+            Guide(0, 0, 128, 128, "ball: left of the screen centre"),
+            Guide(128, 0, 128, 128, "game logo: right of the screen centre"),
+            Guide(0, 128, 128, 72, "credits: several sprites, keep text in the top rows"),
+        ),
     ),
     "menu": Slot(
         name="menu",
@@ -109,6 +130,11 @@ SLOTS: dict[str, Slot] = {
             (("DAT2D.BIN", 240, 504),),
             (("DAT2D.BIN", 128, 502),),
             (("DAT2D.BIN", 112, 502),),
+        ),
+        guides=(
+            Guide(16, 16, 96, 96, "ball: sits at the screen edge, keep inside"),
+            Guide(128, 56, 128, 48, "banner"),
+            Guide(128, 104, 120, 24, "year"),
         ),
     ),
     "boot": Slot(
@@ -150,6 +176,15 @@ SLOTS: dict[str, Slot] = {
             (("LOGO.BIN", 0, 494, 112),),
             (("LOGO.BIN", 0, 494, 128),),
             (("LOGO.BIN", 0, 494, 144),),
+        ),
+        guides=(
+            Guide(0, 0, 256, 56, "licence text, lines 1-2 (screen centre at x=169)"),
+            Guide(0, 64, 256, 27, "licence text, line 3 (screen centre at x=169)"),
+            Guide(265, 0, 114, 128, "emblem page: logo and name, centred on screen"),
+            Guide(256, 128, 128, 58, "emblem caption, left part"),
+            Guide(256, 192, 33, 58, "emblem caption, right part (continues the strip)"),
+            Guide(640, 0, 128, 128, "KONAMI logo, upper half (centred)"),
+            Guide(512, 128, 128, 128, "KONAMI logo, lower half (centred)"),
         ),
     ),
 }
@@ -342,7 +377,9 @@ def import_slot(image_path: str, slot: Slot, png: bytes) -> tuple[list[BlockEdit
             continue
         new = canvas.block_bytes(block)
         if new != original:
-            block_edits.append(BlockEdit(original, lz_compress(new), (slot.file,)))
+            block_edits.append(
+                BlockEdit(original, lz_compress(new), (slot.file,), at=(block.x, block.y))
+            )
     return block_edits, raw_edits
 
 

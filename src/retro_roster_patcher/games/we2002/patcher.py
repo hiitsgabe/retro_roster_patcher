@@ -29,6 +29,7 @@ from typing import Any
 
 from ...core.assets import MissingAssetError
 from ...core.errors import ApiError, CapabilityError, MappingError, RomError, as_rom_error
+from ...core.kits import KitSpec, KitTemplate, default_kits, kit_from_image
 from ...core.models import (
     MappedRosters,
     PartialFn,
@@ -45,11 +46,18 @@ from ...sports import _http
 from ...sports.espn import EspnClient
 from ...sports.models import LeagueData, Team, TeamRoster
 from .flag_atlas import VALID_STYLES, LogoImages, assign_styles
+from .jersey_tex import JERSEY_TEMPLATES, apply_choice, is_page_png, page_png, template_preview
 from .logo_render import render_logo
 from .models import WETeamRecord
 from .ppf import PPFError, apply_ppf
 from .rom_reader import RomReader
-from .rom_writer import _ML_COLOR_OFFSETS, _OFS_BANDIERE_FORMA1, RomWriter
+from .rom_writer import (
+    _ML_COLOR_OFFSETS,
+    _OFS_BANDIERE_FORMA1,
+    _TEX_JERSEY_COLORS,
+    RomWriter,
+    read_tex_files,
+)
 from .screen_art import SLOT_NAMES, SLOTS, apply_images, export_slot
 from .stat_mapper import StatMapper
 from .translations.we2002 import LANGUAGE_CODES, LANGUAGES, ensure_ppf
@@ -110,6 +118,16 @@ class WE2002Patcher(Patcher):
     #: `patch(blank_unused=True)` empties the name and flag of every slot the
     #: mapping leaves out, in both tables.
     supports_blank_unused: bool = True
+    #: `patch(kits=...)` as `Patcher` describes it: a spec or a picture is
+    #: painted onto the 3D kit texture, `{"template": n}` copies one of the 95
+    #: designs `kit_templates` lists, and the 2D preview follows.
+    supports_kits: bool = True
+    #: Slots 0-31 fill a Master League slot and the national slot of the same
+    #: number; 32-62 a national slot only.
+    slot_groups: tuple[tuple[str, int, int], ...] = (
+        ("Master League", 0, MAX_ML_SLOTS),
+        ("National only", MAX_ML_SLOTS, MAX_NAT_SLOTS - MAX_ML_SLOTS),
+    )
     #: Screen art `patch(images={name: png})` can replace; `export_images`
     #: writes the current art of each as a PNG to edit.
     image_slots: tuple[str, ...] = SLOT_NAMES
@@ -270,6 +288,16 @@ class WE2002Patcher(Patcher):
                 roster, data.teams, order_as_given=order_as_given
             )
             self._apply_kit_colours(record, roster.team)
+            record.kit_home_spec, record.kit_away_spec = default_kits(roster.team)
+            # The specs are what the kits are drawn from; the RGB fields, which
+            # the flag palette and the 2D preview read, follow their shirts (the
+            # away shirt is the contrast of the home one when the provider gave
+            # only one colour).
+            if record.kit_home_spec is not None:
+                record.kit_home = record.kit_home_spec.shirt
+            if record.kit_away_spec is not None:
+                record.kit_away = record.kit_away_spec.shirt
+            record.kit_third = record.kit_home
             record.team_id = roster.team.id
             record.logo_url = roster.team.logo_url
             teams[entry.slot_index] = record
@@ -301,6 +329,19 @@ class WE2002Patcher(Patcher):
         if not reader.validate_rom():
             raise RomError(f"Too small to be a WE2002 ROM, or not a WE2002 ROM: {rom_path}")
 
+        # Re-check the range even though `map_rosters` does: a caller may
+        # hand `patch` a `MappedRosters` it built itself. Sorted so writes go
+        # out in slot order regardless of insertion order.
+        slots = sorted(slot for slot in rosters.teams if 0 <= slot < MAX_NAT_SLOTS)
+
+        # Kits: False leaves the disc's 2D previews and 3D textures alone; a
+        # dict overrides the records' kits. Every choice is read and checked
+        # here, before the 700 MB copy below, so a bad picture or spec is a
+        # `CapabilityError` naming the slot rather than a failed patch.
+        kits = options.get("kits", True)
+        if isinstance(kits, dict):
+            self._apply_kit_choices(rosters, slots, kits)
+
         # `Patcher.patch` promises `RomError` on any write failure, and
         # `validate_rom` above is size-only, so an unreadable image reaches the
         # writer's `shutil.copy2`. Only `OSError` is converted; anything else
@@ -321,10 +362,8 @@ class WE2002Patcher(Patcher):
             writer = RomWriter(str(rom_path), str(output_path))
             self._apply_translation(output_path, language, on_progress)
 
-            # Re-check the range even though `map_rosters` does: a caller may
-            # hand `patch` a `MappedRosters` it built itself. Sorted so writes go
-            # out in slot order regardless of insertion order.
-            slots = sorted(slot for slot in rosters.teams if 0 <= slot < MAX_NAT_SLOTS)
+            if kits is False:
+                writer.write_kits = False
 
             # Logos go first: they decide each team's flag style and palette,
             # which the per-team writes below put into the ROM.
@@ -363,6 +402,8 @@ class WE2002Patcher(Patcher):
             # Every `write_team` above queued a 3D-jersey TEX patch; without this
             # they are discarded when the writer goes out of scope.
             writer.flush_tex_patches()
+            for line in getattr(writer, "kit_problems", ()):
+                self.status(f"Kits: {line}")
             if logos_queued:
                 self._flush_logos(writer)
             if images:
@@ -447,6 +488,172 @@ class WE2002Patcher(Patcher):
             queued += 1
             used.add(styles[slot])
         return queued, used
+
+    def _apply_kit_choices(
+        self, rosters: MappedRosters, slots: list[int], given: dict[Any, Any]
+    ) -> None:
+        """Put `patch(kits={slot: {"home": KIT, "away": KIT}})` onto the records.
+
+        KIT is a `KitSpec`, its dict, `{"image": png bytes or path}` (a
+        picture of the kit, or the 128x256 texture page itself from
+        `kit_page_png`, painted over), `{"template": n}` (a TEX index
+        `kit_templates` lists) or None for the record's default. The record's
+        RGB kit colours, which the flag palette and the 2D preview read, follow
+        the choice: the spec's shirt, a kit picture's (read with
+        `kit_from_image`, left alone when it cannot be; a page is left alone),
+        or the template's known shirt colour.
+        """
+        for slot in slots:
+            chosen = given.get(slot) or given.get(str(slot)) or {}
+            record = rosters.teams[slot]
+            for which in ("home", "away"):
+                if chosen.get(which) is None:
+                    continue
+                try:
+                    spec, image, template = self._kit_choice(chosen[which])
+                except CapabilityError as exc:
+                    raise CapabilityError(f"slot {slot} {which} kit: {exc}") from exc
+                except (ValueError, TypeError, KeyError, OSError, ImportError) as exc:
+                    raise CapabilityError(f"slot {slot} {which} kit: {exc}") from exc
+                setattr(record, f"kit_{which}_spec", spec)
+                setattr(record, f"kit_{which}_image", image)
+                setattr(record, f"kit_{which}_template", template)
+                colour = None
+                if spec is not None:
+                    colour = spec.shirt
+                elif template is not None:
+                    colour = _TEX_JERSEY_COLORS[template]
+                elif image is not None and not is_page_png(image):
+                    try:
+                        colour = kit_from_image(image).shirt
+                    except (ImportError, ValueError, OSError):
+                        pass
+                if colour is not None:
+                    setattr(record, f"kit_{which}", colour)
+            record.kit_third = record.kit_home
+
+    @staticmethod
+    def _kit_choice(value: Any) -> tuple[KitSpec | None, bytes | None, int | None]:
+        """One KIT of the option as (spec, image, template), exactly one set,
+        checked: the template in range, the picture read and decodable by
+        Pillow, the spec well formed. Raises `CapabilityError` for a bad
+        template, else whatever reading or parsing raises."""
+        if isinstance(value, KitSpec):
+            return value, None, None
+        value = dict(value)
+        if "template" in value:
+            template = int(value["template"])
+            if template not in JERSEY_TEMPLATES:
+                raise CapabilityError(
+                    f"Unknown kit template {template}; we2002 has 0..{len(JERSEY_TEMPLATES) - 1}"
+                )
+            return None, None, template
+        if "image" in value:
+            png = value["image"]
+            data = Path(png).read_bytes() if isinstance(png, str | Path) else bytes(png)
+            import io
+
+            try:
+                from PIL import Image
+            except ImportError as exc:
+                raise CapabilityError("kit pictures need Pillow (the images extra)") from exc
+            with Image.open(io.BytesIO(data)) as picture:  # raises OSError when not an image
+                picture.load()
+            return None, data, None
+        return KitSpec.from_dict(value), None, None
+
+    @staticmethod
+    def _tex_files(rom_path: Path) -> dict[int, bytes]:
+        """The disc's TEX files, after the same checks `patch` makes: the file
+        exists, is big enough to be WE2002 and is a raw 2352-byte image."""
+        if not Path(rom_path).exists():
+            raise RomError(f"ROM not found: {rom_path}")
+        reader = RomReader(str(rom_path))
+        with as_rom_error(rom_path):
+            if not reader.validate_rom() or not reader.is_raw_image():
+                raise RomError(f"Not a raw WE2002 image (.bin with 2352-byte sectors): {rom_path}")
+            return read_tex_files(str(rom_path))
+
+    def kit_templates(self, rom_path: Path) -> list[KitTemplate]:
+        """The 95 jersey designs on the disc, one per TEX file: 0-62 the
+        national and all-star kits, 63-94 the Master League clubs, each with a
+        96x128 PNG of its home kit. Needs Pillow; `CapabilityError` without it."""
+        files = self._tex_files(rom_path)
+        try:
+            return [
+                KitTemplate(index, name, template_preview(files[index]))
+                for index, name in JERSEY_TEMPLATES.items()
+                if index in files
+            ]
+        except ImportError as exc:
+            raise CapabilityError("Kit templates need Pillow (the images extra)") from exc
+
+    def kit_page_png(
+        self,
+        rom_path: Path,
+        slot: int,
+        which: str = "home",
+        *,
+        template: int | None = None,
+        guides: bool = True,
+    ) -> bytes:
+        """The 3D kit texture page of a slot's current kit as a 128x256 RGBA
+        PNG to paint over and hand back as `patch(kits={slot: {which: {"image":
+        png}}})`. `slot` is a TEX index: 0-62 the national teams, 63-94 the
+        Master League (a mapped slot s below 32 owns both TEX s and 63 + s);
+        `template=n` reads design n instead, the numbering `kit_templates`
+        uses. `which` is "home" or "away". With `guides`, every region the
+        outfield model draws is outlined in red and labelled. Needs Pillow;
+        `CapabilityError` without it."""
+        index = slot if template is None else template
+        if index not in JERSEY_TEMPLATES:
+            raise CapabilityError(
+                f"Unknown kit slot {index}; we2002 has 0..{len(JERSEY_TEMPLATES) - 1}"
+            )
+        if which not in ("home", "away"):
+            raise CapabilityError(f"Unknown kit {which!r}; one of home, away")
+        files = self._tex_files(rom_path)
+        if index not in files:
+            raise RomError(f"TEX_{index:02d}.BIN is not on the disc")
+        try:
+            return page_png(files[index], which, guides)
+        except ImportError as exc:
+            raise CapabilityError("Kit pages need Pillow (the images extra)") from exc
+
+    def kit_preview_png(
+        self,
+        rom_path: Path,
+        slot: int,
+        which: str = "home",
+        choice: Any = None,
+        *,
+        template: int | None = None,
+    ) -> bytes:
+        """A 96x128 RGBA "photo" of a slot's kit, as `patch` would leave it:
+        `choice` is one KIT of the `kits` option (a `KitSpec` or its dict, a
+        `{"image": png bytes or path}`, a page or a photo, or `{"template": n}`),
+        applied in memory to the slot's current texture, None for the kit as it
+        is; `template=n` is the shading base for a spec or picture, as the
+        writer uses it. `slot` and `which` as in `kit_page_png`. Nothing is
+        written. Needs Pillow; `CapabilityError` without it."""
+        if slot not in JERSEY_TEMPLATES:
+            raise CapabilityError(
+                f"Unknown kit slot {slot}; we2002 has 0..{len(JERSEY_TEMPLATES) - 1}"
+            )
+        if which not in ("home", "away"):
+            raise CapabilityError(f"Unknown kit {which!r}; one of home, away")
+        files = self._tex_files(rom_path)
+        if slot not in files:
+            raise RomError(f"TEX_{slot:02d}.BIN is not on the disc")
+        tex = files[slot]
+        try:
+            if choice is not None:
+                spec, image, chosen = self._kit_choice(choice)
+                base = chosen if chosen is not None else template
+                tex = apply_choice(tex, which, spec, image, base, files)
+            return template_preview(tex, which)
+        except ImportError as exc:
+            raise CapabilityError("Kit previews need Pillow (the images extra)") from exc
 
     def _collect_images(self, given: Any) -> dict[str, bytes]:
         """Screen art to write: `patch(images=...)` first, then `<assets_dir>/images/<slot>.png`."""

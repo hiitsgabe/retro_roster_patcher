@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from ...core.errors import ApiError, CapabilityError, MappingError, RomError, as_rom_error
-from ...core.kits import KitSpec, contrast
+from ...core.kits import KitSpec, default_kits, kit_from_image
 from ...core.models import (
     MappedRosters,
     PartialFn,
@@ -33,7 +33,8 @@ from ...core.patcher import Patcher
 from ...core.registry import register
 from ...sports import _http
 from ...sports.espn import EspnClient
-from ...sports.models import LeagueData, Player, Team, TeamRoster
+from ...sports.models import LeagueData, Player, TeamRoster
+from . import kit_textures
 from .kits import AWAY, HOME, apply_spec
 from .models import (
     CLUB_COUNT,
@@ -59,7 +60,6 @@ from .models import (
 from .rom_reader import PlayerTables, RomReader
 from .rom_writer import RomWriter, ascii_fold
 
-RGB = tuple[int, int, int]
 GROUP_ORDER = ("Goalkeeper", "Defender", "Midfielder", "Attacker")
 #: Squad places that are the club's lineup.
 LINEUP_SIZE = 11
@@ -101,39 +101,37 @@ def pes_name(player: Player) -> str:
     return full[:DISPLAY_NAME_CHARS].upper()
 
 
-def default_kits(team: Team) -> tuple[KitSpec | None, KitSpec | None]:
-    """Plain home and away kits from the provider's two team colours: the
-    first colour at home, the second away, each with the other as its trim,
-    white shorts unless the shirt is white, socks like the shirt. None when
-    the provider gave no usable colour."""
-    first = _hex_colour(team.color)
-    second = _hex_colour(team.alternate_color) or (contrast(first) if first else None)
-    if first is None or second is None:
-        return None, None
-
-    def plain(shirt: RGB, trim: RGB) -> KitSpec:
-        shorts = trim if shirt == (255, 255, 255) else (255, 255, 255)
-        return KitSpec(shirt=shirt, secondary=trim, pattern="plain", shorts=shorts, socks=shirt)
-
-    return plain(first, second), plain(second, first)
+#: The slot groups by league, for `Patcher.slot_groups`.
+SLOT_GROUPS = tuple(
+    (name, group.first, group.count)
+    for name, group in zip(
+        ("England", "France", "Italy", "Netherlands", "Spain"), LEAGUE_GROUPS, strict=True
+    )
+)
+_GROUPED = LEAGUE_GROUPS[-1].first + LEAGUE_GROUPS[-1].count
+SLOT_GROUPS += (("Other", _GROUPED, CLUB_COUNT - _GROUPED),)
 
 
-def _hex_colour(value: str) -> RGB | None:
-    """A `RRGGBB` / `#RRGGBB` provider colour, else None."""
-    text = (value or "").lstrip("#")
-    if len(text) != 6:
+def _image_bytes(value: Any) -> bytes | None:
+    """The PNG of a `{"image": png bytes or path}` kit choice, else None."""
+    if not isinstance(value, dict) or "image" not in value:
         return None
-    try:
-        return (int(text[0:2], 16), int(text[2:4], 16), int(text[4:6], 16))
-    except ValueError:
-        return None
+    png = value["image"]
+    return Path(png).read_bytes() if isinstance(png, str | Path) else bytes(png)
 
 
 def _as_spec(value: Any) -> KitSpec | None:
-    """A `KitSpec` from the patch option: the object itself or its dict."""
+    """A `KitSpec` from the patch option: the object itself, its dict,
+    `{"image": png bytes or path}` read with `kit_from_image`, or None."""
     if value is None or isinstance(value, KitSpec):
         return value
-    return KitSpec.from_dict(dict(value))
+    value = dict(value)
+    if "template" in value:
+        raise CapabilityError("pes2013-ps2 has no jersey templates")
+    png = _image_bytes(value)
+    if png is not None:
+        return kit_from_image(png)
+    return KitSpec.from_dict(value)
 
 
 def shirt_name(player: Player) -> str:
@@ -246,6 +244,12 @@ class PES2013PS2Patcher(Patcher):
     #: `patch` draws each team's logo into the emblem atlases unless `logos=False`.
     supports_logos: bool = True
     supports_blank_unused: bool = True
+    #: `patch(kits=...)` as `Patcher` describes it; `{"template": n}` is refused,
+    #: the disc has no jersey designs to pick from.
+    supports_kits: bool = True
+    slot_groups: tuple[tuple[str, int, int], ...] = SLOT_GROUPS
+    supports_nationals: bool = True
+    national_slot_base: int | None = NATIONAL_SLOT_BASE
     #: Screen art `patch(images={name: png})` can replace; `export_images`
     #: writes the current art of each as a PNG to edit.
     image_slots: tuple[str, ...] = IMAGE_SLOT_NAMES
@@ -257,9 +261,13 @@ class PES2013PS2Patcher(Patcher):
         provider: str | None = None,
         on_status: StatusFn | None = None,
         on_partial: PartialFn | None = None,
+        assets_dir: Path | str | None = None,
         transport: _http.Transport | None = None,
     ) -> None:
         super().__init__(cache_dir, provider=provider, on_status=on_status, on_partial=on_partial)
+        # User-supplied, read-only: `logos/<team_id>.png` crests drawn instead
+        # of the provider's logo.
+        self.assets_dir = Path(assets_dir) if assets_dir is not None else None
         self._transport = transport
         self.api: Any = EspnClient(str(self.cache_dir), on_status, transport=transport)
 
@@ -433,6 +441,9 @@ class PES2013PS2Patcher(Patcher):
         rosters.require_game(self.game_id)
         if not Path(rom_path).exists():
             raise RomError(f"ROM not found: {rom_path}")
+        # Every kit choice is read and checked before the disc is copied, so a
+        # bad picture is refused up front instead of after a 2 GB write.
+        kit_choices = self._resolve_kits(rosters, options.get("kits", True))
         with as_rom_error(rom_path):
             writer = RomWriter(str(rom_path), str(output_path))
             self.status("Copying ISO...")
@@ -473,8 +484,8 @@ class PES2013PS2Patcher(Patcher):
             if options.get("logos", True):
                 self._write_logos(writer, rosters, slots, on_progress)
             self._write_leagues(writer, rosters, slots, options.get("logos", True), blank_unused)
-            if options.get("kits", True):
-                self._write_kits(writer, rosters, slots + national_slots, options.get("kits"))
+            if kit_choices is not None:
+                self._write_kits(writer, rosters, slots + national_slots, kit_choices)
             images = self._collect_images(options.get("images"))
             if images:
                 self._write_images(writer, images)
@@ -648,7 +659,8 @@ class PES2013PS2Patcher(Patcher):
         slots: list[int],
         on_progress: ProgressFn | None,
     ) -> None:
-        """Download each mapped team's logo and draw it as the club's crest.
+        """Draw each mapped team's logo as the club's crest: the user's
+        `assets_dir/logos/<team_id>.png` when there is one, else a download.
 
         Without Pillow, or with a logo that will not download, the crests are
         skipped with a status line; the roster patch stands.
@@ -656,12 +668,15 @@ class PES2013PS2Patcher(Patcher):
         logos: dict[int, bytes] = {}
         for i, slot in enumerate(slots):
             record = rosters.teams[slot]
-            if not record.logo_url:
+            override = self._logo_override(record)
+            if override is None and not record.logo_url:
                 continue
             if on_progress is not None:
                 on_progress(0.85 + 0.1 * (i / max(len(slots), 1)), f"Logo for {record.name}...")
             try:
-                logos[slot] = self._load_logo(record.logo_url)
+                logos[slot] = (
+                    override.read_bytes() if override else self._load_logo(record.logo_url)
+                )
             except ApiError as exc:
                 self.status(f"{record.name}: logo skipped: {exc}")
         if not logos:
@@ -750,31 +765,69 @@ class PES2013PS2Patcher(Patcher):
                 return
             self.status(f"League icon {icon}: {count} bundles" + (" (blank)" if not url else ""))
 
+    @staticmethod
+    def _resolve_kits(rosters: MappedRosters, given: Any) -> dict[int, dict[int, Any]] | None:
+        """Every mapped team's kit choices, read and checked.
+
+        `given` is the `kits` patch option: False keeps the disc's kits (None);
+        anything else draws the record's default kits (the provider's two
+        colours, plain) except where a dict `{slot: {"home": KIT, "away": KIT}}`
+        names the slot. A KIT is a `KitSpec`, its dict or `{"image": png}`; a
+        picture of the texture's own size (512x256) is kept as `("texture", png,
+        fallback spec)` for `_write_kits`, anything else becomes `("spec",
+        KitSpec, None)`. A choice that cannot be read is a `CapabilityError`
+        naming the slot.
+        """
+        if given is False:
+            return None
+        overrides = given if isinstance(given, dict) else {}
+        resolved: dict[int, dict[int, Any]] = {}
+        for slot, record in rosters.teams.items():
+            chosen = overrides.get(slot) or overrides.get(str(slot)) or {}
+            entry: dict[int, Any] = {}
+            for which, side, default in (
+                (HOME, "home", record.kit_home),
+                (AWAY, "away", record.kit_away),
+            ):
+                value = chosen.get(side)
+                try:
+                    png = _image_bytes(value)
+                    if png is not None and kit_textures.is_texture_png(png):
+                        # Teams without a licensed kit get the picture's colours
+                        # instead; a flat picture has none and keeps the default.
+                        try:
+                            fallback: KitSpec | None = kit_from_image(png)
+                        except ValueError:
+                            fallback = default
+                        entry[which] = ("texture", png, fallback)
+                    else:
+                        entry[which] = ("spec", _as_spec(value) or default, None)
+                except (OSError, ValueError, TypeError, KeyError, ImportError) as exc:
+                    raise CapabilityError(f"slot {slot} {side} kit: {exc}") from exc
+            resolved[slot] = entry
+        return resolved
+
     def _write_kits(
         self,
         writer: RomWriter,
         rosters: MappedRosters,
         slots: list[int],
-        given: Any,
+        choices: dict[int, dict[int, Any]],
     ) -> None:
-        """Draw each mapped team's home and away kits from colours.
+        """Draw each mapped team's home and away kits (see `_resolve_kits`).
 
-        The record's kits (the provider's two colours, plain) unless `given`,
-        `patch(kits={slot: {"home": KitSpec or its dict, "away": ...}})`,
-        names the slot. A kit so written is parametric: the game composes it
-        from the colours, licensed texture or not. Clubs past the last kit
-        record (slots 130 and up) are skipped with a status line.
+        A spec is written into the kit record, which becomes parametric: the
+        game composes it from the colours, licensed texture or not. A texture
+        picture for a team with a licensed kit is painted into that kit's
+        package (`kit_textures`) and the record stays licensed; on a team
+        without one it gives its colours and pattern instead. Clubs past the
+        last kit record (slots 130 and up) are skipped with a status line.
         """
-        overrides = given if isinstance(given, dict) else {}
         table = writer.reader.kits()
-        written = 0
+        licensed = kit_textures.licensed_slots(writer.reader)
+        written = textures = 0
         for slot in slots:
             record = rosters.teams[slot]
-            chosen = overrides.get(slot) or overrides.get(str(slot)) or {}
-            specs = {
-                HOME: _as_spec(chosen.get("home")) or record.kit_home,
-                AWAY: _as_spec(chosen.get("away")) or record.kit_away,
-            }
             if slot >= NATIONAL_SLOT_BASE:
                 rows, row = table.nationals, slot - NATIONAL_SLOT_BASE
             else:
@@ -783,13 +836,27 @@ class PES2013PS2Patcher(Patcher):
                 self.status(f"{record.name}: slot {slot} has no kit record, kit kept")
                 continue
             kits = rows[row]
-            for which, spec in specs.items():
+            for which, (kind, value, fallback) in choices.get(slot, {}).items():
+                spec = value
+                if kind == "texture":
+                    if slot in licensed:
+                        kit_textures.write_kit_png(writer, slot, which, value)
+                        textures += 1
+                        continue
+                    spec = fallback
                 if spec is not None:
                     apply_spec(kits[which], spec)
                     written += 1
         if written:
             writer.write_kits(table)
-            self.status(f"Kits written: {written}")
+        if written or textures:
+            self.status(f"Kits written: {written}, kit textures painted: {textures}")
+
+    def _logo_override(self, record: PESTeamRecord) -> Path | None:
+        if self.assets_dir is None or record.team_id is None:
+            return None
+        candidate = self.assets_dir / "logos" / f"{record.team_id}.png"
+        return candidate if candidate.is_file() else None
 
     def _load_logo(self, url: str) -> bytes:
         """The logo bytes, from `cache_dir/logos` or downloaded once."""

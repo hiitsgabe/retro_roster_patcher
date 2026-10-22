@@ -101,7 +101,7 @@ def _tex_lba(idx: int) -> int:
     return _TEX_BASE_LBA + idx * _TEX_LBA_STRIDE
 
 
-def _build_iso(tmp_path, tex, *, extra_records=(), listed_sizes=None):
+def _build_iso(tmp_path, tex, *, extra_records=(), listed_sizes=None, sectors=2):
     """A sparse synthetic image whose BIN directory lists `tex` (index -> bytes).
 
     Records are laid down back to front, so with the default two-entry `tex` the
@@ -119,10 +119,13 @@ def _build_iso(tmp_path, tex, *, extra_records=(), listed_sizes=None):
     path = tmp_path / "synthetic.bin"
     listed_sizes = listed_sizes or {}
     last = _tex_lba(rw._TEX_COUNT - 1) + _TEX_LBA_STRIDE
-    per_sector = {0: list(extra_records), 1: []}
+    # `sectors` directory sectors (the real directory has six), records dealt
+    # round them; two hold the handful of files most tests list.
+    per_sector = {s: [] for s in range(sectors)}
+    per_sector[0] = list(extra_records)
     for n, idx in enumerate(sorted(tex, reverse=True)):
         size = listed_sizes.get(idx, len(tex[idx]))
-        per_sector[n % 2].append(_dir_record(b"TEX_%02d.BIN;1" % idx, size))
+        per_sector[n % sectors].append(_dir_record(b"TEX_%02d.BIN;1" % idx, size))
     with open(path, "wb") as f:
         f.truncate(last * _SECTOR)
         # A real raw image starts with a sync header; `patch` checks for it.
@@ -521,7 +524,7 @@ def _queued_writer(tmp_path, *, tex=None):
     """A writer over a synthetic image with one TEX patch queued by `write_team`.
 
     The queue is filled the way `patch` fills it — through `write_team`, which
-    appends `(63 + slot_index, team.kit_home)` — rather than by poking the list,
+    appends `(63 + slot_index, team)` — rather than by poking the list,
     so the index arithmetic is under test too.
     """
     if tex is None:
@@ -533,8 +536,10 @@ def _queued_writer(tmp_path, *, tex=None):
 
 
 def test_write_team_queues_the_master_league_slots_tex_index(tmp_path):
+    # The record itself is queued: `flush_tex_patches` reads its kit choice,
+    # and with none (as here) its `kit_home` for the nearest-colour copy.
     _, writer = _queued_writer(tmp_path)
-    assert writer._pending_tex_patches == [(_DST_TEX, _SRC_COLOUR)]
+    assert writer._pending_tex_patches == [(_DST_TEX, _team(_SRC_COLOUR))]
 
 
 def test_flushing_copies_the_source_slots_bytes_into_the_destination(tmp_path):
@@ -611,7 +616,7 @@ def test_a_missing_output_file_keeps_the_queue_for_later(tmp_path):
     path, writer = _queued_writer(tmp_path)
     path.unlink()
     writer.flush_tex_patches()
-    assert writer._pending_tex_patches == [(_DST_TEX, _SRC_COLOUR)]
+    assert writer._pending_tex_patches == [(_DST_TEX, _team(_SRC_COLOUR))]
 
 
 def test_a_directory_listing_no_tex_files_discards_the_queue(tmp_path):

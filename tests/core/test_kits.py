@@ -1,13 +1,21 @@
-"""`render_kit` needs Pillow, the optional `images` extra."""
+"""`render_kit` and `kit_from_image` need Pillow, the optional `images` extra."""
 
 import io
 
 import pytest
 
-from retro_roster_patcher.core.kits import PATTERNS, KitSpec, contrast, render_kit
+from retro_roster_patcher.core.kits import (
+    PATTERNS,
+    KitSpec,
+    contrast,
+    default_kits,
+    kit_from_image,
+    render_kit,
+)
+from retro_roster_patcher.sports.models import Team
 
 PIL = pytest.importorskip("PIL")
-from PIL import Image  # noqa: E402
+from PIL import Image, ImageDraw  # noqa: E402
 
 RED = (200, 16, 46)
 WHITE = (255, 255, 255)
@@ -78,3 +86,54 @@ def test_sleeves_take_their_own_colour_when_given():
 def test_contrast_picks_white_on_navy_and_black_on_yellow():
     assert contrast((0, 0, 128)) == (255, 255, 255)
     assert contrast((255, 255, 0)) == (0, 0, 0)
+
+
+GREEN, BLUE, NAVY = (0, 128, 0), (0, 0, 200), (0, 0, 80)
+
+
+def _png(image: Image.Image) -> bytes:
+    out = io.BytesIO()
+    image.save(out, "PNG")
+    return out.getvalue()
+
+
+def test_default_kits_are_plain_in_the_providers_two_colours():
+    home, away = default_kits(Team(id=1, name="X", color="#C8102E", alternate_color="FFFFFF"))
+    assert home == KitSpec(RED, WHITE, "plain", WHITE, RED)
+    assert away == KitSpec(WHITE, RED, "plain", RED, WHITE)  # white shirt, trim shorts
+    assert default_kits(Team(id=1, name="X", color="red")) == (None, None)
+
+
+def test_a_shirt_alone_reads_as_a_plain_kit_with_white_shorts():
+    image = Image.new("RGBA", (120, 100), (0, 0, 0, 0))
+    ImageDraw.Draw(image).rectangle((10, 10, 109, 89), fill=(*RED, 255))
+    assert kit_from_image(_png(image)) == KitSpec(RED, WHITE, "plain", WHITE, RED)
+
+
+def test_a_photo_background_is_read_off_the_corners():
+    image = Image.new("RGB", (120, 100), (240, 240, 236))  # an off-white backdrop
+    ImageDraw.Draw(image).rectangle((10, 10, 109, 89), fill=RED)
+    assert kit_from_image(_png(image)).shirt == RED
+    with pytest.raises(ValueError, match="background"):
+        kit_from_image(_png(Image.new("RGB", (8, 8), (240, 240, 236))))
+
+
+@pytest.mark.parametrize(
+    "spec",
+    [
+        KitSpec(RED, WHITE, "plain", BLUE, NAVY),
+        KitSpec(RED, WHITE, "stripes", WHITE, RED),
+        KitSpec(RED, WHITE, "pinstripes", WHITE, RED),
+        KitSpec(GREEN, WHITE, "hoops", WHITE, GREEN),
+        KitSpec(WHITE, RED, "sash", RED, WHITE),
+        KitSpec(RED, WHITE, "halves", WHITE, RED),
+        KitSpec(RED, WHITE, "sleeves", WHITE, RED),
+    ],
+    ids=lambda spec: spec.pattern,
+)
+def test_a_rendered_full_kit_reads_back_its_pattern_and_colours(spec):
+    read = kit_from_image(render_kit(spec, 192, 256))
+    assert read.pattern == spec.pattern
+    # Which of two colours is "the shirt" on a striped or halved kit is a toss-up.
+    assert {read.shirt, read.secondary} == {spec.shirt, spec.secondary}
+    assert (read.shorts, read.socks) == (spec.shorts, spec.socks)
