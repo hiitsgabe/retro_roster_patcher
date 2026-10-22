@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import base64
 import hashlib
-from collections import defaultdict
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -59,6 +58,8 @@ from .rom_reader import PlayerTables, RomReader
 from .rom_writer import RomWriter, ascii_fold
 
 GROUP_ORDER = ("Goalkeeper", "Defender", "Midfielder", "Attacker")
+#: Squad places that are the club's lineup.
+LINEUP_SIZE = 11
 #: A 1x1 fully transparent PNG: what a blanked icon is painted with.
 BLANK_PNG = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNgYGBgAAAABQABeqhXUAAAAABJRU5ErkJggg=="
@@ -131,6 +132,41 @@ LINEUP_GROUPS = {
     "LW": "Attacker",
     "RW": "Attacker",
 }
+
+#: ESPN lineup position codes as the game's registered-position nibble
+#: (byte 53 >> 4): GK 0, CB 3, SB 4, DMF 5, CMF 7, SMF 8, AMF 9, SS 10, WF 11,
+#: CF 12. The wide attacking midfielders of a 4-2-3-1 are side midfielders.
+LINEUP_ROLES = {
+    "G": 0,
+    "CD": 3,
+    "SW": 3,
+    "LB": 4,
+    "RB": 4,
+    "LWB": 4,
+    "RWB": 4,
+    "DM": 5,
+    "CM": 7,
+    "LM": 8,
+    "RM": 8,
+    "AM": 9,
+    "AM-L": 8,
+    "AM-R": 8,
+    "SS": 10,
+    "LW": 11,
+    "RW": 11,
+    "F": 12,
+    "CF": 12,
+    "ST": 12,
+}
+
+
+def lineup_role(player: Player, lineup: dict[str, Any] | None) -> int | None:
+    """The nibble of the position the lineup had the player start in, or None."""
+    for s in (lineup or {}).get("starters") or []:
+        if int(s["id"]) == player.id:
+            code = str(s.get("position", "")).upper()
+            return LINEUP_ROLES.get(code, LINEUP_ROLES.get(code.split("-")[0]))
+    return None
 
 
 def squad_order(players: list[Player], lineup: dict[str, Any] | None = None) -> list[Player]:
@@ -330,6 +366,7 @@ class PES2013PS2Patcher(Patcher):
                         shirt_name=shirt_name(p),
                         number=p.number,
                         position=lineup_group(p, lineup),
+                        role=lineup_role(p, lineup),
                     )
                     for p in players[: NATIONAL_SQUAD_SIZE if national else CLUB_SQUAD_SIZE]
                 ],
@@ -514,7 +551,13 @@ class PES2013PS2Patcher(Patcher):
             for player, idx in zip(record.players, take, strict=False):
                 for t in tables.values():
                     RomWriter.set_player_names(t, idx, player.display_name, player.shirt_name)
-                    RomWriter.set_position(t, idx, GROUP_POSITIONS.get(player.position, 7))
+                    RomWriter.set_position(
+                        t,
+                        idx,
+                        player.role
+                        if player.role is not None
+                        else GROUP_POSITIONS.get(player.position, 7),
+                    )
                 new_row.append(idx)
                 written += 1
             leftovers = [idx for idx in exclusive if idx not in take] + kept
@@ -683,28 +726,52 @@ class PES2013PS2Patcher(Patcher):
     ) -> list[tuple[int, int, PESPlayer]]:
         """Pair each incoming player with a record of the club's squad.
 
-        Records are handed out by position group first, then whatever is left,
-        in squad order. Returns (squad slot, player index, player) triples.
+        The first eleven squad places are the club's lineup, and each record
+        there holds the position its place plays in the club's formation. A
+        starter (a player with a `role`) takes the place whose record has his
+        position, else one of his group, else any place still free in the
+        eleven. The bench then takes the remaining records by position group,
+        then whatever is left, in squad order. Returns (squad place, player
+        index, player) triples.
         """
         squad = [
             (s, idx)
             for s, idx in enumerate(tables.club_squad(club))
             if 0 < idx < tables.player_count
         ]
-        free: dict[str, list[tuple[int, int]]] = defaultdict(list)
-        for s, idx in squad:
-            free[position_group(tables.record(idx))].append((s, idx))
+        free = {s: idx for s, idx in squad}
         out: list[tuple[int, int, PESPlayer]] = []
+
+        def take(player: PESPlayer, places: list[int]) -> bool:
+            for s in places:
+                if s in free:
+                    out.append((s, free.pop(s), player))
+                    return True
+            return False
+
+        def role_of(s: int) -> int:
+            return tables.record(free[s])[POSITION_BYTE] >> 4
+
+        eleven = [s for s, _ in squad[:LINEUP_SIZE]]
+        starters = [p for p in players if p.role is not None][:LINEUP_SIZE]
+        bench = [p for p in players if p not in starters]
+        for player in starters:
+            same_role = [s for s in eleven if s in free and role_of(s) == player.role]
+            same_group = [
+                s
+                for s in eleven
+                if s in free and position_group(tables.record(free[s])) == player.position
+            ]
+            if not take(player, same_role + same_group + eleven):
+                bench.append(player)
         waiting: list[PESPlayer] = []
-        for player in players:
-            pool = free.get(player.position)
-            if pool:
-                s, idx = pool.pop(0)
-                out.append((s, idx, player))
-            else:
+        for player in bench:
+            same_group = [
+                s for s in sorted(free) if position_group(tables.record(free[s])) == player.position
+            ]
+            if not take(player, same_group):
                 waiting.append(player)
-        rest = sorted((pair for pool in free.values() for pair in pool), key=lambda p: p[0])
-        for player, (s, idx) in zip(waiting, rest, strict=False):
-            out.append((s, idx, player))
+        for player, s in zip(waiting, sorted(free), strict=False):
+            out.append((s, free.pop(s), player))
         out.sort(key=lambda t: t[0])
         return out

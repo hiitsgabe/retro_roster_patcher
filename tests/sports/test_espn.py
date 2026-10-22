@@ -1147,3 +1147,52 @@ def test_the_network_guard_sentinel_escapes_the_parallel_fetch(tmp_path):
     client = EspnClient(str(tmp_path), transport=transport)
     with pytest.raises(TransportLeak):
         client.get_player_stats(364, 2025, league_code="eng.1")
+
+
+def test_the_lineup_is_the_eleven_who_started_most_in_the_last_matches(tmp_path):
+    """Two completed matches: ids 1..10 started both, 11 only the latest and
+    12 only the older one. The eleven are 1..11 (11 is the more recent of the
+    two single starters), each with the position of his latest start."""
+
+    def event(ident, date):
+        return {
+            "id": ident,
+            "date": date,
+            "competitions": [{"status": {"type": {"completed": True}}}],
+        }
+
+    def summary(starters, formation):
+        return {
+            "rosters": [
+                {
+                    "team": {"id": "359"},
+                    "formation": formation,
+                    "roster": [
+                        {
+                            "starter": True,
+                            "athlete": {"id": str(pid)},
+                            "position": {"abbreviation": pos},
+                            "jersey": str(pid),
+                            "formationPlace": str(k + 1),
+                        }
+                        for k, (pid, pos) in enumerate(starters)
+                    ],
+                }
+            ]
+        }
+
+    bodies = {
+        "schedule": {"events": [event("20", "2026-10-01"), event("10", "2026-10-08")]},
+        "event=10": summary([(1, "G")] + [(i, "CM") for i in range(2, 12)], "4-4-2"),
+        "event=20": summary([(1, "CD")] + [(i, "CM") for i in range(2, 11)] + [(12, "F")], "4-3-3"),
+    }
+
+    def transport(url, headers, timeout):
+        key = next(k for k in bodies if k in url)
+        return json.dumps(bodies[key]).encode()
+
+    client = EspnClient(str(tmp_path), transport=transport)
+    lineup = client.get_lineup(359, 2001)
+    assert lineup["formation"] == "4-4-2" and lineup["event"] == "10"
+    assert [s["id"] for s in lineup["starters"]] == list(range(1, 12))
+    assert lineup["starters"][0]["position"] == "G"

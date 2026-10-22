@@ -107,6 +107,9 @@ NHL_TEAM_MAP = {
     "NHL.WEST": 27,  # All-Star West
 }
 
+#: Completed matches a lineup is read from: the eleven who started most often.
+LINEUP_MATCHES = 5
+
 _ID_TO_LEAGUE = {item["id"]: item for item in ESPN_LEAGUES}
 _CODE_TO_LEAGUE = {item["code"]: item for item in ESPN_LEAGUES}
 
@@ -646,19 +649,22 @@ class EspnClient:
         return None
 
     def get_lineup(self, team_id: int, league_id: int) -> dict[str, Any] | None:
-        """The team's starting eleven from its latest completed match, or None.
+        """The team's starting eleven from its last few completed matches, or None.
 
-        Two requests: the team schedule for the newest finished event, then
-        that match's summary, whose `rosters` carry each side's formation and
-        who started where. Returned as plain data (`{"formation": "4-2-3-1",
-        "event": id, "starters": [{"id", "position", "number", "place"}, ...]}`)
-        so it rides along in `TeamRoster.extra` through the JSON boundary.
-        Cached per event, so a new match means one fresh fetch.
+        One request for the team schedule, then one per match summary (up to
+        `LINEUP_MATCHES`), whose `rosters` carry each side's formation and who
+        started where. The eleven who started most often make the lineup, so a
+        side rested for one match does not become the team; ties go to the
+        more recent starter, and each keeps the position of his latest start.
+        The formation is the latest match's. Returned as plain data
+        (`{"formation": "4-2-3-1", "event": id, "starters": [{"id",
+        "position", "number", "place"}, ...]}`) so it rides along in
+        `TeamRoster.extra` through the JSON boundary. Cached per match.
         """
         item = _ID_TO_LEAGUE.get(league_id)
         if item is None:
             return None
-        code = item["code"]
+        code = str(item["code"])
         try:
             schedule = self._request(f"/{code}/teams/{team_id}/schedule", sport="soccer")
         except ApiError:
@@ -668,9 +674,28 @@ class EspnClient:
             for e in schedule.get("events") or []
             if (e.get("competitions") or [{}])[0].get("status", {}).get("type", {}).get("completed")
         ]
-        if not done:
+        recent = sorted(done, key=lambda e: str(e.get("date", "")), reverse=True)[:LINEUP_MATCHES]
+        lineups = [lu for e in recent if (lu := self._match_lineup(code, team_id, e)) is not None]
+        if not lineups:
             return None
-        event = max(done, key=lambda e: str(e.get("date", "")))
+        latest = lineups[0]
+        if len(lineups) == 1:
+            return latest
+        starts: dict[int, int] = {}
+        seen: dict[int, dict[str, Any]] = {}
+        for lineup in lineups:  # newest first, so the first sighting is the latest
+            for starter in lineup["starters"]:
+                starts[starter["id"]] = starts.get(starter["id"], 0) + 1
+                seen.setdefault(starter["id"], starter)
+        order = sorted(starts, key=lambda pid: (-starts[pid], list(seen).index(pid)))
+        return {
+            "formation": latest["formation"],
+            "event": latest["event"],
+            "starters": [seen[pid] for pid in order[:11]],
+        }
+
+    def _match_lineup(self, code: str, team_id: int, event: dict) -> dict[str, Any] | None:
+        """One match's formation and starters for `team_id`, cached per match."""
         cache_key = f"espn_lineup_{code}_{team_id}_{event.get('id')}"
         cached = self._load_cache(cache_key)
         if cached:

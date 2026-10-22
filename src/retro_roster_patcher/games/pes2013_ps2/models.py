@@ -140,6 +140,10 @@ class PESPlayer:
     shirt_name: str
     number: int | None = None
     position: str = ""  # ESPN group: Goalkeeper / Defender / Midfielder / Attacker
+    #: A starter's registered-position nibble, from where the lineup had him;
+    #: None for a bench player. Starters take the squad places whose records
+    #: hold that position, which is how the club's formation is laid out.
+    role: int | None = None
 
 
 @dataclass

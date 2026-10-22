@@ -24,6 +24,7 @@ from retro_roster_patcher.games.pes2013_ps2.models import (
     NATIONAL_SLOT_BASE,
     PLAYER_ENTRIES,
     PLAYER_RECORD_SIZE,
+    PESPlayer,
 )
 from retro_roster_patcher.games.pes2013_ps2.patcher import PES2013PS2Patcher, squad_order
 from retro_roster_patcher.games.pes2013_ps2.rom_reader import RomReader
@@ -596,3 +597,36 @@ def test_blanking_free_records_leaves_every_squad_member_alone(iso):
     for t in tables.values():
         assert t.record(36)[:32].rstrip(b"\0") and not any(t.record(37))
         assert not any(t.record(39)) and t.record(33)[:32].rstrip(b"\0")
+
+
+def test_starters_take_the_formation_places_holding_their_position(iso):
+    """Club 0's eleven is laid out GK, CB, CB, SB, DMF, CMF, CMF, SMF, WF, CF, CF
+    (the fixture's SLOT_POSITIONS): a right back listed before the centre
+    backs still lands on the side-back place, and a starter whose position
+    the formation lacks takes a place of his group inside the eleven."""
+    reader = RomReader(str(iso))
+    reader.load()
+    tables = reader.player_tables(PLAYER_ENTRIES[0])
+
+    def player(name, group, role=None):
+        return PESPlayer(display_name=name, shirt_name=name, position=group, role=role)
+
+    players = [
+        player("GK", "Goalkeeper", 0),
+        player("RB", "Defender", 4),
+        player("CB1", "Defender", 3),
+        player("CB2", "Defender", 3),
+        player("AM", "Midfielder", 9),  # no AMF place: a midfield place instead
+        player("ST", "Attacker", 12),
+        player("BENCH GK", "Goalkeeper"),
+        player("BENCH CB", "Defender"),
+    ]
+    out = PES2013PS2Patcher._assign(tables, 0, players)
+    by_name = {p.display_name: s for s, _idx, p in out}
+    assert by_name["GK"] == 0 and by_name["RB"] == 3
+    assert {by_name["CB1"], by_name["CB2"]} == {1, 2}
+    assert by_name["AM"] in (4, 5, 6, 7) and by_name["ST"] in (9, 10)
+    # The bench fills what the starters left, by group: no keeper place is
+    # free, so the bench keeper waits for whatever is left.
+    assert by_name["BENCH CB"] in (4, 5, 6, 7, 8, 9, 10)
+    assert by_name["BENCH GK"] in (4, 5, 6, 7, 8, 9, 10)

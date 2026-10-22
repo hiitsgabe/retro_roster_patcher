@@ -31,8 +31,9 @@ from tests.sports.test_nhl import NETWORK_CALLS as NHL_CALLS
 # a response worth caching — the teams methods cache only what parsed to at least
 # one team, the leaders methods only a non-empty stat dict — so the envelopes are
 # merged rather than chosen between: `sports` for the ESPN team lists,
-# `categories` for ESPN leaders, `skaters` for NHL club stats, and `athletes`
-# for the roster parsers.
+# `categories` for ESPN leaders, `skaters` for NHL club stats, `athletes` for
+# the roster parsers, and `events` plus `rosters` for the lineup lookup, which
+# caches one file per completed match it finds on the schedule.
 OMNIBUS = json.dumps(
     {
         "sports": [
@@ -45,6 +46,22 @@ OMNIBUS = json.dumps(
         "categories": [{"abbreviation": "G", "leaders": [{"athlete": {"id": 1}, "value": 1}]}],
         "skaters": [{"playerId": 1, "goals": 1}],
         "athletes": [{"items": [{"id": 1, "displayName": "Player", "jersey": "1"}]}],
+        "events": [
+            {
+                "id": "1",
+                "date": "2026-01-01",
+                "competitions": [{"status": {"type": {"completed": True}}}],
+            }
+        ],
+        "rosters": [
+            {
+                "team": {"id": "359"},
+                "formation": "4-4-2",
+                "roster": [
+                    {"starter": True, "athlete": {"id": "1"}, "position": {"abbreviation": "G"}}
+                ],
+            }
+        ],
     }
 ).encode()
 
