@@ -23,6 +23,7 @@ the JSON-serialisable `core.models` one crosses this interface.
 from __future__ import annotations
 
 import hashlib
+import shutil
 import struct
 from pathlib import Path
 from typing import Any
@@ -360,7 +361,7 @@ class WE2002Patcher(Patcher):
             # The constructor copies the ROM to `output_path`, so the file the
             # translation patches below exists by the time it runs.
             writer = RomWriter(str(rom_path), str(output_path))
-            self._apply_translation(output_path, language, on_progress)
+            self._apply_translation(rom_path, output_path, language, on_progress)
 
             if kits is False:
                 writer.write_kits = False
@@ -806,11 +807,19 @@ class WE2002Patcher(Patcher):
 
     def _apply_translation(
         self,
+        rom_path: Path,
         output_path: Path,
         language: str,
         on_progress: ProgressFn | None,
     ) -> None:
         """Apply the translation PPF, degrading to Japanese menus on failure.
+
+        The community patch writes absolute offsets with validation skipped, so
+        on a disc that is not the dump it was made for (another release, or a
+        disc patched before: its 2D files were rebuilt) it corrupts the menu
+        art. After it is applied the screen files are parsed; if one no longer
+        reads, the output is copied again from `rom_path` and the translation
+        reported as skipped.
 
         Two patches can arrive here and must be applied differently:
 
@@ -835,6 +844,13 @@ class WE2002Patcher(Patcher):
             community = self._community_ppf(language)
             if community is not None:
                 apply_ppf(str(output_path), str(community), skip_validation=True)
+                broken = _unreadable_screen_files(str(output_path))
+                if broken:
+                    shutil.copy2(rom_path, output_path)
+                    raise PPFError(
+                        f"{', '.join(broken)} no longer read after the patch: this disc is not "
+                        "the dump the translation was made for (patch an original disc)"
+                    )
             else:
                 ppf_path = ensure_ppf(
                     str(self.cache_dir / "translations"),
@@ -866,3 +882,25 @@ class WE2002Patcher(Patcher):
             return None
         candidate = self.assets_dir / "w202-english.ppf"
         return candidate if candidate.is_file() else None
+
+
+#: Screen files the community translation touches; each must still parse after it.
+_SCREEN_FILES = ("DATSEL.BIN", "DAT2D.BIN", "TITLE.BIN", "LOGO.BIN")
+
+
+def _unreadable_screen_files(image_path: str) -> list[str]:
+    """The screen files on the disc that no longer parse as 2D data files."""
+    from .flag_atlas import _disc_files, read_data_file
+
+    try:
+        with open(image_path, "rb") as f:
+            present = [name for name in _SCREEN_FILES if name in _disc_files(f)]
+    except RomError:
+        return []  # not a disc the screen files can be read from: nothing to check
+    broken = []
+    for name in present:
+        try:
+            read_data_file(image_path, name)
+        except RomError:
+            broken.append(name)
+    return broken

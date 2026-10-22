@@ -1,6 +1,8 @@
 """Screen-art blocks are rewritten by VRAM position, not by content."""
 
 import io
+import shutil
+from pathlib import Path
 
 import pytest
 
@@ -47,3 +49,32 @@ def test_every_guide_lies_inside_its_canvas():
             assert 0 <= g.y and g.y + g.h <= slot.height, (slot.name, g)
             assert g.label
     assert sa.SLOTS["boot"].guides, "the boot screen has measured guides"
+
+
+def test_a_community_translation_that_breaks_the_menu_art_is_backed_out(disc, tmp_path):  # noqa: F811
+    """The English PPF writes absolute offsets; on a disc it was not made for
+    the screen files stop parsing, so the output is restored and the
+    translation reported as skipped."""
+    from retro_roster_patcher.games.we2002.patcher import WE2002Patcher
+    from tests.games.we2002.test_ppf import _ppf1_patch
+
+    rom, _title = disc
+    rom = Path(rom)
+    # A patch that zeroes TITLE.BIN's pointer table (its first 8 user bytes).
+    from retro_roster_patcher.games.we2002.flag_atlas import _disc_files
+
+    with open(rom, "rb") as f:
+        entry = _disc_files(f)["TITLE.BIN"]
+    offset = entry.lba * 2352 + 24
+    assets = tmp_path / "assets"
+    assets.mkdir()
+    (assets / "w202-english.ppf").write_bytes(
+        _ppf1_patch("bad", offset.to_bytes(4, "little") + bytes([8]) + bytes(8))
+    )
+    out = tmp_path / "out.bin"
+    shutil.copy2(rom, out)
+    lines: list[str] = []
+    patcher = WE2002Patcher(tmp_path / "cache", assets_dir=assets, on_status=lines.append)
+    patcher._apply_translation(rom, out, "en", None)
+    assert out.read_bytes() == rom.read_bytes()
+    assert any("translation skipped" in line and "TITLE.BIN" in line for line in lines)
