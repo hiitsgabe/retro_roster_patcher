@@ -1,0 +1,7 @@
+cache/
+raw/
+sheets/
+catalog.json
+catalog_partial.json
+final_sheet.png
+debug_*.png

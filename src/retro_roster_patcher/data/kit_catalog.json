@@ -1,0 +1,2911 @@
+{
+ "format": 1,
+ "updated": "2026-10-22",
+ "description": "Home and away kits of real football clubs as retro_roster_patcher KitSpec dicts (shirt, secondary, pattern, shorts, socks, sleeves; colours #rrggbb). Look a club up by espn_id (ESPN's soccer team id) or, for one without, by name or one of its names. Clubs: the footballdatabase.com world ranking's top 100 (ranking) plus every Brasileirao Serie A 2026 club (ranking null).",
+ "patterns": [
+  "plain",
+  "stripes",
+  "hoops",
+  "halves",
+  "sash",
+  "pinstripes",
+  "chevron",
+  "sleeves"
+ ],
+ "source": "Kit colours and patterns read from each club's English Wikipedia infobox kit fields (2026-27 season), then reviewed by eye against Wikipedia's kit drawings.",
+ "license": "Derived from Wikipedia, CC BY-SA 4.0 (https://creativecommons.org/licenses/by-sa/4.0/); attribute Wikipedia contributors.",
+ "clubs": [
+  {
+   "name": "Bayern München",
+   "country": "Germany",
+   "espn_id": 132,
+   "names": [
+    "FC Bayern Munich",
+    "Bayern Munich"
+   ],
+   "wikipedia": "FC Bayern Munich",
+   "ranking": 1,
+   "home": {
+    "shirt": "#ff0000",
+    "secondary": "#ffffff",
+    "pattern": "plain",
+    "shorts": "#ff0c00",
+    "socks": "#ff0d00",
+    "sleeves": null
+   },
+   "away": {
+    "shirt": "#fdfdfd",
+    "secondary": "#000f5a",
+    "pattern": "plain",
+    "shorts": "#000f5a",
+    "socks": "#ffffff",
+    "sleeves": null
+   }
+  },
+  {
+   "name": "Arsenal",
+   "country": "England",
+   "espn_id": 359,
+   "names": [
+    "Arsenal F.C."
+   ],
+   "wikipedia": "Arsenal F.C.",
+   "ranking": 2,
+   "home": {
+    "shirt": "#ed0000",
+    "secondary": "#ffffff",
+    "pattern": "sleeves",
+    "shorts": "#ffffff",
+    "socks": "#ef0000",
+    "sleeves": "#ffffff"
+   },
+   "away": {
+    "shirt": "#042866",
+    "secondary": "#ffffff",
+    "pattern": "plain",
+    "shorts": "#0d1b5c",
+    "socks": "#0d1b5c",
+    "sleeves": null
+   }
+  },
+  {
+   "name": "Barcelona",
+   "country": "Spain",
+   "espn_id": 83,
+   "names": [
+    "FC Barcelona"
+   ],
+   "wikipedia": "FC Barcelona",
+   "ranking": 3,
+   "home": {
+    "shirt": "#061c56",
+    "secondary": "#a00634",
+    "pattern": "stripes",
+    "shorts": "#05003b",
+    "socks": "#05003b",
+    "sleeves": "#c60f47"
+   },
+   "away": {
+    "shirt": "#000000",
+    "secondary": "#5713a2",
+    "pattern": "plain",
+    "shorts": "#7f20e0",
+    "socks": "#000000",
+    "sleeves": null
+   }
+  },
+  {
+   "name": "Paris Saint-Germain",
+   "country": "France",
+   "espn_id": 160,
+   "names": [
+    "Paris Saint-Germain FC"
+   ],
+   "wikipedia": "Paris Saint-Germain FC",
+   "ranking": 4,
+   "home": {
+    "shirt": "#0000cc",
+    "secondary": "#fe0000",
+    "pattern": "plain",
+    "shorts": "#0000cc",
+    "socks": "#0000cb",
+    "sleeves": null
+   },
+   "away": {
+    "shirt": "#fefefe",
+    "secondary": "#ff0000",
+    "pattern": "plain",
+    "shorts": "#ffffff",
+    "socks": "#ff0000",
+    "sleeves": null
+   }
+  },
+  {
+   "name": "Manchester City",
+   "country": "England",
+   "espn_id": 382,
+   "names": [
+    "Manchester City F.C."
+   ],
+   "wikipedia": "Manchester City F.C.",
+   "ranking": 5,
+   "home": {
+    "shirt": "#9fcef2",
+    "secondary": "#e9f6ff",
+    "pattern": "plain",
+    "shorts": "#e9f6ff",
+    "socks": "#e9f6ff",
+    "sleeves": null
+   },
+   "away": {
+    "shirt": "#020202",
+    "secondary": "#ffffff",
+    "pattern": "plain",
+    "shorts": "#000000",
+    "socks": "#f1d363",
+    "sleeves": null
+   }
+  },
+  {
+   "name": "Real Madrid",
+   "country": "Spain",
+   "espn_id": 86,
+   "names": [
+    "Real Madrid CF"
+   ],
+   "wikipedia": "Real Madrid CF",
+   "ranking": 6,
+   "home": {
+    "shirt": "#fcfcfc",
+    "secondary": "#000000",
+    "pattern": "plain",
+    "shorts": "#fefefe",
+    "socks": "#ffffff",
+    "sleeves": null
+   },
+   "away": {
+    "shirt": "#142b2f",
+    "secondary": "#ffffff",
+    "pattern": "plain",
+    "shorts": "#162e32",
+    "socks": "#162e32",
+    "sleeves": null
+   }
+  },
+  {
+   "name": "Inter Milan",
+   "country": "Italy",
+   "espn_id": 110,
+   "names": [
+    "Internazionale"
+   ],
+   "wikipedia": "Inter Milan",
+   "ranking": 7,
+   "home": {
+    "shirt": "#010404",
+    "secondary": "#0031f8",
+    "pattern": "stripes",
+    "shorts": "#000000",
+    "socks": "#000000",
+    "sleeves": null
+   },
+   "away": {
+    "shirt": "#ffffff",
+    "secondary": "#000000",
+    "pattern": "plain",
+    "shorts": "#ffffff",
+    "socks": "#ffffff",
+    "sleeves": null
+   }
+  },
+  {
+   "name": "Sporting",
+   "country": "Portugal",
+   "espn_id": 2250,
+   "names": [
+    "Sporting CP"
+   ],
+   "wikipedia": "Sporting CP",
+   "ranking": 8,
+   "home": {
+    "shirt": "#fdfdfd",
+    "secondary": "#06442e",
+    "pattern": "hoops",
+    "shorts": "#000000",
+    "socks": "#06442e",
+    "sleeves": null
+   },
+   "away": {
+    "shirt": "#d3b06c",
+    "secondary": "#000000",
+    "pattern": "plain",
+    "shorts": "#d3b06c",
+    "socks": "#d3b06c",
+    "sleeves": null
+   }
+  },
+  {
+   "name": "Flamengo",
+   "country": "Brazil",
+   "espn_id": 819,
+   "names": [
+    "CR Flamengo"
+   ],
+   "wikipedia": "CR Flamengo",
+   "ranking": 9,
+   "home": {
+    "shirt": "#040404",
+    "secondary": "#ec0202",
+    "pattern": "hoops",
+    "shorts": "#ffffff",
+    "socks": "#ef0000",
+    "sleeves": null
+   },
+   "away": {
+    "shirt": "#fcfcfc",
+    "secondary": "#ec0101",
+    "pattern": "plain",
+    "shorts": "#000000",
+    "socks": "#ffffff",
+    "sleeves": null
+   }
+  },
+  {
+   "name": "AS Roma",
+   "country": "Italy",
+   "espn_id": 104,
+   "names": [],
+   "wikipedia": "AS Roma",
+   "ranking": 10,
+   "home": {
+    "shirt": "#960728",
+    "secondary": "#ffffff",
+    "pattern": "plain",
+    "shorts": "#681f30",
+    "socks": "#980729",
+    "sleeves": null
+   },
+   "away": {
+    "shirt": "#ebe2d9",
+    "secondary": "#000000",
+    "pattern": "plain",
+    "shorts": "#ece3da",
+    "socks": "#ece3da",
+    "sleeves": null
+   }
+  },
+  {
+   "name": "Aston Villa",
+   "country": "England",
+   "espn_id": 362,
+   "names": [
+    "Aston Villa F.C."
+   ],
+   "wikipedia": "Aston Villa F.C.",
+   "ranking": 11,
+   "home": {
+    "shirt": "#67081b",
+    "secondary": "#bbd5f2",
+    "pattern": "plain",
+    "shorts": "#bbd5f2",
+    "socks": "#bbd5f2",
+    "sleeves": null
+   },
+   "away": {
+    "shirt": "#000000",
+    "secondary": "#ffffff",
+    "pattern": "plain",
+    "shorts": "#010101",
+    "socks": "#010101",
+    "sleeves": null
+   }
+  },
+  {
+   "name": "Brighton & Hove Albion",
+   "country": "England",
+   "espn_id": 331,
+   "names": [
+    "Brighton & Hove Albion F.C."
+   ],
+   "wikipedia": "Brighton & Hove Albion F.C.",
+   "ranking": 12,
+   "home": {
+    "shirt": "#1144dd",
+    "secondary": "#ffffff",
+    "pattern": "pinstripes",
+    "shorts": "#1144dd",
+    "socks": "#1144dd",
+    "sleeves": null
+   },
+   "away": {
+    "shirt": "#fcfcfc",
+    "secondary": "#1040d2",
+    "pattern": "plain",
+    "shorts": "#ffffff",
+    "socks": "#ffffff",
+    "sleeves": null
+   }
+  },
+  {
+   "name": "Borussia Dortmund",
+   "country": "Germany",
+   "espn_id": 124,
+   "names": [],
+   "wikipedia": "Borussia Dortmund",
+   "ranking": 13,
+   "home": {
+    "shirt": "#ffe000",
+    "secondary": "#000000",
+    "pattern": "plain",
+    "shorts": "#000000",
+    "socks": "#ffdd00",
+    "sleeves": null
+   },
+   "away": {
+    "shirt": "#010101",
+    "secondary": "#3b3b3b",
+    "pattern": "plain",
+    "shorts": "#010101",
+    "socks": "#000000",
+    "sleeves": null
+   }
+  },
+  {
+   "name": "Atlético Madrid",
+   "country": "Spain",
+   "espn_id": 1068,
+   "names": [],
+   "wikipedia": "Atlético Madrid",
+   "ranking": 14,
+   "home": {
+    "shirt": "#fd0000",
+    "secondary": "#fefefe",
+    "pattern": "stripes",
+    "shorts": "#0000e8",
+    "socks": "#0000e8",
+    "sleeves": null
+   },
+   "away": {
+    "shirt": "#010101",
+    "secondary": "#ffffff",
+    "pattern": "plain",
+    "shorts": "#000000",
+    "socks": "#070707",
+    "sleeves": null
+   }
+  },
+  {
+   "name": "Liverpool FC",
+   "country": "England",
+   "espn_id": 364,
+   "names": [
+    "Liverpool F.C.",
+    "Liverpool"
+   ],
+   "wikipedia": "Liverpool F.C.",
+   "ranking": 15,
+   "home": {
+    "shirt": "#dd0000",
+    "secondary": "#ffffff",
+    "pattern": "plain",
+    "shorts": "#dd0000",
+    "socks": "#dd0000",
+    "sleeves": null
+   },
+   "away": {
+    "shirt": "#fcfcfc",
+    "secondary": "#de0000",
+    "pattern": "plain",
+    "shorts": "#de0000",
+    "socks": "#ffffff",
+    "sleeves": null
+   }
+  },
+  {
+   "name": "Benfica",
+   "country": "Portugal",
+   "espn_id": 1929,
+   "names": [
+    "S.L. Benfica"
+   ],
+   "wikipedia": "S.L. Benfica",
+   "ranking": 16,
+   "home": {
+    "shirt": "#ff2323",
+    "secondary": "#ffffff",
+    "pattern": "plain",
+    "shorts": "#ffffff",
+    "socks": "#fe0000",
+    "sleeves": null
+   },
+   "away": {
+    "shirt": "#fafafa",
+    "secondary": "#000000",
+    "pattern": "plain",
+    "shorts": "#ffffff",
+    "socks": "#ffffff",
+    "sleeves": null
+   }
+  },
+  {
+   "name": "Bayer Leverkusen",
+   "country": "Germany",
+   "espn_id": 131,
+   "names": [
+    "Bayer 04 Leverkusen"
+   ],
+   "wikipedia": "Bayer 04 Leverkusen",
+   "ranking": 17,
+   "home": {
+    "shirt": "#000000",
+    "secondary": "#fe0000",
+    "pattern": "stripes",
+    "shorts": "#000000",
+    "socks": "#000000",
+    "sleeves": null
+   },
+   "away": {
+    "shirt": "#d8e6e6",
+    "secondary": "#587185",
+    "pattern": "plain",
+    "shorts": "#587185",
+    "socks": "#587185",
+    "sleeves": null
+   }
+  },
+  {
+   "name": "Como 1907",
+   "country": "Italy",
+   "espn_id": 2572,
+   "names": [
+    "Como"
+   ],
+   "wikipedia": "Como 1907",
+   "ranking": 18,
+   "home": {
+    "shirt": "#215aae",
+    "secondary": "#ffffff",
+    "pattern": "plain",
+    "shorts": "#ffffff",
+    "socks": "#215aae",
+    "sleeves": null
+   },
+   "away": {
+    "shirt": "#fefefe",
+    "secondary": "#000055",
+    "pattern": "plain",
+    "shorts": "#000055",
+    "socks": "#ffffff",
+    "sleeves": null
+   }
+  },
+  {
+   "name": "Manchester United",
+   "country": "England",
+   "espn_id": 360,
+   "names": [
+    "Manchester United F.C."
+   ],
+   "wikipedia": "Manchester United F.C.",
+   "ranking": 19,
+   "home": {
+    "shirt": "#fc0000",
+    "secondary": "#ffffff",
+    "pattern": "plain",
+    "shorts": "#ffffff",
+    "socks": "#000000",
+    "sleeves": null
+   },
+   "away": {
+    "shirt": "#0000dc",
+    "secondary": "#ffffff",
+    "pattern": "plain",
+    "shorts": "#0000f0",
+    "socks": "#0000dc",
+    "sleeves": null
+   }
+  },
+  {
+   "name": "Palmeiras",
+   "country": "Brazil",
+   "espn_id": 2029,
+   "names": [
+    "SE Palmeiras"
+   ],
+   "wikipedia": "SE Palmeiras",
+   "ranking": 20,
+   "home": {
+    "shirt": "#035f30",
+    "secondary": "#ffffff",
+    "pattern": "plain",
+    "shorts": "#ffffff",
+    "socks": "#035f30",
+    "sleeves": null
+   },
+   "away": {
+    "shirt": "#fefefe",
+    "secondary": "#035f30",
+    "pattern": "plain",
+    "shorts": "#035f30",
+    "socks": "#ffffff",
+    "sleeves": null
+   }
+  },
+  {
+   "name": "FC Porto",
+   "country": "Portugal",
+   "espn_id": 437,
+   "names": [],
+   "wikipedia": "FC Porto",
+   "ranking": 21,
+   "home": {
+    "shirt": "#fefefe",
+    "secondary": "#0022ea",
+    "pattern": "stripes",
+    "shorts": "#0022ea",
+    "socks": "#ffffff",
+    "sleeves": "#0022ea"
+   },
+   "away": {
+    "shirt": "#360016",
+    "secondary": "#ffffff",
+    "pattern": "plain",
+    "shorts": "#41001d",
+    "socks": "#3e001b",
+    "sleeves": null
+   }
+  },
+  {
+   "name": "Real Betis",
+   "country": "Spain",
+   "espn_id": 244,
+   "names": [],
+   "wikipedia": "Real Betis",
+   "ranking": 22,
+   "home": {
+    "shirt": "#349b5c",
+    "secondary": "#fefefe",
+    "pattern": "stripes",
+    "shorts": "#ffffff",
+    "socks": "#349b5c",
+    "sleeves": null
+   },
+   "away": {
+    "shirt": "#006e3f",
+    "secondary": "#398c64",
+    "pattern": "halves",
+    "shorts": "#005c29",
+    "socks": "#005c29",
+    "sleeves": null
+   }
+  },
+  {
+   "name": "AFC Bournemouth",
+   "country": "England",
+   "espn_id": 349,
+   "names": [],
+   "wikipedia": "AFC Bournemouth",
+   "ranking": 23,
+   "home": {
+    "shirt": "#000000",
+    "secondary": "#fc0000",
+    "pattern": "stripes",
+    "shorts": "#000000",
+    "socks": "#000000",
+    "sleeves": null
+   },
+   "away": {
+    "shirt": "#8c85cf",
+    "secondary": "#6152bc",
+    "pattern": "plain",
+    "shorts": "#6152bc",
+    "socks": "#aba7e0",
+    "sleeves": null
+   }
+  },
+  {
+   "name": "Lazio",
+   "country": "Italy",
+   "espn_id": 112,
+   "names": [
+    "SS Lazio"
+   ],
+   "wikipedia": "SS Lazio",
+   "ranking": 24,
+   "home": {
+    "shirt": "#8cbcfe",
+    "secondary": "#ffffff",
+    "pattern": "plain",
+    "shorts": "#ffffff",
+    "socks": "#ffffff",
+    "sleeves": null
+   },
+   "away": {
+    "shirt": "#ffffff",
+    "secondary": "#242d4e",
+    "pattern": "plain",
+    "shorts": "#242d4e",
+    "socks": "#ffffff",
+    "sleeves": null
+   }
+  },
+  {
+   "name": "Chelsea FC",
+   "country": "England",
+   "espn_id": 363,
+   "names": [
+    "Chelsea F.C.",
+    "Chelsea"
+   ],
+   "wikipedia": "Chelsea F.C.",
+   "ranking": 25,
+   "home": {
+    "shirt": "#1144cc",
+    "secondary": "#ffffff",
+    "pattern": "plain",
+    "shorts": "#1144cb",
+    "socks": "#ffffff",
+    "sleeves": null
+   },
+   "away": {
+    "shirt": "#020202",
+    "secondary": "#ffffff",
+    "pattern": "plain",
+    "shorts": "#000000",
+    "socks": "#fadb04",
+    "sleeves": null
+   }
+  },
+  {
+   "name": "AC Milan",
+   "country": "Italy",
+   "espn_id": 103,
+   "names": [],
+   "wikipedia": "AC Milan",
+   "ranking": 26,
+   "home": {
+    "shirt": "#000000",
+    "secondary": "#fd0000",
+    "pattern": "stripes",
+    "shorts": "#ffffff",
+    "socks": "#000000",
+    "sleeves": null
+   },
+   "away": {
+    "shirt": "#fbfbfb",
+    "secondary": "#000000",
+    "pattern": "plain",
+    "shorts": "#ffffff",
+    "socks": "#ffffff",
+    "sleeves": null
+   }
+  },
+  {
+   "name": "PSV Eindhoven",
+   "country": "Netherlands",
+   "espn_id": 148,
+   "names": [],
+   "wikipedia": "PSV Eindhoven",
+   "ranking": 27,
+   "home": {
+    "shirt": "#fa0000",
+    "secondary": "#ffffff",
+    "pattern": "stripes",
+    "shorts": "#000000",
+    "socks": "#ffffff",
+    "sleeves": null
+   },
+   "away": {
+    "shirt": "#fefefe",
+    "secondary": "#000000",
+    "pattern": "plain",
+    "shorts": "#fefefe",
+    "socks": "#ffffff",
+    "sleeves": null
+   }
+  },
+  {
+   "name": "Brentford FC",
+   "country": "England",
+   "espn_id": 337,
+   "names": [
+    "Brentford F.C.",
+    "Brentford"
+   ],
+   "wikipedia": "Brentford F.C.",
+   "ranking": 28,
+   "home": {
+    "shirt": "#ff0000",
+    "secondary": "#ffffff",
+    "pattern": "stripes",
+    "shorts": "#000000",
+    "socks": "#000000",
+    "sleeves": null
+   },
+   "away": {
+    "shirt": "#000040",
+    "secondary": "#ffffff",
+    "pattern": "pinstripes",
+    "shorts": "#000040",
+    "socks": "#000040",
+    "sleeves": null
+   }
+  },
+  {
+   "name": "Club Brugge",
+   "country": "Belgium",
+   "espn_id": 570,
+   "names": [
+    "Club Brugge KV"
+   ],
+   "wikipedia": "Club Brugge KV",
+   "ranking": 29,
+   "home": {
+    "shirt": "#000101",
+    "secondary": "#0080ff",
+    "pattern": "stripes",
+    "shorts": "#010101",
+    "socks": "#000000",
+    "sleeves": null
+   },
+   "away": {
+    "shirt": "#f1eee4",
+    "secondary": "#000000",
+    "pattern": "plain",
+    "shorts": "#f1eee4",
+    "socks": "#f1eee4",
+    "sleeves": null
+   }
+  },
+  {
+   "name": "VfB Stuttgart",
+   "country": "Germany",
+   "espn_id": 134,
+   "names": [],
+   "wikipedia": "VfB Stuttgart",
+   "ranking": 30,
+   "home": {
+    "shirt": "#fcfcfc",
+    "secondary": "#fc0000",
+    "pattern": "sleeves",
+    "shorts": "#ffffff",
+    "socks": "#ffffff",
+    "sleeves": "#ff0000"
+   },
+   "away": {
+    "shirt": "#ff0000",
+    "secondary": "#ffffff",
+    "pattern": "plain",
+    "shorts": "#ff0000",
+    "socks": "#ff0000",
+    "sleeves": null
+   }
+  },
+  {
+   "name": "Bodø / Glimt",
+   "country": "Norway",
+   "espn_id": 2980,
+   "names": [
+    "FK Bodø/Glimt",
+    "Bodo/Glimt"
+   ],
+   "wikipedia": "FK Bodø/Glimt",
+   "ranking": 31,
+   "home": {
+    "shirt": "#f5d500",
+    "secondary": "#000000",
+    "pattern": "plain",
+    "shorts": "#ffdd00",
+    "socks": "#ffdd00",
+    "sleeves": null
+   },
+   "away": {
+    "shirt": "#fdfdfd",
+    "secondary": "#000000",
+    "pattern": "plain",
+    "shorts": "#ede8d0",
+    "socks": "#ede8d0",
+    "sleeves": null
+   }
+  },
+  {
+   "name": "Juventus",
+   "country": "Italy",
+   "espn_id": 111,
+   "names": [
+    "Juventus FC"
+   ],
+   "wikipedia": "Juventus FC",
+   "ranking": 32,
+   "home": {
+    "shirt": "#fcfcfc",
+    "secondary": "#040404",
+    "pattern": "stripes",
+    "shorts": "#ffffff",
+    "socks": "#ffffff",
+    "sleeves": null
+   },
+   "away": {
+    "shirt": "#ffa8c6",
+    "secondary": "#000000",
+    "pattern": "plain",
+    "shorts": "#000000",
+    "socks": "#000000",
+    "sleeves": null
+   }
+  },
+  {
+   "name": "Al Hilal",
+   "country": "Saudi Arabia",
+   "espn_id": 929,
+   "names": [
+    "Al Hilal SFC"
+   ],
+   "wikipedia": "Al Hilal SFC",
+   "ranking": 33,
+   "home": {
+    "shirt": "#003ef8",
+    "secondary": "#ffffff",
+    "pattern": "plain",
+    "shorts": "#0040ff",
+    "socks": "#0040ff",
+    "sleeves": null
+   },
+   "away": {
+    "shirt": "#fdfdfd",
+    "secondary": "#000000",
+    "pattern": "plain",
+    "shorts": "#ffffff",
+    "socks": "#ffffff",
+    "sleeves": null
+   }
+  },
+  {
+   "name": "RB Leipzig",
+   "country": "Germany",
+   "espn_id": 11420,
+   "names": [],
+   "wikipedia": "RB Leipzig",
+   "ranking": 34,
+   "home": {
+    "shirt": "#fefefe",
+    "secondary": "#fe0000",
+    "pattern": "plain",
+    "shorts": "#fe0000",
+    "socks": "#ff0000",
+    "sleeves": null
+   },
+   "away": {
+    "shirt": "#fe0000",
+    "secondary": "#000065",
+    "pattern": "plain",
+    "shorts": "#ff0000",
+    "socks": "#ff0000",
+    "sleeves": null
+   }
+  },
+  {
+   "name": "Leeds United",
+   "country": "England",
+   "espn_id": 357,
+   "names": [
+    "Leeds United F.C."
+   ],
+   "wikipedia": "Leeds United F.C.",
+   "ranking": 35,
+   "home": {
+    "shirt": "#ffffff",
+    "secondary": "#000000",
+    "pattern": "plain",
+    "shorts": "#ffffff",
+    "socks": "#ffffff",
+    "sleeves": null
+   },
+   "away": {
+    "shirt": "#fffa00",
+    "secondary": "#000033",
+    "pattern": "plain",
+    "shorts": "#000033",
+    "socks": "#ffff00",
+    "sleeves": null
+   }
+  },
+  {
+   "name": "Union St.Gilloise",
+   "country": "Belgium",
+   "espn_id": 5807,
+   "names": [
+    "Royale Union Saint-Gilloise",
+    "Union St.-Gilloise"
+   ],
+   "wikipedia": "Royale Union Saint-Gilloise",
+   "ranking": 36,
+   "home": {
+    "shirt": "#ffe000",
+    "secondary": "#000055",
+    "pattern": "plain",
+    "shorts": "#000055",
+    "socks": "#000055",
+    "sleeves": null
+   },
+   "away": {
+    "shirt": "#b9e9ff",
+    "secondary": "#00a8e0",
+    "pattern": "plain",
+    "shorts": "#00a8e0",
+    "socks": "#00a8e0",
+    "sleeves": null
+   }
+  },
+  {
+   "name": "SSC Napoli",
+   "country": "Italy",
+   "espn_id": 114,
+   "names": [
+    "Napoli"
+   ],
+   "wikipedia": "SSC Napoli",
+   "ranking": 37,
+   "home": {
+    "shirt": "#5f8ee6",
+    "secondary": "#ffffff",
+    "pattern": "plain",
+    "shorts": "#ffffff",
+    "socks": "#5f8ee6",
+    "sleeves": null
+   },
+   "away": {
+    "shirt": "#ffffff",
+    "secondary": "#000000",
+    "pattern": "plain",
+    "shorts": "#fefefe",
+    "socks": "#ffffff",
+    "sleeves": null
+   }
+  },
+  {
+   "name": "Lyon",
+   "country": "France",
+   "espn_id": 167,
+   "names": [
+    "Olympique Lyonnais"
+   ],
+   "wikipedia": "Olympique Lyonnais",
+   "ranking": 38,
+   "home": {
+    "shirt": "#ffffff",
+    "secondary": "#0000fe",
+    "pattern": "sleeves",
+    "shorts": "#0000ff",
+    "socks": "#ffffff",
+    "sleeves": "#0000fe"
+   },
+   "away": {
+    "shirt": "#e9535f",
+    "secondary": "#8c2b4c",
+    "pattern": "plain",
+    "shorts": "#8c2b4c",
+    "socks": "#f45764",
+    "sleeves": null
+   }
+  },
+  {
+   "name": "Olympiakos",
+   "country": "Greece",
+   "espn_id": 435,
+   "names": [
+    "Olympiacos F.C.",
+    "Olympiacos"
+   ],
+   "wikipedia": "Olympiacos F.C.",
+   "ranking": 39,
+   "home": {
+    "shirt": "#ef0000",
+    "secondary": "#ffffff",
+    "pattern": "stripes",
+    "shorts": "#ef0000",
+    "socks": "#ff0000",
+    "sleeves": null
+   },
+   "away": {
+    "shirt": "#fffbe9",
+    "secondary": "#000000",
+    "pattern": "plain",
+    "shorts": "#fffbe9",
+    "socks": "#fffbe9",
+    "sleeves": null
+   }
+  },
+  {
+   "name": "Nottingham Forest",
+   "country": "England",
+   "espn_id": 393,
+   "names": [
+    "Nottingham Forest F.C."
+   ],
+   "wikipedia": "Nottingham Forest F.C.",
+   "ranking": 40,
+   "home": {
+    "shirt": "#d70926",
+    "secondary": "#ffffff",
+    "pattern": "plain",
+    "shorts": "#ffffff",
+    "socks": "#d70926",
+    "sleeves": null
+   },
+   "away": {
+    "shirt": "#103226",
+    "secondary": "#ffffff",
+    "pattern": "plain",
+    "shorts": "#0a3023",
+    "socks": "#103226",
+    "sleeves": null
+   }
+  },
+  {
+   "name": "Newcastle United",
+   "country": "England",
+   "espn_id": 361,
+   "names": [
+    "Newcastle United F.C."
+   ],
+   "wikipedia": "Newcastle United F.C.",
+   "ranking": 41,
+   "home": {
+    "shirt": "#020202",
+    "secondary": "#ffffff",
+    "pattern": "stripes",
+    "shorts": "#000000",
+    "socks": "#000000",
+    "sleeves": null
+   },
+   "away": {
+    "shirt": "#12223a",
+    "secondary": "#ffffff",
+    "pattern": "plain",
+    "shorts": "#0c192c",
+    "socks": "#0c192c",
+    "sleeves": null
+   }
+  },
+  {
+   "name": "AS Monaco",
+   "country": "France",
+   "espn_id": 174,
+   "names": [
+    "AS Monaco FC"
+   ],
+   "wikipedia": "AS Monaco FC",
+   "ranking": 42,
+   "home": {
+    "shirt": "#fc0000",
+    "secondary": "#fcfcfc",
+    "pattern": "halves",
+    "shorts": "#ff0000",
+    "socks": "#fe0000",
+    "sleeves": null
+   },
+   "away": {
+    "shirt": "#563138",
+    "secondary": "#ffffff",
+    "pattern": "plain",
+    "shorts": "#522830",
+    "socks": "#522830",
+    "sleeves": null
+   }
+  },
+  {
+   "name": "Freiburg",
+   "country": "Germany",
+   "espn_id": 126,
+   "names": [
+    "SC Freiburg"
+   ],
+   "wikipedia": "SC Freiburg",
+   "ranking": 43,
+   "home": {
+    "shirt": "#fe0000",
+    "secondary": "#ffffff",
+    "pattern": "plain",
+    "shorts": "#ff0000",
+    "socks": "#fe0000",
+    "sleeves": null
+   },
+   "away": {
+    "shirt": "#fefefe",
+    "secondary": "#000000",
+    "pattern": "plain",
+    "shorts": "#ffffff",
+    "socks": "#ffffff",
+    "sleeves": null
+   }
+  },
+  {
+   "name": "Villarreal",
+   "country": "Spain",
+   "espn_id": 102,
+   "names": [
+    "Villarreal CF"
+   ],
+   "wikipedia": "Villarreal CF",
+   "ranking": 44,
+   "home": {
+    "shirt": "#ffff00",
+    "secondary": "#000000",
+    "pattern": "plain",
+    "shorts": "#ffff00",
+    "socks": "#ffff00",
+    "sleeves": null
+   },
+   "away": {
+    "shirt": "#cbcbcb",
+    "secondary": "#1880ff",
+    "pattern": "sleeves",
+    "shorts": "#cbcbcb",
+    "socks": "#cbcbcb",
+    "sleeves": "#1880ff"
+   }
+  },
+  {
+   "name": "Lens",
+   "country": "France",
+   "espn_id": 175,
+   "names": [
+    "RC Lens"
+   ],
+   "wikipedia": "RC Lens",
+   "ranking": 45,
+   "home": {
+    "shirt": "#fff000",
+    "secondary": "#ff0000",
+    "pattern": "plain",
+    "shorts": "#ff0000",
+    "socks": "#ff0000",
+    "sleeves": null
+   },
+   "away": {
+    "shirt": "#010101",
+    "secondary": "#626262",
+    "pattern": "plain",
+    "shorts": "#000000",
+    "socks": "#000000",
+    "sleeves": null
+   }
+  },
+  {
+   "name": "Feyenoord",
+   "country": "Netherlands",
+   "espn_id": 142,
+   "names": [
+    "Feyenoord Rotterdam"
+   ],
+   "wikipedia": "Feyenoord",
+   "ranking": 46,
+   "home": {
+    "shirt": "#ff0000",
+    "secondary": "#ffffff",
+    "pattern": "halves",
+    "shorts": "#010101",
+    "socks": "#000000",
+    "sleeves": null
+   },
+   "away": {
+    "shirt": "#71ccf8",
+    "secondary": "#ffffff",
+    "pattern": "plain",
+    "shorts": "#ffffff",
+    "socks": "#71ccf8",
+    "sleeves": null
+   }
+  },
+  {
+   "name": "Atalanta",
+   "country": "Italy",
+   "espn_id": 105,
+   "names": [
+    "Atalanta BC"
+   ],
+   "wikipedia": "Atalanta BC",
+   "ranking": 47,
+   "home": {
+    "shirt": "#030505",
+    "secondary": "#0054d3",
+    "pattern": "stripes",
+    "shorts": "#000000",
+    "socks": "#000000",
+    "sleeves": null
+   },
+   "away": {
+    "shirt": "#fefefe",
+    "secondary": "#000000",
+    "pattern": "plain",
+    "shorts": "#ffffff",
+    "socks": "#ffffff",
+    "sleeves": null
+   }
+  },
+  {
+   "name": "Galatasaray",
+   "country": "Turkey",
+   "espn_id": 432,
+   "names": [
+    "Galatasaray S.K. (football)"
+   ],
+   "wikipedia": "Galatasaray S.K. (football)",
+   "ranking": 48,
+   "home": {
+    "shirt": "#fb9502",
+    "secondary": "#b01638",
+    "pattern": "halves",
+    "shorts": "#b01638",
+    "socks": "#b11638",
+    "sleeves": null
+   },
+   "away": {
+    "shirt": "#fefefe",
+    "secondary": "#000000",
+    "pattern": "plain",
+    "shorts": "#fefefe",
+    "socks": "#ffffff",
+    "sleeves": null
+   }
+  },
+  {
+   "name": "FK Red Star Belgrade",
+   "country": "Serbia",
+   "espn_id": 2290,
+   "names": [
+    "Red Star Belgrade"
+   ],
+   "wikipedia": "Red Star Belgrade",
+   "ranking": 49,
+   "home": {
+    "shirt": "#f70101",
+    "secondary": "#f7f7f7",
+    "pattern": "stripes",
+    "shorts": "#fe0000",
+    "socks": "#fe0000",
+    "sleeves": null
+   },
+   "away": {
+    "shirt": "#000055",
+    "secondary": "#9b0046",
+    "pattern": "pinstripes",
+    "shorts": "#000055",
+    "socks": "#000055",
+    "sleeves": null
+   }
+  },
+  {
+   "name": "Everton FC",
+   "country": "England",
+   "espn_id": 368,
+   "names": [
+    "Everton F.C.",
+    "Everton"
+   ],
+   "wikipedia": "Everton F.C.",
+   "ranking": 50,
+   "home": {
+    "shirt": "#0030b0",
+    "secondary": "#ffffff",
+    "pattern": "plain",
+    "shorts": "#ffffff",
+    "socks": "#0030b0",
+    "sleeves": null
+   },
+   "away": {
+    "shirt": "#ffffff",
+    "secondary": "#000055",
+    "pattern": "plain",
+    "shorts": "#000055",
+    "socks": "#ffffff",
+    "sleeves": null
+   }
+  },
+  {
+   "name": "Shakhtar Donetsk",
+   "country": "Ukraine",
+   "espn_id": 493,
+   "names": [
+    "FC Shakhtar Donetsk"
+   ],
+   "wikipedia": "FC Shakhtar Donetsk",
+   "ranking": 51,
+   "home": {
+    "shirt": "#000000",
+    "secondary": "#fb872c",
+    "pattern": "stripes",
+    "shorts": "#fb882c",
+    "socks": "#fc882c",
+    "sleeves": null
+   },
+   "away": {
+    "shirt": "#cfebef",
+    "secondary": "#000000",
+    "pattern": "plain",
+    "shorts": "#fefefe",
+    "socks": "#ffffff",
+    "sleeves": null
+   }
+  },
+  {
+   "name": "Independiente",
+   "country": "Ecuador",
+   "espn_id": 17086,
+   "names": [
+    "Independiente del Valle"
+   ],
+   "wikipedia": "Independiente del Valle",
+   "ranking": 52,
+   "home": {
+    "shirt": "#000000",
+    "secondary": "#052461",
+    "pattern": "plain",
+    "shorts": "#000000",
+    "socks": "#000000",
+    "sleeves": null
+   },
+   "away": {
+    "shirt": "#de4379",
+    "secondary": "#ffffff",
+    "pattern": "plain",
+    "shorts": "#ffffff",
+    "socks": "#ffffff",
+    "sleeves": null
+   }
+  },
+  {
+   "name": "Cruzeiro",
+   "country": "Brazil",
+   "espn_id": 2022,
+   "names": [
+    "Cruzeiro EC"
+   ],
+   "wikipedia": "Cruzeiro EC",
+   "ranking": 53,
+   "home": {
+    "shirt": "#0000ff",
+    "secondary": "#ffffff",
+    "pattern": "plain",
+    "shorts": "#ffffff",
+    "socks": "#ffffff",
+    "sleeves": null
+   },
+   "away": {
+    "shirt": "#fefefe",
+    "secondary": "#0000ff",
+    "pattern": "plain",
+    "shorts": "#0000ff",
+    "socks": "#0000ff",
+    "sleeves": null
+   }
+  },
+  {
+   "name": "Fenerbahçe",
+   "country": "Turkey",
+   "espn_id": 436,
+   "names": [
+    "Fenerbahçe S.K. (football)",
+    "Fenerbahce"
+   ],
+   "wikipedia": "Fenerbahçe S.K. (football)",
+   "ranking": 54,
+   "home": {
+    "shirt": "#000060",
+    "secondary": "#fdfd00",
+    "pattern": "stripes",
+    "shorts": "#fefefe",
+    "socks": "#ffffff",
+    "sleeves": "#ffff00"
+   },
+   "away": {
+    "shirt": "#e6dcaa",
+    "secondary": "#fcfcfc",
+    "pattern": "stripes",
+    "shorts": "#ffffff",
+    "socks": "#ffffff",
+    "sleeves": "#ffffff"
+   }
+  },
+  {
+   "name": "Lille",
+   "country": "France",
+   "espn_id": 166,
+   "names": [
+    "Lille OSC"
+   ],
+   "wikipedia": "Lille OSC",
+   "ranking": 55,
+   "home": {
+    "shirt": "#ff0000",
+    "secondary": "#24216a",
+    "pattern": "chevron",
+    "shorts": "#221f65",
+    "socks": "#221f65",
+    "sleeves": null
+   },
+   "away": {
+    "shirt": "#fdfdfd",
+    "secondary": "#000000",
+    "pattern": "plain",
+    "shorts": "#ffffff",
+    "socks": "#ffffff",
+    "sleeves": null
+   }
+  },
+  {
+   "name": "Crystal Palace",
+   "country": "England",
+   "espn_id": 384,
+   "names": [
+    "Crystal Palace F.C."
+   ],
+   "wikipedia": "Crystal Palace F.C.",
+   "ranking": 56,
+   "home": {
+    "shirt": "#fdfdfd",
+    "secondary": "#0000ff",
+    "pattern": "sash",
+    "shorts": "#fdfdfd",
+    "socks": "#ffffff",
+    "sleeves": null
+   },
+   "away": {
+    "shirt": "#1a1a1a",
+    "secondary": "#ffffff",
+    "pattern": "plain",
+    "shorts": "#000000",
+    "socks": "#000000",
+    "sleeves": null
+   }
+  },
+  {
+   "name": "Rennes",
+   "country": "France",
+   "espn_id": 169,
+   "names": [
+    "Stade Rennais FC",
+    "Stade Rennais"
+   ],
+   "wikipedia": "Stade Rennais FC",
+   "ranking": 57,
+   "home": {
+    "shirt": "#fd0000",
+    "secondary": "#000000",
+    "pattern": "plain",
+    "shorts": "#000000",
+    "socks": "#000000",
+    "sleeves": null
+   },
+   "away": {
+    "shirt": "#fefefe",
+    "secondary": "#000000",
+    "pattern": "plain",
+    "shorts": "#ffffff",
+    "socks": "#ffffff",
+    "sleeves": null
+   }
+  },
+  {
+   "name": "Mamelodi Sundowns FC",
+   "country": "South Africa",
+   "espn_id": 7084,
+   "names": [
+    "Mamelodi Sundowns F.C.",
+    "Mamelodi Sundowns"
+   ],
+   "wikipedia": "Mamelodi Sundowns F.C.",
+   "ranking": 58,
+   "home": {
+    "shirt": "#fefe00",
+    "secondary": "#0000fe",
+    "pattern": "plain",
+    "shorts": "#0000fe",
+    "socks": "#ffffff",
+    "sleeves": null
+   },
+   "away": {
+    "shirt": "#0000fe",
+    "secondary": "#0000a0",
+    "pattern": "plain",
+    "shorts": "#ffffff",
+    "socks": "#0000ff",
+    "sleeves": null
+   }
+  },
+  {
+   "name": "The New Saints",
+   "country": "Wales",
+   "espn_id": 576,
+   "names": [
+    "The New Saints F.C."
+   ],
+   "wikipedia": "The New Saints F.C.",
+   "ranking": 59,
+   "home": {
+    "shirt": "#fefefe",
+    "secondary": "#0db357",
+    "pattern": "hoops",
+    "shorts": "#ffffff",
+    "socks": "#ffffff",
+    "sleeves": null
+   },
+   "away": {
+    "shirt": "#0000dd",
+    "secondary": "#ffffff",
+    "pattern": "plain",
+    "shorts": "#0000ff",
+    "socks": "#0000ff",
+    "sleeves": null
+   }
+  },
+  {
+   "name": "West Ham United",
+   "country": "England",
+   "espn_id": 371,
+   "names": [
+    "West Ham United F.C."
+   ],
+   "wikipedia": "West Ham United F.C.",
+   "ranking": 61,
+   "home": {
+    "shirt": "#7e1823",
+    "secondary": "#ffffff",
+    "pattern": "plain",
+    "shorts": "#ffffff",
+    "socks": "#ffffff",
+    "sleeves": null
+   },
+   "away": {
+    "shirt": "#efe5dc",
+    "secondary": "#282e3c",
+    "pattern": "plain",
+    "shorts": "#282e3c",
+    "socks": "#efe5dc",
+    "sleeves": null
+   }
+  },
+  {
+   "name": "Fulham",
+   "country": "England",
+   "espn_id": 370,
+   "names": [
+    "Fulham F.C."
+   ],
+   "wikipedia": "Fulham F.C.",
+   "ranking": 62,
+   "home": {
+    "shirt": "#fefefe",
+    "secondary": "#070606",
+    "pattern": "plain",
+    "shorts": "#000000",
+    "socks": "#ffffff",
+    "sleeves": null
+   },
+   "away": {
+    "shirt": "#000000",
+    "secondary": "#ff0000",
+    "pattern": "hoops",
+    "shorts": "#ff0000",
+    "socks": "#ff0000",
+    "sleeves": null
+   }
+  },
+  {
+   "name": "Rayo Vallecano",
+   "country": "Spain",
+   "espn_id": 101,
+   "names": [],
+   "wikipedia": "Rayo Vallecano",
+   "ranking": 63,
+   "home": {
+    "shirt": "#fdfdfd",
+    "secondary": "#ff0000",
+    "pattern": "sash",
+    "shorts": "#ffffff",
+    "socks": "#ffffff",
+    "sleeves": "#000000"
+   },
+   "away": {
+    "shirt": "#fe0000",
+    "secondary": "#ffffff",
+    "pattern": "sash",
+    "shorts": "#ff0000",
+    "socks": "#ff0000",
+    "sleeves": "#000000"
+   }
+  },
+  {
+   "name": "Pyramids FC",
+   "country": "Egypt",
+   "espn_id": 20220,
+   "names": [],
+   "wikipedia": "Pyramids FC",
+   "ranking": 64,
+   "home": {
+    "shirt": "#fefefe",
+    "secondary": "#80bfed",
+    "pattern": "stripes",
+    "shorts": "#000040",
+    "socks": "#ffffff",
+    "sleeves": null
+   },
+   "away": {
+    "shirt": "#00ffee",
+    "secondary": "#00a999",
+    "pattern": "plain",
+    "shorts": "#00ffee",
+    "socks": "#00924f",
+    "sleeves": null
+   }
+  },
+  {
+   "name": "FCI Levadia Tallinn",
+   "country": "Estonia",
+   "espn_id": null,
+   "names": [],
+   "wikipedia": "FCI Levadia Tallinn",
+   "ranking": 65,
+   "home": {
+    "shirt": "#008000",
+    "secondary": "#ffffff",
+    "pattern": "plain",
+    "shorts": "#008000",
+    "socks": "#ffffff",
+    "sleeves": null
+   },
+   "away": {
+    "shirt": "#fefefe",
+    "secondary": "#008000",
+    "pattern": "plain",
+    "shorts": "#008000",
+    "socks": "#ffffff",
+    "sleeves": null
+   }
+  },
+  {
+   "name": "Mainz 05",
+   "country": "Germany",
+   "espn_id": 2950,
+   "names": [
+    "1. FSV Mainz 05",
+    "Mainz"
+   ],
+   "wikipedia": "1. FSV Mainz 05",
+   "ranking": 66,
+   "home": {
+    "shirt": "#ff0000",
+    "secondary": "#ffffff",
+    "pattern": "plain",
+    "shorts": "#ff0000",
+    "socks": "#ff0000",
+    "sleeves": null
+   },
+   "away": {
+    "shirt": "#fcfcfc",
+    "secondary": "#000000",
+    "pattern": "plain",
+    "shorts": "#ffffff",
+    "socks": "#ffffff",
+    "sleeves": null
+   }
+  },
+  {
+   "name": "Omonia Nicosia",
+   "country": "Cyprus",
+   "espn_id": 617,
+   "names": [
+    "AC Omonia"
+   ],
+   "wikipedia": "AC Omonia",
+   "ranking": 67,
+   "home": {
+    "shirt": "#ffffff",
+    "secondary": "#007310",
+    "pattern": "pinstripes",
+    "shorts": "#ffffff",
+    "socks": "#ffffff",
+    "sleeves": null
+   },
+   "away": {
+    "shirt": "#000000",
+    "secondary": "#ffffff",
+    "pattern": "plain",
+    "shorts": "#000000",
+    "socks": "#000000",
+    "sleeves": null
+   }
+  },
+  {
+   "name": "AEK",
+   "country": "Greece",
+   "espn_id": 887,
+   "names": [
+    "AEK Athens F.C.",
+    "AEK Athens"
+   ],
+   "wikipedia": "AEK Athens F.C.",
+   "ranking": 68,
+   "home": {
+    "shirt": "#fee100",
+    "secondary": "#000000",
+    "pattern": "stripes",
+    "shorts": "#000000",
+    "socks": "#ffe200",
+    "sleeves": null
+   },
+   "away": {
+    "shirt": "#000000",
+    "secondary": "#ffffff",
+    "pattern": "plain",
+    "shorts": "#000000",
+    "socks": "#000000",
+    "sleeves": null
+   }
+  },
+  {
+   "name": "Real Sociedad",
+   "country": "Spain",
+   "espn_id": 89,
+   "names": [],
+   "wikipedia": "Real Sociedad",
+   "ranking": 69,
+   "home": {
+    "shirt": "#ffffff",
+    "secondary": "#000f99",
+    "pattern": "stripes",
+    "shorts": "#ffffff",
+    "socks": "#000f98",
+    "sleeves": null
+   },
+   "away": {
+    "shirt": "#050505",
+    "secondary": "#ffffff",
+    "pattern": "plain",
+    "shorts": "#000000",
+    "socks": "#000000",
+    "sleeves": null
+   }
+  },
+  {
+   "name": "Slavia Prague",
+   "country": "Czech Republic",
+   "espn_id": 494,
+   "names": [
+    "SK Slavia Prague"
+   ],
+   "wikipedia": "SK Slavia Prague",
+   "ranking": 70,
+   "home": {
+    "shirt": "#fefefe",
+    "secondary": "#fe0000",
+    "pattern": "halves",
+    "shorts": "#ffffff",
+    "socks": "#ffffff",
+    "sleeves": null
+   },
+   "away": {
+    "shirt": "#000000",
+    "secondary": "#fe4224",
+    "pattern": "plain",
+    "shorts": "#010101",
+    "socks": "#000000",
+    "sleeves": null
+   }
+  },
+  {
+   "name": "Tottenham Hotspur",
+   "country": "England",
+   "espn_id": 367,
+   "names": [
+    "Tottenham Hotspur F.C."
+   ],
+   "wikipedia": "Tottenham Hotspur F.C.",
+   "ranking": 71,
+   "home": {
+    "shirt": "#fcfcfc",
+    "secondary": "#000e4c",
+    "pattern": "plain",
+    "shorts": "#000e4c",
+    "socks": "#ffffff",
+    "sleeves": null
+   },
+   "away": {
+    "shirt": "#000e4c",
+    "secondary": "#ffc200",
+    "pattern": "plain",
+    "shorts": "#000e4c",
+    "socks": "#000e4c",
+    "sleeves": null
+   }
+  },
+  {
+   "name": "Boca Juniors",
+   "country": "Argentina",
+   "espn_id": 5,
+   "names": [],
+   "wikipedia": "Boca Juniors",
+   "ranking": 72,
+   "home": {
+    "shirt": "#000080",
+    "secondary": "#ffdf00",
+    "pattern": "plain",
+    "shorts": "#000080",
+    "socks": "#0000cd",
+    "sleeves": null
+   },
+   "away": {
+    "shirt": "#ffffff",
+    "secondary": "#6c6c7a",
+    "pattern": "pinstripes",
+    "shorts": "#ffffff",
+    "socks": "#ffffff",
+    "sleeves": null
+   }
+  },
+  {
+   "name": "Atlético Mineiro",
+   "country": "Brazil",
+   "espn_id": 7632,
+   "names": [
+    "Clube Atlético Mineiro",
+    "Atlético-MG"
+   ],
+   "wikipedia": "Clube Atlético Mineiro",
+   "ranking": 73,
+   "home": {
+    "shirt": "#040404",
+    "secondary": "#fcfcfc",
+    "pattern": "stripes",
+    "shorts": "#040404",
+    "socks": "#000000",
+    "sleeves": null
+   },
+   "away": {
+    "shirt": "#fcfcfc",
+    "secondary": "#000000",
+    "pattern": "plain",
+    "shorts": "#fcfcfc",
+    "socks": "#ffffff",
+    "sleeves": null
+   }
+  },
+  {
+   "name": "Fluminense FC",
+   "country": "Brazil",
+   "espn_id": 3445,
+   "names": [
+    "Fluminense"
+   ],
+   "wikipedia": "Fluminense FC",
+   "ranking": 74,
+   "home": {
+    "shirt": "#9a0101",
+    "secondary": "#006030",
+    "pattern": "stripes",
+    "shorts": "#fefefe",
+    "socks": "#ffffff",
+    "sleeves": null
+   },
+   "away": {
+    "shirt": "#fefefe",
+    "secondary": "#a00101",
+    "pattern": "plain",
+    "shorts": "#a00101",
+    "socks": "#a00101",
+    "sleeves": null
+   }
+  },
+  {
+   "name": "Rosario Central",
+   "country": "Argentina",
+   "espn_id": 17,
+   "names": [],
+   "wikipedia": "Rosario Central",
+   "ranking": 75,
+   "home": {
+    "shirt": "#0000ff",
+    "secondary": "#ffd700",
+    "pattern": "stripes",
+    "shorts": "#0000ff",
+    "socks": "#0000ff",
+    "sleeves": null
+   },
+   "away": {
+    "shirt": "#ffffff",
+    "secondary": "#0000ff",
+    "pattern": "sleeves",
+    "shorts": "#ffffff",
+    "socks": "#ffffff",
+    "sleeves": "#0000ff"
+   }
+  },
+  {
+   "name": "Al Nassr",
+   "country": "Saudi Arabia",
+   "espn_id": 817,
+   "names": [
+    "Al-Nassr FC"
+   ],
+   "wikipedia": "Al-Nassr FC",
+   "ranking": 76,
+   "home": {
+    "shirt": "#fcfc00",
+    "secondary": "#00094f",
+    "pattern": "plain",
+    "shorts": "#00094f",
+    "socks": "#ffff00",
+    "sleeves": null
+   },
+   "away": {
+    "shirt": "#000f35",
+    "secondary": "#ffffff",
+    "pattern": "plain",
+    "shorts": "#081b4c",
+    "socks": "#00122c",
+    "sleeves": null
+   }
+  },
+  {
+   "name": "Santos FC",
+   "country": "Brazil",
+   "espn_id": 2674,
+   "names": [
+    "Santos"
+   ],
+   "wikipedia": "Santos FC",
+   "ranking": 77,
+   "home": {
+    "shirt": "#fefefe",
+    "secondary": "#000000",
+    "pattern": "plain",
+    "shorts": "#ffffff",
+    "socks": "#ffffff",
+    "sleeves": null
+   },
+   "away": {
+    "shirt": "#000000",
+    "secondary": "#ffffff",
+    "pattern": "stripes",
+    "shorts": "#000000",
+    "socks": "#000000",
+    "sleeves": null
+   }
+  },
+  {
+   "name": "Braga",
+   "country": "Portugal",
+   "espn_id": 2994,
+   "names": [
+    "S.C. Braga"
+   ],
+   "wikipedia": "S.C. Braga",
+   "ranking": 78,
+   "home": {
+    "shirt": "#ff0000",
+    "secondary": "#fefefe",
+    "pattern": "sleeves",
+    "shorts": "#ffffff",
+    "socks": "#ff0000",
+    "sleeves": "#fefefe"
+   },
+   "away": {
+    "shirt": "#fefefe",
+    "secondary": "#ff0000",
+    "pattern": "plain",
+    "shorts": "#ff0000",
+    "socks": "#ffffff",
+    "sleeves": null
+   }
+  },
+  {
+   "name": "Ajax Amsterdam",
+   "country": "Netherlands",
+   "espn_id": 139,
+   "names": [
+    "AFC Ajax"
+   ],
+   "wikipedia": "AFC Ajax",
+   "ranking": 79,
+   "home": {
+    "shirt": "#ff0000",
+    "secondary": "#fefefe",
+    "pattern": "sleeves",
+    "shorts": "#fefefe",
+    "socks": "#ffffff",
+    "sleeves": "#fefefe"
+   },
+   "away": {
+    "shirt": "#020202",
+    "secondary": "#ffffff",
+    "pattern": "plain",
+    "shorts": "#000000",
+    "socks": "#000000",
+    "sleeves": null
+   }
+  },
+  {
+   "name": "Dinamo Zagreb",
+   "country": "Croatia",
+   "espn_id": 597,
+   "names": [
+    "GNK Dinamo Zagreb"
+   ],
+   "wikipedia": "GNK Dinamo Zagreb",
+   "ranking": 80,
+   "home": {
+    "shirt": "#0000fe",
+    "secondary": "#ffffff",
+    "pattern": "plain",
+    "shorts": "#0000ff",
+    "socks": "#0000ff",
+    "sleeves": null
+   },
+   "away": {
+    "shirt": "#ffffff",
+    "secondary": "#000000",
+    "pattern": "plain",
+    "shorts": "#ffffff",
+    "socks": "#ffffff",
+    "sleeves": null
+   }
+  },
+  {
+   "name": "Al Ahly",
+   "country": "Egypt",
+   "espn_id": null,
+   "names": [
+    "Al Ahly SC"
+   ],
+   "wikipedia": "Al Ahly SC",
+   "ranking": 81,
+   "home": {
+    "shirt": "#cf0000",
+    "secondary": "#060000",
+    "pattern": "plain",
+    "shorts": "#ffffff",
+    "socks": "#cf0000",
+    "sleeves": null
+   },
+   "away": {
+    "shirt": "#000000",
+    "secondary": "#ffffff",
+    "pattern": "plain",
+    "shorts": "#000000",
+    "socks": "#000000",
+    "sleeves": null
+   }
+  },
+  {
+   "name": "Sunderland",
+   "country": "England",
+   "espn_id": 366,
+   "names": [
+    "Sunderland A.F.C."
+   ],
+   "wikipedia": "Sunderland A.F.C.",
+   "ranking": 82,
+   "home": {
+    "shirt": "#fb0000",
+    "secondary": "#fcfbfb",
+    "pattern": "stripes",
+    "shorts": "#000000",
+    "socks": "#000000",
+    "sleeves": null
+   },
+   "away": {
+    "shirt": "#fc9dbd",
+    "secondary": "#000000",
+    "pattern": "plain",
+    "shorts": "#ff9fbf",
+    "socks": "#ff9fbf",
+    "sleeves": null
+   }
+  },
+  {
+   "name": "Atlético PR",
+   "country": "Brazil",
+   "espn_id": 3458,
+   "names": [
+    "Club Athletico Paranaense",
+    "Athletico-PR"
+   ],
+   "wikipedia": "Club Athletico Paranaense",
+   "ranking": 83,
+   "home": {
+    "shirt": "#010101",
+    "secondary": "#cd0000",
+    "pattern": "stripes",
+    "shorts": "#000000",
+    "socks": "#000000",
+    "sleeves": null
+   },
+   "away": {
+    "shirt": "#fefefe",
+    "secondary": "#000000",
+    "pattern": "plain",
+    "shorts": "#ffffff",
+    "socks": "#ffffff",
+    "sleeves": null
+   }
+  },
+  {
+   "name": "Augsburg",
+   "country": "Germany",
+   "espn_id": 3841,
+   "names": [
+    "FC Augsburg"
+   ],
+   "wikipedia": "FC Augsburg",
+   "ranking": 84,
+   "home": {
+    "shirt": "#ede6dc",
+    "secondary": "#680f00",
+    "pattern": "plain",
+    "shorts": "#680f00",
+    "socks": "#ede6dc",
+    "sleeves": null
+   },
+   "away": {
+    "shirt": "#016b75",
+    "secondary": "#ffffff",
+    "pattern": "plain",
+    "shorts": "#016c76",
+    "socks": "#016c76",
+    "sleeves": null
+   }
+  },
+  {
+   "name": "Argentinos Juniors",
+   "country": "Argentina",
+   "espn_id": 3,
+   "names": [],
+   "wikipedia": "Argentinos Juniors",
+   "ranking": 85,
+   "home": {
+    "shirt": "#ff0000",
+    "secondary": "#ffffff",
+    "pattern": "plain",
+    "shorts": "#ff0000",
+    "socks": "#ff0000",
+    "sleeves": null
+   },
+   "away": {
+    "shirt": "#fefefe",
+    "secondary": "#dbdbdb",
+    "pattern": "hoops",
+    "shorts": "#ffffff",
+    "socks": "#ffffff",
+    "sleeves": null
+   }
+  },
+  {
+   "name": "Athletic Bilbao",
+   "country": "Spain",
+   "espn_id": 93,
+   "names": [
+    "Athletic Club"
+   ],
+   "wikipedia": "Athletic Bilbao",
+   "ranking": 86,
+   "home": {
+    "shirt": "#ff0505",
+    "secondary": "#ffffff",
+    "pattern": "stripes",
+    "shorts": "#010101",
+    "socks": "#000000",
+    "sleeves": "#ffffff"
+   },
+   "away": {
+    "shirt": "#000000",
+    "secondary": "#ff0b0b",
+    "pattern": "plain",
+    "shorts": "#ff0b0b",
+    "socks": "#ff0b0b",
+    "sleeves": null
+   }
+  },
+  {
+   "name": "FC Midtjylland",
+   "country": "Denmark",
+   "espn_id": 572,
+   "names": [],
+   "wikipedia": "FC Midtjylland",
+   "ranking": 87,
+   "home": {
+    "shirt": "#000000",
+    "secondary": "#9b0000",
+    "pattern": "pinstripes",
+    "shorts": "#000000",
+    "socks": "#000000",
+    "sleeves": null
+   },
+   "away": {
+    "shirt": "#ffffff",
+    "secondary": "#000000",
+    "pattern": "plain",
+    "shorts": "#ffffff",
+    "socks": "#ffffff",
+    "sleeves": null
+   }
+  },
+  {
+   "name": "Marseille",
+   "country": "France",
+   "espn_id": 176,
+   "names": [
+    "Olympique de Marseille"
+   ],
+   "wikipedia": "Olympique de Marseille",
+   "ranking": 88,
+   "home": {
+    "shirt": "#fefefe",
+    "secondary": "#000000",
+    "pattern": "plain",
+    "shorts": "#ffffff",
+    "socks": "#ffffff",
+    "sleeves": null
+   },
+   "away": {
+    "shirt": "#28273d",
+    "secondary": "#3c6372",
+    "pattern": "plain",
+    "shorts": "#28273d",
+    "socks": "#28273d",
+    "sleeves": null
+   }
+  },
+  {
+   "name": "LDU de Quito",
+   "country": "Ecuador",
+   "espn_id": 4816,
+   "names": [
+    "LDU Quito",
+    "Liga de Quito"
+   ],
+   "wikipedia": "LDU Quito",
+   "ranking": 89,
+   "home": {
+    "shirt": "#fcfcfc",
+    "secondary": "#000000",
+    "pattern": "plain",
+    "shorts": "#ffffff",
+    "socks": "#ffffff",
+    "sleeves": null
+   },
+   "away": {
+    "shirt": "#414141",
+    "secondary": "#ffffff",
+    "pattern": "plain",
+    "shorts": "#3f3f3f",
+    "socks": "#4f4f4f",
+    "sleeves": null
+   }
+  },
+  {
+   "name": "Ferencváros",
+   "country": "Hungary",
+   "espn_id": 622,
+   "names": [
+    "Ferencvárosi TC",
+    "Ferencvaros"
+   ],
+   "wikipedia": "Ferencvárosi TC",
+   "ranking": 90,
+   "home": {
+    "shirt": "#ffffff",
+    "secondary": "#38a357",
+    "pattern": "hoops",
+    "shorts": "#fefefe",
+    "socks": "#ffffff",
+    "sleeves": null
+   },
+   "away": {
+    "shirt": "#000000",
+    "secondary": "#ffffff",
+    "pattern": "plain",
+    "shorts": "#000000",
+    "socks": "#000000",
+    "sleeves": null
+   }
+  },
+  {
+   "name": "Celtic",
+   "country": "Scotland",
+   "espn_id": 256,
+   "names": [
+    "Celtic F.C."
+   ],
+   "wikipedia": "Celtic F.C.",
+   "ranking": 91,
+   "home": {
+    "shirt": "#068346",
+    "secondary": "#fcfcfc",
+    "pattern": "hoops",
+    "shorts": "#fefefe",
+    "socks": "#ffffff",
+    "sleeves": "#fdfdfd"
+   },
+   "away": {
+    "shirt": "#060606",
+    "secondary": "#114b40",
+    "pattern": "stripes",
+    "shorts": "#000000",
+    "socks": "#000000",
+    "sleeves": null
+   }
+  },
+  {
+   "name": "Cagliari",
+   "country": "Italy",
+   "espn_id": 2925,
+   "names": [
+    "Cagliari Calcio"
+   ],
+   "wikipedia": "Cagliari Calcio",
+   "ranking": 92,
+   "home": {
+    "shirt": "#022249",
+    "secondary": "#ae0c21",
+    "pattern": "halves",
+    "shorts": "#022249",
+    "socks": "#022249",
+    "sleeves": null
+   },
+   "away": {
+    "shirt": "#ffffff",
+    "secondary": "#022249",
+    "pattern": "sleeves",
+    "shorts": "#ffffff",
+    "socks": "#ffffff",
+    "sleeves": "#022249"
+   }
+  },
+  {
+   "name": "Cruz Azul",
+   "country": "Mexico",
+   "espn_id": 218,
+   "names": [],
+   "wikipedia": "Cruz Azul",
+   "ranking": 93,
+   "home": {
+    "shirt": "#0000f9",
+    "secondary": "#ffffff",
+    "pattern": "plain",
+    "shorts": "#0000ff",
+    "socks": "#0000ff",
+    "sleeves": null
+   },
+   "away": {
+    "shirt": "#d6dad9",
+    "secondary": "#00006a",
+    "pattern": "plain",
+    "shorts": "#00006a",
+    "socks": "#e0e4e3",
+    "sleeves": null
+   }
+  },
+  {
+   "name": "Bologna",
+   "country": "Italy",
+   "espn_id": 107,
+   "names": [
+    "Bologna FC 1909"
+   ],
+   "wikipedia": "Bologna FC 1909",
+   "ranking": 94,
+   "home": {
+    "shirt": "#ce0000",
+    "secondary": "#04043d",
+    "pattern": "stripes",
+    "shorts": "#fefefe",
+    "socks": "#00003d",
+    "sleeves": "#05053d"
+   },
+   "away": {
+    "shirt": "#ffffff",
+    "secondary": "#04043d",
+    "pattern": "plain",
+    "shorts": "#04043d",
+    "socks": "#ffffff",
+    "sleeves": null
+   }
+  },
+  {
+   "name": "Al-Ahli",
+   "country": "Saudi Arabia",
+   "espn_id": 8346,
+   "names": [
+    "Al-Ahli Saudi FC",
+    "Al Ahli"
+   ],
+   "wikipedia": "Al-Ahli Saudi FC",
+   "ranking": 95,
+   "home": {
+    "shirt": "#008053",
+    "secondary": "#ffffff",
+    "pattern": "sleeves",
+    "shorts": "#008456",
+    "socks": "#008456",
+    "sleeves": "#ffffff"
+   },
+   "away": {
+    "shirt": "#faf8f3",
+    "secondary": "#005641",
+    "pattern": "sleeves",
+    "shorts": "#fcfaf5",
+    "socks": "#fcfaf5",
+    "sleeves": "#005642"
+   }
+  },
+  {
+   "name": "Celta Vigo",
+   "country": "Spain",
+   "espn_id": 85,
+   "names": [
+    "RC Celta de Vigo"
+   ],
+   "wikipedia": "RC Celta de Vigo",
+   "ranking": 96,
+   "home": {
+    "shirt": "#90ccff",
+    "secondary": "#f6f1ea",
+    "pattern": "plain",
+    "shorts": "#f6f1ea",
+    "socks": "#90ccff",
+    "sleeves": null
+   },
+   "away": {
+    "shirt": "#0a2339",
+    "secondary": "#ffffff",
+    "pattern": "plain",
+    "shorts": "#0a2339",
+    "socks": "#0a2339",
+    "sleeves": null
+   }
+  },
+  {
+   "name": "Flora Tallinn",
+   "country": "Estonia",
+   "espn_id": null,
+   "names": [
+    "FC Flora"
+   ],
+   "wikipedia": "FC Flora",
+   "ranking": 97,
+   "home": {
+    "shirt": "#008000",
+    "secondary": "#ffffff",
+    "pattern": "plain",
+    "shorts": "#ffffff",
+    "socks": "#008000",
+    "sleeves": null
+   },
+   "away": {
+    "shirt": "#ffffff",
+    "secondary": "#000000",
+    "pattern": "plain",
+    "shorts": "#ffffff",
+    "socks": "#ffffff",
+    "sleeves": null
+   }
+  },
+  {
+   "name": "Belgrano",
+   "country": "Argentina",
+   "espn_id": 4,
+   "names": [
+    "Club Atlético Belgrano",
+    "Belgrano (Córdoba)"
+   ],
+   "wikipedia": "Club Atlético Belgrano",
+   "ranking": 98,
+   "home": {
+    "shirt": "#409efe",
+    "secondary": "#ffffff",
+    "pattern": "plain",
+    "shorts": "#ffffff",
+    "socks": "#ffffff",
+    "sleeves": null
+   },
+   "away": {
+    "shirt": "#000000",
+    "secondary": "#3b3b3b",
+    "pattern": "plain",
+    "shorts": "#000000",
+    "socks": "#000000",
+    "sleeves": null
+   }
+  },
+  {
+   "name": "RC Strasbourg",
+   "country": "France",
+   "espn_id": 180,
+   "names": [
+    "RC Strasbourg Alsace",
+    "Strasbourg"
+   ],
+   "wikipedia": "RC Strasbourg Alsace",
+   "ranking": 99,
+   "home": {
+    "shirt": "#0000ff",
+    "secondary": "#ffffff",
+    "pattern": "plain",
+    "shorts": "#ffffff",
+    "socks": "#0000ff",
+    "sleeves": null
+   },
+   "away": {
+    "shirt": "#faf7f0",
+    "secondary": "#000000",
+    "pattern": "plain",
+    "shorts": "#faf7f0",
+    "socks": "#faf7f0",
+    "sleeves": null
+   }
+  },
+  {
+   "name": "Sevilla",
+   "country": "Spain",
+   "espn_id": 243,
+   "names": [
+    "Sevilla FC"
+   ],
+   "wikipedia": "Sevilla FC",
+   "ranking": 100,
+   "home": {
+    "shirt": "#f9f9f9",
+    "secondary": "#000000",
+    "pattern": "plain",
+    "shorts": "#ffffff",
+    "socks": "#000000",
+    "sleeves": null
+   },
+   "away": {
+    "shirt": "#e30000",
+    "secondary": "#ffffff",
+    "pattern": "plain",
+    "shorts": "#e30000",
+    "socks": "#e30000",
+    "sleeves": null
+   }
+  },
+  {
+   "name": "Bahia",
+   "country": "Brazil",
+   "espn_id": 9967,
+   "names": [
+    "Esporte Clube Bahia"
+   ],
+   "wikipedia": "Esporte Clube Bahia",
+   "ranking": null,
+   "home": {
+    "shirt": "#fefefe",
+    "secondary": "#ff0000",
+    "pattern": "sash",
+    "shorts": "#0000b3",
+    "socks": "#ff0000",
+    "sleeves": null
+   },
+   "away": {
+    "shirt": "#0000fd",
+    "secondary": "#ff0000",
+    "pattern": "stripes",
+    "shorts": "#ffffff",
+    "socks": "#ffffff",
+    "sleeves": null
+   }
+  },
+  {
+   "name": "Botafogo",
+   "country": "Brazil",
+   "espn_id": 6086,
+   "names": [
+    "Botafogo FR"
+   ],
+   "wikipedia": "Botafogo FR",
+   "ranking": null,
+   "home": {
+    "shirt": "#030303",
+    "secondary": "#fcfcfc",
+    "pattern": "stripes",
+    "shorts": "#000000",
+    "socks": "#000000",
+    "sleeves": null
+   },
+   "away": {
+    "shirt": "#000000",
+    "secondary": "#ffffff",
+    "pattern": "plain",
+    "shorts": "#000000",
+    "socks": "#000000",
+    "sleeves": null
+   }
+  },
+  {
+   "name": "Chapecoense",
+   "country": "Brazil",
+   "espn_id": 9318,
+   "names": [
+    "Associação Chapecoense de Futebol"
+   ],
+   "wikipedia": "Associação Chapecoense de Futebol",
+   "ranking": null,
+   "home": {
+    "shirt": "#007342",
+    "secondary": "#ffffff",
+    "pattern": "stripes",
+    "shorts": "#007744",
+    "socks": "#007744",
+    "sleeves": null
+   },
+   "away": {
+    "shirt": "#fdfdfd",
+    "secondary": "#000000",
+    "pattern": "plain",
+    "shorts": "#ffffff",
+    "socks": "#ffffff",
+    "sleeves": null
+   }
+  },
+  {
+   "name": "Corinthians",
+   "country": "Brazil",
+   "espn_id": 874,
+   "names": [
+    "SC Corinthians Paulista"
+   ],
+   "wikipedia": "SC Corinthians Paulista",
+   "ranking": null,
+   "home": {
+    "shirt": "#faf9f4",
+    "secondary": "#010101",
+    "pattern": "plain",
+    "shorts": "#010101",
+    "socks": "#fcfaf5",
+    "sleeves": null
+   },
+   "away": {
+    "shirt": "#020202",
+    "secondary": "#ffffff",
+    "pattern": "pinstripes",
+    "shorts": "#010101",
+    "socks": "#000000",
+    "sleeves": null
+   }
+  },
+  {
+   "name": "Coritiba",
+   "country": "Brazil",
+   "espn_id": 3456,
+   "names": [
+    "Coritiba Foot Ball Club"
+   ],
+   "wikipedia": "Coritiba Foot Ball Club",
+   "ranking": null,
+   "home": {
+    "shirt": "#f9f9f9",
+    "secondary": "#014631",
+    "pattern": "plain",
+    "shorts": "#000000",
+    "socks": "#dddddd",
+    "sleeves": null
+   },
+   "away": {
+    "shirt": "#002016",
+    "secondary": "#ffffff",
+    "pattern": "pinstripes",
+    "shorts": "#ffffff",
+    "socks": "#002217",
+    "sleeves": null
+   }
+  },
+  {
+   "name": "Grêmio",
+   "country": "Brazil",
+   "espn_id": 6273,
+   "names": [
+    "Grêmio FBPA"
+   ],
+   "wikipedia": "Grêmio FBPA",
+   "ranking": null,
+   "home": {
+    "shirt": "#000101",
+    "secondary": "#21baff",
+    "pattern": "stripes",
+    "shorts": "#000000",
+    "socks": "#ffffff",
+    "sleeves": null
+   },
+   "away": {
+    "shirt": "#abd7f2",
+    "secondary": "#faf9f5",
+    "pattern": "stripes",
+    "shorts": "#faf9f5",
+    "socks": "#21b7ff",
+    "sleeves": null
+   }
+  },
+  {
+   "name": "Internacional",
+   "country": "Brazil",
+   "espn_id": 1936,
+   "names": [
+    "SC Internacional"
+   ],
+   "wikipedia": "SC Internacional",
+   "ranking": null,
+   "home": {
+    "shirt": "#ef0000",
+    "secondary": "#ffffff",
+    "pattern": "plain",
+    "shorts": "#ffffff",
+    "socks": "#ffffff",
+    "sleeves": null
+   },
+   "away": {
+    "shirt": "#ffffff",
+    "secondary": "#000000",
+    "pattern": "plain",
+    "shorts": "#ffffff",
+    "socks": "#ffffff",
+    "sleeves": null
+   }
+  },
+  {
+   "name": "Mirassol",
+   "country": "Brazil",
+   "espn_id": 9169,
+   "names": [
+    "Mirassol Futebol Clube"
+   ],
+   "wikipedia": "Mirassol Futebol Clube",
+   "ranking": null,
+   "home": {
+    "shirt": "#ffee00",
+    "secondary": "#000000",
+    "pattern": "plain",
+    "shorts": "#ffee00",
+    "socks": "#fff200",
+    "sleeves": null
+   },
+   "away": {
+    "shirt": "#fefefe",
+    "secondary": "#000000",
+    "pattern": "plain",
+    "shorts": "#ffffff",
+    "socks": "#ffffff",
+    "sleeves": null
+   }
+  },
+  {
+   "name": "Red Bull Bragantino",
+   "country": "Brazil",
+   "espn_id": 6079,
+   "names": [],
+   "wikipedia": "Red Bull Bragantino",
+   "ranking": null,
+   "home": {
+    "shirt": "#fefdfd",
+    "secondary": "#ff0000",
+    "pattern": "plain",
+    "shorts": "#ff0000",
+    "socks": "#ffffff",
+    "sleeves": null
+   },
+   "away": {
+    "shirt": "#040404",
+    "secondary": "#ff0000",
+    "pattern": "plain",
+    "shorts": "#000000",
+    "socks": "#000000",
+    "sleeves": "#000000"
+   }
+  },
+  {
+   "name": "Remo",
+   "country": "Brazil",
+   "espn_id": 4936,
+   "names": [
+    "Clube do Remo"
+   ],
+   "wikipedia": "Clube do Remo",
+   "ranking": null,
+   "home": {
+    "shirt": "#111533",
+    "secondary": "#ffffff",
+    "pattern": "plain",
+    "shorts": "#ffffff",
+    "socks": "#ffffff",
+    "sleeves": null
+   },
+   "away": {
+    "shirt": "#fefdeb",
+    "secondary": "#111533",
+    "pattern": "sleeves",
+    "shorts": "#111533",
+    "socks": "#111533",
+    "sleeves": "#111533"
+   }
+  },
+  {
+   "name": "São Paulo",
+   "country": "Brazil",
+   "espn_id": 2026,
+   "names": [
+    "São Paulo FC"
+   ],
+   "wikipedia": "São Paulo FC",
+   "ranking": null,
+   "home": {
+    "shirt": "#fefefe",
+    "secondary": "#ff0000",
+    "pattern": "plain",
+    "shorts": "#ffffff",
+    "socks": "#ffffff",
+    "sleeves": null
+   },
+   "away": {
+    "shirt": "#ff0000",
+    "secondary": "#000000",
+    "pattern": "stripes",
+    "shorts": "#000000",
+    "socks": "#000000",
+    "sleeves": "#000000"
+   }
+  },
+  {
+   "name": "Vasco da Gama",
+   "country": "Brazil",
+   "espn_id": 3454,
+   "names": [
+    "CR Vasco da Gama"
+   ],
+   "wikipedia": "CR Vasco da Gama",
+   "ranking": null,
+   "home": {
+    "shirt": "#050505",
+    "secondary": "#e8e8e8",
+    "pattern": "sash",
+    "shorts": "#040404",
+    "socks": "#000000",
+    "sleeves": null
+   },
+   "away": {
+    "shirt": "#fcfcfc",
+    "secondary": "#030303",
+    "pattern": "sash",
+    "shorts": "#fcfcfc",
+    "socks": "#ffffff",
+    "sleeves": null
+   }
+  },
+  {
+   "name": "Vitória",
+   "country": "Brazil",
+   "espn_id": 3457,
+   "names": [
+    "Esporte Clube Vitória"
+   ],
+   "wikipedia": "Esporte Clube Vitória",
+   "ranking": null,
+   "home": {
+    "shirt": "#010101",
+    "secondary": "#ff0000",
+    "pattern": "stripes",
+    "shorts": "#000000",
+    "socks": "#000000",
+    "sleeves": null
+   },
+   "away": {
+    "shirt": "#faf9e9",
+    "secondary": "#000000",
+    "pattern": "plain",
+    "shorts": "#fffeec",
+    "socks": "#fffeec",
+    "sleeves": null
+   }
+  }
+ ]
+}

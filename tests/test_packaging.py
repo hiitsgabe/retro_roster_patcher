@@ -58,6 +58,13 @@ def test_the_translation_ppf_is_readable_as_package_data():
     assert data[:5] == b"PPF10"
 
 
+def test_the_kit_catalogue_is_readable_as_package_data():
+    import json
+
+    doc = json.loads(package_bytes("retro_roster_patcher.data", "kit_catalog.json"))
+    assert doc["format"] == 1 and len(doc["clubs"]) >= 100
+
+
 def _shipped_game_packages() -> set[str]:
     """Game ids implied by the subpackages actually present in the distribution.
 

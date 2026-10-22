@@ -485,12 +485,15 @@ def test_kit_templates_lists_one_preview_per_tex_file(tmp_path):
 
 def test_map_rosters_gives_every_record_its_default_kits(tmp_path):
     patcher = _make_patcher(tmp_path)
-    data = _league_data([_roster(100, color="C60000", alternate_color="FFFFFF"), _roster(101)])
+    # Ids no catalogued club has: these teams take the colour defaults.
+    data = _league_data(
+        [_roster(900100, color="C60000", alternate_color="FFFFFF"), _roster(900101)]
+    )
     mapped = patcher.map_rosters(
         data,
         slot_mapping=[
-            SlotMapping(slot_index=0, team_id=100),
-            SlotMapping(slot_index=1, team_id=101),
+            SlotMapping(slot_index=0, team_id=900100),
+            SlotMapping(slot_index=1, team_id=900101),
         ],
     )
     home, away = mapped.teams[0].kit_home_spec, mapped.teams[0].kit_away_spec

@@ -1,0 +1,642 @@
+{
+ "Bayern München": {
+  "espn": "132",
+  "espn_name": "Bayern Munich",
+  "league": "ger.1",
+  "how": "name score 3"
+ },
+ "Arsenal": {
+  "espn": "359",
+  "espn_name": "Arsenal",
+  "league": "eng.1",
+  "how": "name score 3"
+ },
+ "Barcelona": {
+  "espn": "83",
+  "espn_name": "Barcelona",
+  "league": "esp.1",
+  "how": "name score 3"
+ },
+ "Paris Saint-Germain": {
+  "espn": "160",
+  "espn_name": "Paris Saint-Germain",
+  "league": "fra.1",
+  "how": "name score 3"
+ },
+ "Manchester City": {
+  "espn": "382",
+  "espn_name": "Manchester City",
+  "league": "eng.1",
+  "how": "name score 3"
+ },
+ "Real Madrid": {
+  "espn": "86",
+  "espn_name": "Real Madrid",
+  "league": "esp.1",
+  "how": "name score 3"
+ },
+ "Inter Milan": {
+  "espn": "110",
+  "espn_name": "Internazionale",
+  "league": "ita.1",
+  "how": "name score 3"
+ },
+ "Sporting": {
+  "espn": "2250",
+  "espn_name": "Sporting CP",
+  "league": "por.1",
+  "how": "name score 3"
+ },
+ "Flamengo": {
+  "espn": "819",
+  "espn_name": "Flamengo",
+  "how": "brasileirao rosters"
+ },
+ "AS Roma": {
+  "espn": "104",
+  "espn_name": "AS Roma",
+  "league": "ita.1",
+  "how": "name score 3"
+ },
+ "Aston Villa": {
+  "espn": "362",
+  "espn_name": "Aston Villa",
+  "league": "eng.1",
+  "how": "name score 3"
+ },
+ "Brighton & Hove Albion": {
+  "espn": "331",
+  "espn_name": "Brighton & Hove Albion",
+  "league": "eng.1",
+  "how": "name score 3"
+ },
+ "Borussia Dortmund": {
+  "espn": "124",
+  "espn_name": "Borussia Dortmund",
+  "league": "ger.1",
+  "how": "name score 3"
+ },
+ "Atlético Madrid": {
+  "espn": "1068",
+  "espn_name": "Atlético Madrid",
+  "league": "esp.1",
+  "how": "name score 3"
+ },
+ "Liverpool FC": {
+  "espn": "364",
+  "espn_name": "Liverpool",
+  "league": "eng.1",
+  "how": "name score 3"
+ },
+ "Benfica": {
+  "espn": "1929",
+  "espn_name": "Benfica",
+  "league": "por.1",
+  "how": "name score 3"
+ },
+ "Bayer Leverkusen": {
+  "espn": "131",
+  "espn_name": "Bayer Leverkusen",
+  "league": "ger.1",
+  "how": "name score 3"
+ },
+ "Como 1907": {
+  "espn": "2572",
+  "espn_name": "Como",
+  "league": "ita.1",
+  "how": "name score 3"
+ },
+ "Manchester United": {
+  "espn": "360",
+  "espn_name": "Manchester United",
+  "league": "eng.1",
+  "how": "name score 3"
+ },
+ "Palmeiras": {
+  "espn": "2029",
+  "espn_name": "Palmeiras",
+  "how": "brasileirao rosters"
+ },
+ "FC Porto": {
+  "espn": "437",
+  "espn_name": "FC Porto",
+  "league": "por.1",
+  "how": "name score 3"
+ },
+ "Real Betis": {
+  "espn": "244",
+  "espn_name": "Real Betis",
+  "league": "esp.1",
+  "how": "name score 3"
+ },
+ "AFC Bournemouth": {
+  "espn": "349",
+  "espn_name": "AFC Bournemouth",
+  "league": "eng.1",
+  "how": "name score 3"
+ },
+ "Lazio": {
+  "espn": "112",
+  "espn_name": "Lazio",
+  "league": "ita.1",
+  "how": "name score 3"
+ },
+ "Chelsea FC": {
+  "espn": "363",
+  "espn_name": "Chelsea",
+  "league": "eng.1",
+  "how": "name score 3"
+ },
+ "AC Milan": {
+  "espn": "103",
+  "espn_name": "AC Milan",
+  "league": "ita.1",
+  "how": "name score 3"
+ },
+ "PSV Eindhoven": {
+  "espn": "148",
+  "espn_name": "PSV Eindhoven",
+  "league": "ned.1",
+  "how": "name score 3"
+ },
+ "Brentford FC": {
+  "espn": "337",
+  "espn_name": "Brentford",
+  "league": "eng.1",
+  "how": "name score 3"
+ },
+ "Club Brugge": {
+  "espn": "570",
+  "espn_name": "Club Brugge",
+  "league": "bel.1",
+  "how": "name score 3"
+ },
+ "VfB Stuttgart": {
+  "espn": "134",
+  "espn_name": "VfB Stuttgart",
+  "league": "ger.1",
+  "how": "name score 3"
+ },
+ "Juventus": {
+  "espn": "111",
+  "espn_name": "Juventus",
+  "league": "ita.1",
+  "how": "name score 3"
+ },
+ "Al Hilal": {
+  "espn": "929",
+  "espn_name": "Al Hilal",
+  "league": "ksa.1",
+  "how": "name score 3"
+ },
+ "RB Leipzig": {
+  "espn": "11420",
+  "espn_name": "RB Leipzig",
+  "league": "ger.1",
+  "how": "name score 3"
+ },
+ "Leeds United": {
+  "espn": "357",
+  "espn_name": "Leeds United",
+  "league": "eng.1",
+  "how": "name score 3"
+ },
+ "Union St.Gilloise": {
+  "espn": "5807",
+  "espn_name": "Union St.-Gilloise",
+  "league": "bel.1",
+  "how": "name score 3"
+ },
+ "SSC Napoli": {
+  "espn": "114",
+  "espn_name": "Napoli",
+  "league": "ita.1",
+  "how": "name score 3"
+ },
+ "Lyon": {
+  "espn": "167",
+  "espn_name": "Lyon",
+  "league": "fra.1",
+  "how": "name score 3"
+ },
+ "Olympiakos": {
+  "espn": "435",
+  "espn_name": "Olympiacos",
+  "league": "gre.1",
+  "how": "name score 3"
+ },
+ "Nottingham Forest": {
+  "espn": "393",
+  "espn_name": "Nottingham Forest",
+  "league": "eng.1",
+  "how": "name score 3"
+ },
+ "Newcastle United": {
+  "espn": "361",
+  "espn_name": "Newcastle United",
+  "league": "eng.1",
+  "how": "name score 3"
+ },
+ "AS Monaco": {
+  "espn": "174",
+  "espn_name": "AS Monaco",
+  "league": "fra.1",
+  "how": "name score 3"
+ },
+ "Freiburg": {
+  "espn": "126",
+  "espn_name": "SC Freiburg",
+  "league": "ger.1",
+  "how": "name score 3"
+ },
+ "Villarreal": {
+  "espn": "102",
+  "espn_name": "Villarreal",
+  "league": "esp.1",
+  "how": "name score 3"
+ },
+ "Lens": {
+  "espn": "175",
+  "espn_name": "Lens",
+  "league": "fra.1",
+  "how": "name score 3"
+ },
+ "Feyenoord": {
+  "espn": "142",
+  "espn_name": "Feyenoord Rotterdam",
+  "league": "ned.1",
+  "how": "name score 3"
+ },
+ "Atalanta": {
+  "espn": "105",
+  "espn_name": "Atalanta",
+  "league": "ita.1",
+  "how": "name score 3"
+ },
+ "Galatasaray": {
+  "espn": "432",
+  "espn_name": "Galatasaray",
+  "league": "tur.1",
+  "how": "name score 3"
+ },
+ "FK Red Star Belgrade": {
+  "espn": "2290",
+  "espn_name": "Red Star Belgrade",
+  "league": "uefa.europa.conf",
+  "how": "name score 3"
+ },
+ "Everton FC": {
+  "espn": "368",
+  "espn_name": "Everton",
+  "league": "eng.1",
+  "how": "name score 3"
+ },
+ "Shakhtar Donetsk": {
+  "espn": "493",
+  "espn_name": "Shakhtar Donetsk",
+  "league": "uefa.champions",
+  "how": "name score 3"
+ },
+ "Independiente": {
+  "espn": "17086",
+  "espn_name": "Independiente del Valle",
+  "league": "ecu.1",
+  "how": "name score 3"
+ },
+ "Cruzeiro": {
+  "espn": "2022",
+  "espn_name": "Cruzeiro",
+  "how": "brasileirao rosters"
+ },
+ "Fenerbahçe": {
+  "espn": "436",
+  "espn_name": "Fenerbahce",
+  "league": "tur.1",
+  "how": "name score 3"
+ },
+ "Lille": {
+  "espn": "166",
+  "espn_name": "Lille",
+  "league": "fra.1",
+  "how": "name score 3"
+ },
+ "Crystal Palace": {
+  "espn": "384",
+  "espn_name": "Crystal Palace",
+  "league": "eng.1",
+  "how": "name score 3"
+ },
+ "Rennes": {
+  "espn": "169",
+  "espn_name": "Stade Rennais",
+  "league": "fra.1",
+  "how": "name score 3"
+ },
+ "Mamelodi Sundowns FC": {
+  "espn": "7084",
+  "espn_name": "Mamelodi Sundowns",
+  "league": "rsa.1",
+  "how": "name score 3"
+ },
+ "The New Saints": {
+  "espn": "576",
+  "espn_name": "The New Saints",
+  "league": "wal.1",
+  "how": "name score 3"
+ },
+ "Zenit St. Petersburg": {
+  "espn": "2533",
+  "espn_name": "Zenit St Petersburg",
+  "league": "rus.1",
+  "how": "name score 3"
+ },
+ "West Ham United": {
+  "espn": "371",
+  "espn_name": "West Ham United",
+  "league": "eng.2",
+  "how": "name score 3"
+ },
+ "Fulham": {
+  "espn": "370",
+  "espn_name": "Fulham",
+  "league": "eng.1",
+  "how": "name score 3"
+ },
+ "Rayo Vallecano": {
+  "espn": "101",
+  "espn_name": "Rayo Vallecano",
+  "league": "esp.1",
+  "how": "name score 3"
+ },
+ "Pyramids FC": {
+  "espn": "20220",
+  "espn_name": "Pyramids FC",
+  "league": "caf.champions",
+  "how": "name score 3"
+ },
+ "Mainz 05": {
+  "espn": "2950",
+  "espn_name": "Mainz",
+  "league": "ger.1",
+  "how": "name score 2"
+ },
+ "Omonia Nicosia": {
+  "espn": "617",
+  "espn_name": "Omonia Nicosia",
+  "league": "cyp.1",
+  "how": "name score 3"
+ },
+ "Real Sociedad": {
+  "espn": "89",
+  "espn_name": "Real Sociedad",
+  "league": "esp.1",
+  "how": "name score 3"
+ },
+ "Slavia Prague": {
+  "espn": "494",
+  "espn_name": "Slavia Prague",
+  "league": "uefa.champions",
+  "how": "name score 3"
+ },
+ "Tottenham Hotspur": {
+  "espn": "367",
+  "espn_name": "Tottenham Hotspur",
+  "league": "eng.1",
+  "how": "name score 3"
+ },
+ "Boca Juniors": {
+  "espn": "5",
+  "espn_name": "Boca Juniors",
+  "league": "arg.1",
+  "how": "name score 3"
+ },
+ "Atlético Mineiro": {
+  "espn": "7632",
+  "espn_name": "Atlético-MG",
+  "how": "brasileirao rosters"
+ },
+ "Fluminense FC": {
+  "espn": "3445",
+  "espn_name": "Fluminense",
+  "how": "brasileirao rosters"
+ },
+ "Rosario Central": {
+  "espn": "17",
+  "espn_name": "Rosario Central",
+  "league": "arg.1",
+  "how": "name score 3"
+ },
+ "Al Nassr": {
+  "espn": "817",
+  "espn_name": "Al Nassr",
+  "league": "ksa.1",
+  "how": "name score 3"
+ },
+ "Santos FC": {
+  "espn": "2674",
+  "espn_name": "Santos",
+  "how": "brasileirao rosters"
+ },
+ "Braga": {
+  "espn": "2994",
+  "espn_name": "Braga",
+  "league": "por.1",
+  "how": "name score 3"
+ },
+ "Ajax Amsterdam": {
+  "espn": "139",
+  "espn_name": "Ajax Amsterdam",
+  "league": "ned.1",
+  "how": "name score 3"
+ },
+ "Dinamo Zagreb": {
+  "espn": "597",
+  "espn_name": "Dinamo Zagreb",
+  "league": "uefa.europa",
+  "how": "name score 3"
+ },
+ "Sunderland": {
+  "espn": "366",
+  "espn_name": "Sunderland",
+  "league": "eng.1",
+  "how": "name score 3"
+ },
+ "Atlético PR": {
+  "espn": "3458",
+  "espn_name": "Athletico-PR",
+  "how": "brasileirao rosters"
+ },
+ "Augsburg": {
+  "espn": "3841",
+  "espn_name": "FC Augsburg",
+  "league": "ger.1",
+  "how": "name score 3"
+ },
+ "Argentinos Juniors": {
+  "espn": "3",
+  "espn_name": "Argentinos Juniors",
+  "league": "arg.1",
+  "how": "name score 3"
+ },
+ "Athletic Bilbao": {
+  "espn": "93",
+  "espn_name": "Athletic Club",
+  "league": "esp.1",
+  "how": "name score 2"
+ },
+ "FC Midtjylland": {
+  "espn": "572",
+  "espn_name": "FC Midtjylland",
+  "league": "den.1",
+  "how": "name score 3"
+ },
+ "Marseille": {
+  "espn": "176",
+  "espn_name": "Marseille",
+  "league": "fra.1",
+  "how": "name score 3"
+ },
+ "Ferencváros": {
+  "espn": "622",
+  "espn_name": "Ferencvaros",
+  "league": "uefa.europa",
+  "how": "name score 3"
+ },
+ "Celtic": {
+  "espn": "256",
+  "espn_name": "Celtic",
+  "league": "sco.1",
+  "how": "name score 3"
+ },
+ "Cagliari": {
+  "espn": "2925",
+  "espn_name": "Cagliari",
+  "league": "ita.1",
+  "how": "name score 3"
+ },
+ "Cruz Azul": {
+  "espn": "218",
+  "espn_name": "Cruz Azul",
+  "league": "mex.1",
+  "how": "name score 3"
+ },
+ "Bologna": {
+  "espn": "107",
+  "espn_name": "Bologna",
+  "league": "ita.1",
+  "how": "name score 3"
+ },
+ "Al-Ahli": {
+  "espn": "8346",
+  "espn_name": "Al Ahli",
+  "league": "ksa.1",
+  "how": "name score 3"
+ },
+ "Celta Vigo": {
+  "espn": "85",
+  "espn_name": "Celta Vigo",
+  "league": "esp.1",
+  "how": "name score 3"
+ },
+ "Belgrano": {
+  "espn": "4",
+  "espn_name": "Belgrano (Córdoba)",
+  "league": "arg.1",
+  "how": "name score 3"
+ },
+ "RC Strasbourg": {
+  "espn": "180",
+  "espn_name": "Strasbourg",
+  "league": "fra.1",
+  "how": "name score 3"
+ },
+ "Sevilla": {
+  "espn": "243",
+  "espn_name": "Sevilla",
+  "league": "esp.1",
+  "how": "name score 3"
+ },
+ "Bahia": {
+  "espn": "9967",
+  "espn_name": "Bahia",
+  "how": "brasileirao rosters"
+ },
+ "Botafogo": {
+  "espn": "6086",
+  "espn_name": "Botafogo",
+  "how": "brasileirao rosters"
+ },
+ "Chapecoense": {
+  "espn": "9318",
+  "espn_name": "Chapecoense",
+  "how": "brasileirao rosters"
+ },
+ "Corinthians": {
+  "espn": "874",
+  "espn_name": "Corinthians",
+  "how": "brasileirao rosters"
+ },
+ "Coritiba": {
+  "espn": "3456",
+  "espn_name": "Coritiba",
+  "how": "brasileirao rosters"
+ },
+ "Grêmio": {
+  "espn": "6273",
+  "espn_name": "Grêmio",
+  "how": "brasileirao rosters"
+ },
+ "Internacional": {
+  "espn": "1936",
+  "espn_name": "Internacional",
+  "how": "brasileirao rosters"
+ },
+ "Mirassol": {
+  "espn": "9169",
+  "espn_name": "Mirassol",
+  "how": "brasileirao rosters"
+ },
+ "Red Bull Bragantino": {
+  "espn": "6079",
+  "espn_name": "Red Bull Bragantino",
+  "how": "brasileirao rosters"
+ },
+ "Remo": {
+  "espn": "4936",
+  "espn_name": "Remo",
+  "how": "brasileirao rosters"
+ },
+ "São Paulo": {
+  "espn": "2026",
+  "espn_name": "São Paulo",
+  "how": "brasileirao rosters"
+ },
+ "Vasco da Gama": {
+  "espn": "3454",
+  "espn_name": "Vasco da Gama",
+  "how": "brasileirao rosters"
+ },
+ "Vitória": {
+  "espn": "3457",
+  "espn_name": "Vitória",
+  "how": "brasileirao rosters"
+ },
+ "Bodø / Glimt": {
+  "espn": "2980",
+  "espn_name": "Bodo/Glimt",
+  "league": "nor.1",
+  "how": "manual"
+ },
+ "AEK": {
+  "espn": "887",
+  "espn_name": "AEK Athens",
+  "league": "gre.1",
+  "how": "manual"
+ },
+ "LDU de Quito": {
+  "espn": "4816",
+  "espn_name": "Liga de Quito",
+  "league": "ecu.1",
+  "how": "manual"
+ }
+}

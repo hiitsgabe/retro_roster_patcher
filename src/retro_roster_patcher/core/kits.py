@@ -118,11 +118,92 @@ def _hex_colour(value: str) -> RGB | None:
         return None
 
 
+CATALOG_PACKAGE = "retro_roster_patcher.data"
+CATALOG_FILE = "kit_catalog.json"
+_catalog: dict[str, Any] | None = None
+
+
+def kit_catalog() -> dict[str, Any]:
+    """The packaged kit catalogue (`data/kit_catalog.json`): real clubs' home
+    and away kits as `KitSpec` dicts. A plain JSON file so any soccer patcher,
+    or another program, can read it: `clubs` is a list of entries with `name`,
+    `country`, `espn_id` (int or null), `names` (other spellings), `wikipedia`,
+    `home` and `away`. Read once; an install without it reads as empty."""
+    global _catalog
+    if _catalog is None:
+        import json
+
+        from .assets import MissingAssetError, package_bytes
+
+        try:
+            _catalog = json.loads(package_bytes(CATALOG_PACKAGE, CATALOG_FILE))
+        except MissingAssetError:
+            _catalog = {"clubs": []}
+    return _catalog
+
+
+def _name_key(name: str) -> str:
+    """A club name folded for matching: ASCII, lower case, no club-type words."""
+    import unicodedata
+
+    folded = unicodedata.normalize("NFKD", name).encode("ascii", "ignore").decode().lower()
+    words = "".join(c if c.isalnum() else " " for c in folded).split()
+    noise = {
+        "fc",
+        "cf",
+        "sc",
+        "ac",
+        "afc",
+        "sk",
+        "fk",
+        "cd",
+        "cr",
+        "ssc",
+        "rc",
+        "the",
+        "club",
+        "de",
+        "da",
+        "do",
+        "del",
+    }
+    return " ".join(w for w in words if w not in noise)
+
+
+def catalog_kits(team: Team) -> tuple[KitSpec, KitSpec] | None:
+    """The catalogue's home and away kits for `team`, if it is there.
+
+    An entry with an ESPN id answers only to that id, so a club that shares a
+    name with a catalogued one elsewhere never takes its kit; an entry
+    without one (a league ESPN does not carry) answers to its names.
+    """
+    clubs = kit_catalog().get("clubs", [])
+    hit = next((c for c in clubs if c.get("espn_id") is not None and c["espn_id"] == team.id), None)
+    if hit is None:
+        keys = {_name_key(n) for n in (team.name, team.short_name) if n}
+        hit = next(
+            (
+                c
+                for c in clubs
+                if c.get("espn_id") is None
+                and keys & {_name_key(n) for n in [c["name"], *c.get("names", [])]}
+            ),
+            None,
+        )
+    if hit is None or not hit.get("home") or not hit.get("away"):
+        return None
+    return KitSpec.from_dict(hit["home"]), KitSpec.from_dict(hit["away"])
+
+
 def default_kits(team: Team) -> tuple[KitSpec | None, KitSpec | None]:
-    """Plain home and away kits from the provider's two team colours: the
-    first colour at home, the second away, each with the other as its trim,
-    white shorts unless the shirt is white, socks like the shirt. None when
-    the provider gave no usable colour."""
+    """The kits a team starts with: the catalogue's (`catalog_kits`) for a
+    club it knows, else plain home and away kits from the provider's two team
+    colours: the first colour at home, the second away, each with the other
+    as its trim, white shorts unless the shirt is white, socks like the
+    shirt. None when neither knows the team's colours."""
+    known = catalog_kits(team)
+    if known is not None:
+        return known
     first = _hex_colour(team.color)
     second = _hex_colour(team.alternate_color) or (contrast(first) if first else None)
     if first is None or second is None:

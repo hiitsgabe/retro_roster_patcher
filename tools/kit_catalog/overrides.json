@@ -1,0 +1,450 @@
+[
+ {
+  "name": "Paris Saint-Germain",
+  "side": "home",
+  "field": "shirt",
+  "value": "#0000cc",
+  "why": "The Wikipedia drawing is the classic blue PSG shirt with a red centre stripe, but our render shows a red body with blue sleeves, which doesn't read as PSG. The body should be blue (template body1 is 0000CC)."
+ },
+ {
+  "name": "Paris Saint-Germain",
+  "side": "home",
+  "field": "secondary",
+  "value": "#fe0000",
+  "why": "Once the body is blue, the red centre stripe becomes the secondary colour. The secondary is currently blue."
+ },
+ {
+  "name": "Paris Saint-Germain",
+  "side": "home",
+  "field": "pattern",
+  "value": "plain",
+  "why": "There is no centre-stripe pattern. Plain blue with red as secondary is the closest recognisable spec, because the 'sleeves' pattern made the shirt look red with blue arms."
+ },
+ {
+  "name": "Paris Saint-Germain",
+  "side": "home",
+  "field": "sleeves",
+  "value": "none",
+  "why": "The sleeves in the drawing are blue like the body. There should be no separate sleeve colour."
+ },
+ {
+  "name": "Brighton & Hove Albion",
+  "side": "home",
+  "field": "pattern",
+  "value": "pinstripes",
+  "why": "The drawing shows thin white vertical lines across the whole blue body and sleeves, in the club's traditional blue-and-white striped look. The plain render loses them."
+ },
+ {
+  "name": "Brighton & Hove Albion",
+  "side": "home",
+  "field": "socks",
+  "value": "#1144dd",
+  "why": "The socks in the drawing are blue with only a white top band (socks1 1144DD with _whitetopl), but our render has all-white socks."
+ },
+ {
+  "name": "Borussia Dortmund",
+  "side": "away",
+  "field": "pattern",
+  "value": "plain",
+  "why": "The Wikipedia away kit is all black with a dark tone-on-tone texture. It has no bands, so our grey/black hoops are wrong."
+ },
+ {
+  "name": "Benfica",
+  "side": "away",
+  "field": "shorts",
+  "value": "#ffffff",
+  "why": "In the drawing the away kit is white shirt, white shorts with red side stripes and white socks. We render black shorts."
+ },
+ {
+  "name": "Como 1907",
+  "side": "home",
+  "field": "socks",
+  "value": "#215aae",
+  "why": "The home socks in the drawing are the same blue as the shirt, not black."
+ },
+ {
+  "name": "Como 1907",
+  "side": "away",
+  "field": "socks",
+  "value": "#ffffff",
+  "why": "The away socks in the drawing are white with navy bands, not black."
+ },
+ {
+  "name": "Manchester United",
+  "side": "away",
+  "field": "socks",
+  "value": "#0000dc",
+  "why": "The away kit is blue from top to bottom, including blue socks with red tops. We render white socks."
+ },
+ {
+  "name": "Real Betis",
+  "side": "away",
+  "field": "pattern",
+  "value": "halves",
+  "why": "The away shirt is split down the middle: dark green on the left (#006e3f), lighter speckled green on the right (#398c64). There are no vertical stripes."
+ },
+ {
+  "name": "AFC Bournemouth",
+  "side": "away",
+  "field": "pattern",
+  "value": "plain",
+  "why": "The away shirt is lavender/purple with a triangle texture. It has no stripes, so it reads as one mid-lavender shirt."
+ },
+ {
+  "name": "AFC Bournemouth",
+  "side": "away",
+  "field": "shirt",
+  "value": "#8c85cf",
+  "why": "With the pattern set to plain, the shirt should be the shirt body's measured average colour (#9189cb), which sits between the two texture tones. #8c85cf is the nearest of the catalogue's measured body colours."
+ },
+ {
+  "name": "Brentford FC",
+  "side": "away",
+  "field": "pattern",
+  "value": "pinstripes",
+  "why": "Wikipedia drawing is navy covered in thin white vertical pinstripes, clearly visible across the whole shirt; plain navy loses the defining feature. The secondary is already #ffffff, so the pinstripes come out white."
+ },
+ {
+  "name": "RB Leipzig",
+  "side": "away",
+  "field": "pattern",
+  "value": "plain",
+  "why": "The away shirt is solid red with a tone-on-tone mottled texture, not horizontal bands. The hoops came from the texture's lighter red (#ff3f3f)."
+ },
+ {
+  "name": "RB Leipzig",
+  "side": "away",
+  "field": "secondary",
+  "value": "#000065",
+  "why": "The real accent colour is the navy on the collar, cuffs and side panels (#000065 in body_colours). #ff3f3f is only the texture tone."
+ },
+ {
+  "name": "Atalanta",
+  "side": "home",
+  "field": "pattern",
+  "value": "stripes",
+  "why": "The Wikipedia drawing shows vertical black and blue stripes (the Nerazzurri look), but our render draws horizontal hoops."
+ },
+ {
+  "name": "AS Monaco",
+  "side": "home",
+  "field": "pattern",
+  "value": "halves",
+  "why": "Monaco's red and white diagonal split should be halves. Our render shows a plain red body with white sleeves, which doesn't read as Monaco."
+ },
+ {
+  "name": "AS Monaco",
+  "side": "home",
+  "field": "sleeves",
+  "value": "none",
+  "why": "Once the pattern is halves, the two halves carry the white. A separate white sleeve colour is wrong, because the drawing has one white sleeve and one red sleeve."
+ },
+ {
+  "name": "Nottingham Forest",
+  "side": "home",
+  "field": "socks",
+  "value": "#d70926",
+  "why": "The drawing shows red socks under the white shorts (sock pattern _redtopl). Our render has white socks."
+ },
+ {
+  "name": "Nottingham Forest",
+  "side": "away",
+  "field": "socks",
+  "value": "#103226",
+  "why": "The drawing shows dark green socks with red tops, matching the all-dark-green kit. Our render has white socks."
+ },
+ {
+  "name": "Lens",
+  "side": "away",
+  "field": "pattern",
+  "value": "plain",
+  "why": "The black shirt has a grey zigzag all-over texture, not stripes. Grey stripes make it look like a different kit, so it should be plain black."
+ },
+ {
+  "name": "Galatasaray",
+  "side": "home",
+  "field": "shirt",
+  "value": "#fb9502",
+  "why": "The drawing has the yellow-orange half on the viewer's left and red on the right. Our halves render puts the shirt colour on the left, so it comes out mirrored. Swap shirt and secondary."
+ },
+ {
+  "name": "Galatasaray",
+  "side": "home",
+  "field": "secondary",
+  "value": "#b01638",
+  "why": "The other half of the swap, so red sits on the right half as in the drawing. Shorts and socks stay red."
+ },
+ {
+  "name": "FK Red Star Belgrade",
+  "side": "home",
+  "field": "socks",
+  "value": "#fe0000",
+  "why": "Drawing shows red socks with a white top band (_whitetopl), not white socks."
+ },
+ {
+  "name": "FK Red Star Belgrade",
+  "side": "away",
+  "field": "socks",
+  "value": "#000055",
+  "why": "Drawing shows navy socks with a red top band (_redtopl), not white socks."
+ },
+ {
+  "name": "Independiente",
+  "side": "home",
+  "field": "pattern",
+  "value": "plain",
+  "why": "Drawing is a black shirt with only a narrow blue decorative strip down the centre; no horizontal bands, so hoops is wrong."
+ },
+ {
+  "name": "Independiente",
+  "side": "away",
+  "field": "pattern",
+  "value": "plain",
+  "why": "Shirt and sleeves are all pink; the black is only a thin cuff border (_blackborder), not sleeves in the secondary colour."
+ },
+ {
+  "name": "Independiente",
+  "side": "away",
+  "field": "sleeves",
+  "value": "none",
+  "why": "Sleeves are pink like the body, with only thin black cuffs."
+ },
+ {
+  "name": "Independiente",
+  "side": "away",
+  "field": "shorts",
+  "value": "#ffffff",
+  "why": "Drawing shows white shorts, not black."
+ },
+ {
+  "name": "Cruzeiro",
+  "side": "away",
+  "field": "socks",
+  "value": "#0000ff",
+  "why": "Drawing shows blue socks with a white top band (_whitetopl) to match the blue shorts, not white socks."
+ },
+ {
+  "name": "Lille",
+  "side": "home",
+  "field": "pattern",
+  "value": "chevron",
+  "why": "The kit's defining feature is a broad navy-and-white V across the chest."
+ },
+ {
+  "name": "Lille",
+  "side": "home",
+  "field": "secondary",
+  "value": "#24216a",
+  "why": "The chevron is navy (with a white edge), so navy is the secondary colour for the V."
+ },
+ {
+  "name": "Crystal Palace",
+  "side": "home",
+  "field": "pattern",
+  "value": "sash",
+  "why": "White shirt with a red and blue diagonal sash, Palace's signature design; plain white loses it."
+ },
+ {
+  "name": "Crystal Palace",
+  "side": "home",
+  "field": "secondary",
+  "value": "#0000ff",
+  "why": "The sash is blue and red. The current secondary is black, which is not on the shirt."
+ },
+ {
+  "name": "Rennes",
+  "side": "away",
+  "field": "pattern",
+  "value": "plain",
+  "why": "The drawing is a white shirt with one black cross on the chest, not black and white vertical stripes."
+ },
+ {
+  "name": "Rennes",
+  "side": "away",
+  "field": "shorts",
+  "value": "#ffffff",
+  "why": "Drawing shows white shorts, not black."
+ },
+ {
+  "name": "Mamelodi Sundowns FC",
+  "side": "away",
+  "field": "pattern",
+  "value": "plain",
+  "why": "The blue shirt has only a tone-on-tone geometric texture, not horizontal hoops."
+ },
+ {
+  "name": "Rayo Vallecano",
+  "side": "away",
+  "field": "pattern",
+  "value": "sash",
+  "why": "The Wikipedia drawing is a red shirt crossed by Rayo's diagonal white lightning bolt (the home kit with the colours swapped), not horizontal hoops. The secondary is already #ffffff."
+ },
+ {
+  "name": "Pyramids FC",
+  "side": "away",
+  "field": "pattern",
+  "value": "plain",
+  "why": "The cyan shirt has a tone-on-tone teal graphic all over it, which is texture, not horizontal bands. Our hoops render reads as a striped shirt the club does not wear."
+ },
+ {
+  "name": "Mainz 05",
+  "side": "home",
+  "field": "socks",
+  "value": "#ff0000",
+  "why": "Wikipedia draws red socks with a white top band. Our black socks are clearly wrong for a red-white-red kit."
+ },
+ {
+  "name": "Mainz 05",
+  "side": "away",
+  "field": "socks",
+  "value": "#ffffff",
+  "why": "Wikipedia draws white socks with a red top band. Our black socks are not in the kit at all."
+ },
+ {
+  "name": "Fulham",
+  "side": "away",
+  "field": "socks",
+  "value": "#ff0000",
+  "why": "Wikipedia draws red socks to match the red shorts. We render them white."
+ },
+ {
+  "name": "Omonia Nicosia",
+  "side": "home",
+  "field": "pattern",
+  "value": "pinstripes",
+  "why": "The shirt is white with clear thin green vertical pinstripes, Omonia's green. Our all-white render has no green anywhere."
+ },
+ {
+  "name": "Omonia Nicosia",
+  "side": "home",
+  "field": "secondary",
+  "value": "#007310",
+  "why": "The pinstripe and trim colour is green (#007310 in body_colours). The current black secondary does not appear on the kit."
+ },
+ {
+  "name": "Tottenham Hotspur",
+  "side": "away",
+  "field": "pattern",
+  "value": "plain",
+  "why": "The navy shirt has an orange and pink diagonal graphic panel on the chest, not gold horizontal hoops. Plain navy is the recognisable reading, and the gold hoops make it look like a different kit."
+ },
+ {
+  "name": "Fluminense FC",
+  "side": "home",
+  "field": "secondary",
+  "value": "#006030",
+  "why": "Wikipedia drawing is maroon, green and white tricolour stripes; our render pairs maroon with black (the #000101 share is outline/dark pixels), which reads as AC Milan rather than Fluminense. Maroon/green stripes is the recognisable Tricolor look."
+ },
+ {
+  "name": "Fluminense FC",
+  "side": "home",
+  "field": "sleeves",
+  "value": "none",
+  "why": "Drawing has the same maroon/green/white stripes running down the sleeves, not plain green sleeves. Once green is the stripe secondary, solid green sleeves are wrong."
+ },
+ {
+  "name": "Sunderland",
+  "side": "home",
+  "field": "sleeves",
+  "value": "none",
+  "why": "Drawing's sleeves carry the red/white stripes. Our render has solid white sleeves, which turns it into a different-looking shirt. Without a sleeves override the stripes reach the sleeves, as on the Rosario Central render."
+ },
+ {
+  "name": "Ferencváros",
+  "side": "home",
+  "field": "pattern",
+  "value": "hoops",
+  "why": "The Wikipedia drawing has horizontal green and white bands across the body and sleeves, not vertical stripes. The white shirt and #38a357 secondary are right."
+ },
+ {
+  "name": "Argentinos Juniors",
+  "side": "away",
+  "field": "pattern",
+  "value": "hoops",
+  "why": "The Wikipedia drawing is a white shirt with wide light-grey horizontal bands. Our render is a flat grey shirt with no hoops."
+ },
+ {
+  "name": "Argentinos Juniors",
+  "side": "away",
+  "field": "shirt",
+  "value": "#fefefe",
+  "why": "The base of the hooped shirt is white (0.42 white body share); grey is the band colour."
+ },
+ {
+  "name": "Argentinos Juniors",
+  "side": "away",
+  "field": "secondary",
+  "value": "#dbdbdb",
+  "why": "Grey is the hoop colour. Black is only trim."
+ },
+ {
+  "name": "RC Strasbourg",
+  "side": "home",
+  "field": "socks",
+  "value": "#0000ff",
+  "why": "Wikipedia drawing shows blue socks matching the shirt; our render has black socks."
+ },
+ {
+  "name": "RC Strasbourg",
+  "side": "away",
+  "field": "socks",
+  "value": "#faf7f0",
+  "why": "Away drawing has off-white socks matching shirt and shorts; our render has black socks."
+ },
+ {
+  "name": "Botafogo",
+  "side": "home",
+  "field": "pattern",
+  "value": "stripes",
+  "why": "Drawing shows the classic broad black-and-white vertical stripes, not thin white pinstripes on black."
+ },
+ {
+  "name": "Corinthians",
+  "side": "away",
+  "field": "pattern",
+  "value": "pinstripes",
+  "why": "Away shirt is black with clearly visible thin white vertical pinstripes; plain black loses the defining feature (secondary is already white)."
+ },
+ {
+  "name": "Coritiba",
+  "side": "away",
+  "field": "pattern",
+  "value": "pinstripes",
+  "why": "Away shirt is dark green with distinct thin white vertical pinstripes; secondary is already white."
+ },
+ {
+  "name": "Grêmio",
+  "side": "home",
+  "field": "secondary",
+  "value": "#21baff",
+  "why": "Grêmio home is black with sky-blue stripes (the tricolor); black/white stripes reads as Botafogo/Juventus, not Grêmio."
+ },
+ {
+  "name": "São Paulo",
+  "side": "home",
+  "field": "pattern",
+  "value": "plain",
+  "why": "The home shirt is white with a single red-white-black band across the chest, not hoops all over. A single chest band is plain with the band colour (#ff0000, already set) as secondary. The full red-and-white hoops render looks like a different club."
+ },
+ {
+  "name": "Red Bull Bragantino",
+  "side": "away",
+  "field": "pattern",
+  "value": "plain",
+  "why": "The Wikipedia drawing is a black shirt covered in a dark-red maze texture with red trim. It has no vertical stripes, and the maroon/black stripes render reads as a striped kit Bragantino doesn't wear. The texture counts as plain."
+ },
+ {
+  "name": "Red Bull Bragantino",
+  "side": "away",
+  "field": "shirt",
+  "value": "#040404",
+  "why": "With the pattern changed to plain, the body has to be black (the shirt's base colour, as in the drawing), not maroon #5a0a16."
+ },
+ {
+  "name": "Red Bull Bragantino",
+  "side": "away",
+  "field": "secondary",
+  "value": "#ff0000",
+  "why": "The red of the collar, cuffs and logo is the accent you see on a plain black shirt."
+ }
+]

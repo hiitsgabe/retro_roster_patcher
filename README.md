@@ -201,8 +201,8 @@ as they are. Needs Pillow, like the logos.
 ### Kits
 
 `we2002` draws every mapped team's home and away kits, the same `kits` contract
-as `pes2013-ps2` (see the library section): plain kits in the provider's two
-colours by default, a `KitSpec`, a picture or a template per slot on request,
+as `pes2013-ps2` (see the library section): the default kits by default (below),
+a `KitSpec`, a picture or a template per slot on request,
 `kits=False` to leave the disc's. Each team owns a 3D texture file (`TEX_nn.BIN`,
 0-62 the national teams, 63-94 the Master League) holding the home and away
 kit pages and their palettes, and the game composes the shirt, shorts and socks
@@ -224,6 +224,25 @@ a 16-colour sprite palette, written from the same colours (striped kits put the
 contrast colour on the collar and shoulder zones). Needs Pillow; without
 it each slot takes the whole texture of the shipped team whose shirt colour is
 nearest, which is all earlier versions did.
+
+#### Default kits and the kit catalogue
+
+Every soccer patcher starts a team from `core.kits.default_kits(team)`. For a
+club in the packaged catalogue, `src/retro_roster_patcher/data/kit_catalog.json`,
+that is the club's real home and away kit (Flamengo in red and black hoops,
+Juventus in black and white stripes, Feyenoord in red and white halves); for any
+other team, plain kits in the provider's two colours. The catalogue holds the
+footballdatabase.com world ranking's top 100 clubs and every Brasileirao Serie A
+club, read from each club's English Wikipedia kit fields for the 2026-27 season
+and checked by eye against Wikipedia's kit drawings. It is plain JSON so other
+programs can use it: `clubs` is a list of `{name, country, espn_id, names,
+wikipedia, ranking, home, away}`, the kits as `KitSpec` dicts (`shirt`,
+`secondary`, `pattern`, `shorts`, `socks`, `sleeves`, colours `#rrggbb`). A club
+with an `espn_id` is matched by that id only, so a namesake elsewhere never takes
+its kit; one without (a league ESPN does not carry) is matched by name.
+`tools/kit_catalog/` rebuilds it. Kit colours derived from Wikipedia,
+[CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/), Wikipedia
+contributors.
 
 ## Library
 
