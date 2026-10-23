@@ -1,4 +1,4 @@
-"""catalog.json + espn_ids.json + overrides.json -> src/retro_roster_patcher/data/kit_catalog.json.
+"""catalog.json + espn_ids.json + overrides.json -> the packaged kit_catalog.json.
 
 Run extract.py, then espn_match.py, then this; `--sheet` also draws every kit
 into final_sheet.png for a last look. overrides.json holds the corrections a
@@ -16,7 +16,7 @@ from PIL import Image, ImageDraw
 from retro_roster_patcher.core.kits import KitSpec, render_kit
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-OUT = os.path.join(HERE, "..", "..", "src", "retro_roster_patcher", "data", "kit_catalog.json")
+OUT = os.path.join(HERE, "..", "..", "src", "retro_roster_patcher", "assets", "kit_catalog.json")
 
 catalog = json.load(open(os.path.join(HERE, "catalog.json")))
 espn = json.load(open(os.path.join(HERE, "espn_ids.json")))

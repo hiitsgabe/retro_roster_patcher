@@ -46,7 +46,7 @@ where = ["src"]
 # would be enforced only for callers inside `src`.
 "retro_roster_patcher" = ["py.typed"]
 "retro_roster_patcher.games.we2002.assets" = ["*.ppf"]
-"retro_roster_patcher.data" = ["*.json"]
+"retro_roster_patcher.assets" = ["*.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

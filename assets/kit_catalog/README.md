@@ -1,6 +1,6 @@
 # Kit catalogue
 
-Builds `src/retro_roster_patcher/data/kit_catalog.json`, the home and away kits
+Builds `src/retro_roster_patcher/assets/kit_catalog.json`, the home and away kits
 `core.kits.default_kits` starts from for the clubs it knows.
 
 1. `clubs.tsv`: rank, name, country and English Wikipedia title of each club

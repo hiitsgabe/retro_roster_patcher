@@ -118,7 +118,7 @@ def _hex_colour(value: str) -> RGB | None:
         return None
 
 
-CATALOG_PACKAGE = "retro_roster_patcher.data"
+CATALOG_PACKAGE = "retro_roster_patcher.assets"
 CATALOG_FILE = "kit_catalog.json"
 _catalog: dict[str, Any] | None = None
 

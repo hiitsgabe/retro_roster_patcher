@@ -15,7 +15,7 @@ from retro_roster_patcher.sports.models import Team
 
 def test_every_entry_is_a_valid_pair_of_kits_with_unique_ids():
     doc = json.loads(
-        (resources.files("retro_roster_patcher.data") / "kit_catalog.json").read_text()
+        (resources.files("retro_roster_patcher.assets") / "kit_catalog.json").read_text()
     )
     assert doc["format"] == 1 and doc["patterns"] == list(PATTERNS)
     clubs = doc["clubs"]

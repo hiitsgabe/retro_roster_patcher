@@ -268,7 +268,7 @@ cartridge's kits and chest designs. Pictures and previews need Pillow.
 #### Default kits and the kit catalogue
 
 Every soccer patcher starts a team from `core.kits.default_kits(team)`. For a
-club in the packaged catalogue, `src/retro_roster_patcher/data/kit_catalog.json`,
+club in the packaged catalogue, `src/retro_roster_patcher/assets/kit_catalog.json`,
 that is the club's real home and away kit (Flamengo in red and black hoops,
 Juventus in black and white stripes, Feyenoord in red and white halves); for any
 other team, plain kits in the provider's two colours. The catalogue holds the
@@ -280,7 +280,7 @@ wikipedia, ranking, home, away}`, the kits as `KitSpec` dicts (`shirt`,
 `secondary`, `pattern`, `shorts`, `socks`, `sleeves`, colours `#rrggbb`). A club
 with an `espn_id` is matched by that id only, so a namesake elsewhere never takes
 its kit; one without (a league ESPN does not carry) is matched by name.
-`tools/kit_catalog/` rebuilds it. Kit colours derived from Wikipedia,
+`assets/kit_catalog/` rebuilds it. Kit colours derived from Wikipedia,
 [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/), Wikipedia
 contributors.
 

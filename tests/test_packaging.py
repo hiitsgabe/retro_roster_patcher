@@ -61,7 +61,7 @@ def test_the_translation_ppf_is_readable_as_package_data():
 def test_the_kit_catalogue_is_readable_as_package_data():
     import json
 
-    doc = json.loads(package_bytes("retro_roster_patcher.data", "kit_catalog.json"))
+    doc = json.loads(package_bytes("retro_roster_patcher.assets", "kit_catalog.json"))
     assert doc["format"] == 1 and len(doc["clubs"]) >= 100
 
 
