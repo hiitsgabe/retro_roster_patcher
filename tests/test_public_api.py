@@ -98,6 +98,7 @@ def test_the_sports_package_exports_exactly_these_names():
     # `ApiError` from `core.errors` is what "the provider failed" catches.
     expected = {
         "EspnClient",
+        "FotmobClient",
         "League",
         "LeagueData",
         "NhlApiClient",
@@ -106,6 +107,7 @@ def test_the_sports_package_exports_exactly_these_names():
         "Team",
         "TeamRoster",
         "Transport",
+        "fill_headshots",
         "team_colors",
     }
     assert set(sports.__all__) == expected

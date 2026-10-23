@@ -88,6 +88,7 @@ to run without the flag, `yes` means it accepts it, `-` means it does not.
 | `--out` | - | - | yes | req | req | where to write the rosters file / the patched ROM |
 | `--season` | - | - | req | yes | - | season year, e.g. `2025` |
 | `--rosters` | - | - | - | yes | - | patch from a `fetch` file instead of `--season` |
+| `--fill-from-other-sources` | - | - | yes | yes | - | soccer: give players the main provider has no head shot for the one FotMob has, matched by birth date and name (a few extra requests per team); FotMob is unofficial, so treat it as best effort. Nothing to add for other sports |
 | `--slot-map` | - | - | - | yes | - | JSON list of slot mappings |
 | `--language` | - | - | - | yes | - | menu language, for a game that ships translations |
 | `--no-logos` | - | - | - | yes | - | draw no team logos: by default `we2002` and `iss-snes` draw each team's logo as its flag and `pes2013-ps2` as its crest; with this flag a team keeps the striped (`we2002`) or two-band (`iss-snes`) flag, and `pes2013-ps2` the disc's crests |
@@ -365,7 +366,8 @@ name or icon).
 
 `from retro_roster_patcher.sports import ...`
 
-- Clients: `EspnClient`, `NhlApiClient`, `Transport`, `team_colors`
+- Clients: `EspnClient`, `FotmobClient`, `NhlApiClient`, `Transport`, `team_colors`
+- Filling gaps: `fill_headshots`
 - Models: `League`, `LeagueData`, `Player`, `PlayerStats`, `Team`, `TeamRoster`
 
 ## The `--json` protocol

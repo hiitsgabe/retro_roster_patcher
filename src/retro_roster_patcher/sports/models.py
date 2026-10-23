@@ -28,6 +28,7 @@ class Player:
     position: str = ""  # Soccer: "Goalkeeper"/"Defender"/etc. Hockey: "C"/"LW"/"RW"/"D"/"G"
     number: int | None = None
     photo_url: str = ""
+    birth_date: str = ""  # ISO "YYYY-MM-DD"; "" when the provider gives none
     # Optional hockey fields
     weight: float = 0.0  # lbs
     handedness: str = ""  # "L" or "R" (throw hand)

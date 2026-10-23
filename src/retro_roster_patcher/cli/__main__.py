@@ -66,6 +66,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_analyze.set_defaults(handler=commands.cmd_analyze)
 
+    def add_fill_flag(sub: argparse.ArgumentParser) -> None:
+        sub.add_argument(
+            "--fill-from-other-sources",
+            action="store_true",
+            help="fill what the main provider lacks from a second one (soccer head shots, "
+            "from FotMob); costs a few extra requests per team",
+        )
+
     def add_provider_flags(sub: argparse.ArgumentParser) -> None:
         """Flags every network-touching verb needs."""
         sub.add_argument("--game", required=True, help="patcher id, as shown by `list`")
@@ -93,6 +101,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_fetch.add_argument(
         "--out", default="", help="write rosters here; omit to emit them on the protocol stream"
     )
+    add_fill_flag(p_fetch)
     p_fetch.set_defaults(handler=commands.cmd_fetch)
 
     p_patch = subparsers.add_parser("patch", parents=[common], help="write a patched ROM")
@@ -101,6 +110,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_patch.add_argument("--out", required=True, help="path to write the patched ROM to")
     p_patch.add_argument("--season", type=int, default=None, help="fetch this season inline")
     p_patch.add_argument("--rosters", default="", help="use a rosters file from `fetch`")
+    add_fill_flag(p_patch)
     p_patch.add_argument("--slot-map", default="", help="JSON list of slot mappings")
     # No `choices=`: which codes are valid depends on the game, and this parser
     # is built before `--game` is read. `cmd_patch` checks it instead.

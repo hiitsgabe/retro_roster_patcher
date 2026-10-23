@@ -17,6 +17,8 @@ from ..core.errors import CapabilityError, RomError, as_storage_error
 from ..core.models import PartialFn, SlotMapping
 from ..core.patcher import Patcher
 from ..core.registry import get_patcher, list_patchers
+from ..sports.fotmob import FotmobClient
+from ..sports.headshots import fill_headshots
 from ..sports.models import LeagueData
 from ..sports.serde import league_data_from_dict, league_data_to_dict
 from .render import Renderer
@@ -135,11 +137,30 @@ def _summarise(data: LeagueData, output_path: str) -> dict[str, Any]:
     }
 
 
+def _fill_from_other_sources(
+    data: LeagueData, args: argparse.Namespace, patcher: Patcher, renderer: Renderer
+) -> None:
+    """`--fill-from-other-sources`: ask a second provider for what the first lacked.
+
+    Soccer head shots are the only gap it fills today, so it does nothing for
+    another sport: say so rather than silently ignore the flag.
+    """
+    if not getattr(args, "fill_from_other_sources", False):
+        return
+    if patcher.sport != "soccer":
+        renderer.status(f"--fill-from-other-sources has nothing to add for {patcher.sport}")
+        return
+    client = FotmobClient(str(patcher.cache_dir), renderer.status)
+    count = fill_headshots(data, client, renderer.status)
+    renderer.status(f"Filled {count} player photo(s) from FotMob")
+
+
 def cmd_fetch(args: argparse.Namespace, renderer: Renderer) -> None:
     patcher = build_patcher(args.game, args, renderer)
     data = patcher.fetch(
         season=args.season, league_id=args.league_id, on_progress=renderer.progress
     )
+    _fill_from_other_sources(data, args, patcher, renderer)
     payload = league_data_to_dict(data)
 
     if args.out:
@@ -168,10 +189,13 @@ def _rosters_for_patch(
             raw = json.loads(Path(args.rosters).read_text(encoding="utf-8"))
         except (OSError, ValueError) as exc:
             raise UsageError(f"Cannot read rosters {args.rosters}: {exc}") from None
-        return league_data_from_dict(raw)
-    return patcher.fetch(
-        season=args.season, league_id=args.league_id, on_progress=renderer.progress
-    )
+        data = league_data_from_dict(raw)
+    else:
+        data = patcher.fetch(
+            season=args.season, league_id=args.league_id, on_progress=renderer.progress
+        )
+    _fill_from_other_sources(data, args, patcher, renderer)
+    return data
 
 
 def _patch_options(game_id: str, args: argparse.Namespace, patcher: Patcher) -> dict[str, Any]:

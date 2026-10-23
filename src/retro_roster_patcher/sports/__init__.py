@@ -13,6 +13,8 @@ is a bag of cache functions over one JSON file.
 from . import team_colors
 from ._http import Transport
 from .espn import EspnClient
+from .fotmob import FotmobClient
+from .headshots import fill_headshots
 from .models import (
     League,
     LeagueData,
@@ -25,6 +27,7 @@ from .nhl import NhlApiClient
 
 __all__ = [
     "EspnClient",
+    "FotmobClient",
     "League",
     "LeagueData",
     "NhlApiClient",
@@ -33,5 +36,6 @@ __all__ = [
     "Team",
     "TeamRoster",
     "Transport",
+    "fill_headshots",
     "team_colors",
 ]

@@ -1005,7 +1005,12 @@ class EspnClient:
                     nationality=athlete.get("citizenship", ""),
                     position=position,
                     number=number,
-                    photo_url="",
+                    photo_url=(
+                        athlete["headshot"].get("href", "")
+                        if isinstance(athlete.get("headshot"), dict)
+                        else ""
+                    ),
+                    birth_date=str(athlete.get("dateOfBirth") or "")[:10],
                 )
             )
         return players
