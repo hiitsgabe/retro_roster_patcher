@@ -129,6 +129,8 @@ class WE2002Patcher(Patcher):
         ("Master League", 0, MAX_ML_SLOTS),
         ("National only", MAX_ML_SLOTS, MAX_NAT_SLOTS - MAX_ML_SLOTS),
     )
+    #: The groups describe the slots, not leagues: one league fills them.
+    max_leagues: int = 1
     #: Screen art `patch(images={name: png})` can replace; `export_images`
     #: writes the current art of each as a PNG to edit.
     image_slots: tuple[str, ...] = SLOT_NAMES

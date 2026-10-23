@@ -2,6 +2,7 @@ from pathlib import Path
 
 import pytest
 
+from retro_roster_patcher import get_patcher, list_patchers
 from retro_roster_patcher.core.errors import CapabilityError
 from retro_roster_patcher.core.models import MappedRosters, PatchResult, RomInfo, SlotMapping
 from retro_roster_patcher.core.patcher import Patcher
@@ -247,5 +248,16 @@ def test_given_blocks_with_a_total_past_the_squad_return_everyone_once():
 def test_the_base_declares_no_kits_slot_groups_or_nationals():
     assert Patcher.supports_kits is False
     assert Patcher.slot_groups == ()
+    assert Patcher.max_leagues == 1
     assert Patcher.supports_nationals is False and Patcher.national_slot_base is None
     assert FakePatcher(cache_dir=Path("/tmp")).kit_templates(Path("rom.bin")) == []
+
+
+def test_every_game_takes_no_more_leagues_than_it_has_slot_groups():
+    for info in list_patchers():
+        cls = get_patcher(info.game_id)
+        assert 1 <= cls.max_leagues <= max(1, len(cls.slot_groups)), info.game_id
+    # WE2002's groups are Master League and national-only slots, not leagues.
+    assert get_patcher("we2002").max_leagues == 1
+    # PES 2013 names five leagues; a league in "Other" would get no name.
+    assert get_patcher("pes2013-ps2").max_leagues == 5

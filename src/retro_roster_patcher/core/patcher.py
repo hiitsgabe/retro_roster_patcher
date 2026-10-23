@@ -56,6 +56,10 @@ class Patcher(ABC):
     supports_kits: bool = False
     #: (name, first slot, count) for games whose slots form named groups.
     slot_groups: tuple[tuple[str, int, int], ...] = ()
+    #: How many leagues one patch takes, the k-th filling `slot_groups[k]`. 1
+    #: unless the game holds each group as a league of its own: groups can
+    #: just describe the slots, and a second league would overwrite the next.
+    max_leagues: int = 1
     #: National teams are slots `national_slot_base` and up.
     supports_nationals: bool = False
     national_slot_base: int | None = None

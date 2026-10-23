@@ -263,6 +263,8 @@ class PES2013PS2Patcher(Patcher):
     #: the disc has no jersey designs to pick from.
     supports_kits: bool = True
     slot_groups: tuple[tuple[str, int, int], ...] = SLOT_GROUPS
+    #: One league per named group: "Other" gets no league name or icon.
+    max_leagues: int = len(LEAGUE_GROUPS)
     supports_nationals: bool = True
     national_slot_base: int | None = NATIONAL_SLOT_BASE
     #: Screen art `patch(images={name: png})` can replace; `export_images`

@@ -344,6 +344,10 @@ reads a `KitSpec` off it with `kit_from_image`), `{"template": n}` (one of the g
 jersey designs, listed by the patcher's `kit_templates`) or `None` for the default.
 `render_kit` draws a `KitSpec` as a PNG to preview it. `slot_groups` (name, first slot, count),
 `supports_nationals` and `national_slot_base` describe a game's slot layout for a picker.
+`max_leagues` says how many leagues one patch takes, the k-th filling the k-th group: 1 by
+default and for `we2002`, whose two groups (Master League, national only) are one run of
+slots; 5 for `pes2013-ps2`, one per named league (a league in "Other" would get no league
+name or icon).
 
 ### Root exports
 
