@@ -4,6 +4,9 @@ position defaults when a player has no stat line.
   - https://github.com/Team-95/rom-edit
 """
 
+from collections import Counter
+from dataclasses import replace
+
 from ...sports.models import Player
 from .models import (
     MODERN_NBA_TO_NBALIVE95,
@@ -16,6 +19,17 @@ from .models import (
     POSITION_TO_BYTE,
     NBALive95PlayerRecord,
 )
+
+#: The game's five positions, in the order `select_roster` fills a lineup.
+LINEUP = ("PG", "SG", "SF", "PF", "C")
+
+#: ESPN labels an NBA player G, F or C. A G can play either guard spot and an F
+#: either forward spot; `split_positions` picks which by list order.
+COMBO_SPOTS = {"G": ("PG", "SG"), "F": ("SF", "PF")}
+
+#: The app's editor labels the first five rows the starting lineup. That the
+#: cartridge starts pointer slots 0-4 is not confirmed on a real cartridge.
+STARTERS = 5
 
 
 def _clamp(val: int, lo: int = 25, hi: int = 99) -> int:
@@ -176,8 +190,12 @@ class NBALive95StatMapper:
         players: list[Player],
         stats: dict | None = None,
     ) -> list[Player]:
-        """Pick 12 by minutes played: 2 PG, 2 SG, 2 SF, 2 PF, 2 C, then the 2 best
-        remaining.
+        """Pick 12 by minutes played: the busiest at each of PG, SG, SF, PF and C,
+        then the next busiest at each, then the 2 best remaining. The first five
+        hold one player per position where the squad has one.
+
+        A G fills either guard spot and an F either forward spot, which
+        `split_positions` then writes as PG and SG, SF and PF.
 
         No position filter, deliberately: `_normalize_position` answers "SF" for
         every string it does not recognise, so one could never exclude anybody.
@@ -195,21 +213,16 @@ class NBALive95StatMapper:
 
         eligible.sort(key=minutes_sort, reverse=True)
 
-        position_targets = {"PG": 2, "SG": 2, "SF": 2, "PF": 2, "C": 2}
         selected = []
         used = set()
 
-        for pos, count in position_targets.items():
-            filled = 0
-            for p in eligible:
-                if filled >= count:
-                    break
-                if id(p) in used:
-                    continue
-                if self._normalize_position(p.position) == pos:
-                    selected.append(p)
-                    used.add(id(p))
-                    filled += 1
+        for _ in range(2):
+            for pos in LINEUP:
+                for p in eligible:
+                    if id(p) not in used and pos in self._spots(p.position):
+                        selected.append(p)
+                        used.add(id(p))
+                        break
 
         # the 2 bench spots go to the best unused
         for p in eligible:
@@ -227,6 +240,29 @@ class NBALive95StatMapper:
                 used.add(id(p))
 
         return selected[:12]
+
+    def split_positions(self, players: list[Player]) -> list[Player]:
+        """`players` with each G and F given one of its two spots, by list order.
+
+        In the first five, and again on the bench, the first G becomes a PG, the
+        next an SG, and so on alternating; the first F an SF, the next a PF. A
+        first five of two G, two F and a C so writes one of each of the game's five.
+        """
+        out = []
+        for group in (players[:STARTERS], players[STARTERS:]):
+            seen: Counter[str] = Counter()
+            for p in group:
+                label = (p.position or "").upper().strip()
+                if label in COMBO_SPOTS:
+                    p = replace(p, position=COMBO_SPOTS[label][seen[label] % 2])
+                    seen[label] += 1
+                out.append(p)
+        return out
+
+    def _spots(self, position: str) -> tuple[str, ...]:
+        """The game positions a label can fill."""
+        label = (position or "").upper().strip()
+        return COMBO_SPOTS.get(label, (self._normalize_position(label),))
 
     def _normalize_position(self, position: str) -> str:
         """Map an ESPN position string onto one of the game's five."""

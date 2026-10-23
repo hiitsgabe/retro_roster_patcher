@@ -19,12 +19,14 @@ import struct
 import subprocess
 import sys
 import textwrap
+from dataclasses import replace
 
 import pytest
 
 from retro_roster_patcher.core.errors import ApiError, CapabilityError, MappingError, RomError
 from retro_roster_patcher.core.models import MappedRosters, PatchResult, RomSlot, SlotMapping
 from retro_roster_patcher.games.nbalive95_genesis.models import (
+    BYTE_TO_POSITION,
     NBA_TEAM_COUNT,
     NBALIVE95_TEAM_ORDER,
     TEAM_COUNT,
@@ -991,6 +993,54 @@ def test_order_as_given_writes_the_callers_first_twelve_in_order(patcher):
     mapped = patcher.map_rosters(_ranked_league(given), order_as_given=True)
 
     assert [r.jersey for r in mapped.teams[BOS_SLOT].players] == [p.number for p in given[:12]]
+
+
+def _espn_squad(labels):
+    return [
+        Player(id=n, name=f"First{n:02d} Last{n:02d}", position=label, number=n + 1)
+        for n, label in enumerate(labels)
+    ]
+
+
+def test_order_as_given_turns_espns_guards_and_forwards_into_the_five_positions(patcher):
+    """The edited order decides which G is the PG and which F the SF."""
+    given = _espn_squad(["G", "F", "C", "G", "F", "F", "G", "G", "C", "F"])
+
+    mapped = patcher.map_rosters(_ranked_league(given), order_as_given=True)
+
+    found = [BYTE_TO_POSITION[r.position] for r in mapped.teams[BOS_SLOT].players]
+    assert found == ["PG", "SF", "C", "SG", "PF", "SF", "PG", "SG", "C", "PF"]
+
+
+def test_swapping_two_forwards_in_the_first_five_changes_only_their_position_bytes(patcher):
+    """Ratings, height and weight come from the player's own ESPN label, not his row."""
+    squad = _espn_squad(["G", "G", "F", "F", "C"])
+    swapped = [squad[0], squad[1], squad[3], squad[2], squad[4]]
+
+    def by_jersey(players):
+        mapped = patcher.map_rosters(_ranked_league(players), order_as_given=True)
+        return {r.jersey: r for r in mapped.teams[BOS_SLOT].players}
+
+    before, after = by_jersey(squad), by_jersey(swapped)
+
+    for jersey, record in before.items():
+        moved = after[jersey]
+        assert replace(moved, position=record.position) == record
+    assert [BYTE_TO_POSITION[before[j].position] for j in (3, 4)] == ["SF", "PF"]
+    assert [BYTE_TO_POSITION[after[j].position] for j in (3, 4)] == ["PF", "SF"]
+
+
+def test_the_suggested_order_starts_one_player_at_each_position(patcher):
+    squad = _espn_squad(["G"] * 5 + ["F"] * 5 + ["C"] * 3)
+    data = _ranked_league(squad)
+
+    suggested = patcher.suggest_squad_order(data.teams[0])
+    data.teams[0].players = suggested
+    mapped = patcher.map_rosters(data, order_as_given=True)
+
+    starters = [BYTE_TO_POSITION[r.position] for r in mapped.teams[BOS_SLOT].players[:5]]
+    assert starters == ["PG", "SG", "SF", "PF", "C"]
+    assert len(suggested) == len(squad)
 
 
 def test_without_order_as_given_the_input_order_is_ignored(patcher):

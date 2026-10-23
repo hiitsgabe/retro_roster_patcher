@@ -24,6 +24,7 @@ puts the constant team name in `display_name`.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -51,6 +52,8 @@ from .models import (
     OFF_NAME,
     OFF_POSITION,
     PLAYERS_PER_TEAM,
+    POSITION_SF,
+    POSITION_TO_BYTE,
     TEAM_COUNT,
     TEAM_POINTER_SIZE,
     TEAM_ROSTER_ADDRESSES,
@@ -243,7 +246,9 @@ class NBALive95Patcher(Patcher):
     ) -> MappedRosters:
         """Reduce league data to one `NBALive95TeamRecord` per matched ROM slot.
 
-        Sparse: a key exists only for a slot some fetched team mapped to.
+        Sparse: a key exists only for a slot some fetched team mapped to. Each
+        G and F is written as a PG or SG, SF or PF by its place in the list
+        (`split_positions`); that changes the position byte alone.
         """
         self.check_slot_mapping(slot_mapping)
         teams: dict[int, NBALive95TeamRecord] = {}
@@ -259,9 +264,18 @@ class NBALive95Patcher(Patcher):
                 if order_as_given
                 else self.mapper.select_roster(roster.players, leaders)
             )
+            # Ratings, height and weight from the player's own label; only the
+            # position byte follows his row, so reordering moves no attribute.
             records = [
-                self.mapper.map_player(player, leaders.get(str(player.id), {}))
-                for player in selected
+                replace(
+                    self.mapper.map_player(player, leaders.get(str(player.id), {})),
+                    position=POSITION_TO_BYTE.get(
+                        self.mapper._normalize_position(split.position), POSITION_SF
+                    ),
+                )
+                for player, split in zip(
+                    selected, self.mapper.split_positions(selected), strict=True
+                )
             ]
             # `MODERN_NBA_TO_NBALIVE95` maps 34 codes onto 27 slots -- GS/GSW,
             # BKN/NJN, NYK/NY, SA/SAS, OKC/SEA, UTA/UTAH and WAS/WSH alias -- so an
