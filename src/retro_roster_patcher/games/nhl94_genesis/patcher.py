@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from ...core.errors import ApiError, RomError
+from ...core.errors import ApiError, MappingError, RomError
 from ...core.models import (
     MappedRosters,
     PartialFn,
@@ -20,7 +20,7 @@ from ...core.patcher import Patcher
 from ...core.registry import register
 from ...sports import _http
 from ...sports.espn import EspnClient
-from ...sports.models import League, LeagueData, TeamRoster
+from ...sports.models import League, LeagueData, Player, TeamRoster
 from ...sports.nhl import NhlApiClient
 from .models import NHL94_GEN_TEAM_ORDER, TEAM_COUNT, NHL94GenPlayerRecord
 from .rom_reader import NHL94GenesisRomReader
@@ -32,6 +32,23 @@ from .stat_mapper import NHL94GenStatMapper
 # inside the existing record chain, so a 452-byte region fits roughly 19 of the
 # 14-character names `map_player` produces. The overflow is dropped silently.
 MAX_PLAYERS_PER_SLOT = 23
+
+# A list given in order is refused below this. With no goalie the line table
+# puts a skater in goal; with one, the goalie byte the writer keeps from the
+# slot is unverified.
+MIN_GOALIES = 2
+
+
+def _starting_six_first(ordered: list[Player]) -> list[Player]:
+    """`ordered` (G, F, D blocks) with the six who start in front: G1, the first
+    trio in its C, LW, RW slots, D1 and D2, then G2, the other forwards and the
+    other defencemen. Each block keeps its order, so `map_rosters` with
+    `order_as_given=True` writes the same ROM from either list.
+    """
+    goalies = [p for p in ordered if p.position == "G"]
+    forwards = [p for p in ordered if p.position not in ("G", "D")]
+    defence = [p for p in ordered if p.position == "D"]
+    return goalies[:1] + forwards[:3] + defence[:2] + goalies[1:] + forwards[3:] + defence[2:]
 
 
 @register(
@@ -167,7 +184,7 @@ class NHL94GenesisPatcher(Patcher):
         ordered = self.mapper.select_roster(
             team_roster.players, leaders, max_players=MAX_PLAYERS_PER_SLOT
         )
-        return self._append_unused(ordered, team_roster.players)
+        return self._append_unused(_starting_six_first(ordered), team_roster.players)
 
     def map_rosters(
         self,
@@ -185,7 +202,9 @@ class NHL94GenesisPatcher(Patcher):
             leaders = roster.extra.get("leaders") or {}
             if order_as_given:
                 # The header and line table assume contiguous G, F, D blocks;
-                # the caller's order decides who comes first inside each.
+                # the caller's order decides who comes first inside each. Nothing
+                # is topped up after the defencemen, where the header would count
+                # a leftover forward or goalie in the wrong block.
                 selected = self._given_blocks(
                     roster.players,
                     [
@@ -193,8 +212,13 @@ class NHL94GenesisPatcher(Patcher):
                         (lambda p: p.position not in ("G", "D"), 14),
                         (lambda p: p.position == "D", 7),
                     ],
-                    total=MAX_PLAYERS_PER_SLOT,
                 )
+                goalies = sum(1 for p in selected if p.position == "G")
+                if selected and goalies < MIN_GOALIES:
+                    raise MappingError(
+                        f"{roster.team.name}: {goalies} goalie(s) in the list; "
+                        f"NHL 94 needs {MIN_GOALIES}"
+                    )
             else:
                 selected = self.mapper.select_roster(
                     roster.players, leaders, max_players=MAX_PLAYERS_PER_SLOT

@@ -1,8 +1,10 @@
 """NHL 94 (SNES) on the unified Patcher interface.
 
 Roster composition comes out of the ROM: byte 17 of a team block packs the
-forward count in its high nibble and the defenceman count in its low nibble, and
-goalies are not encoded and are always 2. `map_rosters` is given no ROM, so the
+forward count in its high nibble and the defenceman count in its low nibble.
+Goalies are not in it: bytes 19-20 hold one nibble per goalie (1 to 3 on the
+retail cartridge). This package reports 2 goalies for every slot, writes 2 and
+rewrites those bytes to count 2. `map_rosters` is given no ROM, so the
 counts travel in two hops -- `analyze_rom` publishes them in
 `RomInfo.extra["roster_counts"]`, a caller passes them to
 `map_rosters(roster_counts=...)`, and each `NHL94TeamRecord` records the triple
@@ -41,7 +43,7 @@ from ...core.patcher import Patcher
 from ...core.registry import register
 from ...sports import _http
 from ...sports.espn import EspnClient
-from ...sports.models import League, LeagueData, TeamRoster
+from ...sports.models import League, LeagueData, Player, TeamRoster
 from ...sports.nhl import NhlApiClient
 from .models import (
     DEFAULT_ROSTER_COUNTS,
@@ -51,6 +53,7 @@ from .models import (
 )
 from .rom_reader import POINTER_SIZE, NHL94SNESRomReader
 from .rom_writer import (
+    HEADER_GOALIE_SLOTS,
     LINE_ASSIGN_OFFSET,
     LINE_COUNT,
     LINE_SLOTS,
@@ -75,9 +78,22 @@ def _pointer_table_fits(reader: NHL94SNESRomReader) -> bool:
     return last + 2 <= len(reader.data)
 
 
+def _starting_six_first(ordered: list[Player]) -> list[Player]:
+    """`ordered` (G, F, D blocks) with the six who start in front: G1, the first
+    trio in its LW, C, RW slots, D1 and D2, then G2, the other forwards and the
+    other defencemen. Each block keeps its order, so `map_rosters` with
+    `order_as_given=True` writes the same ROM from either list.
+    """
+    goalies = [p for p in ordered if p.position == "G"]
+    forwards = [p for p in ordered if p.position not in ("G", "D")]
+    defence = [p for p in ordered if p.position == "D"]
+    return goalies[:1] + forwards[:3] + defence[:2] + goalies[1:] + forwards[3:] + defence[2:]
+
+
 #: Smallest team-block header this game's writer can be pointed at: the player
-#: count sits at byte 17 and 8 lines of 7 slots at byte 19, so anything shorter
-#: would have the line table overwrite the first player record.
+#: count sits at byte 17 and 8 lines of 8 bytes at byte 21, so anything shorter
+#: would have the line table overwrite the first player record. The retail
+#: cartridge's headers are exactly this long.
 MIN_TEAM_HEADER_SIZE = LINE_ASSIGN_OFFSET + LINE_COUNT * LINE_SLOTS
 
 #: Largest one. Team blocks are addressed by a 16-bit offset within bank $9C,
@@ -260,7 +276,7 @@ class NHL94SNESPatcher(Patcher):
         # Default line counts (2 G / 14 F / 7 D) — a display order, not the
         # per-slot header the patch resolves from the ROM.
         ordered = self.mapper.select_roster(team_roster.players, leaders)
-        return self._append_unused(ordered, team_roster.players)
+        return self._append_unused(_starting_six_first(ordered), team_roster.players)
 
     def map_rosters(
         self,
@@ -275,7 +291,9 @@ class NHL94SNESPatcher(Patcher):
         `roster_counts` is `RomInfo.extra["roster_counts"]` passed straight back
         in; omit it and every slot is cut to `DEFAULT_ROSTER_COUNTS`. Whatever was
         used is recorded on the record, because `patch` writes the header from
-        that and not from the ROM.
+        that and not from the ROM. With `order_as_given` the record carries the
+        forwards and defencemen the list actually filled, and a list with fewer
+        than 2 goalies is refused.
         """
         self.check_slot_mapping(slot_mapping)
         counts = self._resolve_roster_counts(roster_counts)
@@ -287,17 +305,20 @@ class NHL94SNESPatcher(Patcher):
             leaders = roster.extra.get("leaders") or {}
             num_goalies, num_forwards, num_defensemen = counts[slot]
             if order_as_given:
-                # The line table assumes contiguous G, F, D blocks sized to this
-                # slot's counts; the caller's order decides who comes first.
-                selected = self._given_blocks(
-                    roster.players,
-                    [
-                        (lambda p: p.position == "G", num_goalies),
-                        (lambda p: p.position not in ("G", "D"), num_forwards),
-                        (lambda p: p.position == "D", num_defensemen),
-                    ],
-                    total=num_goalies + num_forwards + num_defensemen,
-                )
+                # The slot's G, F, D blocks in the caller's order, and a header
+                # counting what each block got: nothing is topped up after the
+                # defencemen, where the line table would read it as one.
+                players = roster.players
+                goalies = [p for p in players if p.position == "G"][:num_goalies]
+                forwards = [p for p in players if p.position not in ("G", "D")][:num_forwards]
+                defence = [p for p in players if p.position == "D"][:num_defensemen]
+                if players and len(goalies) < HEADER_GOALIE_SLOTS:
+                    raise MappingError(
+                        f"{roster.team.name}: {len(goalies)} goalie(s) in the list; "
+                        f"NHL 94 needs {HEADER_GOALIE_SLOTS}"
+                    )
+                selected = goalies + forwards + defence
+                num_forwards, num_defensemen = len(forwards), len(defence)
             else:
                 selected = self.mapper.select_roster(
                     roster.players,
@@ -414,14 +435,14 @@ class NHL94SNESPatcher(Patcher):
                 continue
             # `written == 0` -- a region too small for one record -- still gets a
             # header. Upstream's behaviour, known wrong, preserved for byte fidelity:
-            # the 49 bytes it writes are a line table naming records that do not
-            # exist. Do not skip it.
+            # the line table it writes names records that do not exist. Do not
+            # skip it.
             #
-            # The counts come off the record, not the ROM -- the line assignments
-            # index forwards from 2 and defencemen from `2 + num_forwards`, so a
-            # header written from a different triple than the one that shaped this
-            # list labels real players with the wrong role -- and `header_counts`
-            # then clamps them to what actually reached the image.
+            # The counts come off the record, not the ROM -- the line table
+            # indexes forwards from 3 and defencemen from `3 + num_forwards`
+            # (1-based), so a header written from a different triple than the one
+            # that shaped this list labels real players with the wrong role -- and
+            # `header_counts` then clamps them to what actually reached the image.
             written_forwards, written_defencemen = header_counts(
                 written, team.num_forwards, team.num_defensemen
             )

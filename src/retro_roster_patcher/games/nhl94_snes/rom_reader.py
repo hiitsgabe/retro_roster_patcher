@@ -42,8 +42,9 @@ ROM_SIZE_WITH_HEADER = 650240  # 0x9EE00
 # jersey + 7 attribute bytes
 STATS_SIZE = 8
 
-# Team-data byte 17: high nibble forwards, low nibble defencemen.
-# Goalies are always 2 and are not encoded.
+# Team-data byte 17: high nibble forwards, low nibble defencemen. Goalies are
+# counted in bytes 19-20, one nibble each, which this reader does not read: it
+# reports 2.
 PLAYER_COUNT_OFFSET = 17
 
 

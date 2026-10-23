@@ -11,7 +11,6 @@ $FFDC/$FFDE and this game does not read it. The Genesis sibling does both.
 """
 
 import os
-from collections.abc import Callable
 
 from .models import (
     TEAM_COUNT,
@@ -23,22 +22,29 @@ from .rom_reader import (
     NHL94SNESRomReader,
 )
 
-# Team-data header: byte 17 player count, byte 18 team overall,
-# bytes 19..74 the 8 lines x 7 slots = 56 bytes of line assignments.
-LINE_ASSIGN_OFFSET = 19
-LINE_SLOTS = 7  # G, LD, RD, LW, C, RW, EA
-LINE_COUNT = 8  # SC1, SC2, CHK, PP1, PP2, PK1, PK2, EA
+# Team-data header, 85 bytes on the retail cartridge: byte 17 the F|D counts,
+# byte 18 the team overall, bytes 19-20 one nibble per goalie, and bytes 21-84
+# the line table, 8 records of 8 bytes.
+GOALIE_OFFSET = 19
+LINE_ASSIGN_OFFSET = 21
+LINE_SLOTS = 8  # G, LD, RD, LW, C, RW, EA, 0x00
+LINE_COUNT = 8  # Best, SC1, SC2, CHK, PP1, PP2, PK1, PK2
 
-# The line table is built from `g1 = 0`, `g2 = 1` and `f_base = 2`, so it always
-# assumes two goalie records precede the forwards.
+# (forward trio, defence pair) behind each record, in the cartridge's order.
+# Best plays when line changes are off and Scoring 1 leads them when they are
+# on, so both are the first trio and the first pair.
+LINE_UNITS = [(0, 0), (0, 0), (1, 1), (2, 2), (0, 0), (1, 1), (2, 0), (1, 1)]
+
+# The line table counts forwards from record 3, so it always assumes two goalie
+# records precede them.
 HEADER_GOALIE_SLOTS = 2
 
 
 def header_counts(written: int, num_forwards: int, num_defensemen: int) -> tuple[int, int]:
     """The `(forwards, defencemen)` a header may claim for `written` records.
 
-    The line table indexes players by absolute position -- forwards at
-    `HEADER_GOALIE_SLOTS`, defencemen at `HEADER_GOALIE_SLOTS + forwards` -- so a
+    The line table indexes players by absolute position -- forwards after the
+    `HEADER_GOALIE_SLOTS` goalies, defencemen after the forwards -- so a
     header claiming more than reached the image names records the writer never
     wrote and the game reads the zero-fill as a player. Clamping to the prefix
     actually written is a no-op for any full roster.
@@ -159,8 +165,9 @@ class NHL94SNESRomWriter:
         num_forwards: int,
         num_defensemen: int,
     ) -> bool:
-        """Update byte 17 (the player-count nibbles) and bytes 19-74 (8 lines x 7
-        slots) so the game's line display matches the G+F+D order written.
+        """Update byte 17 (the player-count nibbles), bytes 19-20 (the goalie
+        nibbles) and bytes 21-84 (the line table) for a roster written as G, F, D
+        blocks.
 
         The counts must be the ones that reached the image, not the ones the
         selection asked for; `header_counts` turns one into the other.
@@ -179,36 +186,21 @@ class NHL94SNESRomWriter:
         nd = min(15, max(0, num_defensemen))
         self.data[pc_off] = (nf << 4) | nd
 
-        # Player indices:
-        #   G:  0, 1
-        #   F:  2  .. 2+nf-1    (LW,C,RW per line)
-        #   D:  2+nf .. 2+nf+nd-1
-        g1, g2 = 0, min(1, 1)
-        f_base = HEADER_GOALIE_SLOTS
-        d_base = HEADER_GOALIE_SLOTS + nf
-
-        def fi(i: int) -> int:
-            return min(f_base + i, f_base + nf - 1)
-
-        def di(i: int) -> int:
-            return min(d_base + i, d_base + nd - 1)
-
-        lines = self._build_lines(
-            g1,
-            g2,
-            f_base,
-            nf,
-            d_base,
-            nd,
-            fi,
-            di,
-        )
-
         la_off = file_off + LINE_ASSIGN_OFFSET
         if la_off + LINE_COUNT * LINE_SLOTS > len(self.data):
             return False
 
-        for line_bytes in lines:
+        # One nonzero nibble per goalie, high first: the game counts its goalies
+        # from them. Each is that goalie's start weight (about games played / 5 on
+        # the cartridge, and it follows the goalie from team to team). Two are
+        # written, so keep the slot's two largest, the larger on G1; a slot with
+        # one goalie gets a backup's 5, one with none Montreal's 12 and 5.
+        g = file_off + GOALIE_OFFSET
+        w = sorted((n for b in self.data[g : g + 2] for n in (b >> 4, b & 15) if n), reverse=True)
+        self.data[g] = (w[0] if w else 12) << 4 | (w[1] if len(w) > 1 else 5)
+        self.data[g + 1] = 0
+
+        for line_bytes in self._build_lines(nf, nd):
             for b in line_bytes:
                 self.data[la_off] = b & 0xFF
                 la_off += 1
@@ -216,30 +208,29 @@ class NHL94SNESRomWriter:
         return True
 
     @staticmethod
-    def _build_lines(
-        g1: int,
-        g2: int,
-        fb: int,
-        nf: int,
-        db: int,
-        nd: int,
-        fi: Callable[[int], int],
-        di: Callable[[int], int],
-    ) -> list[list[int]]:
-        """Build 8 line configs: SC1 SC2 CHK PP1 PP2 PK1 PK2 EA.
+    def _build_lines(nf: int, nd: int) -> list[list[int]]:
+        """The 8 records, `[G, LD, RD, LW, C, RW, EA, 0x00]`, with 1-based roster
+        indices: goalies 1-2, forwards from 3 (LW, C, RW per trio), defencemen
+        after them. An index past a block's end clamps to its last player.
 
-        Each line = [G, LD, RD, LW, C, RW, EA].
+        G is the starter in every record, as on the cartridge. EA, the extra
+        attacker, is the next trio's left wing: the cartridge keeps it off the line.
         """
-        sc1 = [g1, di(0), di(1), fi(0), fi(1), fi(2), fi(0)]
-        sc2 = [g1, di(2), di(3), fi(3), fi(4), fi(5), fi(3)]
-        sc3 = [g1, di(4), di(5), fi(6), fi(7), fi(8), fi(6)]  # CHK
-        pp1 = [g1, di(0), di(1), fi(0), fi(1), fi(2), fi(3)]
-        pp2 = [g1, di(2), di(3), fi(3), fi(4), fi(5), fi(6)]
-        pk1 = [g1, di(0), di(1), fi(6), fi(7), fi(8), fi(6)]
-        pk2 = [g1, di(2), di(3), fi(3), fi(4), fi(5), fi(3)]
-        ea = [g2, di(0), di(1), fi(0), fi(1), fi(2), fi(3)]  # backup G pulled for a forward
+        f_base = HEADER_GOALIE_SLOTS + 1
+        d_base = f_base + nf
 
-        return [sc1, sc2, sc3, pp1, pp2, pk1, pk2, ea]
+        def fi(i: int) -> int:
+            return min(f_base + i, f_base + nf - 1)
+
+        def di(i: int) -> int:
+            return min(d_base + i, d_base + nd - 1)
+
+        lines = []
+        for trio, pair in LINE_UNITS:
+            lw, c, rw = (fi(3 * trio + k) for k in range(3))
+            ea = fi(3 * ((trio + 1) % 3))
+            lines.append([1, di(2 * pair), di(2 * pair + 1), lw, c, rw, ea, 0])
+        return lines
 
     def _write_player_stats(self, player: NHL94PlayerRecord, offset: int) -> int:
         """Write a player's 8 stat bytes and return the offset after them.

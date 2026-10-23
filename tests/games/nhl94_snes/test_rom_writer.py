@@ -495,11 +495,11 @@ def test_the_counts_a_short_roster_claims_add_up_to_what_was_written():
 
 
 def test_a_header_written_from_the_clamped_counts_stops_at_the_last_record(tmp_path):
-    """End to end at the writer: no line slot names record 21.
+    """End to end at the writer: no line slot names record 22.
 
-    Twenty-one records written under a 14/7 request. Written from the requested
-    counts the table reaches index 21; written from the clamped ones it stops at
-    20, which is the last record that exists.
+    Twenty-one records written under a 14/7 request, numbered 1..21 as the line
+    table counts them. Written from the requested counts the table reaches 22;
+    written from the clamped ones it stops at 21, the last record that exists.
     """
     writer = _writer(tmp_path)
     forwards, defencemen = header_counts(21, 14, 7)
@@ -507,20 +507,20 @@ def test_a_header_written_from_the_clamped_counts_stops_at_the_last_record(tmp_p
     data = writer.data
     assert data is not None
     base = fixture.team_base(5) + LINE_TABLE_BYTE
-    assert max(data[base : base + LINE_COUNT * LINE_SLOTS]) == 20
+    assert max(data[base : base + LINE_COUNT * LINE_SLOTS]) == 21
 
 
 def test_a_header_written_from_the_requested_counts_names_an_absent_record(tmp_path):
     # The behaviour being diverged from, kept as an assertion so the fix is a
     # difference and not a claim. `_build_lines` reaches `di(5)`, which under 7
-    # defencemen from base 16 is record 21 -- one past the 21 records, 0..20,
+    # defencemen from record 17 is record 22 -- one past the 21 records, 1..21,
     # that were written.
     writer = _writer(tmp_path)
     assert writer.write_team_header(5, 14, 7) is True
     data = writer.data
     assert data is not None
     base = fixture.team_base(5) + LINE_TABLE_BYTE
-    assert max(data[base : base + LINE_COUNT * LINE_SLOTS]) == 21
+    assert max(data[base : base + LINE_COUNT * LINE_SLOTS]) == 22
 
 
 def test_the_count_byte_packs_forwards_high_and_defencemen_low(tmp_path):
@@ -550,27 +550,59 @@ def test_the_count_nibbles_are_clamped_to_four_bits(tmp_path, forwards, defencem
     assert data[fixture.team_base(5) + PLAYER_COUNT_BYTE] == expected
 
 
-def test_the_header_write_fills_exactly_fifty_six_line_bytes(tmp_path):
+def test_the_header_write_fills_exactly_sixty_four_line_bytes(tmp_path):
     writer = _writer(tmp_path)
     before = bytes(writer.reader.data or b"")
     writer.write_team_header(5, 14, 7)
     after = bytes(writer.data or b"")
     base = fixture.team_base(5)
     changed = [i for i in range(base, base + fixture.TEAM_HEADER_SIZE) if before[i] != after[i]]
-    lines = list(range(base + LINE_TABLE_BYTE, base + LINE_TABLE_BYTE + 56))
-    # The count byte and the line table, and nothing else in the header --
-    # byte 18's team overall in particular is left alone.
-    assert changed == [base + PLAYER_COUNT_BYTE, *lines]
-    assert LINE_COUNT * LINE_SLOTS == 56
+    lines = list(range(base + LINE_TABLE_BYTE, base + LINE_TABLE_BYTE + 64))
+    goalies = [base + fixture.GOALIE_OFFSET, base + fixture.GOALIE_OFFSET + 1]
+    # The count byte, the goalie nibbles and the line table, and nothing else in
+    # the header -- byte 18's team overall is left alone.
+    assert changed == [base + PLAYER_COUNT_BYTE, *goalies, *lines]
+    assert LINE_COUNT * LINE_SLOTS == 64
+    assert LINE_TABLE_BYTE + 64 == fixture.TEAM_HEADER_SIZE
+
+
+@pytest.mark.parametrize(
+    ("cartridge", "written"),
+    [
+        # Retail patterns. EDM's one goalie keeps his 13 and a backup's 5 joins him.
+        (b"\xd0\x00", b"\xd5\x00"),
+        # BUF's three, [11, 2, 5]: the two largest, Fuhr's 11 then Hasek's 5.
+        (b"\xb2\x50", b"\xb5\x00"),
+        # TB's [6, 8, 4]: Jablonski's 8 outweighed G1's 6, so it moves to G1.
+        (b"\x68\x40", b"\x86\x00"),
+        # Nothing to keep: Montreal's 12 and 5.
+        (b"\x00\x00", b"\xc5\x00"),
+    ],
+)
+def test_the_goalie_nibbles_count_the_two_goalies_written_largest_first(
+    tmp_path, cartridge, written
+):
+    """The game counts its goalies from the nonzero nibbles at bytes 19-20 (28 of
+    28 retail teams agree), and the patch always writes 2, so 2 must be left
+    there, the larger weight on the editor's G1."""
+    writer = _writer(tmp_path)
+    data = writer.data
+    assert data is not None
+    goalies = fixture.team_base(5) + fixture.GOALIE_OFFSET
+    data[goalies : goalies + 2] = cartridge
+    assert writer.write_team_header(5, 14, 7) is True
+    assert bytes(data[goalies : goalies + 2]) == written
 
 
 def test_the_eight_lines_index_goalies_forwards_and_defencemen_by_position(tmp_path):
-    """The whole table, against the layout the writer's comments describe.
+    """The whole table, in the retail cartridge's layout.
 
-    Forwards start at 2 and defencemen at 2 + forwards, so a header written for
-    a different forward count moves every defenceman index. That is what makes
-    `patch` reading the count off the mapped record rather than off the ROM load
-    bearing.
+    Eight bytes per record, `[G, LD, RD, LW, C, RW, EA, 0x00]`, with 1-based
+    indices: forwards from 3 and defencemen from 3 + forwards, so a header
+    written for a different forward count moves every defenceman index. That is
+    what makes `patch` reading the count off the mapped record rather than off
+    the ROM load bearing. The records run Best, Scoring 1, Scoring 2, Checking,
+    PP1, PP2, PK1, PK2, and the starting goalie, record 1, is in every one.
     """
     writer = _writer(tmp_path)
     writer.write_team_header(5, 9, 4)
@@ -579,17 +611,29 @@ def test_the_eight_lines_index_goalies_forwards_and_defencemen_by_position(tmp_p
     base = fixture.team_base(5) + LINE_TABLE_BYTE
     slots = fixture.LINE_SLOTS
     table = [list(data[base + i * slots : base + (i + 1) * slots]) for i in range(8)]
-    # Forwards 2..10, defencemen 11..14, and `di`/`fi` clamp to the last one.
+    # Forwards 3..11, defencemen 12..15, and `di`/`fi` clamp to the last one.
     assert table == [
-        [0, 11, 12, 2, 3, 4, 2],  # SC1
-        [0, 13, 14, 5, 6, 7, 5],  # SC2
-        [0, 14, 14, 8, 9, 10, 8],  # CHK, both defence indices clamped
-        [0, 11, 12, 2, 3, 4, 5],  # PP1
-        [0, 13, 14, 5, 6, 7, 8],  # PP2
-        [0, 11, 12, 8, 9, 10, 8],  # PK1
-        [0, 13, 14, 5, 6, 7, 5],  # PK2
-        [1, 11, 12, 2, 3, 4, 5],  # EA, the only line on the backup goalie
+        [1, 12, 13, 3, 4, 5, 6, 0],  # Best: trio 1, pair 1
+        [1, 12, 13, 3, 4, 5, 6, 0],  # Scoring 1: the same unit
+        [1, 14, 15, 6, 7, 8, 9, 0],  # Scoring 2
+        [1, 15, 15, 9, 10, 11, 3, 0],  # Checking, both defence indices clamped
+        [1, 12, 13, 3, 4, 5, 6, 0],  # PP1
+        [1, 14, 15, 6, 7, 8, 9, 0],  # PP2
+        [1, 12, 13, 9, 10, 11, 3, 0],  # PK1
+        [1, 14, 15, 6, 7, 8, 9, 0],  # PK2
     ]
+
+
+def test_no_record_names_its_extra_attacker_among_the_five_on_the_ice(tmp_path):
+    # The retail cartridge does this in 206 of its 208 records.
+    writer = _writer(tmp_path)
+    writer.write_team_header(5, 14, 7)
+    data = writer.data
+    assert data is not None
+    base = fixture.team_base(5) + LINE_TABLE_BYTE
+    for i in range(LINE_COUNT):
+        record = data[base + i * 8 : base + i * 8 + 8]
+        assert record[6] not in record[1:6]
 
 
 def test_a_header_write_past_the_last_team_is_refused(tmp_path):

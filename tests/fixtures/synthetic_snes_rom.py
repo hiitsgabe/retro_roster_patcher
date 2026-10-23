@@ -52,16 +52,17 @@ BANK_WINDOW_SIZE = 0x8000
 TEAM_BLOCK_BASE = 0xE2700
 TEAM_BLOCK_STRIDE = 0x300
 
-# Team block header. `rom_writer` writes the player count at byte 17 and eight
-# lines of seven slots at bytes 19-74, so the header has to be at least 75 bytes
-# for the player records that follow it not to be overwritten. 0x50 leaves five
-# spare bytes, which the writer must not touch.
-TEAM_HEADER_SIZE = 0x50
+# Team block header, laid out as on the retail cartridge, where every team's is
+# 85 bytes: the player count at byte 17, the team overall at 18, one nibble per
+# goalie at 19-20, and eight line records of eight bytes at 21-84, each
+# [G, LD, RD, LW, C, RW, EA, 0x00] with 1-based roster indices.
+TEAM_HEADER_SIZE = 85
 PLAYER_COUNT_OFFSET = 17
 TEAM_OVERALL_OFFSET = 18
-LINE_ASSIGN_OFFSET = 19
+GOALIE_OFFSET = 19
+LINE_ASSIGN_OFFSET = 21
 LINE_COUNT = 8
-LINE_SLOTS = 7
+LINE_SLOTS = 8
 
 # Player records. 2 length bytes + name + 8 stat bytes, and the length field
 # counts itself but not the stats -- the encoding `read_team_roster` decodes.
@@ -322,18 +323,18 @@ def build_nhl94_snes_rom(
         # Byte 18 is the team's overall rating. Nothing reads it; it is filled
         # with a per-team value so a writer that scribbled over it is visible.
         rom[base + TEAM_OVERALL_OFFSET] = 0x40 | (i & 0x0F)
-        # 56 bytes of line assignments, each byte carrying its own position and
-        # the team index, so a header write that landed on the wrong team or at
-        # the wrong offset changes bytes a test can name.
+        # The goalie bytes and the 64 bytes of line records, each byte carrying
+        # its own position and the team index, so a header write that landed on
+        # the wrong team or at the wrong offset changes bytes a test can name.
         #
-        # The high bit is set on every one of them, which puts all 56 outside
+        # The high bit is set on every one of them, which puts all 66 outside
         # the range `write_team_header` can emit: a line byte is a player index,
         # and there are never more than 2 + 15 + 15 players. Without that, a
         # filler byte that happened to equal the index the writer was about to
         # write would leave the byte unchanged, and a test that counts which
         # bytes a header write touched would undercount.
-        for position in range(LINE_COUNT * LINE_SLOTS):
-            rom[base + LINE_ASSIGN_OFFSET + position] = 0x80 | ((position + i) & 0x3F)
+        for position in range(GOALIE_OFFSET, TEAM_HEADER_SIZE):
+            rom[base + position] = 0x80 | ((position + i) & 0x3F)
 
         offset = base + TEAM_HEADER_SIZE
         for slot in range(players_per_team):

@@ -281,9 +281,9 @@ def test_a_file_of_the_declared_standard_size_is_not_claimed(patcher, tmp_path):
 
 
 def test_a_team_block_whose_header_is_too_short_is_not_claimed(patcher, tmp_path):
-    """A header under 75 bytes would put the line table over the first record."""
+    """A header under 85 bytes would put the line table over the first record."""
     rom = fixture.build_nhl94_snes_rom()
-    rom[fixture.team_base(13)] = 74
+    rom[fixture.team_base(13)] = 84
     rom[fixture.team_base(13) + 1] = 0
     broken = tmp_path / "broken.sfc"
     broken.write_bytes(bytes(rom))
@@ -590,7 +590,7 @@ def test_players_patched_counts_records_that_reached_the_image(patcher, rom, tmp
 def test_a_slot_whose_region_takes_nothing_still_gets_its_header_written(patcher, tmp_path):
     """PINS UPSTREAM FIDELITY DELIBERATELY, and it is known to be wrong.
 
-    Upstream wrote byte 17 and the 56-byte line table even for a region too small
+    Upstream wrote byte 17 and the line table even for a region too small
     to hold one record, and the game reads the zero-fill as a player. Do not
     "fix" it by skipping the header: nothing here has been validated against a
     real dump.
@@ -666,17 +666,17 @@ def test_the_header_does_not_claim_defencemen_the_writer_dropped(patcher, rom, t
 def test_no_line_slot_names_a_record_the_writer_never_wrote(patcher, rom, tmp_path):
     """The consequence the header byte alone does not show.
 
-    Under the requested 14 and 7 the table's highest index is 21; 21 records were
-    written, so records 0..20 exist and 21 does not. Asserted as the exact maximum
-    rather than as a bound: `max(...) <= 20` would also pass on a table of all
-    zeroes, which is what a zero-filled header produces.
+    The table's indices are 1-based. Under the requested 14 and 7 its highest is
+    22; 21 records were written, so records 1..21 exist and 22 does not. Asserted
+    as the exact maximum rather than as a bound: `max(...) <= 21` would also pass
+    on a table of all zeroes, which is what a zero-filled header produces.
     """
     out = tmp_path / "out.sfc"
     mapped = MappedRosters(game_id="nhl94-snes", teams={BOS_SLOT: _team_record(BOS_SLOT, 23)})
     patcher.patch(rom_path=rom, output_path=out, rosters=mapped)
     base = fixture.team_base(BOS_SLOT) + fixture.LINE_ASSIGN_OFFSET
     table = out.read_bytes()[base : base + fixture.LINE_COUNT * fixture.LINE_SLOTS]
-    assert max(table) == 20
+    assert max(table) == 21
 
 
 def test_a_provider_short_of_skaters_does_not_get_a_full_teams_header(patcher, rom, tmp_path):
@@ -910,8 +910,8 @@ def test_a_patched_rom_can_be_analysed_and_patched_again(patcher, rom, tmp_path)
 
 
 def _ranked_squad():
-    """One goalie, nine forwards and five defencemen, named by id."""
-    positions = ["G"] + ["C", "LW", "RW"] * 3 + ["D"] * 5
+    """Two goalies, nine forwards and five defencemen, named by id."""
+    positions = ["G"] * 2 + ["C", "LW", "RW"] * 3 + ["D"] * 5
     return [
         Player(id=n, name=f"P{n:02d}", position=pos, number=n + 1)
         for n, pos in enumerate(positions)
@@ -926,6 +926,22 @@ def _ranked_league(players):
     return data
 
 
+def _named_league(goalies, forwards, defence):
+    """One BOS roster listed and ranked best first, each player named by position
+    and rank: G1, G2, LW1, C1, RW1, LW2, ..., D1, D2, ..."""
+    positions = ["G"] * goalies + (["LW", "C", "RW"] * 6)[:forwards] + ["D"] * defence
+    players = [
+        Player(id=n, name=f"{pos}{positions[: n + 1].count(pos)}", position=pos, number=n + 1)
+        for n, pos in enumerate(positions)
+    ]
+    data = _league_data(("BOS", 0))
+    data.teams[0].players = players
+    data.teams[0].extra["leaders"] = {
+        str(p.id): {"PTS": 99 - p.id, "SV%": 99 - p.id} for p in players
+    }
+    return data
+
+
 def _small_counts():
     """Default counts everywhere but BOS, which holds 2 G, 5 F and 3 D."""
     counts = [list(DEFAULT_ROSTER_COUNTS) for _ in range(TEAM_COUNT)]
@@ -934,8 +950,6 @@ def _small_counts():
 
 
 def test_order_as_given_keeps_the_slots_blocks_and_the_callers_order_inside_them(patcher):
-    # One goalie leaves the G block a player short, so the tenth slot is the
-    # first leftover in the caller's order.
     squad = _ranked_squad()
     given = squad[::2] + squad[1::2]
 
@@ -946,9 +960,35 @@ def test_order_as_given_keeps_the_slots_blocks_and_the_callers_order_inside_them
     goalies = [p for p in given if p.position == "G"][:2]
     forwards = [p for p in given if p.position not in ("G", "D")][:5]
     defence = [p for p in given if p.position == "D"][:3]
-    blocks = goalies + forwards + defence
-    expected = blocks + [p for p in given if p not in blocks]
-    assert [r.name for r in mapped.teams[BOS_SLOT].players] == [p.name for p in expected[:10]]
+    assert [r.name for r in mapped.teams[BOS_SLOT].players] == [
+        p.name for p in goalies + forwards + defence
+    ]
+
+
+def test_order_as_given_tops_up_nothing_and_counts_what_each_block_got(patcher):
+    """BOS holds 5 F and 3 D here, and the list has 3 forwards.
+
+    Two more defencemen used to be topped up after the D block under a header
+    still claiming 5 forwards, which made D1 and D2 forwards to the line table.
+    """
+    mapped = patcher.map_rosters(
+        _named_league(2, 3, 6), roster_counts=_small_counts(), order_as_given=True
+    )
+    team = mapped.teams[BOS_SLOT]
+    assert [r.name for r in team.players] == ["G1", "G2", "LW1", "C1", "RW1", "D1", "D2", "D3"]
+    assert (team.num_forwards, team.num_defensemen) == (3, 3)
+
+
+def test_order_as_given_refuses_a_list_with_one_goalie(patcher):
+    # The line table counts forwards from record 3, so a lone goalie would put
+    # the first forward in the backup's place and shift every index after it.
+    with pytest.raises(MappingError, match="goalie"):
+        patcher.map_rosters(_named_league(1, 12, 6), order_as_given=True)
+
+
+def test_order_as_given_still_skips_an_empty_roster(patcher):
+    mapped = patcher.map_rosters(_league_data(("BOS", 0)), order_as_given=True)
+    assert mapped.teams[BOS_SLOT].players == []
 
 
 def test_without_order_as_given_the_input_order_is_ignored(patcher):
@@ -959,3 +999,44 @@ def test_without_order_as_given_the_input_order_is_ignored(patcher):
     assert [r.name for r in forward.teams[BOS_SLOT].players] == [
         r.name for r in backward.teams[BOS_SLOT].players
     ]
+
+
+def test_the_suggested_order_puts_the_starting_six_first(patcher):
+    roster = _named_league(3, 16, 9).teams[0]
+    order = [p.name for p in patcher.suggest_squad_order(roster)]
+    # G1, the first trio in its LW, C, RW slots and the first pair, then G2.
+    assert order[:7] == ["G1", "LW1", "C1", "RW1", "D1", "D2", "G2"]
+    assert sorted(order) == sorted(p.name for p in roster.players)
+
+
+def test_the_suggested_order_maps_to_the_ranked_selection(patcher):
+    # Moving the six to the front changes no block's order, so the ROM is the one
+    # the ranked selection writes.
+    data = _named_league(3, 16, 9)
+    ranked = patcher.map_rosters(data).teams[BOS_SLOT].players
+    data.teams[0].players = patcher.suggest_squad_order(data.teams[0])
+    given = patcher.map_rosters(data, order_as_given=True).teams[BOS_SLOT].players
+    assert [r.name for r in given] == [r.name for r in ranked]
+
+
+def test_the_best_line_is_the_lists_starting_six(patcher, rom, tmp_path):
+    """The editor's first six are the six the cartridge starts.
+
+    BOS's image holds 13 F and 8 D and the list has 11 forwards, so the header
+    must say 11 for the Best record to find the defencemen.
+    """
+    data = _named_league(2, 11, 10)
+    data.teams[0].players = patcher.suggest_squad_order(data.teams[0])
+    counts = patcher.analyze_rom(rom).extra["roster_counts"]
+    mapped = patcher.map_rosters(data, roster_counts=counts, order_as_given=True)
+    out = tmp_path / "out.sfc"
+    patcher.patch(rom_path=rom, output_path=out, rosters=mapped)
+
+    names, _ = _read_back(out, BOS_SLOT)
+    image = out.read_bytes()
+    base = fixture.team_base(BOS_SLOT)
+    assert image[base + fixture.PLAYER_COUNT_OFFSET] == (11 << 4) | 8
+    best = image[base + fixture.LINE_ASSIGN_OFFSET : base + fixture.LINE_ASSIGN_OFFSET + 8]
+    # [G, LD, RD, LW, C, RW], 1-based, then EA and the record's zero byte.
+    assert [names[i - 1] for i in best[:6]] == ["G1", "D1", "D2", "LW1", "C1", "RW1"]
+    assert best[7] == 0

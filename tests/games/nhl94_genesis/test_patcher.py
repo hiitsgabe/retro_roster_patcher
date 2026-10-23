@@ -1033,8 +1033,8 @@ def test_short_names_reach_the_full_cap(tmp_path, patcher):
 
 
 def _ranked_squad():
-    """One goalie, eighteen forwards and nine defencemen, named by id."""
-    positions = ["G"] + ["C", "LW", "RW"] * 6 + ["D"] * 9
+    """Two goalies, eighteen forwards and nine defencemen, named by id."""
+    positions = ["G"] * 2 + ["C", "LW", "RW"] * 6 + ["D"] * 9
     return [
         Player(id=n, name=f"P{n:02d}", position=pos, number=n + 1)
         for n, pos in enumerate(positions)
@@ -1048,9 +1048,22 @@ def _ranked_league(players):
     return data
 
 
+def _named_league(goalies, forwards, defence):
+    """One BOS roster listed and ranked best first, each player named by position
+    and rank: G1, G2, C1, LW1, RW1, C2, ..., D1, D2, ..."""
+    positions = ["G"] * goalies + (["C", "LW", "RW"] * 6)[:forwards] + ["D"] * defence
+    players = [
+        Player(id=n, name=f"{pos}{positions[: n + 1].count(pos)}", position=pos, number=n + 1)
+        for n, pos in enumerate(positions)
+    ]
+    data = _league_data(players)
+    data.teams[0].extra["leaders"] = {
+        str(p.id): {"PTS": 99 - p.id, "SV%": 99 - p.id} for p in players
+    }
+    return data
+
+
 def test_order_as_given_keeps_the_blocks_and_the_callers_order_inside_them(patcher):
-    # One goalie leaves the G block a player short, so the 23rd slot is the
-    # first leftover in the caller's order.
     squad = _ranked_squad()
     given = squad[::2] + squad[1::2]
 
@@ -1059,11 +1072,32 @@ def test_order_as_given_keeps_the_blocks_and_the_callers_order_inside_them(patch
     goalies = [p for p in given if p.position == "G"][:2]
     forwards = [p for p in given if p.position not in ("G", "D")][:14]
     defence = [p for p in given if p.position == "D"][:7]
-    blocks = goalies + forwards + defence
-    expected = blocks + [p for p in given if p not in blocks]
     assert [r.name for r in mapped.teams[BOS_SLOT]] == [
-        p.name for p in expected[:MAX_PLAYERS_PER_SLOT]
+        p.name for p in goalies + forwards + defence
     ]
+
+
+def test_order_as_given_tops_up_nothing_after_the_defencemen(patcher):
+    """A third goalie used to fill the 21st slot, after the D block.
+
+    The writer counts goalies off the records, so it put the forwards at 3 when
+    they start at 2.
+    """
+    mapped = patcher.map_rosters(_named_league(3, 12, 6), order_as_given=True)
+    names = [r.name for r in mapped.teams[BOS_SLOT]]
+    assert len(names) == 20
+    assert names[:3] == ["G1", "G2", "C1"]
+    assert names[-1] == "D6"
+
+
+def test_order_as_given_refuses_a_list_with_one_goalie(patcher):
+    with pytest.raises(MappingError, match="goalie"):
+        patcher.map_rosters(_named_league(1, 14, 7), order_as_given=True)
+
+
+def test_order_as_given_still_skips_an_empty_roster(patcher):
+    mapped = patcher.map_rosters(_league_data([]), order_as_given=True)
+    assert mapped.teams[BOS_SLOT] == []
 
 
 def test_without_order_as_given_the_input_order_is_ignored(patcher):
@@ -1071,3 +1105,21 @@ def test_without_order_as_given_the_input_order_is_ignored(patcher):
     forward = patcher.map_rosters(_ranked_league(squad)).teams[BOS_SLOT]
     backward = patcher.map_rosters(_ranked_league(squad[::-1])).teams[BOS_SLOT]
     assert [r.name for r in forward] == [r.name for r in backward]
+
+
+def test_the_suggested_order_puts_the_starting_six_first(patcher):
+    roster = _named_league(3, 16, 9).teams[0]
+    order = [p.name for p in patcher.suggest_squad_order(roster)]
+    # G1, the first trio in its C, LW, RW slots and the first pair, then G2.
+    assert order[:7] == ["G1", "C1", "LW1", "RW1", "D1", "D2", "G2"]
+    assert sorted(order) == sorted(p.name for p in roster.players)
+
+
+def test_the_suggested_order_maps_to_the_ranked_selection(patcher):
+    # Moving the six to the front changes no block's order, so the ROM is the one
+    # the ranked selection writes.
+    data = _named_league(3, 16, 9)
+    ranked = patcher.map_rosters(data).teams[BOS_SLOT]
+    data.teams[0].players = patcher.suggest_squad_order(data.teams[0])
+    given = patcher.map_rosters(data, order_as_given=True).teams[BOS_SLOT]
+    assert [r.name for r in given] == [r.name for r in ranked]
