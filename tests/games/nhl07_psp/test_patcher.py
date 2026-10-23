@@ -7,6 +7,8 @@ produced it.
 
 from __future__ import annotations
 
+import sys
+
 import pytest
 
 from retro_roster_patcher.core.errors import ApiError, CapabilityError, MappingError, RomError
@@ -908,7 +910,12 @@ def test_patching_names_each_team_in_its_progress_message(tmp_path):
     ]
 
 
-def test_patching_reports_its_phases_as_status(tmp_path):
+@pytest.mark.parametrize("pillow", [True, False])
+def test_patching_reports_its_phases_as_status(tmp_path, monkeypatch, pillow):
+    """The same lines with or without Pillow: with no head shot to draw there
+    is nothing to skip."""
+    if not pillow:
+        monkeypatch.setitem(sys.modules, "PIL", None)
     seen: list[str] = []
     source = iso(tmp_path)
     patcher = build(tmp_path, on_status=seen.append)

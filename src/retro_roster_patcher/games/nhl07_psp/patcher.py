@@ -891,17 +891,18 @@ class NHL07PSPPatcher(Patcher):
         dozens of European players. A player without a head shot, or whose head
         shot fails to download or decode, gets entry 0000, the game's own
         silhouette, so no 2006 face stays on a new player. Needs Pillow; skipped
-        with a status line without it. Returns how many portraits went in.
+        with a status line without it, when there are portraits to draw.
+        Returns how many portraits went in.
         """
-        if importlib.util.find_spec("PIL") is None:
-            self.status("Portraits skipped: Pillow is not installed")
-            return 0
         spbt = master_tdb.get_table("SPBT")
         if spbt is None or not photos:
             return 0
         art_of = {i: spbt.read_record(i).get("ART_") for i in _live_records(spbt)}
         wanted = portrait_targets(art_of, photos)
         if not wanted:
+            return 0
+        if importlib.util.find_spec("PIL") is None:
+            self.status("Portraits skipped: Pillow is not installed")
             return 0
 
         with open(writer.output_path, "rb") as f:
