@@ -564,3 +564,80 @@ def test_the_record_carries_no_flag_colours_of_its_own(mapper):
     them in from the provider's `Team`."""
     roster = _roster([], [])
     assert mapper.map_team_with_league_context(roster, [roster]).flag_colors == []
+
+
+def _lineup(*starters):
+    """A `get_lineup` result: (player id, ESPN position code) in start order."""
+    return {
+        "formation": "",
+        "event": 1,
+        "starters": [{"id": i, "position": c} for i, c in starters],
+    }
+
+
+def test_the_recent_lineup_starts_over_the_season_leaders(mapper):
+    players = _squad({"Goalkeeper": 2, "Defender": 6, "Midfielder": 6, "Attacker": 3})
+    # Season starts favour the low ids; the recent eleven is the high ones.
+    stats = {p.id: _stats(p.id, lineups=30 - p.id) for p in players}
+    lineup = _lineup(
+        (2, "G"),
+        (7, "RB"),
+        (8, "CD-R"),
+        (6, "CD-L"),
+        (5, "LB"),
+        (13, "DM"),
+        (14, "CM"),
+        (12, "AM"),
+        (11, "LM"),
+        (17, "CF"),
+        (16, "RF"),
+    )
+    eleven = mapper._select_best_15(players, stats, lineup)[:11]
+    assert {p.id for p in eleven} == {2, 7, 8, 6, 5, 13, 14, 12, 11, 17, 16}
+    assert eleven[0].id == 2  # the recent keeper keeps goal
+
+
+def test_a_front_three_puts_its_third_forward_in_midfield(mapper):
+    players = _squad({"Goalkeeper": 2, "Defender": 6, "Midfielder": 6, "Attacker": 4})
+    lineup = _lineup(
+        (1, "G"),
+        (3, "LB"),
+        (4, "CD"),
+        (5, "CD"),
+        (6, "RB"),
+        (9, "DM"),
+        (10, "CM"),
+        (11, "CM"),
+        (15, "LF"),
+        (16, "CF"),
+        (17, "RF"),
+    )
+    eleven = mapper._select_best_15(players, {}, lineup)[:11]
+    assert {p.id for p in eleven} == {1, 3, 4, 5, 6, 9, 10, 11, 15, 16, 17}
+    assert [p.position for p in eleven][5:9].count("Attacker") == 1  # one forward drops back
+
+
+def test_a_forward_with_no_starts_never_takes_a_place_from_a_starter(mapper):
+    # One forward has starts; the other never started. A midfielder with
+    # starts takes the second forward place instead.
+    players = _squad({"Goalkeeper": 1, "Defender": 4, "Midfielder": 5, "Attacker": 2})
+    stats = {p.id: _stats(p.id, lineups=10) for p in players if p.id != 12}
+    eleven = mapper._select_best_15(players, stats)[:11]
+    assert 12 not in {p.id for p in eleven}
+    assert {p.id for p in eleven} == {p.id for p in players if p.id != 12}
+
+
+def test_shared_surnames_are_told_apart(mapper):
+    names = mapper._distinct_names(
+        [
+            _player(1, name="Vitor Hugo"),
+            _player(2, name="Victor Hugo"),
+            _player(3, name="Gabriel Silva"),
+            _player(4, name="Lucas Silva"),
+            _player(5, name="Paulinho"),
+            _player(6, name="Paulinho"),
+            _player(7, name="Bernard"),
+        ]
+    )
+    assert names == ["Vitor", "Victor", "G.Silva", "L.Silva", "Paulinho", "Paulinh2", "Bernard"]
+    assert len(set(names)) == len(names)

@@ -32,7 +32,7 @@ from ...core.models import (
 from ...core.patcher import Patcher
 from ...core.registry import register
 from ...sports import _http
-from ...sports.espn import EspnClient
+from ...sports.espn import LINEUP_GROUPS, EspnClient
 from ...sports.models import LeagueData, Player, TeamRoster
 from . import kit_textures
 from .kits import AWAY, HOME, apply_spec
@@ -140,38 +140,6 @@ def shirt_name(player: Player) -> str:
     Full names in both fields cost 11 KB of room on the real disc."""
     return (player.last_name.strip() or pes_name(player)).upper()
 
-
-#: ESPN lineup position codes, by group.
-LINEUP_GROUPS = {
-    "G": "Goalkeeper",
-    "CD": "Defender",
-    "CD-L": "Defender",
-    "CD-R": "Defender",
-    "LB": "Defender",
-    "RB": "Defender",
-    "LWB": "Defender",
-    "RWB": "Defender",
-    "SW": "Defender",
-    "DM": "Midfielder",
-    "CM": "Midfielder",
-    "CM-L": "Midfielder",
-    "CM-R": "Midfielder",
-    "LM": "Midfielder",
-    "RM": "Midfielder",
-    "AM": "Midfielder",
-    "AM-L": "Midfielder",
-    "AM-R": "Midfielder",
-    "F": "Attacker",
-    "CF": "Attacker",
-    "CF-L": "Attacker",
-    "CF-R": "Attacker",
-    "LW": "Attacker",
-    "RW": "Attacker",
-    "LF": "Attacker",
-    "RF": "Attacker",
-    "LCF": "Attacker",
-    "RCF": "Attacker",
-}
 
 #: ESPN lineup position codes as the game's registered-position nibble
 #: (byte 53 >> 4): GK 0, CB 3, SB 4, DMF 5, CMF 7, SMF 8, AMF 9, SS 10, WF 11,

@@ -18,6 +18,7 @@ something else would be a judgement about how the game ought to play applied to
 
 from __future__ import annotations
 
+from ...sports.espn import LINEUP_GROUPS
 from ...sports.models import Player, PlayerStats, TeamRoster
 from .models import (
     PLAYERS_PER_TEAM,
@@ -118,14 +119,15 @@ class ISSStatMapper:
         best_15 = (
             team_roster.players[:PLAYERS_PER_TEAM]
             if order_as_given
-            else self._select_best_15(team_roster.players, team_roster.player_stats)
+            else self._select_best_15(
+                team_roster.players, team_roster.player_stats, team_roster.extra.get("lineup")
+            )
         )
 
         iss_players = []
-        for player in best_15:
+        for player, rom_name in zip(best_15, self._distinct_names(best_15), strict=True):
             stats = team_roster.player_stats.get(player.id)
             attrs = self.map_player(player, stats, percentiles)
-            rom_name = self._format_player_name(player)
             hair = self.HAIR_BY_POSITION.get(player.position, 0)
             iss_players.append(
                 ISSPlayerRecord(
@@ -256,67 +258,107 @@ class ISSStatMapper:
         assists_per_game = stats.assists / max(stats.appearances, 1)
         return goals_per_game >= 0.5 or assists_per_game >= 0.4
 
+    #: The fifteen's starting places by group: slot 0 keeps goal, then a 4-4-2.
+    XI_PLACES = (("Goalkeeper", 1), ("Defender", 4), ("Midfielder", 4), ("Attacker", 2))
+
+    #: Where a group's extra starters play when its places are full, nearest
+    #: first. Keepers never swap with outfield players.
+    SPILL = {
+        "Defender": ("Midfielder", "Attacker"),
+        "Midfielder": ("Attacker", "Defender"),
+        "Attacker": ("Midfielder", "Defender"),
+    }
+
     def _select_best_15(
         self,
         players: list[Player],
         player_stats: dict[int, PlayerStats] | None = None,
+        lineup: dict | None = None,
     ) -> list[Player]:
-        """Select best 15 players ordered for ISS starting lineup.
+        """The fifteen in ISS's order: the starting eleven, then four subs.
 
-        ISS uses the first 11 as starters, last 4 as subs.
-        Starting 11 (4-4-2): 1 GK, 4 DF, 4 MF, 2 FW.
-        Subs: 1 GK + best remaining (typically 1 MF, 2 FW).
+        The eleven is the team's recent starting lineup when `lineup` (what
+        `EspnClient.get_lineup` returns) has one: every listed starter plays,
+        in his lineup group, and a group with more starters than places (a
+        front three) sends the rest to the nearest group with room. Places
+        still open go to the players with the most starts this season, in
+        their group, then in a neighbouring one, and only then to a player
+        who never started, so a forward with no starts never takes a place a
+        midfielder with twenty would. Subs are the backup keeper, then the
+        best of the rest the same way.
         """
         stats = player_stats or {}
+        recent = {int(s["id"]): (i, s) for i, s in enumerate((lineup or {}).get("starters") or [])}
 
-        def _sort_key(p: Player) -> tuple[int, int, int]:
+        def group(p: Player) -> str:
+            if p.id in recent:
+                code = str(recent[p.id][1].get("position", "")).upper()
+                return LINEUP_GROUPS.get(code, p.position)
+            return p.position
+
+        def key(p: Player) -> tuple[int, int, int, int]:
             s = stats.get(p.id)
-            if s:
-                return (-s.lineups, -s.appearances, -s.minutes)
-            return (0, 0, 0)
+            return (
+                recent[p.id][0] if p.id in recent else len(recent),
+                -(s.lineups if s else 0),
+                -(s.appearances if s else 0),
+                -(s.minutes if s else 0),
+            )
 
-        by_position: dict[str, list[Player]] = {}
-        for p in players:
-            by_position.setdefault(p.position, []).append(p)
-        for pos in by_position:
-            by_position[pos].sort(key=_sort_key)
+        def started(p: Player) -> bool:
+            s = stats.get(p.id)
+            return p.id in recent or bool(s and s.lineups)
 
-        gks = by_position.get("Goalkeeper", [])
-        dfs = by_position.get("Defender", [])
-        mfs = by_position.get("Midfielder", [])
-        fws = by_position.get("Attacker", [])
+        pool = sorted(players, key=key)
+        places = dict(self.XI_PLACES)
+        chosen: dict[str, list[Player]] = {g: [] for g in places}
+        taken: set[int] = set()
 
-        starters = []
-        starters.extend(gks[:1])
-        starters.extend(dfs[:4])
-        starters.extend(mfs[:4])
-        starters.extend(fws[:2])
+        def fill(eligible, spill: bool) -> None:
+            for p in pool:
+                if id(p) in taken or not eligible(p):
+                    continue
+                home = group(p)
+                for target in (home, *(self.SPILL.get(home, ()) if spill else ())):
+                    if target in places and len(chosen[target]) < places[target]:
+                        chosen[target].append(p)
+                        taken.add(id(p))
+                        break
 
-        subs = []
-        subs.extend(gks[1:2])
+        for eligible in (lambda p: p.id in recent, started, lambda p: True):
+            fill(eligible, spill=False)
+            fill(eligible, spill=True)
+        eleven = [p for g, _ in self.XI_PLACES for p in chosen[g]]
 
-        remaining = (
-            dfs[4:]
-            + mfs[4:]
-            + fws[2:]
-            + gks[2:]
-            + [
-                p
-                for p in players
-                if p.position not in by_position or p not in gks + dfs + mfs + fws
-            ]
-        )
-        remaining.sort(key=_sort_key)
-        subs.extend(remaining)
+        rest = [p for p in pool if id(p) not in taken]
+        keepers = [p for p in rest if group(p) == "Goalkeeper"][:1]
+        subs = keepers + [p for p in rest if p not in keepers]
+        return (eleven + subs)[:PLAYERS_PER_TEAM]
 
-        squad = starters + subs
-
-        used = set(id(p) for p in squad)
-        extras = [p for p in players if id(p) not in used]
-        extras.sort(key=_sort_key)
-        squad.extend(extras)
-
-        return squad[:PLAYERS_PER_TEAM]
+    def _distinct_names(self, players: list[Player]) -> list[str]:
+        """Each player's ROM name, told apart within the team. Players the
+        surname alone would merge (Gabriel Silva, Lucas Silva) all become
+        initial and surname ("G.Silva"), or, when that still merges them (Vitor
+        Hugo, Victor Hugo), their first names; one-word names get a digit."""
+        names = [self._format_player_name(p) for p in players]
+        shared: dict[str, list[int]] = {}
+        for i, name in enumerate(names):
+            shared.setdefault(name, []).append(i)
+        for name, idx in shared.items():
+            if len(idx) < 2:
+                continue
+            words = [(_to_ascii(players[i].name) or name).split() for i in idx]
+            others = set(names) - {name}
+            picks: list[str | None] = []
+            for make in (lambda w: f"{w[0][0]}.{w[-1]}"[:8], lambda w: w[0][:8]):
+                picks = [make(w) if len(w) > 1 else None for w in words]
+                if None not in picks and len(set(picks)) == len(picks) and not others & set(picks):
+                    break
+            else:
+                picks = [name, *(f"{name[:7]}{k}" for k in range(2, len(idx) + 1))]
+            for i, pick in zip(idx, picks, strict=True):
+                names[i] = str(pick)
+        return names
 
     def _format_player_name(self, player: Player) -> str:
         """Build a ROM-friendly name from a Player: surname, 8 characters max."""

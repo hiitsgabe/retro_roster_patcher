@@ -48,6 +48,15 @@ class FakeApi:
         self.team_calls = []
         self.squad_calls = []
         self.stats_calls = []
+        self.lineup_calls = []
+
+    def get_lineup(self, team_id, league_id):
+        self.lineup_calls.append((team_id, league_id))
+        return {
+            "formation": "4-4-2",
+            "event": 1,
+            "starters": [{"id": team_id * 100 + 1, "position": "G"}],
+        }
 
     def get_leagues(self, id=None, season=None):
         self.league_calls.append((id, season))
@@ -455,6 +464,18 @@ def test_fetch_keys_the_player_stats_by_player_id(patcher):
     data = patcher.fetch(season=2025, league_id=2001)
     first = data.teams[0]
     assert set(first.player_stats) == {p.id for p in first.players}
+
+
+def test_fetch_keeps_each_teams_recent_lineup(patcher):
+    data = patcher.fetch(season=2025, league_id=2001)
+    assert patcher.api.lineup_calls == [(t.team.id, 2001) for t in data.teams]
+    assert data.teams[0].extra["lineup"]["starters"][0]["id"] == data.teams[0].team.id * 100 + 1
+
+
+def test_the_suggested_order_starts_the_recent_keeper(patcher):
+    data = patcher.fetch(season=2025, league_id=2001)
+    first = data.teams[0]
+    assert patcher.suggest_squad_order(first)[0].id == first.team.id * 100 + 1
 
 
 def _league(patcher):
