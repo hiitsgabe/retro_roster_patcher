@@ -558,13 +558,9 @@ class KGJMLBPatcher(Patcher):
         """Each mapped slot's logo: `assets_dir/logos/<team_id>.png`, else the
         provider's (downloaded once into `cache_dir/logos`). A slot with
         neither, or one that will not load, keeps the cartridge's; without
-        Pillow every slot does, with one status line."""
-        try:
-            from PIL import Image
-        except ImportError:
-            self.status("Pillow is not installed; team logos skipped")
-            return {}
-        pictures: dict[int, Image.Image] = {}
+        Pillow every slot does, with one status line when there were logos
+        to draw."""
+        sources = {}
         for slot, record in rosters.teams.items():
             override = (
                 self.assets_dir / "logos" / f"{record.team_id}.png"
@@ -573,8 +569,17 @@ class KGJMLBPatcher(Patcher):
             )
             if override is not None and not override.is_file():
                 override = None
-            if override is None and not record.logo_url:
-                continue
+            if override is not None or record.logo_url:
+                sources[slot] = (record, override)
+        if not sources:
+            return {}
+        try:
+            from PIL import Image
+        except ImportError:
+            self.status("Pillow is not installed; team logos skipped")
+            return {}
+        pictures: dict[int, Image.Image] = {}
+        for slot, (record, override) in sources.items():
             try:
                 png = override.read_bytes() if override else self._load_logo(record.logo_url)
                 picture = Image.open(io.BytesIO(png))

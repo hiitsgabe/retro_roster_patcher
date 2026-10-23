@@ -838,7 +838,12 @@ def test_patch_reports_progress_once_per_target_and_once_at_the_end(patcher, rom
     assert seen == [0.0, 0.5, 1.0]
 
 
-def test_patch_narrates_its_three_steps(tmp_path, rom, out):
+@pytest.mark.parametrize("pillow", [True, False])
+def test_patch_narrates_its_three_steps(tmp_path, rom, out, monkeypatch, pillow):
+    """The same lines with or without Pillow: with no logo or head shot to
+    draw there is nothing to skip."""
+    if not pillow:
+        monkeypatch.setitem(sys.modules, "PIL", None)
     messages = []
     p = KGJMLBPatcher(cache_dir=tmp_path / "cache", on_status=messages.append)
     p.api = FakeApi(_teams())
