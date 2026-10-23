@@ -580,6 +580,14 @@ enforces. Set `requires_slot_mapping=True` if the ROM's team slots cannot be mat
 automatically; `Patcher.check_slot_mapping` then rejects both a missing mapping and an
 unwanted one.
 
+A game that draws or measures players' faces shares two helpers.
+`core.headshots.load_headshot(cache_dir, url, transport)` returns a provider head shot
+from `cache_dir/headshots`, downloading it once, or `None` (an error page is never
+cached, and no failure raises). `core.skin.face_ita(png)` measures the face's skin as
+its ITA angle (`None` when there is no face; needs Pillow), and `core.skin.tone(ita,
+cuts)` cuts it into the game's own number of tones at the game's cut points, lightest
+first; `kgj_mlb_snes.looks.SKIN_CUTS` are KGJ's six.
+
 ## Development
 
 ```bash

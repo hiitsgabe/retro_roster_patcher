@@ -232,6 +232,15 @@ def test_a_tile_merged_into_a_flipped_twin_keeps_the_flip():
     )
 
 
+def test_without_flips_a_tile_merges_into_its_nearest_unflipped():
+    """Mode 7 (NHL '94's boot screen) cannot flip: the upside-down twin is far."""
+    base = bytes([1] * 32 + [2] * 32)
+    near = bytes([1] * 31 + [2] + [2] * 32)
+    colours = {0: [0, 0x7FFF, 0x001F] + [0] * 13}
+    patterns = [base, screens._flipped(base, 2), near]
+    assert screens._merge(patterns, [0] * 3, [1, 5, 5], colours, 2, flips=False) == {0: (2, 0)}
+
+
 def test_the_konami_sweep_tiles_are_kept_verbatim(rom):
     konami = screens.SLOTS_BY_NAME["konami"]
     written, _ = screens.write(bytes(rom), {"konami": _flat_picture((256, 224), 10)})

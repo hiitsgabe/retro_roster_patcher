@@ -56,7 +56,6 @@ import math
 import os
 import shutil
 import struct
-import unicodedata
 from collections import Counter
 from collections.abc import Iterable
 from itertools import permutations
@@ -64,6 +63,7 @@ from types import TracebackType
 from typing import IO
 
 from ...core.errors import RomError
+from ...core.text import to_ascii as _to_ascii
 from .konami import compress, decompress
 from .models import (
     PLAYERS_PER_TEAM,
@@ -320,12 +320,6 @@ def _build_char_to_byte() -> dict[str, int]:
 #: ISS custom character encoding. Note 0x00 is a SPACE and not a terminator, so
 #: a character this table has no entry for encodes to a space silently.
 CHAR_TO_BYTE = _build_char_to_byte()
-
-
-def _to_ascii(text: str) -> str:
-    """Strip diacritics and non-ASCII chars."""
-    nfkd = unicodedata.normalize("NFKD", text)
-    return "".join(c for c in nfkd if not unicodedata.combining(c) and ord(c) < 128)
 
 
 def _encode_iss_name(name: str, max_len: int = _PLAYER_NAME_LENGTH) -> bytes:

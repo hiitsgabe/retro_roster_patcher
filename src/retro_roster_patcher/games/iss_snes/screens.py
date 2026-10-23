@@ -514,10 +514,13 @@ def _assign_rows(picture: Image.Image, counts: list[int]) -> tuple[list[int], li
     return assign, colours
 
 
-def _distances(patterns: list[bytes], colours: list[int]) -> tuple[list[bytes], list[bytes]]:
-    """For each pair: how far apart the tiles look in `colours`, and the flip that does best.
+def _distances(
+    patterns: list[bytes], colours: list[int], flips: bool = True
+) -> tuple[list[bytes], list[bytes]]:
+    """For each pair: how far apart the tiles look in `colours`, and the flip that does best
+    (always none without `flips`, for Mode 7, which cannot flip a tile).
 
-    `colours` has 16 entries. The distance is the mean of |dR|+|dG|+|dB| / 3 over
+    `colours` has 16 entries, or 256. The distance is the mean of |dR|+|dG|+|dB| / 3 over
     the tile, rounded (0-255); flip codes are map-word bits (1 h, 2 v).
     """
     from PIL import Image, ImageChops
@@ -534,11 +537,11 @@ def _distances(patterns: list[bytes], colours: list[int]) -> tuple[list[bytes], 
         (1, rgb.transpose(t.FLIP_LEFT_RIGHT), True),
         (2, rgb.transpose(t.FLIP_TOP_BOTTOM), False),
         (3, rgb.transpose(t.ROTATE_180), True),
-    )
+    )[: 4 if flips else 1]
     data = rgb.tobytes()
     width = 24 * m
     near: list[bytes] = []
-    flips: list[bytes] = []
+    codes: list[bytes] = []
     for i in range(m):
         rows = [data[y * width + 24 * i : y * width + 24 * i + 24] * m for y in range(8)]
         rep = Image.frombytes("RGB", (8 * m, 8), b"".join(rows))
@@ -555,8 +558,8 @@ def _distances(patterns: list[bytes], colours: list[int]) -> tuple[list[bytes], 
                     how[j] = code
         best[i] = 255
         near.append(bytes(best))
-        flips.append(bytes(how))
-    return near, flips
+        codes.append(bytes(how))
+    return near, codes
 
 
 def _merge(
@@ -565,6 +568,7 @@ def _merge(
     weights: list[int],
     colours: dict[int, list[int]],
     room: int,
+    flips: bool = True,
 ) -> dict[int, tuple[int, int]]:
     """Merge tiles until `room` remain: pattern -> (pattern it became, flip).
 
@@ -579,9 +583,9 @@ def _merge(
     heap: list[tuple[int, int, int]] = []
     tables: dict[int, tuple[list[int], list[bytes], list[bytes], list[list[int]], list[int]]] = {}
     for row, members in groups.items():
-        near, flips = _distances([patterns[p] for p in members], colours[row])
+        near, how = _distances([patterns[p] for p in members], colours[row], flips)
         order = [sorted(range(len(members)), key=d.__getitem__) for d in near]
-        tables[row] = (members, near, flips, order, [0] * len(members))
+        tables[row] = (members, near, how, order, [0] * len(members))
     local = {
         p: (row, i) for row, (members, *_rest) in tables.items() for i, p in enumerate(members)
     }
@@ -606,14 +610,14 @@ def _merge(
         if not alive[p]:
             continue
         row, i = local[p]
-        members, near, flips, _order, _cursor = tables[row]
+        members, near, how, _order, _cursor = tables[row]
         j = local[q][1]
         if not alive[q] or cost != weight[p] * near[i][j]:
             push(p)
             continue
         alive[p] = False
         weight[q] += weight[p]
-        became[p] = (q, flips[i][j])
+        became[p] = (q, how[i][j])
         left -= 1
     return became
 
@@ -870,8 +874,10 @@ def _header(size: int) -> int:
     return 512 if size % 1024 == 512 else 0
 
 
-def load_images(given: Any, status: Callable[[str], None]) -> dict[str, Any]:
-    """`patch(images=...)`: slot name to PNG path or bytes, decoded.
+def load_images(
+    given: Any, status: Callable[[str], None], names: tuple[str, ...] = IMAGE_SLOT_NAMES
+) -> dict[str, Any]:
+    """`patch(images=...)`: slot name (one of `names`) to PNG path or bytes, decoded.
 
     Returns {} without Pillow (with a status line).
 
@@ -880,10 +886,8 @@ def load_images(given: Any, status: Callable[[str], None]) -> dict[str, Any]:
     """
     images = dict(given or {})
     for name in images:
-        if name not in SLOTS_BY_NAME:
-            raise CapabilityError(
-                f"Unknown image slot {name!r}. Slots: {', '.join(IMAGE_SLOT_NAMES)}"
-            )
+        if name not in names:
+            raise CapabilityError(f"Unknown image slot {name!r}. Slots: {', '.join(names)}")
     if not images:
         return {}
     try:
@@ -929,11 +933,16 @@ def export(rom_path: Path, out_dir: Path) -> list[Path]:
     rom = data[_header(len(data)) :]
     if len(rom) < _ONE_MIB:
         raise RomError(f"Too small to hold ISS screen art: {rom_path}")
+    return save_pngs(out_dir, ((slot.name, render(rom, slot)) for slot in SLOTS))
+
+
+def save_pngs(out_dir: Path, pictures: Iterable[tuple[str, Image.Image]]) -> list[Path]:
+    """Write each (slot name, picture) as `<out_dir>/<slot>.png`."""
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     written = []
-    for slot in SLOTS:
-        target_path = out / f"{slot.name}.png"
-        render(rom, slot).save(target_path)
-        written.append(target_path)
+    for name, picture in pictures:
+        path = out / f"{name}.png"
+        picture.save(path)
+        written.append(path)
     return written

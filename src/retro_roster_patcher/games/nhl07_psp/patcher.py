@@ -27,7 +27,6 @@ harmonise them. See `analyze_rom`.
 
 from __future__ import annotations
 
-import hashlib
 import importlib.util
 import os
 from collections.abc import Mapping
@@ -37,6 +36,7 @@ from typing import Any
 
 from ...core.concurrency import parallel_map
 from ...core.errors import ApiError, CapabilityError, RomError, as_rom_error
+from ...core.headshots import load_headshot
 from ...core.models import (
     MappedRosters,
     PartialFn,
@@ -293,10 +293,6 @@ class _MirrorTables:
         """Mirror one ROST write, if there is a mirror with room for it."""
         if self.roster_rost is not None and index < self.roster_rost.capacity:
             self.roster_rost.write_record(index, values)
-
-
-# What a head shot body must start with to be kept: PNG or JPEG.
-_IMAGE_MAGIC = (b"\x89PNG\r\n\x1a\n", b"\xff\xd8\xff")
 
 
 @register(
@@ -937,34 +933,9 @@ class NHL07PSPPatcher(Patcher):
             return None
 
     def _load_headshot(self, url: str) -> bytes | None:
-        """The head shot, from `cache_dir/headshots` or downloaded once; None on failure.
-
-        Only a PNG or JPEG body is kept, so an empty 200 or an HTML error page is
-        refetched next time rather than cached as the player's photo. No failure
-        here, cache I/O included, fails the patch: the player gets the
-        silhouette instead.
-        """
-        cache = self.cache_dir / "headshots" / f"{hashlib.sha1(url.encode()).hexdigest()}.png"
-        try:
-            cached = cache.read_bytes() if cache.is_file() else b""
-        except OSError:
-            cached = b""
-        if cached.startswith(_IMAGE_MAGIC):
-            return cached
-        try:
-            content = (self._transport or _http.default_transport)(url, {}, 15.0)
-        except Exception:  # noqa: BLE001 - a missing photo must not fail the patch
-            return None
-        if not content.startswith(_IMAGE_MAGIC):
-            return None
-        try:
-            cache.parent.mkdir(parents=True, exist_ok=True)
-            partial = cache.with_suffix(".part")
-            partial.write_bytes(content)
-            partial.replace(cache)
-        except OSError:
-            pass
-        return content
+        """`core.headshots.load_headshot` with this patcher's cache and transport:
+        None, and the silhouette, when there is no usable picture."""
+        return load_headshot(self.cache_dir, url, self._transport)
 
     @staticmethod
     def _classify_slots(
