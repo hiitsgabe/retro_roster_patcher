@@ -158,6 +158,9 @@ NHL_TEAM_MAP = {
 #: Completed matches a lineup is read from: the eleven who started most often.
 LINEUP_MATCHES = 5
 
+#: Completed MLB games a batting order is read from (`get_baseball_lineup`).
+LINEUP_GAMES = 10
+
 _ID_TO_LEAGUE = {item["id"]: item for item in ESPN_LEAGUES}
 _CODE_TO_LEAGUE = {item["code"]: item for item in ESPN_LEAGUES}
 
@@ -506,6 +509,95 @@ class EspnClient:
             self._save_cache(cache_key, stats)
         return stats
 
+    def get_baseball_athlete_stats(self, athlete_id: int, season: int) -> dict[str, dict]:
+        """One MLB player's regular-season line by category, `{"batting": {"AVG":
+        0.284, "HR": 25.0, ...}, "pitching": {...}, "fielding": {...}}`, keyed by
+        ESPN's abbreviations (the first of a repeated one wins). `{}` when ESPN
+        has none.
+
+        One request per player, so the line is cached; an empty answer is not,
+        so a failed request is retried by the next fetch.
+        """
+        cache_key = f"espn_baseball_stats_{athlete_id}_{season}"
+        cached = self._load_cache(cache_key)
+        if cached:
+            return cached
+        url = f"{BASEBALL_CORE_URL}/seasons/{season}/types/2/athletes/{athlete_id}/statistics"
+        try:
+            data = _http.get_json(url, transport=self._transport)
+        except Exception:
+            return {}
+        lines: dict[str, dict] = {}
+        for category in (data.get("splits") or {}).get("categories") or []:
+            line = lines.setdefault(str(category.get("name", "")), {})
+            for stat in category.get("stats") or []:
+                line.setdefault(str(stat.get("abbreviation", "")), _as_float(stat.get("value")))
+        if lines:
+            self._save_cache(cache_key, lines)
+        return lines
+
+    def get_baseball_lineup(
+        self, team_id: int, season: int, today: date | None = None
+    ) -> list[dict[str, Any]]:
+        """Where a club's batters have batted lately: `[{"id", "order",
+        "starts"}, ...]`, `order` being the average lineup spot (1-9) of each
+        player who started any of its last `LINEUP_GAMES` regular-season games
+        of `season` up to `today`, and `starts` how many of them he started;
+        sorted by `order`. `[]` when ESPN has none.
+
+        One request for the game list, then one per game, cached per game since
+        a played game does not change.
+        """
+        last = min(today or date.today(), date(season, 12, 31))
+        if last.year < season:
+            return []
+        url = (
+            f"{BASEBALL_CORE_URL}/seasons/{season}/types/2/teams/{team_id}/events"
+            f"?limit=200&dates={season}0101-{last:%Y%m%d}"
+        )
+        try:
+            items = _http.get_json(url, transport=self._transport).get("items") or []
+        except Exception:
+            return []
+        refs = [str(item.get("$ref", "")) for item in items]
+        events = [ref.split("/events/")[1].split("?")[0] for ref in refs if "/events/" in ref]
+        games = parallel_map(
+            lambda event: self._baseball_starters(team_id, event), events[-LINEUP_GAMES:]
+        )
+        orders: dict[int, list[int]] = {}
+        for game in games:
+            for pid, order in game:
+                orders.setdefault(pid, []).append(order)
+        lineup = [
+            {"id": pid, "order": sum(spots) / len(spots), "starts": len(spots)}
+            for pid, spots in orders.items()
+        ]
+        return sorted(lineup, key=lambda starter: starter["order"])
+
+    def _baseball_starters(self, team_id: int, event_id: str) -> list[tuple[int, int]]:
+        """One game's starting batters for `team_id` as (player id, lineup spot),
+        `[]` for a game not played. Cached once it has any."""
+        cache_key = f"espn_baseball_starters_{team_id}_{event_id}"
+        cached = self._load_cache(cache_key)
+        if cached:
+            return [(int(pid), int(order)) for pid, order in cached["starters"]]
+        url = (
+            f"{BASEBALL_CORE_URL}/events/{event_id}/competitions/{event_id}"
+            f"/competitors/{team_id}/roster"
+        )
+        try:
+            entries = _http.get_json(url, transport=self._transport).get("entries") or []
+        except Exception:
+            return []
+        starters = [
+            (int(entry.get("playerId") or 0), entry["batOrder"])
+            for entry in entries
+            if entry.get("starter") and entry.get("batOrder") in range(1, 10)
+        ]
+        if starters:
+            self._save_cache(cache_key, {"starters": starters})
+        return starters
+
     def _parse_baseball_squad(self, data: dict) -> list[Player]:
         """Parse MLB team roster with baseball-specific positions.
 
@@ -554,9 +646,12 @@ class EspnClient:
                         hand_info.get("abbreviation", "") if isinstance(hand_info, dict) else ""
                     )
 
-                # Pounds, as `_parse_hockey_squad` reads it. Zero means "not
-                # reported"; a consumer must treat it that way.
+                # Pounds and inches, as `_parse_hockey_squad` reads them. Zero
+                # means "not reported"; a consumer must treat it that way.
                 weight = athlete.get("weight", 0) or 0
+                height = athlete.get("height", 0) or 0
+                headshot = athlete.get("headshot")
+                photo = headshot.get("href", "") if isinstance(headshot, dict) else ""
 
                 players.append(
                     Player(
@@ -568,8 +663,9 @@ class EspnClient:
                         nationality=athlete.get("citizenship", ""),
                         position=pos_abbrev,
                         number=number,
-                        photo_url="",
+                        photo_url=photo,
                         weight=float(weight),
+                        height=float(height),
                         handedness=throw_hand,
                         bats=bat_hand,
                     )

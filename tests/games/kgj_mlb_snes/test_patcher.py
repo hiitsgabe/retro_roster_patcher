@@ -1,9 +1,7 @@
 """The KGJ MLB patcher against the unified interface.
 
-`_roster_type_for_slot` is where roster-type stamping moved when
-`write_team_roster` stopped mutating the caller's records. The value is
-upstream's, from the slot index; `map_rosters` keeps pitchers from slot 15 on
-whatever the squad's shape, so the index says what kind of player is there.
+`map_rosters` keeps pitchers from slot 15 on whatever the squad's shape: the
+game itself decides who pitches by the slot.
 
 Every read-back of a patched ROM goes through a *fresh* reader on the output
 path. `KGJRomWriter.__init__` builds its own reader over the *input* file, so
@@ -11,6 +9,8 @@ path. `KGJRomWriter.__init__` builds its own reader over the *input* file, so
 asserting against it would assert nothing.
 """
 
+import copy
+import io
 import subprocess
 import sys
 import textwrap
@@ -19,21 +19,18 @@ import pytest
 
 from retro_roster_patcher.core.errors import ApiError, CapabilityError, MappingError, RomError
 from retro_roster_patcher.core.models import MappedRosters, PatchResult, RomSlot, SlotMapping
+from retro_roster_patcher.games.kgj_mlb_snes import expansion, looks
 from retro_roster_patcher.games.kgj_mlb_snes.models import (
     BATTERS_PER_TEAM,
     KGJ_TEAM_ORDER,
     PLAYERS_PER_TEAM,
-    ROSTER_TYPE_BATTER,
-    ROSTER_TYPE_RELIEVER,
-    ROSTER_TYPE_STARTER,
-    STARTERS_PER_TEAM,
     TEAM_COUNT,
     KGJPlayerRecord,
     KGJTeamRecord,
 )
 from retro_roster_patcher.games.kgj_mlb_snes.patcher import (
     KGJMLBPatcher,
-    _roster_type_for_slot,
+    _is_al,
     _team_data_fits,
 )
 from retro_roster_patcher.games.kgj_mlb_snes.rom_reader import TEAM_DATA_SPAN, KGJRomReader
@@ -57,17 +54,21 @@ OAK_SLOT = 10
 class FakeApi:
     """Stands in for `EspnClient`.
 
-    Records what it was asked for, because `season` reaches the two endpoints
-    differently -- a cache key on the squad call, a path segment on the leaders
-    call -- and upstream passed it to only one of them.
+    Records what it was asked for, because `season` reaches the endpoints
+    differently -- a cache key on the squad call, a path segment on the stats
+    and lineup calls -- and upstream passed it to only one of them.
     """
 
-    def __init__(self, teams, squad_size=25, leaders=None):
+    def __init__(self, teams, squad_size=25, lines=None, lineup=None):
         self._teams = teams
         self._squad_size = squad_size
-        self._leaders = {"0": {"AVG": 0.311}} if leaders is None else leaders
+        # Player 0 bats, player 15 pitches; both have a line in each category.
+        both = {"batting": {"AVG": 0.311}, "pitching": {"ERA": 2.5}}
+        self._lines = {0: both, 15: both} if lines is None else lines
+        self._lineup = lineup or []
         self.squad_calls = []
-        self.leader_calls = []
+        self.stat_calls = []
+        self.lineup_calls = []
 
     def get_mlb_teams(self):
         return list(self._teams)
@@ -84,16 +85,20 @@ class FakeApi:
             for index in range(self._squad_size)
         ]
 
-    def get_baseball_team_leaders(self, team_id, season=2025):
-        self.leader_calls.append((team_id, season))
-        return dict(self._leaders)
+    def get_baseball_athlete_stats(self, athlete_id, season):
+        self.stat_calls.append((athlete_id, season))
+        return dict(self._lines.get(athlete_id, {}))
+
+    def get_baseball_lineup(self, team_id, season):
+        self.lineup_calls.append((team_id, season))
+        return list(self._lineup)
 
 
 def _teams():
     return [
         Team(id=1, name="Seattle Mariners", code="SEA"),
         Team(id=2, name="Chicago White Sox", code="CWS"),
-        Team(id=3, name="Arizona Diamondbacks", code="ARI"),
+        Team(id=3, name="Montreal Expos", code="MON"),
         Team(id=4, name="Not A Real Team", code="ZZZ"),
     ]
 
@@ -136,7 +141,7 @@ def _league_data(*entries, season=2025):
                     )
                     for n in range(size)
                 ],
-                extra={"leaders": {}},
+                extra={"stats": {}},
             )
             for index, (code, size) in enumerate(entries)
         ],
@@ -169,7 +174,7 @@ def _uneven_league(batters, starters, relievers, code="SEA"):
             TeamRoster(
                 team=Team(id=1, name=code, code=code),
                 players=players,
-                extra={"leaders": {}},
+                extra={"stats": {}},
             )
         ],
     )
@@ -182,7 +187,7 @@ def _records(count):
             last_name=f"WRITE{index:02d}",
             position="CF",
             jersey_number=index + 1,
-            roster_type=_roster_type_for_slot(index),
+            is_pitcher=index >= BATTERS_PER_TEAM,
         )
         for index in range(count)
     ]
@@ -294,35 +299,8 @@ def test_the_default_provider_is_the_first_declared(tmp_path):
     assert p.provider == "espn"
 
 
-@pytest.mark.parametrize("slot", [0, 7, BATTERS_PER_TEAM - 1])
-def test_a_batter_slot_takes_the_batter_nibble(slot):
-    assert _roster_type_for_slot(slot) == ROSTER_TYPE_BATTER
-
-
-@pytest.mark.parametrize("slot", [BATTERS_PER_TEAM, BATTERS_PER_TEAM + STARTERS_PER_TEAM - 1])
-def test_a_starting_pitcher_slot_takes_the_starter_nibble(slot):
-    assert _roster_type_for_slot(slot) == ROSTER_TYPE_STARTER
-
-
-@pytest.mark.parametrize("slot", [BATTERS_PER_TEAM + STARTERS_PER_TEAM, PLAYERS_PER_TEAM - 1])
-def test_a_relief_pitcher_slot_takes_the_reliever_nibble(slot):
-    assert _roster_type_for_slot(slot) == ROSTER_TYPE_RELIEVER
-
-
-def test_the_slot_layout_calls_slot_twelve_a_batter_slot():
-    assert _roster_type_for_slot(12) == ROSTER_TYPE_BATTER
-
-
-def test_the_starter_boundary_is_the_twenty_upstream_hardcoded():
-    # Upstream's literal for the end of the rotation, read off the two
-    # constants it stands for.
-    assert BATTERS_PER_TEAM + STARTERS_PER_TEAM == 20
-
-
-def test_the_three_nibbles_are_distinct():
-    # A helper that returned one constant would satisfy any single test above.
-    values = {ROSTER_TYPE_BATTER, ROSTER_TYPE_STARTER, ROSTER_TYPE_RELIEVER}
-    assert len(values) == 3
+def test_the_al_is_the_first_fourteen_slots():
+    assert [_is_al(slot) for slot in (0, 13, 14, 27)] == [True, True, False, False]
 
 
 def _reader_for(path):
@@ -375,7 +353,16 @@ def test_analyze_reports_the_path_it_was_given(patcher, rom):
 
 
 def test_analyze_reports_one_slot_per_team(patcher, rom):
-    assert len(patcher.analyze_rom(rom).slots) == TEAM_COUNT
+    # The 28 clubs and the two All-Star teams, Arizona's and Tampa Bay's.
+    assert len(patcher.analyze_rom(rom).slots) == expansion.TEAMS
+
+
+def test_the_last_two_slots_are_the_all_star_teams(patcher, rom):
+    slots = patcher.analyze_rom(rom).slots[TEAM_COUNT:]
+    assert [(s.index, s.display_name) for s in slots] == [
+        (28, "National League All-Stars"),
+        (29, "American League All-Stars"),
+    ]
 
 
 def test_a_slots_display_name_is_the_1994_team(patcher, rom):
@@ -386,7 +373,7 @@ def test_every_slots_display_name_is_distinct(patcher, rom):
     # `RomSlot.display_name` is what a slot-picking UI lists, so a repeated
     # value leaves the user unable to tell two rows apart.
     names = [slot.display_name for slot in patcher.analyze_rom(rom).slots]
-    assert len(set(names)) == TEAM_COUNT
+    assert len(set(names)) == expansion.TEAMS
 
 
 def test_a_slots_current_name_says_it_is_a_player(patcher, rom):
@@ -486,7 +473,7 @@ def test_the_unreadable_error_names_the_file(patcher, tmp_path):
 
 
 def test_fetch_returns_one_roster_per_slot_mapped_team(patcher):
-    # SEA and CWS have slots; ARI never existed in 1994 and ZZZ is not a team.
+    # SEA and CWS have slots; MON is no team of today and ZZZ is not a team.
     assert len(patcher.fetch(season=2025).teams) == 2
 
 
@@ -510,22 +497,31 @@ def test_fetch_threads_the_season_into_the_squad_call(patcher):
     assert patcher.api.squad_calls == [(1, 1994), (2, 1994)]
 
 
-def test_fetch_threads_the_season_into_the_leaders_call(patcher):
+def test_fetch_asks_for_every_players_season_line(patcher):
     patcher.fetch(season=1994)
-    assert patcher.api.leader_calls == [(1, 1994), (2, 1994)]
+    assert sorted(patcher.api.stat_calls) == sorted((n, 1994) for n in range(25) for _ in range(2))
 
 
-def test_fetch_puts_the_leaders_where_map_rosters_can_reach_them(patcher):
-    # DELIBERATE DIVERGENCE: upstream left these on `self.team_stats`, an
-    # instance side channel no serialised rosters file could carry.
+def test_fetch_threads_the_season_into_the_lineup_call(patcher):
+    patcher.fetch(season=1994)
+    assert patcher.api.lineup_calls == [(1, 1994), (2, 1994)]
+
+
+def test_fetch_keeps_the_batting_line_of_a_batter_and_the_pitching_line_of_a_pitcher(patcher):
     data = patcher.fetch(season=2025)
-    assert data.teams[0].extra["leaders"] == {"0": {"AVG": 0.311}}
+    assert data.teams[0].extra["stats"] == {"0": {"AVG": 0.311}, "15": {"ERA": 2.5}}
 
 
-def test_a_team_with_no_leaders_still_gets_an_empty_dict(tmp_path):
+def test_a_team_with_no_lines_still_gets_an_empty_dict(tmp_path):
     p = KGJMLBPatcher(cache_dir=tmp_path / "cache")
-    p.api = FakeApi(_teams(), leaders={})
-    assert p.fetch(season=2025).teams[0].extra["leaders"] == {}
+    p.api = FakeApi(_teams(), lines={})
+    assert p.fetch(season=2025).teams[0].extra["stats"] == {}
+
+
+def test_fetch_puts_the_lineup_where_the_squad_order_can_reach_it(tmp_path):
+    p = KGJMLBPatcher(cache_dir=tmp_path / "cache")
+    p.api = FakeApi(_teams(), lineup=[{"id": 3, "order": 1.0}])
+    assert p.fetch(season=2025).teams[0].extra["lineup"] == [{"id": 3, "order": 1.0}]
 
 
 def test_fetch_raises_when_the_provider_returns_no_teams(tmp_path):
@@ -537,7 +533,7 @@ def test_fetch_raises_when_the_provider_returns_no_teams(tmp_path):
 
 def test_fetch_raises_when_no_team_maps_to_a_slot(tmp_path):
     p = KGJMLBPatcher(cache_dir=tmp_path / "cache")
-    p.api = FakeApi([Team(id=1, name="Arizona", code="ARI"), Team(id=2, name="Rays", code="TB")])
+    p.api = FakeApi([Team(id=1, name="Expos", code="MON"), Team(id=2, name="Pilots", code="SEP")])
     with pytest.raises(ApiError):
         p.fetch(season=2025)
 
@@ -595,27 +591,7 @@ def test_a_squad_of_more_than_25_is_cut_to_the_roster_size(patcher):
 
 
 def test_a_team_with_no_rom_slot_is_dropped(patcher):
-    assert patcher.map_rosters(_league_data(("ARI", 25))).teams == {}
-
-
-def test_the_first_fifteen_records_carry_the_batter_nibble(patcher):
-    mapped = patcher.map_rosters(_league_data(("SEA", 25)))
-    kinds = [r.roster_type for r in mapped.teams[SEA_SLOT].players[:BATTERS_PER_TEAM]]
-    assert kinds == [ROSTER_TYPE_BATTER] * BATTERS_PER_TEAM
-
-
-def test_the_next_five_records_carry_the_starter_nibble(patcher):
-    mapped = patcher.map_rosters(_league_data(("SEA", 25)))
-    span = slice(BATTERS_PER_TEAM, BATTERS_PER_TEAM + STARTERS_PER_TEAM)
-    kinds = [r.roster_type for r in mapped.teams[SEA_SLOT].players[span]]
-    assert kinds == [ROSTER_TYPE_STARTER] * STARTERS_PER_TEAM
-
-
-def test_the_last_five_records_carry_the_reliever_nibble(patcher):
-    mapped = patcher.map_rosters(_league_data(("SEA", 25)))
-    span = slice(BATTERS_PER_TEAM + STARTERS_PER_TEAM, None)
-    kinds = [r.roster_type for r in mapped.teams[SEA_SLOT].players[span]]
-    assert kinds == [ROSTER_TYPE_RELIEVER] * 5
+    assert patcher.map_rosters(_league_data(("MON", 25))).teams == {}
 
 
 def test_the_pitcher_slots_hold_pitcher_records(patcher):
@@ -761,7 +737,9 @@ def test_the_recomputed_checksum_is_not_the_one_the_image_arrived_with(patcher, 
     )
 
 
-def test_patching_a_headered_image_shifts_the_checksum(patcher, tmp_path, out):
+def test_patching_a_headered_image_shifts_the_checksum_and_leaves_the_header_out(
+    patcher, tmp_path, out
+):
     source = fixture.write_kgj_rom(tmp_path / "kgj.smc", with_header=True)
     patcher.patch(rom_path=source, output_path=out, rosters=_mapped((SEA_SLOT, 25)))
     written = out.read_bytes()
@@ -771,7 +749,7 @@ def test_patching_a_headered_image_shifts_the_checksum(patcher, tmp_path, out):
     scratch[at : at + 2] = b"\x00\x00"
     comp = fixture.COMPLEMENT_OFFSET + fixture.SMC_HEADER_SIZE
     scratch[comp : comp + 2] = b"\xff\xff"
-    assert checksum == sum(scratch) & 0xFFFF
+    assert checksum == sum(scratch[fixture.SMC_HEADER_SIZE :]) & 0xFFFF
 
 
 def test_an_empty_roster_is_not_written_and_not_counted(patcher, rom, out):
@@ -869,21 +847,12 @@ def test_patch_narrates_its_three_steps(tmp_path, rom, out):
 
 
 def test_patch_does_not_mutate_the_rosters_it_was_given(patcher, rom, out, tmp_path):
-    # DELIBERATE DIVERGENCE: upstream's `write_team_roster` set `roster_type` on
-    # the caller's own records from the slot index, so a second patch from the
-    # same `MappedRosters` could not be assumed to match the first.
+    # A second patch from the same `MappedRosters` matches the first.
     rosters = _mapped((SEA_SLOT, 25))
     patcher.patch(rom_path=rom, output_path=out, rosters=rosters)
     again = tmp_path / "again.sfc"
     patcher.patch(rom_path=rom, output_path=again, rosters=rosters)
     assert again.read_bytes() == out.read_bytes()
-
-
-def test_the_records_keep_the_roster_types_they_were_built_with(patcher, rom, out):
-    rosters = _mapped((SEA_SLOT, 25))
-    before = [r.roster_type for r in rosters.teams[SEA_SLOT].players]
-    patcher.patch(rom_path=rom, output_path=out, rosters=rosters)
-    assert [r.roster_type for r in rosters.teams[SEA_SLOT].players] == before
 
 
 def test_analyze_reports_a_readable_non_kgj_image_rather_than_raising(patcher, tmp_path):
@@ -963,8 +932,8 @@ class _StubMapper:
     def select_roster(self, players, stats=None):
         return self.real.select_roster(players, stats)
 
-    def select_roster_groups(self, players, stats=None):
-        return self.real.select_roster_groups(players, stats)
+    def select_roster_groups(self, players, stats=None, lineup=None, lineup_size=9):
+        return self.real.select_roster_groups(players, stats, lineup, lineup_size)
 
     def is_pitcher(self, player):
         return self.real.is_pitcher(player)
@@ -982,15 +951,15 @@ def test_map_rosters_drops_a_negative_slot(patcher):
 
 
 def test_map_rosters_drops_a_slot_past_the_league(patcher):
-    patcher.mapper = _StubMapper(TEAM_COUNT)
+    patcher.mapper = _StubMapper(expansion.TEAMS)
     assert patcher.map_rosters(_league_data(("SEA", 25))).teams == {}
 
 
 def test_map_rosters_keeps_the_last_slot_in_the_league(patcher):
-    # The upper bound is exclusive, so slot 27 is in and 28 is out. Without this
-    # the previous test also passes against `slot > TEAM_COUNT`.
-    patcher.mapper = _StubMapper(TEAM_COUNT - 1)
-    assert list(patcher.map_rosters(_league_data(("SEA", 25))).teams) == [TEAM_COUNT - 1]
+    # The upper bound is exclusive, so slot 29 (Tampa Bay's) is in and 30 is
+    # out. Without this the previous test also passes against `slot > 30`.
+    patcher.mapper = _StubMapper(expansion.TEAMS - 1)
+    assert list(patcher.map_rosters(_league_data(("SEA", 25))).teams) == [expansion.TEAMS - 1]
 
 
 def test_map_rosters_keeps_slot_zero(patcher):
@@ -1021,45 +990,10 @@ def test_a_batter_slot_nobody_is_left_for_keeps_the_cartridges_record(patcher, r
     assert names[12] == f"{initial}. {fixture.player_last_name(SEA_SLOT, 12)}"
 
 
-def test_a_short_roster_writes_no_record_that_contradicts_itself(patcher):
-    # Byte 0x1D follows `is_pitcher` and byte 0x19 follows `roster_type`.
-    players = patcher.map_rosters(_uneven_league(12, 5, 5)).teams[SEA_SLOT].players
-    disagreeing = [
-        index
-        for index, record in enumerate(players)
-        if record and record.is_pitcher != (record.roster_type != ROSTER_TYPE_BATTER)
-    ]
-    assert disagreeing == []
-
-
-def test_a_full_roster_has_no_record_that_contradicts_itself(patcher):
-    mapped = patcher.map_rosters(_uneven_league(15, 5, 5))
-    disagreeing = [
-        index
-        for index, record in enumerate(mapped.teams[SEA_SLOT].players)
-        if record.is_pitcher != (record.roster_type != ROSTER_TYPE_BATTER)
-    ]
-    assert disagreeing == []
-
-
 def test_the_rotation_is_rated_as_starters_on_a_short_roster(patcher):
     # A stat-less starter's fatigue default is 7 and a reliever's 3.
     players = patcher.map_rosters(_uneven_league(12, 5, 5)).teams[SEA_SLOT].players
     assert [r.pitcher_attrs.fatigue for r in players[15:25]] == [7] * 5 + [3] * 5
-
-
-def test_a_full_roster_types_every_slot_from_the_slot_layout(patcher):
-    mapped = patcher.map_rosters(_uneven_league(15, 5, 5))
-    types = [r.roster_type for r in mapped.teams[SEA_SLOT].players]
-    assert types == [_roster_type_for_slot(slot) for slot in range(PLAYERS_PER_TEAM)]
-
-
-def test_a_reliever_promoted_into_the_rotation_is_typed_a_starter(patcher):
-    # A team with two starting pitchers has three relievers promoted into the
-    # rotation, and the rotation slots are what the promotion is for.
-    mapped = patcher.map_rosters(_uneven_league(15, 2, 12))
-    rotation = mapped.teams[SEA_SLOT].players[BATTERS_PER_TEAM : BATTERS_PER_TEAM + 5]
-    assert [r.roster_type for r in rotation] == [ROSTER_TYPE_STARTER] * 5
 
 
 def test_a_promoted_reliever_is_rated_as_a_starter_too(patcher):
@@ -1073,19 +1007,20 @@ def test_the_first_pitcher_is_written_pitcher_shaped_at_slot_fifteen(patcher, ro
     patcher.patch(rom_path=rom, output_path=out, rosters=mapped)
     offset = fixture.player_offset(SEA_SLOT, 15, first_team_offset=FIRST_TEAM_OFFSET)
     record = fixture.decode_player_record(out.read_bytes(), offset)
-    assert [record["kind_flag"] & 0xF0, record["roster_type"]] == [0x20, 0x1]
+    # Pitcher-shaped: FAT fills byte 0x0C, ERA's digit nibble is 2.
+    assert [record["raw"][0x0C] >> 4, record["kind_flag"] >> 4] == [0, 2]
 
 
 def _ranked_league(players):
-    """One SEA roster whose leaders rank every player by id, highest first."""
-    leaders = {str(p.id): {"OPS": p.id, "H": p.id, "W": p.id, "SV": p.id} for p in players}
+    """One SEA roster whose stats rank every player by id, highest first."""
+    leaders = {str(p.id): {"GS": p.id, "OPS": p.id, "W": p.id, "SV": p.id} for p in players}
     return LeagueData(
         league=League(id=0, name="MLB", country="USA", country_code="US", season=2025),
         teams=[
             TeamRoster(
                 team=Team(id=1, name="SEA", code="SEA"),
                 players=players,
-                extra={"leaders": leaders},
+                extra={"stats": leaders},
             )
         ],
     )
@@ -1128,9 +1063,7 @@ def _squad_league(positions, code="SEA"):
     return LeagueData(
         league=League(id=0, name="MLB", country="USA", country_code="US", season=2025),
         teams=[
-            TeamRoster(
-                team=Team(id=1, name=code, code=code), players=players, extra={"leaders": {}}
-            )
+            TeamRoster(team=Team(id=1, name=code, code=code), players=players, extra={"stats": {}})
         ],
     )
 
@@ -1189,3 +1122,237 @@ def test_spare_batters_fill_a_short_bullpen_so_no_1994_pitcher_stays(patcher, or
     data = _uneven_league(17, 5, 3)
     players = patcher.map_rosters(data, order_as_given=order_as_given).teams[SEA_SLOT].players
     assert [(r.first_initial, r.is_pitcher) for r in players[23:]] == [("B", True)] * 2
+
+
+def _season_league(code="SEA"):
+    """A club with stat lines and a recent lineup that disagrees with position order."""
+    positions = [*AL_LINEUP, "C", "1B", "OF", "IF", "SS", "LF", "CF", *STAFF, "SP", "RP"]
+    players = [
+        Player(id=n, name=f"First{n:02d} Last{n:02d}", position=pos, number=n + 1)
+        for n, pos in enumerate(positions)
+    ]
+    stats = {
+        str(p.id): {"GS": 100 - p.id, "PA": 500, "AVG": 0.250, "SLG": 0.400, "HR": p.id, "W": p.id}
+        for p in players
+    }
+    # The DH leads off and the catcher bats ninth.
+    lineup = [{"id": n, "order": 9.0 - n} for n in range(9)]
+    roster = TeamRoster(
+        team=Team(id=1, name=code, code=code),
+        players=players,
+        extra={"stats": stats, "lineup": lineup},
+    )
+    return LeagueData(
+        league=League(id=0, name="MLB", country="USA", country_code="US", season=2025),
+        teams=[roster],
+    )
+
+
+@pytest.mark.parametrize("code,slot", [("SEA", SEA_SLOT), ("ATL", 14)])
+def test_the_editors_order_and_the_default_mapping_agree(patcher, code, slot):
+    # The app shows `suggest_squad_order` as the batting order and patches it
+    # with `order_as_given`; without an edit that must be what `map_rosters`
+    # would write on its own.
+    data = _season_league(code)
+    default = patcher.map_rosters(data).teams[slot].players
+    data.teams[0].players = patcher.suggest_squad_order(data.teams[0])
+    edited = patcher.map_rosters(data, order_as_given=True).teams[slot].players
+    assert edited == default
+
+
+def test_a_rosters_file_from_before_full_stat_lines_still_maps_its_leaders(patcher):
+    # Older fetches kept the season lines under `leaders`.
+    data = _season_league()
+    expected = patcher.map_rosters(data).teams[SEA_SLOT].players
+    data.teams[0].extra["leaders"] = data.teams[0].extra.pop("stats")
+    players = patcher.map_rosters(data).teams[SEA_SLOT].players
+    assert players == expected
+    assert any(r.home_runs for r in players if r)
+
+
+def test_the_default_batting_order_follows_the_clubs_lineup(patcher):
+    players = patcher.map_rosters(_season_league()).teams[SEA_SLOT].players
+    assert [r.position for r in players[:9]] == AL_LINEUP[::-1]
+
+
+def test_an_nl_club_sits_its_dh_and_bats_eight(patcher):
+    players = patcher.map_rosters(_season_league("ATL")).teams[14].players
+    assert [r.position for r in players[:8]] == AL_LINEUP[7::-1]
+
+
+def test_the_derby_takes_each_leagues_home_run_leaders(patcher, rom, out):
+    mapped = patcher.map_rosters(_league_data(("SEA", 25), ("ATL", 25)))
+    for team in mapped.teams.values():
+        for n, record in enumerate(team.players[:BATTERS_PER_TEAM]):
+            record.home_runs = n
+            record.last_name = f"{team.name[:2].upper()}{n:02d}"
+    patcher.patch(rom_path=rom, output_path=out, rosters=mapped)
+    written = out.read_bytes()
+    names = [
+        fixture.decode_player_record(written, fixture.derby_offset(i))["last_name"]
+        for i in range(6)
+    ]
+    assert names == ["AT14", "AT13", "AT12", "SE14", "SE13", "SE12"]
+
+
+def test_a_league_with_no_patched_team_keeps_its_derby_batters(patcher, rom, out):
+    before = rom.read_bytes()[fixture.derby_offset(0) : fixture.derby_offset(3)]
+    patcher.patch(
+        rom_path=rom, output_path=out, rosters=patcher.map_rosters(_league_data(("SEA", 25)))
+    )
+    assert out.read_bytes()[fixture.derby_offset(0) : fixture.derby_offset(3)] == before
+
+
+def test_of_two_starters_listed_at_one_position_the_regular_keeps_it(patcher):
+    # Both list 3B; the one batting third started 10 games, the one batting
+    # ninth 150. Without stats the later one would move.
+    given = ["C", "1B", "3B", "SS", "LF", "CF", "RF", "2B", "3B", *STAFF]
+    data = _squad_league(given)
+    data.teams[0].extra["stats"] = {"2": {"GS": 10}, "8": {"GS": 150}}
+    players = patcher.map_rosters(data, order_as_given=True).teams[SEA_SLOT].players
+    assert [players[2].position, players[8].position] == ["DH", "3B"]
+
+
+# -- looks ----------------------------------------------------------------------------
+
+
+def _look_bytes(image, slot, index):
+    off = fixture.player_offset(slot, index, first_team_offset=FIRST_TEAM_OFFSET)
+    return bytes(image[off + 0x0E : off + 0x18])
+
+
+def _photo_league():
+    """Seattle's 25, each with a head shot URL."""
+    data = _league_data(("SEA", 25))
+    for player in data.teams[0].players:
+        player.photo_url = f"https://example.test/{player.id}.png"
+    return data
+
+
+def _face(rgb):
+    from PIL import Image, ImageDraw
+
+    picture = Image.new("RGBA", (600, 436), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(picture)
+    draw.ellipse((220, 110, 380, 300), fill=(*rgb, 255))
+    draw.rectangle((215, 50, 385, 150), fill=(20, 30, 70, 255))
+    draw.rectangle((60, 330, 540, 436), fill=(250, 250, 250, 255))
+    out = io.BytesIO()
+    picture.save(out, "PNG")
+    return out.getvalue()
+
+
+def test_map_rosters_gives_no_two_batters_or_pitchers_the_same_card(patcher):
+    team = patcher.map_rosters(_league_data(("SEA", 25))).teams[SEA_SLOT]
+    cards = [looks._card(r) for r in team.players]
+    assert len(set(cards[:BATTERS_PER_TEAM])) == BATTERS_PER_TEAM
+    assert len(set(cards[BATTERS_PER_TEAM:])) > 1
+
+
+def test_patch_writes_each_players_own_look(patcher, rom, out):
+    mapped = patcher.map_rosters(_league_data(("SEA", 25)))
+    patcher.patch(rom_path=rom, output_path=out, rosters=mapped)
+    written = out.read_bytes()
+    for index, record in enumerate(mapped.teams[SEA_SLOT].players):
+        bat = record.batter_appearance
+        assert _look_bytes(written, SEA_SLOT, index)[0] == bat.skin << 4 | bat.head
+    assert len({_look_bytes(written, SEA_SLOT, i)[:7] for i in range(BATTERS_PER_TEAM)}) > 10
+
+
+def test_patch_takes_each_players_skin_from_his_head_shot(tmp_path, rom, out):
+    pytest.importorskip("PIL")
+    light, dark = _face((232, 190, 160)), _face((95, 60, 40))
+    asked = []
+
+    def transport(url, headers, timeout):
+        asked.append(url)
+        return dark if int(url.rsplit("/", 1)[1].split(".")[0]) % 2 else light
+
+    messages = []
+    p = KGJMLBPatcher(cache_dir=tmp_path / "cache", transport=transport, on_status=messages.append)
+    mapped = p.map_rosters(_photo_league())
+    before = copy.deepcopy(mapped)
+    p.patch(rom_path=rom, output_path=out, rosters=mapped)
+
+    written = out.read_bytes()
+    for index, record in enumerate(mapped.teams[SEA_SLOT].players):
+        tone = 5 if record.player_id % 2 else 0
+        looks_ = _look_bytes(written, SEA_SLOT, index)
+        assert looks_[0] >> 4 == tone
+        if record.is_pitcher:
+            assert looks_[7] & 0x0F == tone
+    assert len(asked) == 25
+    assert "Skin tones from head shots: 25 of 25 players" in messages
+    assert mapped == before  # the caller's rosters keep the looks they were mapped with
+
+
+def test_a_player_whose_head_shot_will_not_load_keeps_his_mapped_look(tmp_path, rom, out):
+    def transport(url, headers, timeout):
+        raise OSError("offline")
+
+    p = KGJMLBPatcher(cache_dir=tmp_path / "cache", transport=transport)
+    mapped = p.map_rosters(_photo_league())
+    p.patch(rom_path=rom, output_path=out, rosters=mapped)
+    first = mapped.teams[SEA_SLOT].players[0].batter_appearance
+    assert _look_bytes(out.read_bytes(), SEA_SLOT, 0)[0] == first.skin << 4 | first.head
+
+
+def test_without_pillow_the_looks_come_from_the_id_and_a_status_says_so(
+    monkeypatch, tmp_path, rom, out
+):
+    monkeypatch.setitem(sys.modules, "PIL", None)
+    messages = []
+
+    def transport(url, headers, timeout):
+        raise AssertionError("nothing to fetch without Pillow")
+
+    p = KGJMLBPatcher(cache_dir=tmp_path / "cache", transport=transport, on_status=messages.append)
+    mapped = p.map_rosters(_photo_league())
+    p.patch(rom_path=rom, output_path=out, rosters=mapped)
+    assert "Pillow is not installed; player skin tones not taken from head shots" in messages
+    first = mapped.teams[SEA_SLOT].players[0].batter_appearance
+    assert _look_bytes(out.read_bytes(), SEA_SLOT, 0)[0] == first.skin << 4 | first.head
+
+
+def test_looks_false_keeps_the_cartridges_looks(patcher, rom, out):
+    patcher.patch(
+        rom_path=rom,
+        output_path=out,
+        rosters=patcher.map_rosters(_league_data(("SEA", 25))),
+        looks=False,
+    )
+    source, written = rom.read_bytes(), out.read_bytes()
+    for index in range(PLAYERS_PER_TEAM):
+        was, now = _look_bytes(source, SEA_SLOT, index), _look_bytes(written, SEA_SLOT, index)
+        assert now[:7] + now[8:] == was[:7] + was[8:]
+        assert now[7] & 0x0F == was[7] & 0x0F
+
+
+#: $85:D1B4 as the retail cartridge has it, at its retail file offset.
+GRIFFEY_RULE = bytes.fromhex("ae4618bdd012c93a00f005c93200d016adf512c91800d00e")
+GRIFFEY_OFFSET = 0x2D1B4
+GRIFFEY_JERSEY = GRIFFEY_OFFSET + GRIFFEY_RULE.index(b"\xc9\x18") + 1
+
+
+@pytest.fixture
+def griffey_rom(rom):
+    image = bytearray(rom.read_bytes())
+    image[GRIFFEY_OFFSET : GRIFFEY_OFFSET + len(GRIFFEY_RULE)] = GRIFFEY_RULE
+    rom.write_bytes(image)
+    return rom
+
+
+@pytest.mark.parametrize(
+    ("codes", "options", "jersey"),
+    [
+        (("SEA",), {}, 0xFF),
+        (("CWS",), {}, 0x18),
+        (("SEA",), {"looks": False}, 0x18),
+    ],
+)
+def test_a_patched_seattle_frees_number_24_from_griffeys_head(
+    patcher, griffey_rom, out, codes, options, jersey
+):
+    rosters = patcher.map_rosters(_league_data(*((code, 25) for code in codes)))
+    patcher.patch(rom_path=griffey_rom, output_path=out, rosters=rosters, **options)
+    assert out.read_bytes()[GRIFFEY_JERSEY] == jersey

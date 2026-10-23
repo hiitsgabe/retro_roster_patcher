@@ -3,7 +3,7 @@
 import inspect
 import json
 from dataclasses import fields
-from datetime import datetime
+from datetime import date, datetime
 
 import pytest
 
@@ -240,6 +240,26 @@ def test_a_hockey_squad_carries_height_and_head_shot(tmp_path):
     assert (player.height, player.photo_url) == (75.0, "https://a.espncdn.com/x.png")
 
 
+def test_a_baseball_squad_carries_height_weight_and_head_shot(tmp_path):
+    body = json.loads(_grouped_roster("Cal Raleigh"))
+    body["athletes"][0]["items"][0].update(
+        {"height": 74.0, "weight": 235.0, "headshot": {"href": "https://a.espncdn.com/c.png"}}
+    )
+    client = EspnClient(str(tmp_path), transport=_sequence_transport(json.dumps(body).encode()))
+    (player,) = client.get_baseball_squad(12, 2026)
+    assert (player.height, player.weight, player.photo_url) == (
+        74.0,
+        235.0,
+        "https://a.espncdn.com/c.png",
+    )
+
+
+def test_a_baseball_squad_without_them_reports_zero_and_no_photo(tmp_path):
+    client = EspnClient(str(tmp_path), transport=_sequence_transport(_grouped_roster("Nobody")))
+    (player,) = client.get_baseball_squad(12, 2026)
+    assert (player.height, player.weight, player.photo_url) == (0.0, 0.0, "")
+
+
 def test_the_hockey_squad_key_names_the_season_on_disk(tmp_path):
     """The file name is the whole mechanism, so it is asserted directly."""
     transport = _sequence_transport(_hockey_roster("Mats Sundin"))
@@ -441,6 +461,9 @@ NETWORK_CALLS = {
     "get_mlb_teams": ((), {}),
     "get_baseball_squad": ((1,), {}),
     "get_baseball_team_leaders": ((1,), {}),
+    "get_baseball_athlete_stats": ((1, 2025), {}),
+    # The game list is the first request; an empty one ends the lookup.
+    "get_baseball_lineup": ((1, 2025), {}),
     "get_nba_teams": ((), {}),
     "get_basketball_squad": ((1,), {}),
     "get_basketball_team_leaders": ((1,), {}),
@@ -1220,3 +1243,97 @@ def test_default_season_follows_each_leagues_calendar():
     assert default_season("bra.1", date(2026, 5, 1)) == 2026
     assert default_season("bra.1", date(2026, 1, 15)) == 2025
     assert default_season("usa.1", date(2026, 10, 22)) == 2026
+
+
+# MLB season lines and lineups, from the core API.
+
+
+def _url_transport(bodies):
+    """Serve the body whose key is in the requested URL, `{}` otherwise."""
+
+    def transport(url, headers, timeout):
+        transport.calls.append(url)
+        return next((body for key, body in bodies.items() if key in url), b"{}")
+
+    transport.calls = []
+    return transport
+
+
+def test_an_athletes_line_is_kept_by_category_with_the_first_repeat_winning(tmp_path):
+    body = json.dumps(
+        {
+            "splits": {
+                "categories": [
+                    {
+                        "name": "pitching",
+                        "stats": [
+                            {"abbreviation": "ER", "value": 39},
+                            {"abbreviation": "ER", "value": 55},
+                            {"abbreviation": "IP", "value": 162.2},
+                        ],
+                    },
+                    {"name": "batting", "stats": [{"abbreviation": "AVG", "value": 0.2}]},
+                ]
+            }
+        }
+    ).encode()
+    transport = _url_transport({"/athletes/30948/statistics": body})
+    client = EspnClient(str(tmp_path), transport=transport)
+    line = client.get_baseball_athlete_stats(30948, 2026)
+    assert line == {"pitching": {"ER": 39.0, "IP": 162.2}, "batting": {"AVG": 0.2}}
+    assert "/seasons/2026/types/2/athletes/30948/statistics" in transport.calls[0]
+    # Cached: a second ask makes no request.
+    assert client.get_baseball_athlete_stats(30948, 2026) == line
+    assert len(transport.calls) == 1
+
+
+def _game(*starters):
+    """A competitor roster: (player id, batOrder, starter) per entry."""
+    return json.dumps(
+        {
+            "entries": [
+                {"playerId": pid, "batOrder": order, "starter": starter}
+                for pid, order, starter in starters
+            ]
+        }
+    ).encode()
+
+
+def test_a_lineup_averages_where_each_starter_batted_lately(tmp_path):
+    events = json.dumps(
+        {"items": [{"$ref": f"http://x/events/{n}?lang=en"} for n in range(100, 112)]}
+    ).encode()
+    bodies = {"/teams/15/events": events}
+    for n in range(100, 112):
+        # Player 7 leads off in the last two games, bats 5th before; player 8
+        # bats 2nd in the odd-numbered games and comes off the bench in the
+        # others; a substitute (not a starter) and a pitcher (spot 0) never
+        # count.
+        lead = 1 if n >= 110 else 5
+        bodies[f"/events/{n}/"] = _game(
+            (7, lead, True), (8, 2, n % 2 == 1), (9, 1, False), (10, 0, True)
+        )
+    client = EspnClient(str(tmp_path), transport=_url_transport(bodies))
+    lineup = client.get_baseball_lineup(15, 2026, today=date(2026, 10, 23))
+    # The last ten games: 102-111, eight with 7 batting 5th and two leading off.
+    assert lineup == [
+        {"id": 8, "order": 2.0, "starts": 5},
+        {"id": 7, "order": 4.2, "starts": 10},
+    ]
+
+
+def test_a_lineup_asks_only_for_games_up_to_today(tmp_path):
+    transport = _url_transport({})
+    client = EspnClient(str(tmp_path), transport=transport)
+    client.get_baseball_lineup(15, 2026, today=date(2026, 7, 4))
+    assert transport.calls == [
+        "https://sports.core.api.espn.com/v2/sports/baseball/leagues/mlb/seasons/2026/types/2"
+        "/teams/15/events?limit=200&dates=20260101-20260704"
+    ]
+
+
+def test_a_season_not_started_has_no_lineup_and_asks_nothing(tmp_path):
+    transport = _url_transport({})
+    client = EspnClient(str(tmp_path), transport=transport)
+    assert client.get_baseball_lineup(15, 2027, today=date(2026, 10, 23)) == []
+    assert transport.calls == []

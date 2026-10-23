@@ -31,6 +31,9 @@ from retro_roster_patcher.games.kgj_mlb_snes.rom_reader import (
 )
 from tests.fixtures import synthetic_kgj_rom as fixture
 
+#: Team 0 player 0 in a default synthetic image.
+FIRST = fixture.MARKER_OFFSET + len(fixture.FIRST_TEAM_MARKER)
+
 
 @pytest.fixture
 def rom(tmp_path):
@@ -113,10 +116,11 @@ def test_validate_accepts_a_headered_image(headered_rom):
         ROM_SIZE_EXPECTED + SMC_HEADER_SIZE - 1,
         ROM_SIZE_EXPECTED + SMC_HEADER_SIZE + 1,
         ROM_SIZE_EXPECTED + 256,
-        ROM_SIZE_EXPECTED * 2,
+        ROM_SIZE_EXPECTED * 3,
+        ROM_SIZE_EXPECTED * 2 + 1,
     ],
 )
-def test_validate_refuses_every_size_but_the_two_it_names(tmp_path, size):
+def test_validate_refuses_every_size_but_the_ones_it_names(tmp_path, size):
     # The marker is present and the data is otherwise well-formed; only the
     # length is wrong. A `>=` in place of the source's `!=` passes the two
     # accepted sizes and fails here.
@@ -126,6 +130,17 @@ def test_validate_refuses_every_size_but_the_two_it_names(tmp_path, size):
     path.write_bytes(data)
     reader = _loaded(path)
     assert reader.validate() is False
+
+
+@pytest.mark.parametrize("with_header", [False, True])
+def test_validate_accepts_the_image_grown_to_4_mb(tmp_path, with_header):
+    # The patch grows the cartridge when its art or team identity needs room.
+    data = fixture.build_kgj_rom(with_header=with_header) + b"\xff" * ROM_SIZE_EXPECTED
+    path = tmp_path / "grown.sfc"
+    path.write_bytes(bytes(data))
+    reader = _loaded(path)
+    assert reader.validate() is True
+    assert reader.get_info().has_header is with_header
 
 
 def test_validate_refuses_a_correctly_sized_image_with_no_marker(tmp_path):
@@ -279,19 +294,16 @@ def test_a_batter_reads_back_its_jersey(rom):
     assert reader.read_player(3, 6)["jersey"] == fixture.player_jersey(3, 6)
 
 
-def test_a_batter_reads_back_its_bat_hand(rom):
+def test_a_batter_reads_back_both_hands(rom):
     reader = _validated(rom)
-    assert reader.read_player(3, 6)["bat_hand"] == fixture.player_bat_hand(3, 6)
+    player = reader.read_player(3, 6)
+    hands = fixture.player_bat_hand(3, 6)
+    assert (player["bats"], player["throws"]) == (hands >> 4, hands & 0xF)
 
 
 def test_a_batter_is_not_reported_as_a_pitcher(rom):
     reader = _validated(rom)
     assert reader.read_player(3, 6)["is_pitcher"] is False
-
-
-def test_a_batters_roster_type_nibble_is_three(rom):
-    reader = _validated(rom)
-    assert reader.read_player(3, 6)["roster_type"] == fixture.ROSTER_TYPE_BATTER
 
 
 @pytest.mark.parametrize(
@@ -305,8 +317,8 @@ def test_a_batters_four_attributes_unpack_from_two_bytes(rom, field, index):
 
 
 def test_a_batting_average_above_255_needs_the_nibble_at_0x19(rom):
-    # The high nibble shares byte 0x19 with the roster type. An implementation
-    # that read only byte 0x18 would answer 300 & 0xFF = 44.
+    # Its low half; the high half is a digit count. An implementation that read
+    # only byte 0x18 would answer 300 & 0xFF = 44.
     reader = _validated(rom)
     assert reader.read_player(3, 6)["batting_avg"] == fixture.player_batting_avg(3, 6)
 
@@ -326,21 +338,31 @@ def test_a_starting_pitcher_is_reported_as_a_pitcher(rom):
     assert reader.read_player(3, 16)["is_pitcher"] is True
 
 
-def test_a_starting_pitchers_roster_type_nibble_is_one(rom):
-    reader = _validated(rom)
-    assert reader.read_player(3, 16)["roster_type"] == fixture.ROSTER_TYPE_STARTER
-
-
-def test_a_relievers_roster_type_nibble_is_zero(rom):
-    reader = _validated(rom)
-    assert reader.read_player(3, 22)["roster_type"] == fixture.ROSTER_TYPE_RELIEVER
-
-
 def test_a_reliever_is_reported_as_a_pitcher(rom):
-    # 0 and 1 both mean pitcher; only 3 means batter. A test that used the
-    # starter alone would pass against `roster_type == 0` as the pitcher test.
     reader = _validated(rom)
     assert reader.read_player(3, 22)["is_pitcher"] is True
+
+
+def test_slot_14_is_the_last_batter_and_slot_15_the_first_pitcher(rom):
+    reader = _validated(rom)
+    assert (reader.read_player(3, 14)["is_pitcher"], reader.read_player(3, 15)["is_pitcher"]) == (
+        False,
+        True,
+    )
+
+
+def test_the_slot_and_not_a_nibble_says_pitcher(rom, tmp_path):
+    # As the game decides (85:D15D): slot 15 and up pitch, whatever 0x19 holds.
+    data = bytearray(rom.read_bytes())
+    data[fixture.player_offset(3, 6, first_team_offset=FIRST) + 0x19] = 0x00
+    data[fixture.player_offset(3, 16, first_team_offset=FIRST) + 0x19] = 0x30
+    path = tmp_path / "nibbles.sfc"
+    path.write_bytes(bytes(data))
+    reader = _validated(path)
+    assert (reader.read_player(3, 6)["is_pitcher"], reader.read_player(3, 16)["is_pitcher"]) == (
+        False,
+        True,
+    )
 
 
 @pytest.mark.parametrize("field,index", [("p_speed", 0), ("p_control", 1), ("p_fatigue", 2)])
@@ -351,7 +373,7 @@ def test_a_pitchers_three_attributes_unpack_from_two_bytes(rom, field, index):
 
 def test_a_pitcher_reads_back_its_throwing_hand(rom):
     reader = _validated(rom)
-    assert reader.read_player(3, 17)["pitch_hand"] == 17 % 2
+    assert reader.read_player(3, 17)["throws"] == fixture.player_bat_hand(3, 17) & 0xF
 
 
 def test_a_pitcher_reads_back_its_wins(rom):

@@ -33,7 +33,7 @@ class Player:
     weight: float = 0.0  # lbs
     handedness: str = ""  # "L" or "R" (throw hand)
     bats: str = ""  # "L", "R", or "B" (bat hand, baseball only)
-    height: float = 0.0  # inches (hockey); 0 when the provider gives none
+    height: float = 0.0  # inches (hockey, baseball); 0 when the provider gives none
 
 
 @dataclass

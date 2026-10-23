@@ -101,9 +101,71 @@ OFF_STAT_THIRD = 0x1C
 OFF_KIND_FLAG = 0x1D
 OFF_STAT_FOURTH = 0x1E
 
-#: Record bytes no writer in this package ever touches. Filled non-zero so a
-#: write that strayed one byte past a field it does own is visible.
-UNTOUCHED_OFFSETS = (0x12, 0x13, 0x14, 0x1F)
+#: Record bytes holding a nibble the game never reads, which the writer keeps:
+#: 0x11's high one and 0x14's low one (0x12 and 0x13 ride along). Filled
+#: non-zero so a write that strayed into one is visible.
+UNTOUCHED_OFFSETS = (0x11, 0x12, 0x13, 0x14)
+
+#: Independent transcription of `models.HR_DERBY_MARKER`, and where it is
+#: planted (body-relative, the retail cartridge's own offset). Eight records
+#: follow it: 3 NL batters, 3 AL batters, the NL and the AL derby pitcher.
+HR_DERBY_MARKER = bytes([0x02, 0x2E, 0x37, 0x27, 0x00, 0x0A, 0x23, 0x3B, 0x35, 0xFF])
+HR_DERBY_OFFSET = 0xE451
+HR_DERBY_RECORDS = 8
+
+
+def derby_offset(index: int) -> int:
+    """Body-relative offset of derby record `index` (0-7)."""
+    return HR_DERBY_OFFSET + len(HR_DERBY_MARKER) + index * PLAYER_LENGTH
+
+
+#: The derby's names as text, planted where the retail cartridge has them: the
+#: Select Player script's two lists (each 9 header bytes, then D1 x y + name
+#: per row, then D2) and the D0-terminated table after " HOMERUN DERBY ". An
+#: apostrophe and "R." are `FC lo hi` glyphs, three bytes for one column.
+HR_DERBY_LIST_HEADER = bytes([0xD1, 0x0D, 0x11, 0xF9, 0x0F, 0x08, 0xD2, 0x00, 0x14])
+HR_DERBY_LIST_OFFSETS = (0x35E79, 0x35EC9)
+HR_DERBY_TABLE_OFFSET = 0x3744C
+#: (x, y, text) per row, NL list then AL list; `'` is the apostrophe glyph and
+#: `@` the "R." one.
+HR_DERBY_ROWS = (
+    (0x0E, 0x14, "SAMMY SCRAP"),
+    (0x0F, 0x16, "CAN O'CORN"),
+    (0x0E, 0x18, "NICK NOHEART"),
+    (0x0E, 0x14, "WARREN TRACK"),
+    (0x0E, 0x16, "BARNY TATER"),
+    (0x0D, 0x18, "KEN GRIFFEY J@"),
+)
+#: The strings after " HOMERUN DERBY ": NL 1-3, one that is no name, AL 1-3.
+HR_DERBY_TABLE = (
+    " SAMMY SCRAP  ",
+    "  CAN O'CORN  ",
+    " NICK NOHEART ",
+    " NO  ",
+    " WARREN TRACK ",
+    " BARNY TATER  ",
+    "KEN GRIFFEY J@",
+)
+
+
+def encode_derby(text: str) -> bytes:
+    """Derby text: the name encoding, with its two 3-byte glyphs."""
+    glyphs = {"'": bytes([0xFC, 0xC6, 0x01]), "@": bytes([0xFC, 0xC7, 0x01])}
+    return b"".join(glyphs.get(ch) or bytes([encode_char(ch)]) for ch in text)
+
+
+def derby_list(league: int) -> bytes:
+    """One league's Select Player rows, header to D2 included."""
+    rows = HR_DERBY_ROWS[league * 3 : league * 3 + 3]
+    body = b"".join(bytes([0xD1, x, y]) + encode_derby(t) for x, y, t in rows)
+    return HR_DERBY_LIST_HEADER + body + b"\xd2"
+
+
+def derby_table() -> bytes:
+    """ " HOMERUN DERBY " and the seven strings after it, each D0-terminated."""
+    strings = (" HOMERUN DERBY ", *HR_DERBY_TABLE)
+    return b"".join(encode_derby(string) + b"\xd0" for string in strings)
+
 
 #: Independent transcription of `models.POSITION_TO_BYTE`, in its own order.
 POSITION_BYTES = {
@@ -150,6 +212,8 @@ def encode_char(ch: str) -> int:
         return 0x01 + (ord(ch) - ord("0"))
     if "A" <= ch <= "Z":
         return 0x0B + (ord(ch) - ord("A"))
+    if ch in "-.":
+        return 0x25 + "-.".index(ch)
     if ch == "c":
         return 0x36
     return 0x00
@@ -163,6 +227,8 @@ def decode_char(value: int) -> str:
         return chr(ord("0") + value - 0x01)
     if 0x0B <= value <= 0x24:
         return chr(ord("A") + value - 0x0B)
+    if value in (0x25, 0x26):
+        return "-."[value - 0x25]
     if value == 0x36:
         return "c"
     return "?"
@@ -291,9 +357,9 @@ def build_player_record(team: int, slot: int) -> bytes:
     record[OFF_SKIN_HEAD] = (_appearance(team, slot, 1) << 4) | _appearance(team, slot, 2)
     record[OFF_HAIR_BODY] = (_appearance(team, slot, 3) << 4) | _appearance(team, slot, 4)
     record[OFF_LEGS] = (_appearance(team, slot, 5) << 4) | _appearance(team, slot, 6)
-    record[OFF_ARMS] = (_appearance(team, slot, 7) << 4) | _appearance(team, slot, 8)
-    for offset in UNTOUCHED_OFFSETS:
+    for offset in UNTOUCHED_OFFSETS[1:]:
         record[offset] = 0x40 | ((team + slot + offset) % 0x3F)
+    record[OFF_ARMS] = (_appearance(team, slot, 7) << 4) | _appearance(team, slot, 8)
 
     nibble = roster_type_nibble(slot)
     if is_pitcher_slot(slot):
@@ -436,6 +502,18 @@ def build_kgj_rom(
     if size >= CHECKSUM_OFFSET + 2:
         body[CHECKSUM_OFFSET : CHECKSUM_OFFSET + 2] = CHECKSUM_FILLER
         body[COMPLEMENT_OFFSET : COMPLEMENT_OFFSET + 2] = COMPLEMENT_FILLER
+
+    if size > HR_DERBY_TABLE_OFFSET + len(derby_table()):
+        for league, at in enumerate(HR_DERBY_LIST_OFFSETS):
+            body[at : at + len(derby_list(league))] = derby_list(league)
+        body[HR_DERBY_TABLE_OFFSET : HR_DERBY_TABLE_OFFSET + len(derby_table())] = derby_table()
+
+    if size >= derby_offset(HR_DERBY_RECORDS):
+        body[HR_DERBY_OFFSET : HR_DERBY_OFFSET + len(HR_DERBY_MARKER)] = HR_DERBY_MARKER
+        for index in range(HR_DERBY_RECORDS):
+            # Team "28" (no such team), batters in slots 0-5, pitchers from 15.
+            slot = index if index < 6 else BATTERS_PER_TEAM + index
+            body[derby_offset(index) : derby_offset(index + 1)] = build_player_record(28, slot)
 
     if place_marker:
         body[marker_offset : marker_offset + len(FIRST_TEAM_MARKER)] = FIRST_TEAM_MARKER

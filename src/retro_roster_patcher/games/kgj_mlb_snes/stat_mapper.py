@@ -1,36 +1,52 @@
-"""Maps MLB season stats onto KGJ's 1-10 attribute scale, falling back to
-position defaults when a player has no stat line."""
+"""Maps MLB season stats onto KGJ's ratings, on the cartridge's own scales.
+
+Each rating falls back to its position default on its own when the stat it
+comes from is missing or rests on too small a sample, so one missing stat never
+zeroes a rating. The scales were fitted so a 2026 league spreads over each
+rating the way the 1994 cartridge's 700 players do.
+"""
 
 import dataclasses
+import unicodedata
+from collections.abc import Callable
+from typing import Any
 
 from ...sports.models import Player
+from . import looks
 from .models import (
     BATTERS_PER_TEAM,
-    HAND_LEFT,
-    HAND_RIGHT,
-    HAND_SWITCH,
     LINEUP_POSITIONS,
     MODERN_MLB_TO_KGJ,
     RELIEVERS_PER_TEAM,
     STARTERS_PER_TEAM,
-    KGJBatterAppearance,
     KGJBatterAttributes,
-    KGJPitcherAppearance,
     KGJPitcherAttributes,
     KGJPlayerRecord,
 )
 
+#: Below these a rate stat says more about luck than about the player.
+MIN_PA = 100
+MIN_IP = 20.0
 
-def _clamp(val: int, lo: int = 1, hi: int = 10) -> int:
-    return max(lo, min(hi, val))
+
+def _stat(stats: dict, key: str) -> float | None:
+    """`stats[key]` as a number, or None when it is missing or not one."""
+    value = stats.get(key)
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        return None
+    return float(value)
 
 
-def _scale(value: float, low: float, high: float) -> int:
-    """Map a value within [low, high] onto the game's 1-10 scale."""
-    if high <= low:
-        return 5
-    ratio = (value - low) / (high - low)
-    return _clamp(round(ratio * 9) + 1)
+def _lin(x: float, x0: float, x1: float, lo: int, hi: int) -> int:
+    """`x` placed between `x0` (rating `lo`) and `x1` (rating `hi`), clamped.
+    `x1 < x0` reads a stat where less is better."""
+    return max(lo, min(hi, round(lo + (x - x0) / (x1 - x0) * (hi - lo))))
+
+
+def _innings(ip: float) -> float:
+    """ESPN writes 162 and 2/3 innings as 162.2."""
+    whole = int(ip)
+    return whole + round((ip - whole) * 10) / 3
 
 
 # Default batter attributes by position. `map_batter` hands the record a
@@ -49,49 +65,76 @@ BATTER_DEFAULTS = {
     "OF": KGJBatterAttributes(batting=5, power=4, speed=6, defense=5),
 }
 
+# FAT on the cartridge's scale: its starters run 5-10 and its relievers 2-5.
 PITCHER_DEFAULTS = {
     "SP": KGJPitcherAttributes(speed=6, control=6, fatigue=7),
     "RP": KGJPitcherAttributes(speed=6, control=5, fatigue=3),
-    "CL": KGJPitcherAttributes(speed=7, control=6, fatigue=3),
 }
+
+#: Who fields, by the positions ESPN lists: a catcher, a first baseman, three
+#: infielders and three outfielders (`patcher._lineup_positions` spreads each
+#: group over its positions). A batter ESPN lists at DH competes for the
+#: outfield (and then for DH), so a regular DH is never benched for his label.
+_LINEUP_POOLS = (
+    (("C",), 1),
+    (("1B",), 1),
+    (("2B", "3B", "SS", "IF"), 3),
+    (("LF", "CF", "RF", "OF", "DH"), 3),
+)
+#: The catcher's and the infield's pools: in an eight-man lineup the bat that
+#: sits comes from the others (first base, the outfield, the DH), so the
+#: catcher, second, third and short keep their gloves.
+_GLOVES = (_LINEUP_POOLS[0][0], _LINEUP_POOLS[2][0])
+
+#: One of the club's last `LINEUP_GAMES` starts counts as this many season starts
+#: when ranking who plays: a regular back from injury beats the part-timer who
+#: covered for him, while a September call-up with ten starts still trails a
+#: 120-start regular. ponytail: a fixed blend, fit by eye on the 2026 clubs.
+RECENT_START_WEIGHT = 10
+
+#: How the game bats every pitcher, whatever his record says (85:D15B): a spare
+#: pitcher on the bench gets these, with .200, 1 HR and 5 RBI.
+PITCHER_BATTING = KGJBatterAttributes(batting=2, power=1, speed=3, defense=3)
 
 
 class KGJStatMapper:
-    def map_batter(
-        self,
-        player: Player,
-        stats: dict | None = None,
-    ) -> KGJPlayerRecord:
-        pos = self._normalize_position(player.position, is_pitcher=False)
-        hand = self._map_bat_hand(player.bats or player.handedness)
+    def map_batter(self, player: Player, stats: dict | None = None) -> KGJPlayerRecord:
+        """`stats` is the player's ESPN batting line (`get_baseball_athlete_stats`).
 
-        if stats:
-            attrs = self._map_batter_stats(stats, pos)
-            avg = int(float(stats.get("AVG", 0.250) or 0.250) * 1000)
-            hr = int(float(stats.get("HR", 0) or 0))
-            rbi = int(float(stats.get("RBI", 0) or 0))
+        A pitcher here is a spare filling a short bench: he is written as an IF
+        with the game's own pitcher batting, never as a P with fielder ratings.
+        """
+        stats = stats or {}
+        if self.is_pitcher(player):
+            pos = "IF"
+            attrs = dataclasses.replace(PITCHER_BATTING)
+            avg, hr, rbi = 200, 1, 5
         else:
-            # Copied, not shared: the module constant must not reach a record.
-            attrs = dataclasses.replace(BATTER_DEFAULTS.get(pos, BATTER_DEFAULTS["CF"]))
-            avg = 250
-            hr = 0
-            rbi = 0
+            pos = self._normalize_position(player.position, is_pitcher=False)
+            attrs = self._map_batter_stats(stats, pos)
+            measured = _stat(stats, "AVG")
+            avg = 250 if measured is None else round(measured * 1000)
+            hr = int(_stat(stats, "HR") or 0)
+            rbi = int(_stat(stats, "RBI") or 0)
 
         first, last = self._split_name(player.name)
-
-        return KGJPlayerRecord(
+        record = KGJPlayerRecord(
             first_initial=first,
             last_name=last,
+            player_id=player.id,
+            photo_url=player.photo_url,
             position=pos,
             jersey_number=player.number or 0,
             is_pitcher=False,
-            bat_hand=hand,
+            bats=self._bats(player),
+            throws=self._throws(player),
             batter_attrs=attrs,
-            batter_appearance=self._default_batter_appearance(),
             batting_avg=avg,
             home_runs=hr,
             rbi=rbi,
         )
+        looks.fit(record, player.height, player.weight)
+        return record
 
     def map_pitcher(
         self,
@@ -99,114 +142,78 @@ class KGJStatMapper:
         stats: dict | None = None,
         is_starter: bool = True,
     ) -> KGJPlayerRecord:
-        hand = self._map_bat_hand(player.bats or player.handedness)
-        pitch_hand = 1 if player.handedness == "L" else 0
-
-        if stats:
-            attrs = self._map_pitcher_stats(stats, is_starter)
-            wins = int(float(stats.get("W", 0) or 0))
-            losses = int(float(stats.get("L", 0) or 0))
-            era_val = float(stats.get("ERA", 4.00) or 4.00)
-            era = int(era_val * 100)
-            saves = int(float(stats.get("SV", 0) or 0))
-        else:
-            default_key = "SP" if is_starter else "RP"
-            # Copied, not shared. `"CL"` is in the table and nothing selects it.
-            attrs = dataclasses.replace(PITCHER_DEFAULTS[default_key])
-            wins = 0
-            losses = 0
-            era = 400
-            saves = 0
-
+        """`stats` is the player's ESPN pitching line."""
+        stats = stats or {}
+        era = _stat(stats, "ERA")
         first, last = self._split_name(player.name)
-
-        return KGJPlayerRecord(
+        record = KGJPlayerRecord(
             first_initial=first,
             last_name=last,
+            player_id=player.id,
+            photo_url=player.photo_url,
             position="P",
             jersey_number=player.number or 0,
             is_pitcher=True,
-            bat_hand=hand,
-            pitcher_attrs=attrs,
-            pitcher_appearance=self._default_pitcher_appearance(),
-            pitch_hand=pitch_hand,
-            wins=wins,
-            losses=losses,
-            era=era,
-            saves=saves,
+            bats=self._bats(player),
+            throws=self._throws(player),
+            pitcher_attrs=self._map_pitcher_stats(stats, is_starter),
+            wins=int(_stat(stats, "W") or 0),
+            losses=int(_stat(stats, "L") or 0),
+            era=400 if era is None else round(era * 100),
+            saves=int(_stat(stats, "SV") or 0),
         )
+        # His look at the plate and on the mound, both: pitchers bat.
+        looks.fit(record, player.height, player.weight)
+        return record
 
     def _map_batter_stats(self, stats: dict, pos: str) -> KGJBatterAttributes:
-        """Per-season stat ranges used for scaling:
-
-        AVG: .200-.330, HR: 0-45, RBI: 0-130, SB: 0-50, OPS: .600-1.000, H: 0-200
-
-        `rbi` and `hits` are read and then used by nothing. Upstream's code,
-        unchanged.
+        """BAT from AVG (.190-.300 = 3-10), POW from isolated power (SLG - AVG,
+        .070-.280 = 2-10), SPD from steals plus twice the triples per 600 PA (0
+        is about 4, 50 is 10), DEF from the position, +1 past 120 games.
         """
-        avg = float(stats.get("AVG", 0.250) or 0.250)
-        hr = float(stats.get("HR", 0) or 0)
-        rbi = float(stats.get("RBI", 0) or 0)  # noqa: F841
-        sb = float(stats.get("SB", 0) or 0)
-        ops = float(stats.get("OPS", 0.700) or 0.700)
-        hits = float(stats.get("H", 0) or 0)  # noqa: F841
-
-        # BAT from average and OPS
-        bat = _scale((avg * 0.6 + ops * 0.4 / 3), 0.200, 0.330)
-
-        # POW from home runs and slugging
-        slg = float(stats.get("SLG", 0.400) or 0.400)
-        pow_r = _scale((hr / 45 * 0.7 + slg * 0.3), 0.0, 1.0)
-
-        # SPD from stolen bases, with a bonus for triples
-        spd = _scale(sb, 0, 40)
-        triples = float(stats.get("3B", 0) or 0)
-        if triples >= 5:
-            spd = _clamp(spd + 1)
-
-        # DEF from the position default, nudged by games played
-        base_def = BATTER_DEFAULTS.get(pos, BATTER_DEFAULTS["CF"]).defense
-        games = float(stats.get("GP", 0) or 0)
-        def_bonus = 1 if games > 120 else 0
-        def_r = _clamp(base_def + def_bonus)
-
+        base = BATTER_DEFAULTS.get(pos, BATTER_DEFAULTS["CF"])
+        pa = _stat(stats, "PA") or 0.0
+        avg, slg, sb = _stat(stats, "AVG"), _stat(stats, "SLG"), _stat(stats, "SB")
+        sample = pa >= MIN_PA
+        batting = base.batting
+        if sample and avg is not None:
+            batting = _lin(avg, 0.190, 0.300, 3, 10)
+        power = base.power
+        if sample and avg is not None and slg is not None:
+            power = _lin(slg - avg, 0.070, 0.280, 2, 10)
+        speed = base.speed
+        if sample and sb is not None:
+            speed = _lin((sb + 2 * (_stat(stats, "3B") or 0)) / pa * 600, -4, 50, 3, 10)
+        games = _stat(stats, "GP") or 0
         return KGJBatterAttributes(
-            batting=bat,
-            power=pow_r,
-            speed=spd,
-            defense=def_r,
+            batting=batting,
+            power=power,
+            speed=speed,
+            defense=min(10, base.defense + (games > 120)),
         )
 
     def _map_pitcher_stats(self, stats: dict, is_starter: bool) -> KGJPitcherAttributes:
-        """ESPN's leaders endpoint provides ERA, W, K, SV, WHIP, QS, OBA and HLD,
-        but no K/9, BB/9, IP or GS."""
-        era = float(stats.get("ERA", 4.00) or 4.00)
-        k = float(stats.get("K", 0) or 0)
-        whip = float(stats.get("WHIP", 1.30) or 1.30)
-        w = float(stats.get("W", 0) or 0)
-        qs = float(stats.get("QS", 0) or 0)
-
-        # SPD: strikeouts as a proxy for velocity
-        if is_starter:
-            spd = _scale(k, 60, 250)
-        else:
-            spd = _scale(k, 20, 90)
-
-        # CON from WHIP -- lower is better control -- and ERA
-        con_from_whip = _scale(1.60 - whip, 0.0, 0.70)
-        con_from_era = _scale(6.0 - era, 0.0, 4.0)
-        con = _clamp((con_from_whip + con_from_era) // 2)
-
-        # FAT from quality starts, or from saves for a reliever
-        if is_starter:
-            fat = _scale(qs, 5, 25)
-            if w >= 15:
-                fat = _clamp(fat + 1)
-        else:
-            sv = float(stats.get("SV", 0) or 0)
-            fat = _clamp(3 + (1 if sv > 20 else 0))
-
-        return KGJPitcherAttributes(speed=spd, control=con, fatigue=fat)
+        """SPD from K/9 (5.5-11.5 = 4-10), CON from BB/9 (5.0-1.8 = 4-10), FAT
+        from innings per game: a starter's 4.5-7.0 = 5-10 (from 3 starts), a
+        reliever's 0.9-2.0 = 2-5. FAT sets when he tires, so a starter never
+        drops below 5, the cartridge's own floor.
+        """
+        base = PITCHER_DEFAULTS["SP" if is_starter else "RP"]
+        ip = _innings(_stat(stats, "IP") or 0.0)
+        if ip < MIN_IP:
+            return dataclasses.replace(base)
+        k, bb = _stat(stats, "K"), _stat(stats, "BB")
+        games, starts = _stat(stats, "GP") or 0, _stat(stats, "GS") or 0
+        fatigue = base.fatigue
+        if is_starter and starts >= 3:
+            fatigue = _lin(ip / games, 4.5, 7.0, 5, 10)
+        elif not is_starter and games:
+            fatigue = _lin(ip / games, 0.9, 2.0, 2, 5)
+        return KGJPitcherAttributes(
+            speed=base.speed if k is None else _lin(k / ip * 9, 5.5, 11.5, 4, 10),
+            control=base.control if bb is None else _lin(bb / ip * 9, 5.0, 1.8, 4, 10),
+            fatigue=fatigue,
+        )
 
     def select_roster(
         self,
@@ -215,8 +222,8 @@ class KGJStatMapper:
     ) -> list[Player]:
         """The three groups of `select_roster_groups`, concatenated. Up to 25:
 
-          [0-14]  = batters (C, 1B, 2B, 3B, SS, LF, CF, RF, DH + bench)
-          [15-19] = starting pitchers, sorted by wins
+          [0-14]  = batters: the lineup in batting order, then the bench
+          [15-19] = starting pitchers, the ace first
           [20-24] = relief pitchers, closer first
 
         Those counts are maxima, not guarantees, so on a short squad the list
@@ -229,94 +236,91 @@ class KGJStatMapper:
         self,
         players: list[Player],
         stats: dict | None = None,
+        lineup: list[dict[str, Any]] | None = None,
+        lineup_size: int = len(LINEUP_POSITIONS),
     ) -> tuple[list[Player], list[Player], list[Player]]:
         """The roster as `(batters, starters, relievers)`, each already ordered.
 
-        The group is the one place a player's kind is actually known, which is
-        why `map_rosters` takes the groups and not the concatenated list.
+        `stats` maps a player id (str) to his ESPN line; `lineup` is what
+        `EspnClient.get_baseball_lineup` returns, and `lineup_size` how many
+        bat (9 in the AL, 8 in the NL). The group is the one place a player's
+        kind is actually known, which is why `map_rosters` takes the groups and
+        not the concatenated list.
         """
         stats = stats or {}
+        lineup = lineup or []
+        recent = {s["id"]: s.get("starts", 0) for s in lineup}
+
+        def num(p: Player, key: str) -> float:
+            return _stat(stats.get(str(p.id), {}), key) or 0.0
 
         pitchers = [p for p in players if self.is_pitcher(p)]
-        batters = [p for p in players if not self.is_pitcher(p)]
+        # The regulars first: whoever started most, this season and lately.
+        batters = sorted(
+            (p for p in players if not self.is_pitcher(p)),
+            key=lambda p: (num(p, "GS") + RECENT_START_WEIGHT * recent.get(p.id, 0), num(p, "PA")),
+            reverse=True,
+        )
 
-        def batter_sort(p: Player) -> float:
-            ps = stats.get(str(p.id), {})
-            ops = float(ps.get("OPS", 0) or 0)
-            hits = float(ps.get("H", 0) or 0)
-            return ops * 1000 + hits
-
-        def starter_sort(p: Player) -> float:
-            ps = stats.get(str(p.id), {})
-            w = float(ps.get("W", 0) or 0)
-            ip = float(ps.get("IP", 0) or 0)
-            return w * 100 + ip
-
-        def reliever_sort(p: Player) -> float:
-            ps = stats.get(str(p.id), {})
-            sv = float(ps.get("SV", 0) or 0)
-            era = float(ps.get("ERA", 9.0) or 9.0)
-            return sv * 100 + (10 - era)
-
-        # ESPN's roster gives SP vs RP; the leaders endpoint has no GS or IP
-        starters = []
-        relievers = []
-        for p in pitchers:
-            pos = (p.position or "").upper()
-            if pos == "SP":
-                starters.append(p)
-            else:
-                relievers.append(p)
-
-        starters.sort(key=starter_sort, reverse=True)
-        relievers.sort(key=reliever_sort, reverse=True)
+        # ESPN's roster gives SP vs RP. The rotation goes by wins then innings,
+        # the bullpen by saves then innings, so the closer and then the most
+        # trusted arms come first.
+        starters = [p for p in pitchers if (p.position or "").upper() == "SP"]
+        relievers = [p for p in pitchers if (p.position or "").upper() != "SP"]
+        starters.sort(key=lambda p: num(p, "W") * 1000 + num(p, "IP"), reverse=True)
+        relievers.sort(key=lambda p: num(p, "SV") * 1000 + num(p, "IP"), reverse=True)
 
         selected_starters = starters[:STARTERS_PER_TEAM]
         selected_relievers = relievers[:RELIEVERS_PER_TEAM]
 
         # top up either group from whatever pitchers are left
-        remaining_pitchers = [
-            p for p in starters[STARTERS_PER_TEAM:] + relievers[RELIEVERS_PER_TEAM:]
-        ]
+        remaining_pitchers = starters[STARTERS_PER_TEAM:] + relievers[RELIEVERS_PER_TEAM:]
         while len(selected_starters) < STARTERS_PER_TEAM and remaining_pitchers:
             selected_starters.append(remaining_pitchers.pop(0))
         while len(selected_relievers) < RELIEVERS_PER_TEAM and remaining_pitchers:
             selected_relievers.append(remaining_pitchers.pop(0))
 
-        batters.sort(key=batter_sort, reverse=True)
-        selected_batters = self._select_position_players(batters)
-
+        selected_batters = self._select_position_players(
+            batters, lineup, lineup_size, lambda p: num(p, "OPS")
+        )
         return selected_batters, selected_starters, selected_relievers
 
-    def _select_position_players(self, batters: list[Player]) -> list[Player]:
-        """15 batters in lineup order: C, 1B, 2B, 3B, SS, LF, CF, RF, DH, bench."""
-        by_pos: dict[str, list[Player]] = {}
-        for p in batters:
-            pos = self._normalize_position(p.position, is_pitcher=False)
-            by_pos.setdefault(pos, []).append(p)
+    def _select_position_players(
+        self,
+        batters: list[Player],
+        lineup: list[dict[str, Any]],
+        lineup_size: int,
+        ops: Callable[[Player], float],
+    ) -> list[Player]:
+        """Up to 15 batters: the starters in batting order, then the bench.
 
-        selected = []
-        used = set()
+        `batters` comes most-used first, so the starters are the regulars, not
+        call-ups: the top catcher, first baseman, three infielders and three
+        outfielders (`map_rosters` then spreads them over the positions), and
+        the next-most-used batter but a catcher as DH. An 8-man lineup sits the
+        weakest bat (OPS) of the first baseman, outfielders and DH, the way an
+        NL club without a DH would. They bat where the club has lately batted
+        them (`lineup`); one it has not, where his OPS ranks among them.
+        """
 
-        for pos in LINEUP_POSITIONS:
-            candidates = by_pos.get(pos, [])
-            for c in candidates:
-                if id(c) not in used:
-                    selected.append(c)
-                    used.add(id(c))
-                    break
-            else:
-                # nobody at this position; the bench fill below covers it
-                pass
+        def pos(p: Player) -> str:
+            return self._normalize_position(p.position, False)
 
-        for p in batters:
-            if len(selected) >= BATTERS_PER_TEAM:
-                break
-            if id(p) not in used:
-                selected.append(p)
-                used.add(id(p))
-
-        return selected[:BATTERS_PER_TEAM]
+        starters: list[Player] = []
+        gloves: list[Player] = []
+        for positions, count in _LINEUP_POOLS:
+            pool = [p for p in batters if pos(p) in positions and p not in starters]
+            starters += pool[:count]
+            gloves += pool[:count] if positions in _GLOVES else []
+        starters += [p for p in batters if p not in starters and pos(p) != "C"][:1]  # the DH
+        while len(starters) > lineup_size:
+            # Of equal bats the last picked sits: with no stats, the DH.
+            bats = [p for p in starters if p not in gloves] or starters
+            starters.remove(min(reversed(bats), key=ops))
+        spot = {s["id"]: s["order"] for s in lineup}
+        by_ops = sorted(starters, key=ops, reverse=True)
+        starters.sort(key=lambda p: spot.get(p.id, by_ops.index(p) + 1))
+        return (starters + [p for p in batters if p not in starters])[:BATTERS_PER_TEAM]
 
     def is_pitcher(self, player: Player) -> bool:
         pos = (player.position or "").upper()
@@ -349,26 +353,25 @@ class KGJStatMapper:
         }
         return pos_map.get(pos, "OF")
 
-    def _map_bat_hand(self, handedness: str | None) -> int:
-        """Batting handedness as the ROM stores it."""
-        if not handedness:
-            return HAND_RIGHT
-        h = handedness.upper()
-        if h == "L":
-            return HAND_LEFT
-        if h in ("S", "B"):
-            return HAND_SWITCH
-        return HAND_RIGHT
+    def _bats(self, player: Player) -> int:
+        """Record byte 0x0D's high nibble: 0 right, 1 left, 2 switch ('B')."""
+        return {"L": 1, "B": 2, "S": 2}.get((player.bats or "").upper(), 0)
+
+    def _throws(self, player: Player) -> int:
+        """0x0D's low nibble (and a pitcher's 0x15): 0 right, 1 left. ESPN's
+        occasional 'B' is written as right."""
+        return 1 if (player.handedness or "").upper() == "L" else 0
 
     def _split_name(self, full_name: str) -> tuple[str, str]:
         """Split "First Last" into (initial, surname): 'J.D. Martinez' -> ('J',
         'MARTINEZ'), 'Ken Griffey Jr.' -> ('K', 'GRIFFEY').
 
-        The 8-character cap is a hard truncation, so "Yastrzemski" writes as
-        "YASTRZEM", and `CHAR_TO_BYTE` then drops anything it does not map,
-        accents included.
+        Accents become plain letters and apostrophes go ("O'Hearn" -> OHEARN),
+        since the font has neither. The 8-character cap is a hard truncation,
+        so "Yastrzemski" writes as "YASTRZEM".
         """
-        parts = full_name.strip().split()
+        plain = unicodedata.normalize("NFKD", full_name).encode("ascii", "ignore").decode()
+        parts = plain.replace("'", "").strip().split()
         if not parts:
             return "A", "PLAYER"
 
@@ -393,12 +396,6 @@ class KGJStatMapper:
             last = "M" + "c" + last[2:]
 
         return first_initial, last
-
-    def _default_batter_appearance(self) -> KGJBatterAppearance:
-        return KGJBatterAppearance()
-
-    def _default_pitcher_appearance(self) -> KGJPitcherAppearance:
-        return KGJPitcherAppearance()
 
     def get_team_slot(self, team_abbrev: str) -> int | None:
         return MODERN_MLB_TO_KGJ.get(team_abbrev.upper())

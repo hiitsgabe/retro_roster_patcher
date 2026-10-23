@@ -19,13 +19,14 @@ from ...sports.models import (  # noqa: F401
 
 # Custom character encoding used for player names.
 #
-# Exactly one lowercase letter is mapped: `c`, at 0x36, so that `_split_name` can
-# render "McGWIRE". The cartridge font holds the rest of the lowercase alphabet --
-# 1994 rosters include DeShields -- and this table simply does not enumerate them.
-# Two live consequences: the writer maps anything absent to 0x00, a SPACE, so
-# accents in a modern roster (Acuna, Baez) are written as blanks; and the reader
-# renders anything absent as "?", which is why the ROM signature check does not
-# test name bytes against this table.
+# The name font holds uppercase letters, digits, `-` (0x25), `.` (0x26) and one
+# lowercase letter, the `c` of Mc (0x36), so that `_split_name` can render
+# "McGWIRE". There is no other lowercase letter and no apostrophe: 0x27-0x34 are
+# position and ordinal labels, 0x35 is another `c`, 0x37-0x3F are "1." to "9.".
+# The writer maps anything absent to 0x00, a SPACE, which is why `_split_name`
+# strips accents and apostrophes first; the reader renders anything absent as
+# "?", which is why the ROM signature check does not test name bytes against
+# this table.
 CHAR_TO_BYTE = {
     " ": 0x00,
     "0": 0x01,
@@ -64,6 +65,8 @@ CHAR_TO_BYTE = {
     "X": 0x22,
     "Y": 0x23,
     "Z": 0x24,
+    "-": 0x25,
+    ".": 0x26,
     "c": 0x36,
 }
 BYTE_TO_CHAR = {v: k for k, v in CHAR_TO_BYTE.items()}
@@ -85,10 +88,6 @@ POSITION_TO_BYTE = {
 }
 BYTE_TO_POSITION = {v: k for k, v in POSITION_TO_BYTE.items()}
 
-HAND_RIGHT = 0x00
-HAND_LEFT = 0x11
-HAND_SWITCH = 0x20
-
 PLAYER_LENGTH = 0x20  # 32 bytes per player
 TEAM_LENGTH = 0x320  # 800 bytes per team (25 * 32)
 AL_TO_NL_GAP = 0xB40  # 2880 bytes between last AL and first NL team
@@ -101,13 +100,6 @@ RELIEVERS_PER_TEAM = 5
 # fills them. An NL club fields all but the DH. The 1994 cartridge's own
 # lineups hold exactly this set in slots 0-8 (AL) or 0-7 (NL).
 LINEUP_POSITIONS: tuple[str, ...] = ("C", "1B", "2B", "3B", "SS", "LF", "CF", "RF", "DH")
-
-# Roster-type nibble in the high half of record byte 0x19: 3 = batter, 1 =
-# starting pitcher, 0 = relief pitcher. Which one a record gets is decided from
-# the slot index alone; see `patcher._roster_type_for_slot`.
-ROSTER_TYPE_BATTER = 0x30
-ROSTER_TYPE_STARTER = 0x10
-ROSTER_TYPE_RELIEVER = 0x00
 
 # 14 bytes immediately before team 0, used to locate the team tables
 FIRST_TEAM_MARKER = bytes(
@@ -128,6 +120,23 @@ FIRST_TEAM_MARKER = bytes(
         0xF0,
     ]
 )
+
+# The Home Run Derby's own player records follow these 10 bytes (file 0xE451 on
+# the retail cartridge): 3 NL batters, 3 AL batters, then the NL and AL derby
+# pitcher, each a 32-byte record laid out like a roster's.
+HR_DERBY_MARKER = bytes([0x02, 0x2E, 0x37, 0x27, 0x00, 0x0A, 0x23, 0x3B, 0x35, 0xFF])
+HR_DERBY_BATTERS_PER_LEAGUE = 3
+
+# The derby's Select Player screen script holds each league's three names as
+# text after these 9 bytes (NL list first): per name a cursor code D1 x y and
+# the name, up to a D2. `FC lo hi` in a name is one special glyph (an
+# apostrophe, "R."). File 0x35E79 and 0x35EC9 on the retail cartridge.
+HR_DERBY_LIST = bytes([0xD1, 0x0D, 0x11, 0xF9, 0x0F, 0x08, 0xD2, 0x00, 0x14])
+
+# A second copy of the six names, 14 columns each and centred, follows the
+# string " HOMERUN DERBY " in a table of D0-terminated strings found by pointer:
+# NL 1-3, one string that is not a name, AL 1-3. File 0x3744C on retail.
+HR_DERBY_TITLE = bytes(CHAR_TO_BYTE[ch] for ch in " HOMERUN DERBY ") + b"\xd0"
 
 # Team order in ROM: 0-13 = AL, 14-27 = NL (1994 MLB)
 TEAM_COUNT = 28
@@ -167,11 +176,17 @@ KGJ_TEAM_ORDER = [
     "Florida Marlins",  # 27
 ]
 
-# Modern MLB team abbreviation -> ROM slot index. The 30 current teams onto 28
-# slots; Arizona and Tampa Bay did not exist in 1994 and have none.
+# Modern MLB team abbreviation -> ROM slot index. The 28 clubs of 1994 hold
+# slots 0-27; Arizona and Tampa Bay, who did not exist in 1994, take the two
+# All-Star teams, slots 28 (NL) and 29 (AL), and play only the All-Star Game
+# (`expansion`).
 #
-# CWS/CHW both mean slot 3 and OAK/ATH both mean slot 10, so `map_rosters` guards
-# the collision.
+# Houston and Milwaukee trade slots, so each plays in its league of today: the
+# slot's league decides the DH, the team-select page and the standings (the
+# patch writes the team's own name, logo and colours over the slot's).
+#
+# CWS/CHW both mean slot 3, OAK/ATH slot 10 and ARI/AZ slot 28, so `map_rosters`
+# guards the collision.
 MODERN_MLB_TO_KGJ = {
     "BAL": 0,
     "BOS": 1,
@@ -181,7 +196,7 @@ MODERN_MLB_TO_KGJ = {
     "CLE": 4,  # was the Indians
     "DET": 5,
     "KC": 6,
-    "MIL": 7,
+    "HOU": 7,  # was Milwaukee
     "MIN": 8,
     "NYY": 9,
     "OAK": 10,
@@ -192,7 +207,7 @@ MODERN_MLB_TO_KGJ = {
     "ATL": 14,
     "CHC": 15,
     "CIN": 16,
-    "HOU": 17,
+    "MIL": 17,  # was Houston
     "LAD": 18,
     "WSH": 19,  # was Montreal
     "NYM": 20,
@@ -203,6 +218,9 @@ MODERN_MLB_TO_KGJ = {
     "PHI": 25,
     "COL": 26,
     "MIA": 27,  # was Florida
+    "ARI": 28,  # the NL All-Stars
+    "AZ": 28,
+    "TB": 29,  # the AL All-Stars
 }
 
 
@@ -227,38 +245,96 @@ class KGJPitcherAttributes:
 
 @dataclass
 class KGJBatterAppearance:
-    """Visual appearance for a batter at the plate."""
+    """How a player looks at the plate and on his Line Up card (record bytes
+    0x0E-0x14; pitchers bat too). The game builds him from parts these pick
+    (loader $85:D037), and a value past each range glitches, resets or hangs
+    the game, which is why `looks.write` clamps every one of them.
+    """
 
-    skin: int = 0  # 0-5: White, Tan, Very Tan, Light Black, Black, Dark Black
-    head: int = 0  # 0-7: hair/facial hair combos
-    hair_color: int = 4  # 0-5: Blonde/Brown, Red, Brown, Bald, Black, Blonde
-    body: int = 1  # 0-7: build/stance
-    legs_size: int = 0  # 0-1: Average, Small
-    legs_stance: int = 0  # 0-4: various stances
-    arms_stance: int = 0  # 0-2: bat position
+    # 0x0E hi. Light to dark; also colours him as a fielder ($85:CE32).
+    skin: int = 0  # 0-5
+    # 0x0E lo. 0 short hair, 1 + mustache, 3 + goatee, 4 longer hair,
+    # 5 + mustache, 6 + beard, 7 long hair. 2 draws what 6 does; on the small
+    # build 2 and 3 draw 6 and 7 draws 4 ($85:D22F). A #24 on Seattle or the AL
+    # All-Stars gets Griffey's own head ($85:D1B4) unless `looks.free_number_24`.
+    head: int = 0  # 0-7
+    # 0x0F hi. Hair and facial hair: 0 blonde, 1 red, 2 brown, 3 dark brown, 4 black.
+    hair_color: int = 4  # 0-4
+    # 0x0F lo. 0 average, 1 tall torso, 2 big, 3 small (which forces legs size 1).
+    body: int = 1  # 0-3
+    legs_size: int = 0  # 0x10 hi. 0 normal, 1 short; ignored on build 3
+    # 0x10 lo. 0 slightly bent, 1 straight and wide, 2 knees together,
+    # 3 deep crouch, 4 front leg straight.
+    legs_stance: int = 0  # 0-4
+    # 0x11 lo (its high nibble is never read). 0 bat upright, 1 hands low and
+    # back, 2 bat over the shoulder.
+    arms_stance: int = 0  # 0-2
+    # 0x12 hi. Which of the arms stance's eight waggles; 0 stops the waggle.
+    waggle: int = 1  # 1-7
+    # 0x12 lo, 0x13 hi. Sprite pieces of the at-bat animation, which the game
+    # remaps by build; 0x12 lo is only tested for zero.
+    piece: int = 0  # 0-1
+    piece_set: int = 1  # 0-2
+    sequence: int = 0  # 0x13 lo. The at-bat sequence, 0-4
+    bat_color: int = 0  # 0x14 hi (its low nibble is never read). 0 ash, 1 brown, 2 black
 
 
 @dataclass
 class KGJPitcherAppearance:
-    """Visual appearance for a pitcher on the mound."""
+    """How a pitcher looks on the mound and on his Bullpen card (record bytes
+    0x15-0x17, loader $85:D428)."""
 
-    skin: int = 0  # 0-5: same as batter
-    head: int = 0  # 0-4: hair/facial hair combos
-    hair_color: int = 4  # 0-4: Blonde, Red, Blonde/Brown, Brown, Black
-    body: int = 0  # 0-2: Average, Fat, Tall
-    throwing_style: int = 0  # 0=Overhand, 1=Sidearm
+    # 0x15 lo. The batter's tones, each lighter on the mound, where 2 and 3 are
+    # equally light (3 is greyer).
+    skin: int = 0  # 0-5
+    head: int = 0  # 0x16 hi. 0 plain, 1 beard, 2 long hair, 3 mustache, 4 glasses
+    hair_color: int = 4  # 0x16 lo. The batter's colours, 0 blonde to 4 black
+    body: int = 0  # 0x17 hi. 0 average, 1 heavy, 2 tall
+    # 0x17 lo ($1335). 0 overhand, anything else sidearm; it changes the pitch's timing.
+    throwing_style: int = 0  # 0-1
 
 
 @dataclass
 class KGJPlayerRecord:
-    """A 32-byte player record."""
+    """A 32-byte player record. Every byte the game reads goes through one
+    accessor (85:D738), which is how the layout below was decoded:
+
+      0x00      first initial; 0x01-0x08 surname
+      0x09      position (`POSITION_TO_BYTE`). A starter's is where he fields;
+                on the bench the game ignores it and a sub takes the slot's
+      0x0A      jersey number
+      0x0B      batter: BAT | POW; pitcher: SPD | CON (each rating - 1)
+      0x0C      batter: SPD | DEF; pitcher: the whole byte is FAT - 1. He tires
+                from (byte + 1) * 7 pitches and is worst from (byte + 1) * 9
+      0x0D      bats (0 R, 1 L, 2 switch) | throws (0 R, 1 L). Pitchers too: they
+                bat, and a fielder throws with the low nibble
+      0x0E-0x14 batter looks (`KGJBatterAppearance`): skin | head, hair |
+                build, legs size | stance, unused | arms, waggle | piece,
+                piece set | sequence, bat colour | unused
+      0x15-0x17 pitcher only: throws | skin, head | hair, build | delivery
+                (`KGJPitcherAppearance`)
+      0x18-0x1F four 12-bit stats, each a low byte then a nibble holding bits
+                8-11: batter AVG, HR, RBI and 0; pitcher W, L, ERA, saves. The
+                high nibble of 0x19, 0x1B, 0x1D and 0x1F is the stat's digit
+                count minus one, as the cartridge has it (AVG always 3, a
+                batter's saves 0xF). The game never reads those four nibbles.
+
+    Nothing in the record says pitcher or batter, starter or reliever: the game
+    goes by the slot (15 and up pitch, 20 and up relieve), and a pitcher bats
+    with fixed ratings whatever his record holds.
+    """
 
     first_initial: str = "A"
     last_name: str = "PLAYER"
+    # The provider's: `looks` picks his parts from the id, and his skin from the
+    # head shot at `photo_url` when there is one.
+    player_id: int = 0
+    photo_url: str = ""
     position: str = "CF"
     jersey_number: int = 1
     is_pitcher: bool = False
-    bat_hand: int = HAND_RIGHT
+    bats: int = 0  # 0 = right, 1 = left, 2 = switch
+    throws: int = 0  # 0 = right, 1 = left
 
     batter_attrs: KGJBatterAttributes = field(default_factory=KGJBatterAttributes)
     batter_appearance: KGJBatterAppearance = field(default_factory=KGJBatterAppearance)
@@ -268,15 +344,10 @@ class KGJPlayerRecord:
 
     pitcher_attrs: KGJPitcherAttributes = field(default_factory=KGJPitcherAttributes)
     pitcher_appearance: KGJPitcherAppearance = field(default_factory=KGJPitcherAppearance)
-    pitch_hand: int = 0  # 0=Right, 1=Left
     wins: int = 0
     losses: int = 0
     era: int = 400  # e.g. 400 = 4.00 ERA
     saves: int = 0
-
-    # 0x30 = batter, 0x10 = starter, 0x00 = reliever. Stamped by
-    # `patcher.map_rosters`; the writer only reads it.
-    roster_type: int = ROSTER_TYPE_BATTER
 
 
 @dataclass
@@ -285,6 +356,17 @@ class KGJTeamRecord:
     name: str
     # In slot order; `None` leaves that slot's ROM record as it is.
     players: list[KGJPlayerRecord | None] = field(default_factory=list)
+    # The club's identity, which `identity.write` puts on the slot: empty keeps
+    # the cartridge's. `city` and `nickname` as the game prints them (capitals,
+    # no punctuation), `code` the provider's abbreviation, `colors` its primary
+    # and alternate colour, and the logo from `assets_dir/logos/<team_id>.png`,
+    # else `logo_url`.
+    city: str = ""
+    nickname: str = ""
+    code: str = ""
+    colors: tuple[tuple[int, int, int], ...] = ()
+    team_id: int | None = None
+    logo_url: str = ""
 
 
 @dataclass

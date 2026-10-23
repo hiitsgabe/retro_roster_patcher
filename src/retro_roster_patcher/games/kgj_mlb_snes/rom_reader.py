@@ -8,8 +8,8 @@ other offset is relative to that. This is why the reader needs no
 headered/headerless arithmetic -- a 512-byte copier header shifts the marker too,
 so the recorded offset is already a file offset either way. Preserve that; a
 constant offset would reintroduce the header case this design deletes.
-`update_snes_checksum` is the one place that still needs `has_header`, because
-the SNES header is at a fixed address.
+`header_size` serves the writers that do need it: the SNES header checksum, and
+the screen and identity data at fixed headerless offsets.
 """
 
 import os
@@ -17,6 +17,7 @@ import os
 from .models import (
     AL_TEAMS,
     AL_TO_NL_GAP,
+    BATTERS_PER_TEAM,
     BYTE_TO_CHAR,
     BYTE_TO_POSITION,
     FIRST_TEAM_MARKER,
@@ -29,10 +30,18 @@ from .models import (
     KGJTeamSlot,
 )
 
-# 2 MB, 16 Mbit, headerless. `validate` tests this for equality rather than as a
-# floor, which is half this game's signature check.
+# 2 MB, 16 Mbit, headerless: the cartridge. `validate` also takes it grown to
+# 4 MB (which the patch does when its art or team identity needs the room), and
+# nothing else: half this game's signature check.
 ROM_SIZE_EXPECTED = 2097152
+ROM_SIZE_GROWN = 2 * ROM_SIZE_EXPECTED
 SMC_HEADER_SIZE = 512
+
+
+def header_size(size: int) -> int:
+    """Bytes of copier header in front of a `size`-byte file: 512 or 0."""
+    return SMC_HEADER_SIZE if size % 1024 == SMC_HEADER_SIZE else 0
+
 
 # Bytes of team data following `first_team_offset`: 14 AL teams, the gap, 14 NL
 # teams. Nothing in `validate` bounds where the marker may match, so a marker
@@ -68,8 +77,8 @@ class KGJRomReader:
         if not self.data:
             return False
         size = len(self.data)
-        # headerless 2 MB, or headered 2 MB + 512
-        if size != ROM_SIZE_EXPECTED and size != ROM_SIZE_EXPECTED + SMC_HEADER_SIZE:
+        # 2 MB or 4 MB, headerless or with a 512-byte copier header
+        if size - header_size(size) not in (ROM_SIZE_EXPECTED, ROM_SIZE_GROWN):
             return False
         pos = self.data.find(FIRST_TEAM_MARKER)
         if pos < 0:
@@ -81,7 +90,7 @@ class KGJRomReader:
         if not self.data:
             return KGJRomInfo(path=self.rom_path, size=0)
         is_valid = self.validate()
-        has_header = len(self.data) == ROM_SIZE_EXPECTED + SMC_HEADER_SIZE
+        has_header = header_size(len(self.data)) > 0
         team_slots = self._read_team_slots() if is_valid else []
         return KGJRomInfo(
             path=self.rom_path,
@@ -127,9 +136,8 @@ class KGJRomReader:
             return {}
 
         d = self.data
-        # roster type, byte 0x19 high nibble: 3 batter, 1 starter, 0 reliever
-        roster_type = (d[off + 0x19] >> 4) & 0xF
-        is_pitcher = roster_type != 3
+        # The game goes by the slot too: nothing in the record says pitcher.
+        is_pitcher = player_slot >= BATTERS_PER_TEAM
 
         result = {
             "first_initial": BYTE_TO_CHAR.get(d[off], "?"),
@@ -137,8 +145,8 @@ class KGJRomReader:
             "position": BYTE_TO_POSITION.get(d[off + 9], "?"),
             "jersey": d[off + 0x0A],
             "is_pitcher": is_pitcher,
-            "roster_type": roster_type,
-            "bat_hand": d[off + 0x0D],
+            "bats": d[off + 0x0D] >> 4,
+            "throws": d[off + 0x0D] & 0xF,
         }
 
         if is_pitcher:
@@ -146,8 +154,7 @@ class KGJRomReader:
             fat = d[off + 0x0C]
             result["p_speed"] = ((spd_con >> 4) & 0xF) + 1
             result["p_control"] = (spd_con & 0xF) + 1
-            result["p_fatigue"] = (fat & 0xF) + 1
-            result["pitch_hand"] = (d[off + 0x15] >> 4) & 0xF
+            result["p_fatigue"] = fat + 1
             result["wins"] = d[off + 0x18]
             result["losses"] = d[off + 0x1A]
             era_low = d[off + 0x1C]
