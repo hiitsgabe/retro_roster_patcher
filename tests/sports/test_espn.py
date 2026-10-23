@@ -1204,3 +1204,19 @@ def test_the_lineup_is_the_eleven_who_started_most_in_the_last_matches(tmp_path)
     assert lineup["formation"] == "4-4-2" and lineup["event"] == "10"
     assert [s["id"] for s in lineup["starters"]] == list(range(1, 12))
     assert lineup["starters"][0]["position"] == "G"
+
+
+def test_default_season_follows_each_leagues_calendar():
+    from datetime import date
+
+    from retro_roster_patcher.sports.espn import default_season
+
+    # August-to-May leagues are named by their start year: in March 2026 the
+    # season with games is 2025-26, from August it is 2026-27.
+    assert default_season("eng.1", date(2026, 3, 10)) == 2025
+    assert default_season("eng.1", date(2026, 8, 20)) == 2026
+    assert default_season("UEFA.CHAMPIONS", date(2026, 7, 1)) == 2025
+    # Calendar-year leagues are named by that year, once it has games.
+    assert default_season("bra.1", date(2026, 5, 1)) == 2026
+    assert default_season("bra.1", date(2026, 1, 15)) == 2025
+    assert default_season("usa.1", date(2026, 10, 22)) == 2026

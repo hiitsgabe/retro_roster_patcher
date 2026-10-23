@@ -9,6 +9,7 @@ soccer. Both are keyless and neither rate-limits.
 import json
 import os
 from collections.abc import Callable
+from datetime import date
 from typing import Any
 
 from ..core.concurrency import emit_status, parallel_map
@@ -69,6 +70,53 @@ ESPN_LEAGUES = [
         "country": "World",
     },
 ]
+
+#: League code prefixes whose season runs inside one calendar year. ESPN names
+#: those by that year (bra.1 2026 is 2026) and every other league by the year
+#: its August-to-May season starts in (eng.1 2026 is 2026-27).
+CALENDAR_YEAR_LEAGUES = ("bra.", "usa.", "arg.", "jpn.", "col.", "chi.", "conmebol.", "fifa.")
+
+
+def default_season(code: str, today: date | None = None) -> int:
+    """The season to fetch for ESPN league `code` on `today`: the current one
+    once it has games (from March for a calendar-year league, from August for
+    the others), else the one before, which has a full season of numbers."""
+    today = today or date.today()
+    start = 3 if code.lower().startswith(CALENDAR_YEAR_LEAGUES) else 8
+    return today.year if today.month >= start else today.year - 1
+
+
+#: ESPN lineup position codes (`get_lineup` starters), by squad group.
+LINEUP_GROUPS = {
+    "G": "Goalkeeper",
+    "CD": "Defender",
+    "CD-L": "Defender",
+    "CD-R": "Defender",
+    "LB": "Defender",
+    "RB": "Defender",
+    "LWB": "Defender",
+    "RWB": "Defender",
+    "SW": "Defender",
+    "DM": "Midfielder",
+    "CM": "Midfielder",
+    "CM-L": "Midfielder",
+    "CM-R": "Midfielder",
+    "LM": "Midfielder",
+    "RM": "Midfielder",
+    "AM": "Midfielder",
+    "AM-L": "Midfielder",
+    "AM-R": "Midfielder",
+    "F": "Attacker",
+    "CF": "Attacker",
+    "CF-L": "Attacker",
+    "CF-R": "Attacker",
+    "LW": "Attacker",
+    "RW": "Attacker",
+    "LF": "Attacker",
+    "RF": "Attacker",
+    "LCF": "Attacker",
+    "RCF": "Attacker",
+}
 
 # NHL team abbreviations mapping to ROM slots (28 teams: 26 NHL + 2 All-Star)
 # Based on NHL 94 SNES team order (1993-94 season)
