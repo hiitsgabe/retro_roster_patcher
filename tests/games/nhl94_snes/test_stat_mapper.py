@@ -14,7 +14,12 @@ import dataclasses
 
 import pytest
 
-from retro_roster_patcher.games.nhl94_snes.models import MODERN_NHL_TO_NHL94, TEAM_COUNT
+from retro_roster_patcher.games.nhl94_snes.models import (
+    MODERN_NHL_TO_NHL94,
+    TEAM_COUNT,
+    NHL94GoalieAttributes,
+    NHL94PlayerAttributes,
+)
 from retro_roster_patcher.games.nhl94_snes.stat_mapper import (
     POSITION_DEFAULTS,
     NHL94StatMapper,
@@ -66,8 +71,14 @@ def test_a_lowercase_code_maps_to_the_same_slot(mapper):
     assert mapper.get_team_slot("bos") == 1
 
 
-def test_an_expansion_team_has_no_slot(mapper):
-    assert mapper.get_team_slot("VGK") is None
+def test_an_expansion_team_without_a_slot_has_none(mapper):
+    assert mapper.get_team_slot("CBJ") is None
+    assert mapper.get_team_slot("UTA") is None
+
+
+def test_seattle_and_vegas_take_the_all_star_slots(mapper):
+    assert mapper.get_team_slot("SEA") == 26
+    assert mapper.get_team_slot("VGK") == 27
 
 
 @pytest.mark.parametrize(
@@ -77,15 +88,10 @@ def test_each_espn_abbreviation_reaches_the_same_slot_as_the_official_one(mapper
     assert mapper.get_team_slot(espn) == mapper.get_team_slot(official)
 
 
-def test_thirty_codes_reach_twenty_six_slots(mapper):
-    """The collision `map_rosters` has to guard, counted.
-
-    26 of the 28 ROM slots are reachable; slots 26 and 27 are the All-Star teams
-    and no code names them.
-    """
-    assert len(MODERN_NHL_TO_NHL94) == 30
-    assert len(set(MODERN_NHL_TO_NHL94.values())) == 26
-    assert max(MODERN_NHL_TO_NHL94.values()) == TEAM_COUNT - 3
+def test_thirty_two_codes_reach_all_twenty_eight_slots(mapper):
+    """The collision `map_rosters` has to guard, counted: four ESPN aliases."""
+    assert len(MODERN_NHL_TO_NHL94) == 32
+    assert set(MODERN_NHL_TO_NHL94.values()) == set(range(TEAM_COUNT))
 
 
 def test_a_player_with_no_stats_gets_the_defaults_for_their_position(mapper):
@@ -118,11 +124,11 @@ def test_two_players_at_one_position_do_not_share_an_attributes_object(mapper):
 
 
 def test_mutating_one_players_attributes_leaves_the_defaults_alone(mapper):
-    before = dataclasses.replace(POSITION_DEFAULTS["G"])
-    record = mapper.map_player(_player(1, "G"), "BOS")
+    before = dataclasses.replace(POSITION_DEFAULTS["D"])
+    record = mapper.map_player(_player(1, "D"), "BOS")
     record.attributes.speed = 6
-    assert POSITION_DEFAULTS["G"] == before
-    assert POSITION_DEFAULTS["G"].speed != 6
+    assert POSITION_DEFAULTS["D"] == before
+    assert POSITION_DEFAULTS["D"].speed != 6
 
 
 def test_a_goalie_is_flagged_as_one(mapper):
@@ -133,9 +139,24 @@ def test_a_skater_is_not_flagged_as_a_goalie(mapper):
     assert mapper.map_player(_player(1, "D"), "BOS").is_goalie is False
 
 
-def test_a_name_is_cut_to_fourteen_characters(mapper):
+def test_a_name_keeps_up_to_nineteen_characters(mapper):
+    # The cartridge's longest is "Vladimir Konstantov".
     record = mapper.map_player(_player(1, "C", name="Alexander Ovechkin"), "WSH")
-    assert record.name == "Alexander Ovec"
+    assert record.name == "Alexander Ovechkin"
+    assert mapper.map_player(_player(1, "C", name="Vladimir Konstantov"), "DET").name == (
+        "Vladimir Konstantov"
+    )
+
+
+def test_a_longer_name_loses_its_first_name_to_an_initial(mapper):
+    record = mapper.map_player(_player(1, "D", name="Oliver Ekman-Larsson"), "TOR")
+    assert record.name == "O. Ekman-Larsson"
+
+
+def test_a_name_is_folded_to_ascii(mapper):
+    # The game draws a non-ASCII byte as '?'.
+    assert mapper.map_player(_player(1, "C", name="Tim Stützle"), "OTT").name == "Tim Stutzle"
+    assert mapper.map_player(_player(1, "D", name="Rémi Poirier"), "NJ").name == "Remi Poirier"
 
 
 def test_a_short_name_is_left_alone(mapper):
@@ -217,39 +238,79 @@ def test_checking_and_endurance_stay_at_the_positions_defaults(mapper):
     assert attributes.endurance == base.endurance
 
 
-def test_a_goalies_agility_comes_from_save_percentage(mapper):
-    attributes = mapper.map_player(_player(1, "G"), "BOS", {"SV%": 0.930}).attributes
+def _goalie(mapper, stats):
+    attributes = mapper.map_player(_player(1, "G"), "BOS", stats).attributes
+    assert isinstance(attributes, NHL94GoalieAttributes)
+    return attributes
+
+
+def test_a_goalies_agility_and_save_zones_come_from_save_percentage(mapper):
+    # .925 over 90 games shrinks to .922, past the top of .865-.915.
+    attributes = _goalie(mapper, {"SV%": 0.925, "GP": 90})
     assert attributes.agility == 6
+    zones = (attributes.stick_right, attributes.stick_left)
+    assert zones + (attributes.glove_right, attributes.glove_left) == (6, 6, 6, 6)
 
 
 def test_a_weak_save_percentage_bottoms_out_the_agility(mapper):
-    attributes = mapper.map_player(_player(1, "G"), "BOS", {"SV%": 0.880}).attributes
-    assert attributes.agility == 0
+    assert _goalie(mapper, {"SV%": 0.860, "GP": 90}).agility == 0
 
 
 def test_a_goalies_awareness_comes_from_goals_against(mapper):
-    # 3.5 - 2.0 = 1.5, the top of the range.
-    attributes = mapper.map_player(_player(1, "G"), "BOS", {"GAA": 2.0}).attributes
-    assert attributes.def_awareness == 6
+    # 2.2 over 90 games shrinks to 2.29, past the bottom of 3.6-2.4.
+    assert _goalie(mapper, {"GAA": 2.2, "GP": 90}).def_awareness == 6
 
 
-def test_a_goalie_with_no_goals_against_average_is_given_three(mapper):
-    # 3.5 - 3.0 = 0.5 of 1.5, which scales to 2.
-    attributes = mapper.map_player(_player(1, "G"), "BOS", {"SV%": 0.9}).attributes
-    assert attributes.def_awareness == 2
+def test_a_small_sample_is_pulled_to_an_average_goalie(mapper):
+    """A backup's perfect night is not the best goalie in the league: ESPN's
+    {SV%: 1.0} with no wins counts as one game, .905, a step over a goalie with
+    no line at all (the .895 prior)."""
+    assert _goalie(mapper, {}).agility == 4
+    assert _goalie(mapper, {"SV%": 1.0}).agility == 5
+    # Three games of .941 count for three games' worth: .906.
+    assert _goalie(mapper, {"SV%": 0.941, "GP": 3}).agility == 5
+
+
+def test_a_goalie_without_wins_is_rated_on_his_own_numbers(mapper):
+    """ESPN lists wins for its top goalies only: two backups with save % lines
+    and no wins rate apart, by their own numbers."""
+    better = _goalie(mapper, {"SV%": 0.948, "GAA": 1.6})
+    worse = _goalie(mapper, {"SV%": 0.864, "GAA": 4.1})
+    assert (better.agility, better.def_awareness) == (4, 3)
+    assert (worse.agility, worse.def_awareness) == (3, 2)
+
+
+def test_puck_control_and_speed_follow_the_goalies_quality(mapper):
+    """Puck control (weight 9) between agility and awareness; speed 3 or 4, the
+    cartridge's goalie range."""
+    star = _goalie(mapper, {"SV%": 0.925, "GAA": 2.2, "GP": 90})
+    average = _goalie(mapper, {})
+    assert (star.puck_control, star.speed) == (6, 4)
+    assert (average.agility, average.def_awareness) == (4, 2)
+    assert (average.puck_control, average.speed) == (3, 3)
 
 
 def test_a_goalie_is_never_scored_on_the_skater_scale(mapper):
     """Every skater-only stat is ignored, so a 90-point goalie stays a goalie."""
-    attributes = mapper.map_player(_player(1, "G"), "BOS", {"PTS": 90, "G": 40}).attributes
-    assert attributes.shot_power == 2
-    assert attributes.stick_handling == 3
-    assert attributes.checking == 1
+    assert _goalie(mapper, {"PTS": 90, "G": 40}) == _goalie(mapper, {})
 
 
-def test_a_null_stat_value_is_read_as_zero_rather_than_raising(mapper):
+def test_a_null_stat_value_is_read_as_missing_rather_than_raising(mapper):
     attributes = mapper.map_player(_player(1, "C"), "BOS", {"PTS": None, "G": None}).attributes
-    assert attributes.off_awareness == 0
+    assert attributes.off_awareness == POSITION_DEFAULTS["C"].off_awareness
+
+
+def test_a_partial_line_keeps_the_positions_default_for_what_it_lacks(mapper):
+    """ESPN's leaders give some skaters only one category: the stats there are
+    used, the rest stay the position's, not 0."""
+    base = POSITION_DEFAULTS["LW"]
+    attributes = mapper.map_player(_player(1, "LW"), "BOS", {"A": 55, "PIM": 0}).attributes
+    assert isinstance(attributes, NHL94PlayerAttributes)
+    assert attributes.pass_accuracy == 6
+    assert attributes.roughness == 0
+    assert attributes.shot_power == base.shot_power
+    assert attributes.off_awareness == base.off_awareness
+    assert attributes.def_awareness == base.def_awareness
 
 
 def test_an_empty_stat_dict_falls_through_to_the_defaults(mapper):
@@ -282,9 +343,9 @@ def test_the_roster_is_ordered_goalies_then_forwards_then_defencemen(mapper):
             (53, "D", 15),
         ]
     )
-    leaders["10"]["SV%"] = 0.930
-    leaders["11"]["SV%"] = 0.900
-    leaders["12"]["SV%"] = 0.880
+    leaders["10"].update({"SV%": 0.880, "W": 30})
+    leaders["11"].update({"SV%": 0.900, "W": 12})
+    leaders["12"].update({"SV%": 1.000})
     selected = mapper.select_roster(
         players, leaders, num_goalies=2, num_forwards=6, num_defensemen=3
     )
@@ -333,19 +394,47 @@ def test_a_missing_position_is_filled_from_the_best_forward_left(mapper):
     assert [p.id for p in selected] == [10, 11, 30, 12, 31, 32]
 
 
-def test_a_short_squad_is_topped_up_from_whoever_is_left(mapper):
-    """Fewer players at each position than asked for, so the leftovers fill in.
-
-    The two extra centres are appended after the defencemen -- past the point
-    the ROM's line table calls a defenceman -- which is what the fill costs.
-    """
+def test_a_short_block_stays_short(mapper):
+    """Fewer players at a position than asked for gives a shorter block, never
+    a spare forward or goalie after the defencemen, where the ROM's line table
+    would call him a defenceman."""
     players, leaders = _squad(
         [(1, "G", 0), (10, "C", 90), (11, "C", 70), (12, "C", 50), (20, "D", 40)]
     )
     selected = mapper.select_roster(
         players, leaders, num_goalies=2, num_forwards=1, num_defensemen=2
     )
-    assert [p.id for p in selected] == [1, 10, 20, 11, 12]
+    assert [p.id for p in selected] == [1, 10, 20]
+
+
+def test_the_goalie_who_started_most_is_the_starter(mapper):
+    """ESPN's wins, then save %: a backup with one perfect game sits."""
+    players, leaders = _squad([(1, "G", 0), (2, "G", 0), (3, "G", 0)])
+    leaders["1"] = {"SV%": 1.0}
+    leaders["2"] = {"SV%": 0.908, "W": 31}
+    leaders["3"] = {"SV%": 0.920, "W": 9}
+    selected = mapper.select_roster(players, leaders, 2, 0, 0)
+    assert [p.id for p in selected] == [2, 3]
+
+
+def test_backups_without_wins_rank_by_their_own_save_percentage(mapper):
+    """Montreal's case: neither backup is on ESPN's wins list, so the better
+    save % is G2, not whoever the roster lists first; a goalie with no line at
+    all sits behind one with a good line."""
+    players, leaders = _squad([(1, "G", 0), (2, "G", 0), (3, "G", 0), (4, "G", 0)])
+    leaders["1"] = {"SV%": 0.872}
+    leaders["2"] = {"SV%": 0.901, "W": 29}
+    leaders["3"] = {}
+    leaders["4"] = {"SV%": 0.908}
+    selected = mapper.select_roster(players, leaders, 4, 0, 0)
+    assert [p.id for p in selected] == [2, 4, 3, 1]
+
+
+def test_games_played_rank_goalies_when_the_provider_sends_them(mapper):
+    players, leaders = _squad([(1, "G", 0), (2, "G", 0)])
+    leaders["1"] = {"SV%": 0.941, "GP": 3, "W": 3}
+    leaders["2"] = {"SV%": 0.928, "GP": 8, "W": 2}
+    assert [p.id for p in mapper.select_roster(players, leaders, 2, 0, 0)] == [2, 1]
 
 
 def test_the_selection_never_exceeds_the_sum_of_the_three_counts(mapper):
@@ -353,7 +442,7 @@ def test_the_selection_never_exceeds_the_sum_of_the_three_counts(mapper):
     selected = mapper.select_roster(
         players, leaders, num_goalies=2, num_forwards=14, num_defensemen=7
     )
-    assert len(selected) == 23
+    assert len(selected) == 14
 
 
 def test_no_player_is_selected_twice(mapper):
@@ -366,7 +455,7 @@ def test_no_player_is_selected_twice(mapper):
         players, leaders, num_goalies=2, num_forwards=14, num_defensemen=7
     )
     assert len(selected) == len({id(p) for p in selected})
-    assert len(selected) == 23
+    assert len(selected) == 2 + 10 + 7
 
 
 def test_an_empty_squad_selects_nobody(mapper):
@@ -375,4 +464,4 @@ def test_an_empty_squad_selects_nobody(mapper):
 
 def test_selection_without_any_stats_still_returns_a_roster(mapper):
     players = [_player(i, "C") for i in range(5)]
-    assert len(mapper.select_roster(players, None, 1, 3, 1)) == 5
+    assert len(mapper.select_roster(players, None, 1, 3, 1)) == 3

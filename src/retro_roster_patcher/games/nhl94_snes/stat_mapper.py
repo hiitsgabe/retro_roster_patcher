@@ -1,14 +1,18 @@
 """Maps NHL season stats onto NHL94's 0-6 attribute scale, falling back to
-position defaults when a player has no stat line."""
+position defaults when a player has no stat line, and per stat when the line
+lacks one (ESPN's team leaders list only each category's top players)."""
 
 from dataclasses import dataclass, replace
 
+from ...core.text import to_ascii
 from ...sports.models import Player
 from .models import (
     MODERN_NHL_TO_NHL94,
+    NHL94GoalieAttributes,
     NHL94PlayerAttributes,
     NHL94PlayerRecord,
 )
+from .rom_writer import MAX_NAME_LENGTH, abbreviate
 
 # Default attributes by position (0-6 scale)
 POSITION_DEFAULTS = {
@@ -68,20 +72,6 @@ POSITION_DEFAULTS = {
         roughness=3,
         aggression=3,
     ),
-    "G": NHL94PlayerAttributes(
-        speed=2,
-        agility=4,
-        shot_power=2,
-        shot_accuracy=2,
-        stick_handling=3,
-        pass_accuracy=2,
-        off_awareness=2,
-        def_awareness=3,
-        checking=1,
-        endurance=4,
-        roughness=1,
-        aggression=1,
-    ),
 }
 
 
@@ -97,6 +87,67 @@ def _scale(value: float, low: float, high: float) -> int:
     return _clamp(round(ratio * 6))
 
 
+def _stat(stats: dict, key: str) -> float | None:
+    """`stats[key]` as a number, or None when the line has no such stat."""
+    try:
+        return float(stats[key])
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+# A goalie's save % and goals-against average are pulled toward these, a
+# little under the league's norm, by `SHRINK_GAMES` games' worth: a backup's
+# one-game 1.000 rates as a backup rather than the best goalie in the league.
+SV_PRIOR = 0.895
+GAA_PRIOR = 3.1
+SHRINK_GAMES = 10
+
+# The save % and goals-against ranges spread over 0-6. On 2025-26's numbers
+# they put the starters' mean overall at 68 and the backups' near 50-60, where
+# the cartridge has 67 and 53.
+SV_RANGE = (0.865, 0.915)
+GAA_RANGE = (3.6, 2.4)
+
+
+#: Games a goalie's own numbers count for when his line has a save % but no
+#: games or wins (ESPN lists wins for its top goalies only): enough to move his
+#: rating a step and to rank him among such backups, not to make a relief
+#: appearance's 1.000 a star.
+NOMINAL_GAMES = 1
+
+
+def _starts(stats: dict) -> float:
+    """How much a goalie played: GP when the provider sends it (NHL API), else
+    W (ESPN's leaders carry wins, not games)."""
+    return (_stat(stats, "GP") if "GP" in stats else _stat(stats, "W")) or 0.0
+
+
+def _weight(stats: dict) -> float:
+    """The games a goalie's save % and goals-against count for against the prior."""
+    return _starts(stats) or (NOMINAL_GAMES if _stat(stats, "SV%") is not None else 0.0)
+
+
+def _shrunk(value: float | None, prior: float, games: float) -> float:
+    if value is None:
+        return prior
+    return (value * games + prior * SHRINK_GAMES) / (games + SHRINK_GAMES)
+
+
+def goalie_rank(stats: dict) -> tuple[float, float]:
+    """Higher starts first: the game always starts the first goalie, so the
+    starter is the one who played most, then the better (shrunk) save %."""
+    return _starts(stats), _shrunk(_stat(stats, "SV%"), SV_PRIOR, _weight(stats))
+
+
+def display_name(name: str) -> str:
+    """The name folded to ASCII, at most `MAX_NAME_LENGTH` characters: a longer
+    one loses its first name to an initial first."""
+    name = " ".join(to_ascii(name).split())
+    if len(name) > MAX_NAME_LENGTH:
+        name = abbreviate(name)
+    return name[:MAX_NAME_LENGTH]
+
+
 @dataclass
 class NHL94StatMapper:
     def map_player(
@@ -108,8 +159,11 @@ class NHL94StatMapper:
         pos = player.position.upper() if player.position else "C"
         is_goalie = pos == "G"
 
-        if stats:
-            attrs = self._map_stats(stats, pos, is_goalie)
+        attrs: NHL94PlayerAttributes | NHL94GoalieAttributes
+        if is_goalie:
+            attrs = self._map_goalie(stats or {})
+        elif stats:
+            attrs = self._map_stats(stats, pos)
         else:
             # Copied, not shared: `attributes` is public and mutable, so the module
             # constant must not be handed out.
@@ -127,65 +181,63 @@ class NHL94StatMapper:
             hand = 1
 
         return NHL94PlayerRecord(
-            name=player.name[:14],
+            name=display_name(player.name),
             jersey_number=jersey,
             weight_class=weight_class,
             handedness=hand,
             is_goalie=is_goalie,
             attributes=attrs,
+            photo_url=player.photo_url,
         )
 
-    def _map_stats(self, stats: dict, pos: str, is_goalie: bool) -> NHL94PlayerAttributes:
+    def _map_stats(self, stats: dict, pos: str) -> NHL94PlayerAttributes:
         """Per-season stat ranges used for scaling:
 
-        G: 0-50, A: 0-70, PTS: 0-120, +/-: -30..+40
-        PIM: 0-120, SV%: .880-.930, GAA: 2.0-3.5
+        G: 0-40, A: 0-55, PTS: 0-90, +/-: -30..+40, PIM: 0-80
+
+        A stat the line lacks keeps the position's default for what it drives.
         """
-        g = float(stats.get("G", 0) or 0)
-        a = float(stats.get("A", 0) or 0)
-        pts = float(stats.get("PTS", 0) or 0)
-        pm = float(stats.get("+/-", 0) or 0)
-        pim = float(stats.get("PIM", 0) or 0)
-
-        if is_goalie:
-            # Upstream's behaviour, known wrong, preserved for byte fidelity: `SV%` is
-            # read as a bare float against a fraction window, so a feed reporting `91.2`
-            # rather than `0.912` saturates `agility` at 6. Do not add a units guard.
-            svp = float(stats.get("SV%", 0) or 0)
-            gaa = float(stats.get("GAA", 3.0) or 3.0)
-            return NHL94PlayerAttributes(
-                speed=2,
-                agility=_scale(svp, 0.880, 0.930),
-                shot_power=2,
-                shot_accuracy=2,
-                stick_handling=3,
-                pass_accuracy=2,
-                off_awareness=2,
-                def_awareness=_scale(3.5 - gaa, 0, 1.5),
-                checking=1,
-                endurance=4,
-                roughness=1,
-                aggression=1,
-            )
-
-        # points as a rate proxy, scaled against an ~82-game season
-        off_rating = _scale(pts, 0, 90)
-
         base = POSITION_DEFAULTS.get(pos, POSITION_DEFAULTS["C"])
+        g, a, pts, pm, pim = (_stat(stats, k) for k in ("G", "A", "PTS", "+/-", "PIM"))
 
+        def scaled(value: float | None, low: float, high: float, default: int) -> int:
+            return default if value is None else _scale(value, low, high)
+
+        bonus = 1 if pts is not None and pts > 50 else 0
         return NHL94PlayerAttributes(
-            speed=_clamp(base.speed + (1 if pts > 50 else 0)),
-            agility=_clamp(base.agility + (1 if pts > 50 else 0)),
-            shot_power=_scale(g, 0, 40),
-            shot_accuracy=_scale(g, 0, 40),
-            stick_handling=off_rating,
-            pass_accuracy=_scale(a, 0, 55),
-            off_awareness=off_rating,
-            def_awareness=_scale(pm + 30, 0, 70),
+            speed=_clamp(base.speed + bonus),
+            agility=_clamp(base.agility + bonus),
+            shot_power=scaled(g, 0, 40, base.shot_power),
+            shot_accuracy=scaled(g, 0, 40, base.shot_accuracy),
+            stick_handling=scaled(pts, 0, 90, base.stick_handling),
+            pass_accuracy=scaled(a, 0, 55, base.pass_accuracy),
+            off_awareness=scaled(pts, 0, 90, base.off_awareness),
+            def_awareness=scaled(None if pm is None else pm + 30, 0, 70, base.def_awareness),
             checking=base.checking,
             endurance=base.endurance,
-            roughness=_scale(pim, 0, 80),
-            aggression=_scale(pim, 0, 80),
+            roughness=scaled(pim, 0, 80, base.roughness),
+            aggression=scaled(pim, 0, 80, base.aggression),
+        )
+
+    def _map_goalie(self, stats: dict) -> NHL94GoalieAttributes:
+        """Agility and the four save zones from save %, awareness from
+        goals-against, both shrunk by games played (`SV_RANGE`, `GAA_RANGE`).
+        Puck control follows the two, and speed is 3 or 4, the cartridge's goalie
+        range.
+        """
+        games = _weight(stats)
+        agility = _scale(_shrunk(_stat(stats, "SV%"), SV_PRIOR, games), *SV_RANGE)
+        gaa = _shrunk(_stat(stats, "GAA"), GAA_PRIOR, games)
+        awareness = _scale(GAA_RANGE[0] - gaa, 0, GAA_RANGE[0] - GAA_RANGE[1])
+        return NHL94GoalieAttributes(
+            agility=agility,
+            speed=4 if agility + awareness >= 7 else 3,
+            def_awareness=awareness,
+            puck_control=(agility + awareness + 1) // 2,
+            stick_right=agility,
+            stick_left=agility,
+            glove_right=agility,
+            glove_left=agility,
         )
 
     def select_roster(
@@ -198,23 +250,20 @@ class NHL94StatMapper:
     ) -> list[Player]:
         """Build the roster in ROM order, goalies first:
 
-        Goalies (2)       - indices 0..1
+        Goalies (2)       - indices 0..1, most starts first
         Forwards (N)      - indices 2..2+N-1, LW/C/RW per line
         Defencemen (M)    - indices 2+N..2+N+M-1
+
+        A position with fewer players than asked for gives a shorter block.
 
         The header's line assignments reference players by absolute index and
         assume exactly this ordering.
         """
         stats = stats or {}
-        max_players = num_goalies + num_forwards + num_defensemen
 
         def sort_key(p: Player) -> float:
-            """Higher is better: PTS for skaters, SV% for goalies."""
-            ps = stats.get(str(p.id), {})
-            if p.position == "G":
-                svp = float(ps.get("SV%", 0) or 0)
-                return svp * 1000
-            return float(ps.get("PTS", 0) or 0)
+            """Higher is better: PTS for skaters."""
+            return _stat(stats.get(str(p.id), {}), "PTS") or 0.0
 
         centers = sorted(
             [p for p in players if p.position == "C"],
@@ -238,7 +287,7 @@ class NHL94StatMapper:
         )
         goalies = sorted(
             [p for p in players if p.position == "G"],
-            key=sort_key,
+            key=lambda p: goalie_rank(stats.get(str(p.id), {})),
             reverse=True,
         )
 
@@ -313,20 +362,9 @@ class NHL94StatMapper:
 
         defense = defensemen[:num_defensemen]
 
-        # ROM order: G, then F, then D
-        selected = selected_goalies + forwards + defense
-
-        all_used = set(id(p) for p in selected)
-        leftover = sorted(
-            [p for p in players if id(p) not in all_used],
-            key=sort_key,
-            reverse=True,
-        )
-        remaining = max_players - len(selected)
-        if remaining > 0:
-            selected.extend(leftover[:remaining])
-
-        return selected[:max_players]
+        # ROM order: G, then F, then D. A short block stays short: a player
+        # topped up after the defencemen would be read as one.
+        return selected_goalies + forwards + defense
 
     def _map_weight(self, weight_pounds: int) -> int:
         """Weight class = (lbs - 140) / 8, clamped to 0-14."""

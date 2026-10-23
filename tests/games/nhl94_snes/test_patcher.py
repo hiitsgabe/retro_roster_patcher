@@ -17,6 +17,7 @@ from retro_roster_patcher.core.errors import ApiError, CapabilityError, MappingE
 from retro_roster_patcher.core.models import MappedRosters, PatchResult, SlotMapping
 from retro_roster_patcher.games.nhl94_snes.models import (
     DEFAULT_ROSTER_COUNTS,
+    RETAIL_ROSTER_COUNTS,
     TEAM_COUNT,
     NHL94PlayerRecord,
     NHL94TeamRecord,
@@ -63,7 +64,8 @@ class FakeApi:
     def get_hockey_squad(self, team_ref, season=None):
         self.squad_calls.append((team_ref, season))
         return [
-            Player(id=i, name=f"P{i}", position="C", number=i + 1) for i in range(self._squad_size)
+            Player(id=i, name=f"P{i}", position="G" if i < 2 else "C", number=i + 1)
+            for i in range(self._squad_size)
         ]
 
     def get_hockey_team_leaders(self, team_ref, season=None):
@@ -79,10 +81,37 @@ def _teams():
     ]
 
 
+def _standings(body):
+    """A transport serving `body` as ESPN's standings, recording the URLs."""
+
+    def transport(url, headers, timeout):
+        transport.urls.append(url)
+        return json.dumps(body).encode()
+
+    transport.urls = []
+    return transport
+
+
+def _standings_body(*rows):
+    """ESPN's standings shape: conferences, divisions, then entries."""
+    entries = [
+        {
+            "team": {"abbreviation": code},
+            "stats": [
+                {"name": "pointsFor", "value": gf},
+                {"name": "pointsAgainst", "value": ga},
+                {"name": "gamesPlayed", "value": gp},
+            ],
+        }
+        for code, gf, ga, gp in rows
+    ]
+    return {"children": [{"children": [{"standings": {"entries": entries}}]}]}
+
+
 @pytest.fixture
 def patcher(tmp_path):
     """A patcher wired to a fake API covering two real NHL94 slots."""
-    p = NHL94SNESPatcher(cache_dir=tmp_path / "cache")
+    p = NHL94SNESPatcher(cache_dir=tmp_path / "cache", transport=_standings({}))
     p.api = FakeApi(_teams())
     return p
 
@@ -104,7 +133,12 @@ def _league_data(*entries, season=2025):
             TeamRoster(
                 team=Team(id=i + 1, name=code, code=code),
                 players=[
-                    Player(id=i * 100 + n, name=f"{code} Player{n:02d}", position="C", number=n + 1)
+                    Player(
+                        id=i * 100 + n,
+                        name=f"{code} Player{n:02d}",
+                        position=_position(n),
+                        number=n + 1,
+                    )
                     for n in range(size)
                 ],
                 extra={"leaders": {}},
@@ -112,6 +146,18 @@ def _league_data(*entries, season=2025):
             for i, (code, size) in enumerate(entries)
         ],
     )
+
+
+def _position(n):
+    """Two goalies first, then two centres for every defenceman."""
+    return "G" if n < 2 else ("D" if n % 3 == 2 else "C")
+
+
+def _base(image, slot):
+    """A block's file offset in a written image, read from the pointer table:
+    a patch rebuilds the blocks, so the fixture's own offsets no longer hold."""
+    entry = fixture.team_pointer_offset(slot)
+    return fixture.BANK_WINDOW_START + ((image[entry] | image[entry + 1] << 8) & 0x7FFF)
 
 
 def _records(count):
@@ -345,16 +391,20 @@ def test_the_intact_image_passes_the_structural_check(patcher, rom):
 
 
 def test_analyze_publishes_one_roster_count_triple_per_slot(patcher, rom):
+    """Per slot, the larger of byte 17 and the cartridge's own counts: a patch
+    writes what it filled into byte 17, and a slot one season left short must be
+    filled again by the next."""
     counts = patcher.analyze_rom(rom).extra["roster_counts"]
     assert len(counts) == TEAM_COUNT
-    expected = [[2, f, d] for f, d in fixture.TEAM_FD_COUNTS]
+    image = list(fixture.TEAM_FD_COUNTS)
     # Slots 26 and 27 are under the reader's sanity floor and fall back.
-    expected[26] = [2, 14, 7]
-    expected[27] = [2, 14, 7]
-    assert counts == expected
-    # Not one repeated triple, which is what would make the equality above hold for a
-    # reader that ignored the slot index.
-    assert len({tuple(c) for c in counts}) == 26
+    image[26] = image[27] = (14, 7)
+    assert counts == [
+        [2, max(f, rf), max(d, rd)]
+        for (f, d), (rf, rd) in zip(image, RETAIL_ROSTER_COUNTS, strict=True)
+    ]
+    assert counts[2] == [2, 15, 8]  # Buffalo: the image's 15 forwards, the cartridge's 8 D
+    assert counts[22] == [2, 14, 8]  # Toronto: the image says 5 and 7
 
 
 def test_the_published_counts_are_json_safe(patcher, rom):
@@ -417,7 +467,7 @@ def test_a_provider_with_no_teams_raises(patcher):
 
 
 def test_a_provider_with_no_matching_team_raises(patcher):
-    patcher.api = FakeApi([Team(id=9, name="Seattle Kraken", code="SEA")])
+    patcher.api = FakeApi([Team(id=9, name="Columbus Blue Jackets", code="CBJ")])
     with pytest.raises(ApiError):
         patcher.fetch(season=2025)
 
@@ -436,7 +486,7 @@ def test_fetch_narrates_its_first_step(patcher):
     seen = []
     patcher.on_status = seen.append
     patcher.fetch(season=2025)
-    assert seen == ["Fetching NHL teams..."]
+    assert seen[0] == "Fetching NHL teams..."
 
 
 def test_mapping_puts_each_team_in_its_own_slot(patcher):
@@ -473,23 +523,36 @@ def test_without_counts_every_slot_is_cut_to_the_default(patcher):
 def test_the_roms_counts_change_how_many_players_are_selected(patcher, rom):
     """Hop two: the counts `analyze_rom` published come back in.
 
-    Slot 4's image says 14 forwards and 6 defencemen, so 22 players, against the
-    default's 23. That one-player difference is the whole observable effect and a
-    fixture with uniform counts would hide it.
+    Buffalo's image says 15 forwards and the cartridge 8 defencemen, so 25
+    players against the default's 23.
     """
     counts = patcher.analyze_rom(rom).extra["roster_counts"]
-    assert counts[CHI_SLOT] == [2, 14, 6]
-    mapped = patcher.map_rosters(_league_data(("CHI", 40)), roster_counts=counts)
-    record = mapped.teams[CHI_SLOT]
-    assert (record.num_goalies, record.num_forwards, record.num_defensemen) == (2, 14, 6)
-    assert len(record.players) == 22
+    mapped = patcher.map_rosters(_league_data(("BUF", 40)), roster_counts=counts)
+    record = mapped.teams[2]
+    assert (record.num_goalies, record.num_forwards, record.num_defensemen) == (2, 15, 8)
+    assert len(record.players) == 25
+
+
+def test_a_slot_one_patch_left_short_is_filled_again_by_the_next(patcher, rom, tmp_path):
+    """A season with 6 forwards and 4 defencemen for Boston writes 6 and 4 into
+    byte 17; the next patch still offers the cartridge's 15 and 7."""
+    once = tmp_path / "once.sfc"
+    counts = patcher.analyze_rom(rom).extra["roster_counts"]
+    short = patcher.map_rosters(_league_data(("BOS", 12)), roster_counts=counts)
+    assert (short.teams[BOS_SLOT].num_forwards, short.teams[BOS_SLOT].num_defensemen) == (6, 4)
+    patcher.patch(rom_path=rom, output_path=once, rosters=short)
+    assert NHL94SNESRomReader(str(once)).load()
+    counts = patcher.analyze_rom(once).extra["roster_counts"]
+    assert counts[BOS_SLOT] == [2, 15, 7]
+    full = patcher.map_rosters(_league_data(("BOS", 40)), roster_counts=counts)
+    assert (full.teams[BOS_SLOT].num_forwards, full.teams[BOS_SLOT].num_defensemen) == (15, 7)
 
 
 def test_the_counts_used_are_recorded_on_every_mapped_record(patcher, rom):
     counts = patcher.analyze_rom(rom).extra["roster_counts"]
     mapped = patcher.map_rosters(_league_data(("BOS", 40), ("CHI", 40)), roster_counts=counts)
     recorded = {slot: team.num_forwards for slot, team in mapped.teams.items()}
-    assert recorded == {BOS_SLOT: 13, CHI_SLOT: 14}
+    assert recorded == {BOS_SLOT: 15, CHI_SLOT: 14}
 
 
 def test_a_roster_counts_list_of_the_wrong_length_is_refused(patcher):
@@ -568,58 +631,31 @@ def test_a_patch_counts_the_slots_it_wrote(patcher, rom, tmp_path):
     assert result.output_path == str(out)
 
 
-def test_players_patched_counts_records_that_reached_the_image(patcher, rom, tmp_path):
-    """A roster that overflows the region.
-
-    The image holds 23 records of an 8-byte name, so each region is 416 bytes.
-    `_records` names are 10 bytes, costing 20 each, and the writer stops while
-    fewer than 13 bytes remain, so 21 fit and 2 of the 23 are dropped. Upstream
-    added `len(team.players)` here and reported 23.
-    """
+def test_every_record_reaches_the_image_however_long_the_roster(patcher, rom, tmp_path):
+    """The block is rebuilt around the roster, so nothing is dropped: 23 records
+    that the slot's 1993 block could not hold all reach the image."""
     out = tmp_path / "out.sfc"
     mapped = MappedRosters(game_id="nhl94-snes", teams={BOS_SLOT: _team_record(BOS_SLOT, 23)})
     result = patcher.patch(rom_path=rom, output_path=out, rosters=mapped)
-    assert result.players_patched == 21
+    assert result.players_patched == 23
     names, _ = _read_back(out, BOS_SLOT)
-    assert len(names) == 21
-    # And the two numbers really do differ, so this is not a coincidence of the
-    # fixture size.
-    assert len(mapped.teams[BOS_SLOT].players) == 23
+    assert names == [f"Written {i:02d}" for i in range(23)]
 
 
-def test_a_slot_whose_region_takes_nothing_still_gets_its_header_written(patcher, tmp_path):
-    """PINS UPSTREAM FIDELITY DELIBERATELY, and it is known to be wrong.
-
-    Upstream wrote byte 17 and the line table even for a region too small
-    to hold one record, and the game reads the zero-fill as a player. Do not
-    "fix" it by skipping the header: nothing here has been validated against a
-    real dump.
-
-    The counts do not come back: `rom_writer.header_counts` still clamps, so the
-    header claims (0, 0) rather than the requested (14, 7). The clamp decides WHAT
-    counts go in; this test is about WHETHER a header is written at all.
-    """
+def test_a_slot_whose_old_block_held_nobody_gets_its_whole_roster(patcher, tmp_path):
     empty = fixture.write_nhl94_snes_rom(tmp_path / "empty.sfc", players_per_team=0)
     out = tmp_path / "out.sfc"
     mapped = MappedRosters(game_id="nhl94-snes", teams={BOS_SLOT: _team_record(BOS_SLOT, 10)})
     result = patcher.patch(rom_path=empty, output_path=out, rosters=mapped)
-    # No record reached the image, so neither counter moves: `PatchResult` defines
-    # both as what reached the ROM.
-    assert result.teams_patched == 0
-    assert result.players_patched == 0
-
-    base = fixture.team_base(BOS_SLOT)
-    header = slice(base + fixture.PLAYER_COUNT_OFFSET, base + fixture.TEAM_HEADER_SIZE)
-    before = empty.read_bytes()
-    after = out.read_bytes()
-    # The header was written: these bytes are not the ones the input carried.
-    assert after[header] != before[header]
-    # And it claims nobody, which is the truthful half of the combination.
-    assert after[base + fixture.PLAYER_COUNT_OFFSET] == 0x00
+    assert (result.teams_patched, result.players_patched) == (1, 10)
+    names, _ = _read_back(out, BOS_SLOT)
+    assert len(names) == 10
+    image = out.read_bytes()
+    assert image[_base(image, BOS_SLOT) + fixture.PLAYER_COUNT_OFFSET] == (8 << 4) | 0
 
 
 def test_an_empty_roster_never_reaches_the_writer(patcher, rom, tmp_path):
-    """`write_team_roster([])` zero-fills the region, erasing the 1994 roster."""
+    """An empty list would wipe the slot's 1994 roster."""
     out = tmp_path / "out.sfc"
     mapped = MappedRosters(game_id="nhl94-snes", teams={BOS_SLOT: _team_record(BOS_SLOT, 0)})
     result = patcher.patch(rom_path=rom, output_path=out, rosters=mapped)
@@ -649,34 +685,16 @@ def test_the_header_is_written_from_the_counts_on_the_record(patcher, rom, tmp_p
     assert reader.read_team_player_counts(BOS_SLOT) == (2, 12, 7)
 
 
-def test_the_header_does_not_claim_defencemen_the_writer_dropped(patcher, rom, tmp_path):
-    """The filed defect, at the layer where it reaches the ROM.
-
-    The same 23-into-21 overflow as above. Upstream, and this port until now,
-    wrote the requested 14 and 7; 2 + 14 + 7 is 23 and only 21 records exist.
-    """
-    out = tmp_path / "out.sfc"
-    mapped = MappedRosters(game_id="nhl94-snes", teams={BOS_SLOT: _team_record(BOS_SLOT, 23)})
-    result = patcher.patch(rom_path=rom, output_path=out, rosters=mapped)
-    assert result.players_patched == 21
-    count_byte = out.read_bytes()[fixture.team_base(BOS_SLOT) + fixture.PLAYER_COUNT_OFFSET]
-    assert count_byte == (14 << 4) | 5
-
-
-def test_no_line_slot_names_a_record_the_writer_never_wrote(patcher, rom, tmp_path):
-    """The consequence the header byte alone does not show.
-
-    The table's indices are 1-based. Under the requested 14 and 7 its highest is
-    22; 21 records were written, so records 1..21 exist and 22 does not. Asserted
-    as the exact maximum rather than as a bound: `max(...) <= 21` would also pass
-    on a table of all zeroes, which is what a zero-filled header produces.
-    """
+def test_the_header_counts_the_records_written(patcher, rom, tmp_path):
     out = tmp_path / "out.sfc"
     mapped = MappedRosters(game_id="nhl94-snes", teams={BOS_SLOT: _team_record(BOS_SLOT, 23)})
     patcher.patch(rom_path=rom, output_path=out, rosters=mapped)
-    base = fixture.team_base(BOS_SLOT) + fixture.LINE_ASSIGN_OFFSET
-    table = out.read_bytes()[base : base + fixture.LINE_COUNT * fixture.LINE_SLOTS]
-    assert max(table) == 21
+    image = out.read_bytes()
+    base = _base(image, BOS_SLOT)
+    assert image[base + fixture.PLAYER_COUNT_OFFSET] == (14 << 4) | 7
+    # Defencemen 17-23 (1-based); the three pairs on the lines are 17-22.
+    table = image[base + fixture.LINE_ASSIGN_OFFSET : base + fixture.TEAM_HEADER_SIZE]
+    assert max(table) == 22
 
 
 def test_a_provider_short_of_skaters_does_not_get_a_full_teams_header(patcher, rom, tmp_path):
@@ -690,8 +708,8 @@ def test_a_provider_short_of_skaters_does_not_get_a_full_teams_header(patcher, r
     mapped = MappedRosters(game_id="nhl94-snes", teams={BOS_SLOT: _team_record(BOS_SLOT, 9)})
     result = patcher.patch(rom_path=rom, output_path=out, rosters=mapped)
     assert result.players_patched == 9
-    count_byte = out.read_bytes()[fixture.team_base(BOS_SLOT) + fixture.PLAYER_COUNT_OFFSET]
-    assert count_byte == (7 << 4) | 0
+    image = out.read_bytes()
+    assert image[_base(image, BOS_SLOT) + fixture.PLAYER_COUNT_OFFSET] == (7 << 4) | 0
 
 
 def test_an_out_of_range_slot_index_is_dropped_after_the_json_boundary(patcher, rom, tmp_path):
@@ -829,9 +847,10 @@ def test_the_cli_threads_the_roms_counts_through_the_same_two_hops(rom, tmp_path
     pass it -- and the CLI did not, so every command-line run selected and
     headered `DEFAULT_ROSTER_COUNTS` for all 28 slots whatever byte 17 said.
 
-    Slot 1's image says 13 forwards and 8 defencemen and slot 4's says 14 and 6,
-    so neither equals the 14/7 default and the two do not equal each other -- a
-    run that fell back would write one number into both.
+    Slot 1 holds 15 forwards and 8 defencemen (the cartridge's 15, the image's
+    8) and slot 4 14 and 8, so neither equals the 14/7 default and the two do
+    not equal each other -- a run that fell back would write one number into
+    both.
     """
     from retro_roster_patcher.cli.__main__ import main
 
@@ -843,10 +862,6 @@ def test_the_cli_threads_the_roms_counts_through_the_same_two_hops(rom, tmp_path
                 "teams": [
                     {
                         "team": {"id": i + 1, "name": code, "code": code},
-                        # Three-character names on purpose: the region holds 414
-                        # bytes and a record costs 10 + len(name), so anything
-                        # longer truncates the roster and the header-count clamp
-                        # starts moving these bytes too.
                         "players": [
                             {
                                 "id": i * 100 + n,
@@ -883,21 +898,17 @@ def test_the_cli_threads_the_roms_counts_through_the_same_two_hops(rom, tmp_path
     )
     assert code == 0
     written = out.read_bytes()
-    bos = fixture.team_base(BOS_SLOT) + fixture.PLAYER_COUNT_OFFSET
-    chi = fixture.team_base(CHI_SLOT) + fixture.PLAYER_COUNT_OFFSET
-    assert written[bos] == (13 << 4) | 8
-    assert written[chi] == (14 << 4) | 6
+    bos = _base(written, BOS_SLOT) + fixture.PLAYER_COUNT_OFFSET
+    chi = _base(written, CHI_SLOT) + fixture.PLAYER_COUNT_OFFSET
+    assert written[bos] == (15 << 4) | 8
+    assert written[chi] == (14 << 4) | 8
     # And the image really was patched, so neither byte is the input's by luck.
     assert written != rom.read_bytes()
 
 
 def test_a_patched_rom_can_be_analysed_and_patched_again(patcher, rom, tmp_path):
-    """Nothing here touches a checksum, so the output stays a valid input.
-
-    Only true because NHL '94 (SNES) does not verify one. A patcher that
-    recomputed the SNES header checksum would have to keep it recomputed; one that
-    verified it could not accept its own output at all.
-    """
+    """The output stays a valid input: its blocks parse, and the room the first
+    patch left is found again."""
     once = tmp_path / "once.sfc"
     twice = tmp_path / "twice.sfc"
     mapped = MappedRosters(game_id="nhl94-snes", teams={BOS_SLOT: _team_record(BOS_SLOT, 10)})
@@ -922,7 +933,9 @@ def _ranked_league(players):
     """One BOS roster whose leaders rank every player by id, highest first."""
     data = _league_data(("BOS", 0))
     data.teams[0].players = players
-    data.teams[0].extra["leaders"] = {str(p.id): {"PTS": p.id, "SV%": p.id} for p in players}
+    data.teams[0].extra["leaders"] = {
+        str(p.id): {"PTS": p.id, "SV%": p.id, "W": p.id} for p in players
+    }
     return data
 
 
@@ -937,7 +950,7 @@ def _named_league(goalies, forwards, defence):
     data = _league_data(("BOS", 0))
     data.teams[0].players = players
     data.teams[0].extra["leaders"] = {
-        str(p.id): {"PTS": 99 - p.id, "SV%": 99 - p.id} for p in players
+        str(p.id): {"PTS": 99 - p.id, "W": 99 - p.id} for p in players
     }
     return data
 
@@ -979,11 +992,17 @@ def test_order_as_given_tops_up_nothing_and_counts_what_each_block_got(patcher):
     assert (team.num_forwards, team.num_defensemen) == (3, 3)
 
 
-def test_order_as_given_refuses_a_list_with_one_goalie(patcher):
+def test_order_as_given_skips_a_team_with_one_goalie(patcher):
     # The line table counts forwards from record 3, so a lone goalie would put
     # the first forward in the backup's place and shift every index after it.
-    with pytest.raises(MappingError, match="goalie"):
-        patcher.map_rosters(_named_league(1, 12, 6), order_as_given=True)
+    # The slot keeps the cartridge's team; the other teams are still mapped.
+    seen = []
+    patcher.on_status = seen.append
+    data = _named_league(1, 12, 6)
+    data.teams += _league_data(("CHI", 20)).teams
+    mapped = patcher.map_rosters(data, order_as_given=True)
+    assert sorted(mapped.teams) == [CHI_SLOT]
+    assert any("BOS skipped: 1 goalie(s)" in line for line in seen)
 
 
 def test_order_as_given_still_skips_an_empty_roster(patcher):
@@ -1034,9 +1053,181 @@ def test_the_best_line_is_the_lists_starting_six(patcher, rom, tmp_path):
 
     names, _ = _read_back(out, BOS_SLOT)
     image = out.read_bytes()
-    base = fixture.team_base(BOS_SLOT)
+    base = _base(image, BOS_SLOT)
     assert image[base + fixture.PLAYER_COUNT_OFFSET] == (11 << 4) | 8
     best = image[base + fixture.LINE_ASSIGN_OFFSET : base + fixture.LINE_ASSIGN_OFFSET + 8]
     # [G, LD, RD, LW, C, RW], 1-based, then EA and the record's zero byte.
     assert [names[i - 1] for i in best[:6]] == ["G1", "D1", "D2", "LW1", "C1", "RW1"]
     assert best[7] == 0
+
+
+SEA_SLOT = 26
+VGK_SLOT = 27
+
+
+def test_seattle_and_vegas_are_fetched_and_take_the_all_star_slots(patcher):
+    patcher.api = FakeApi(
+        [Team(id=124292, name="Seattle Kraken", code="SEA"), Team(id=37, name="Vegas", code="VGK")]
+    )
+    data = patcher.fetch(season=2026)
+    assert [roster.team.code for roster in data.teams] == ["SEA", "VGK"]
+    assert sorted(patcher.map_rosters(data).teams) == [SEA_SLOT, VGK_SLOT]
+
+
+def test_espn_standings_set_each_teams_strength(tmp_path):
+    """One standings request; goals for rank the high nibble (attack) and goals
+    against the low one (leakiness), over 0-7, for the score simulator -- each
+    club against the whole league, not against the teams this fetch maps."""
+    transport = _standings(
+        _standings_body(
+            ("BOS", 272, 250, 82),
+            ("CHI", 210, 290, 82),
+            ("SEA", 240, 240, 82),
+            ("EDM", 300, 200, 82),
+            ("CBJ", 180, 310, 82),
+        )
+    )
+    p = NHL94SNESPatcher(cache_dir=tmp_path / "cache", transport=transport)
+    p.api = FakeApi(_teams() + [Team(id=124292, name="Seattle Kraken", code="SEA")])
+    data = p.fetch(season=2026)
+    assert transport.urls == [
+        "https://site.api.espn.com/apis/v2/sports/hockey/nhl/standings?season=2026"
+    ]
+    # Five clubs: ranks 0-4 become 0, 1, 3, 4, 6.
+    assert [roster.extra["strength"] for roster in data.teams] == [0x43, 0x14, 0x31]
+    data.teams = data.teams[:1]
+    assert p.map_rosters(data).teams[BOS_SLOT].strength == 0x43
+
+
+def test_without_standings_the_strength_is_left_to_the_cartridge(patcher):
+    seen = []
+    patcher.on_status = seen.append
+    teams = patcher.map_rosters(patcher.fetch(season=2026)).teams
+    assert teams[BOS_SLOT].strength is None
+    assert "Team strengths kept from the cartridge: no goals for and against" in seen
+
+
+def test_nhl_club_stats_give_the_strength_without_a_request(tmp_path):
+    """Every skater's goals and every goalie's goals against, per game played."""
+    p = NHL94SNESPatcher(cache_dir=tmp_path, provider="nhl")
+    p.api = FakeApi(_teams())
+    goals = {"BOS": (40, 20), "CHI": (20, 40)}
+    p.api.get_hockey_team_leaders = lambda code, season=None: {
+        "1": {"G": goals[code][0], "GP": 10},
+        "2": {"G": 0, "GP": 4},
+        "3": {"GA": goals[code][1], "GP": 10},
+    }
+    teams = p.map_rosters(p.fetch(season=2025)).teams
+    assert (teams[BOS_SLOT].strength, teams[CHI_SLOT].strength) == (0x40, 0x04)
+
+
+def test_a_partial_stat_line_takes_the_teams_lowest_listed_value(patcher):
+    """ESPN lists each category's top 25: a player missing from the points list
+    scored fewer than its last entry, not the position's default (3 here)."""
+    data = _league_data(("BOS", 6))
+    players = data.teams[0].players
+    leaders = data.teams[0].extra["leaders"]
+    leaders[str(players[2].id)] = {"G": 40, "A": 50, "PTS": 90, "PIM": 80}
+    leaders[str(players[4].id)] = {"G": 2, "A": 13, "PTS": 15, "PIM": 4}
+    leaders[str(players[3].id)] = {"+/-": 5}
+
+    def partial():
+        team = patcher.map_rosters(data).teams[BOS_SLOT]
+        return next(r for r in team.players if r.name == "BOS Player03").attributes
+
+    assert partial().off_awareness == 1  # the lower of the two listed, 15
+    leaders[str(players[2].id)]["PTS"] = 0
+    assert partial().off_awareness == 0
+
+
+def _skaters(forwards, defence, goalies=2):
+    players = [Player(id=n, name=f"G{n}", position="G", number=n + 1) for n in range(goalies)]
+    players += [
+        Player(id=100 + n, name=f"F{n}", position="C", number=n + 1) for n in range(forwards)
+    ]
+    players += [
+        Player(id=200 + n, name=f"D{n}", position="D", number=n + 1) for n in range(defence)
+    ]
+    data = _league_data(("BOS", 0))
+    data.teams[0].players = players
+    return data
+
+
+def test_the_ranked_path_counts_what_the_selection_filled(patcher):
+    """A 13 F / 8 D roster against a 15 F / 7 D slot: the header says 13 and 7,
+    so the line table finds every defenceman where it put him, and nobody of
+    another position is topped up into a block."""
+    counts = [list(DEFAULT_ROSTER_COUNTS) for _ in range(TEAM_COUNT)]
+    counts[BOS_SLOT] = [2, 15, 7]
+    team = patcher.map_rosters(_skaters(13, 8, goalies=3), roster_counts=counts).teams[BOS_SLOT]
+    assert (team.num_forwards, team.num_defensemen) == (13, 7)
+    positions = [r.name[0] for r in team.players]
+    assert positions == ["G"] * 2 + ["F"] * 13 + ["D"] * 7
+
+
+def test_the_ranked_path_skips_a_team_with_one_goalie(patcher, rom, tmp_path):
+    """One short team costs its own slot, which keeps the cartridge's roster,
+    not the whole league's patch."""
+    seen = []
+    patcher.on_status = seen.append
+    data = _skaters(14, 7, goalies=1)
+    data.teams += _league_data(("CHI", 20)).teams
+    mapped = patcher.map_rosters(data)
+    assert sorted(mapped.teams) == [CHI_SLOT]
+    assert any("BOS skipped: 1 goalie(s)" in line for line in seen)
+    out = tmp_path / "out.sfc"
+    assert patcher.patch(rom_path=rom, output_path=out, rosters=mapped).teams_patched == 1
+    names, _ = _read_back(out, BOS_SLOT)
+    assert names == [fixture.player_name(BOS_SLOT, i) for i in range(fixture.ROSTER_PLAYERS)]
+
+
+def test_patch_fixes_the_hot_cold_sign_bug_by_default(patcher, rom, tmp_path):
+    out = tmp_path / "out.sfc"
+    mapped = MappedRosters(game_id="nhl94-snes", teams={BOS_SLOT: _team_record(BOS_SLOT, 10)})
+    patcher.patch(rom_path=rom, output_path=out, rosters=mapped)
+    image = out.read_bytes()
+    at = fixture.HOT_COLD_OFFSET
+    assert (image[at + 8], image[at + 12]) == (0x20, 0xC0)
+
+
+def test_hot_cold_fix_false_keeps_the_retail_behaviour(patcher, rom, tmp_path):
+    out = tmp_path / "out.sfc"
+    mapped = MappedRosters(game_id="nhl94-snes", teams={BOS_SLOT: _team_record(BOS_SLOT, 10)})
+    patcher.patch(rom_path=rom, output_path=out, rosters=mapped, hot_cold_fix=False)
+    at = fixture.HOT_COLD_OFFSET
+    assert out.read_bytes()[at : at + 14] == fixture.HOT_COLD_ROUTINE
+
+
+def test_an_image_without_the_routine_says_the_fix_was_skipped(patcher, tmp_path):
+    rom = fixture.build_nhl94_snes_rom()
+    rom[fixture.HOT_COLD_OFFSET] = 0xEA
+    odd = tmp_path / "odd.sfc"
+    odd.write_bytes(bytes(rom))
+    seen = []
+    patcher.on_status = seen.append
+    mapped = MappedRosters(game_id="nhl94-snes", teams={BOS_SLOT: _team_record(BOS_SLOT, 10)})
+    patcher.patch(rom_path=odd, output_path=tmp_path / "out.sfc", rosters=mapped)
+    assert any("Hot/cold fix skipped" in line for line in seen)
+
+
+def test_patch_writes_the_team_bytes_14_to_18(patcher, rom, tmp_path):
+    out = tmp_path / "out.sfc"
+    team = _team_record(BOS_SLOT, 23)
+    team.strength = 0x63
+    mapped = MappedRosters(game_id="nhl94-snes", teams={BOS_SLOT: team})
+    patcher.patch(rom_path=rom, output_path=out, rosters=mapped)
+    image = out.read_bytes()
+    base = _base(image, BOS_SLOT)
+    assert image[base + 14 : base + 17] == b"\x63\x00\x00"
+    # Every `_records` player has the default attributes: the five skaters of
+    # line record 0 rate 60, its goalie (read on goalie weights) 50.
+    assert image[base + 18] == round((50 + 5 * 60) / 6) - 2
+
+
+def test_an_accented_name_reaches_the_image_as_ascii(patcher, rom, tmp_path):
+    data = _league_data(("BOS", 3))
+    data.teams[0].players[2] = Player(id=2, name="Tim Stützle", position="C", number=18)
+    out = tmp_path / "out.sfc"
+    patcher.patch(rom_path=rom, output_path=out, rosters=patcher.map_rosters(data))
+    names, _ = _read_back(out, BOS_SLOT)
+    assert "Tim Stutzle" in names

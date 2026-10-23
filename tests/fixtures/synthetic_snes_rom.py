@@ -52,11 +52,23 @@ BANK_WINDOW_SIZE = 0x8000
 TEAM_BLOCK_BASE = 0xE2700
 TEAM_BLOCK_STRIDE = 0x300
 
+# Everything in the window after the pointer table that no block uses is 0xFF,
+# like the padding that ends the cartridge's bank $9C: the writer counts it as
+# room for the blocks. Between the last block and that padding sit other
+# tables, as the cartridge's playoff seeds do: not 0xFF, and no block's, so the
+# padding is room only because it ends the bank.
+POINTER_TABLE_END = 0xE2657
+BANK_WINDOW_PADDING = 0xFF
+SEED_TABLES = 0xE7B00
+SEED_TABLES_SIZE = 0x100
+
 # Team block header, laid out as on the retail cartridge, where every team's is
 # 85 bytes: the player count at byte 17, the team overall at 18, one nibble per
 # goalie at 19-20, and eight line records of eight bytes at 21-84, each
 # [G, LD, RD, LW, C, RW, EA, 0x00] with 1-based roster indices.
 TEAM_HEADER_SIZE = 85
+# Bytes 4-5: the offset from the block's start to its four strings.
+STRINGS_OFFSET = 4
 PLAYER_COUNT_OFFSET = 17
 TEAM_OVERALL_OFFSET = 18
 GOALIE_OFFSET = 19
@@ -90,8 +102,8 @@ STAT_PADDING = b"\x33\x44\x55\x66\x12"
 # fallback.
 #
 # Slot 26 has 2 forwards and slot 27 has 1 defenceman, both under the reader's
-# floor, so both fall back to (2, 14, 7). They are the two All-Star slots, which
-# `MODERN_NHL_TO_NHL94` maps no team to, so no test's roster depends on them.
+# floor, so the reader falls back to (2, 14, 7) for both. They are the two
+# All-Star slots, Seattle's and Vegas's in `MODERN_NHL_TO_NHL94`.
 TEAM_FD_COUNTS = [
     (14, 7),  # 0
     (13, 8),  # 1
@@ -195,6 +207,22 @@ ABBREVIATIONS = [
 ]
 
 
+# The block's last two strings, nickname and arena, as on the cartridge.
+def nickname(team_index: int) -> str:
+    return f"Nick{team_index:02d}"
+
+
+def arena(team_index: int) -> str:
+    return f"Arena {team_index:02d}"
+
+
+# The per-game hot/cold routine at $9F:D232 as the cartridge has it, with its
+# sign-extension bug: SEP #$20 / LDA $1A12,Y / LSR / LSR / BIT #$00 / BEQ +2 /
+# ORA #$00 / CLC. The two zero operands are what the writer's fix changes.
+HOT_COLD_OFFSET = 0xFD232
+HOT_COLD_ROUTINE = bytes.fromhex("e220b9121a4a4a8900f002090018")
+
+
 def _u16(rom: bytearray, offset: int, value: int) -> None:
     struct.pack_into("<H", rom, offset, value)
 
@@ -280,15 +308,6 @@ def player_record(team_index: int, slot: int, name_size: int = PLAYER_NAME_SIZE)
     return struct.pack("<H", len(name) + 2) + name + player_stats(team_index, slot)
 
 
-def roster_region_size(players: int, name_size: int = PLAYER_NAME_SIZE) -> int:
-    """Bytes from the first record to the end of the terminator, inclusive.
-
-    The same quantity `rom_writer._get_team_player_region` measures, computed
-    forwards from the layout rather than read back out of the image.
-    """
-    return players * (2 + name_size + PLAYER_STATS_SIZE) + 2
-
-
 def build_nhl94_snes_rom(
     *,
     players_per_team: int = ROSTER_PLAYERS,
@@ -299,18 +318,20 @@ def build_nhl94_snes_rom(
     """Return an image the reader accepts and the writer can fill.
 
     `players_per_team` and `name_size` set how much room each team's existing
-    roster occupies, and so how much room a patch has: the writer patches in
-    place inside the region the records already there define. A ROM built with
-    ten 8-character names holds 182 bytes per team, and a 23-player squad of
-    14-character names needs 24 bytes each, so seven of them fit and sixteen are
-    dropped. That gap is the point -- it is what makes "players requested" and
-    "players written" different numbers.
+    roster occupies. The writer rebuilds every block in the room the blocks, the
+    0xFF between them and the 0xFF that ends the window give it: 21 673 bytes
+    from the pointer table to `SEED_TABLES`, and 1 024 after them.
 
     `with_smc_header` prepends 512 zero bytes, the copier header
     `_detect_header` recognises by `len(data) % 0x8000 == 512`. Every offset
     shifts by that much, which is what `header_offset` exists to absorb.
     """
     rom = bytearray(size)
+    if size >= BANK_WINDOW_START + BANK_WINDOW_SIZE:
+        padding = BANK_WINDOW_START + BANK_WINDOW_SIZE - POINTER_TABLE_END
+        rom[POINTER_TABLE_END : POINTER_TABLE_END + padding] = (
+            bytes([BANK_WINDOW_PADDING]) * padding
+        )
 
     for i in range(TEAM_COUNT):
         base = team_base(i)
@@ -344,11 +365,18 @@ def build_nhl94_snes_rom(
         _u16(rom, offset, TERMINATOR)
         offset += 2
 
-        for text in (CITIES[i], ABBREVIATIONS[i]):
+        _u16(rom, base + STRINGS_OFFSET, offset - base)
+        for text in (CITIES[i], ABBREVIATIONS[i], nickname(i), arena(i)):
             encoded = text.encode("ascii")
             _u16(rom, offset, len(encoded) + 2)
             rom[offset + 2 : offset + 2 + len(encoded)] = encoded
             offset += 2 + len(encoded)
+
+    if size >= BANK_WINDOW_START + BANK_WINDOW_SIZE:
+        rom[SEED_TABLES : SEED_TABLES + SEED_TABLES_SIZE] = bytes(SEED_TABLES_SIZE)
+
+    if size >= HOT_COLD_OFFSET + len(HOT_COLD_ROUTINE):
+        rom[HOT_COLD_OFFSET : HOT_COLD_OFFSET + len(HOT_COLD_ROUTINE)] = HOT_COLD_ROUTINE
 
     if with_smc_header:
         return bytearray(SMC_HEADER_SIZE) + rom

@@ -186,10 +186,27 @@ def test_get_info_reads_no_slot_out_of_an_image_that_does_not_validate(tmp_path)
     assert info.team_slots == []
 
 
-def test_the_city_is_the_first_string_after_the_roster(tmp_path):
+def test_the_city_is_the_first_string_bytes_4_and_5_point_at(tmp_path):
     reader = _loaded(tmp_path)
     read = [reader._read_team_city(fixture.team_base(i)) for i in range(TEAM_COUNT)]
     assert read == fixture.CITIES
+
+
+def test_the_city_is_found_where_a_patch_moved_the_strings(tmp_path):
+    """The game reads bytes 4-5, not the end of the roster: a patch that ends a
+    roster early or moves the strings must not lose the city."""
+    rom = fixture.build_nhl94_snes_rom()
+    base = fixture.team_base(9)
+    elsewhere = fixture.team_base(9) + fixture.TEAM_BLOCK_STRIDE - 16
+    rom[elsewhere : elsewhere + 8] = b"\x08\x00Moved!"
+    offset = elsewhere - base
+    rom[base + fixture.STRINGS_OFFSET : base + fixture.STRINGS_OFFSET + 2] = offset.to_bytes(
+        2, "little"
+    )
+    first_record = base + fixture.TEAM_HEADER_SIZE
+    rom[first_record : first_record + 2] = b"\x02\x00"  # an early terminator
+    reader = _reader(_write(tmp_path, "moved.sfc", rom))
+    assert reader._read_team_city(base) == "Moved!"
 
 
 def test_a_slot_whose_city_string_is_unreadable_falls_back_to_the_constant(tmp_path):
@@ -199,10 +216,9 @@ def test_a_slot_whose_city_string_is_unreadable_falls_back_to_the_constant(tmp_p
     fallback from a reader that returned the constant all along.
     """
     rom = fixture.build_nhl94_snes_rom()
-    # A header size that runs past the block leaves the walk with nothing to
-    # read, so `_read_length_prefixed_string` answers "".
-    rom[fixture.team_base(20)] = 0xFF
-    rom[fixture.team_base(20) + 1] = 0xFF
+    # A strings offset that leaves bank $9C's ROM half points at nothing.
+    rom[fixture.team_base(20) + fixture.STRINGS_OFFSET] = 0x00
+    rom[fixture.team_base(20) + fixture.STRINGS_OFFSET + 1] = 0x80
     reader = _reader(_write(tmp_path, "broken.sfc", rom))
     slots = reader.get_info().team_slots
     assert slots[20].current_name == NHL94_TEAM_ORDER[20]

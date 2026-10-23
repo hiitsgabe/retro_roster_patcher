@@ -1,23 +1,21 @@
 """Writer coverage against `tests/fixtures/synthetic_snes_rom.py`.
 
-The writer patches in place: it measures the region the ROM's existing records
-occupy and writes new ones inside it, truncating names and dropping whatever
-does not fit. So every test here builds an image whose region size it knows, and
-reads the result back with the reader rather than with a private decoder --
-except for the stat bytes, which are decoded by
+The writer rebuilds every team block in bank $9C's room for them (the blocks
+themselves and the window's 0xFF padding) and repoints the table, so tests read
+the result back through the table with the reader, never at the fixture's own
+offsets once a roster has been written. Stat bytes are decoded by
 `synthetic_snes_rom.decode_player_stats`, transcribed from the writer's own
 comments rather than from its code.
-
-`test_the_number_written_is_not_the_number_asked_for` is the one this file
-exists for. Upstream returned `bool` here and its caller reported
-`len(players)`, and the two coincide for any roster that happens to fit -- which
-is exactly the fixture size a test would reach for first.
 """
+
+import struct
 
 import pytest
 
+from retro_roster_patcher.core.errors import RomError
 from retro_roster_patcher.games.nhl94_snes.models import (
     TEAM_COUNT,
+    NHL94GoalieAttributes,
     NHL94PlayerAttributes,
     NHL94PlayerRecord,
 )
@@ -27,9 +25,13 @@ from retro_roster_patcher.games.nhl94_snes.rom_writer import (
     LINE_COUNT,
     LINE_SLOTS,
     NHL94SNESRomWriter,
+    abbreviate,
     encode_nibble,
+    encode_records,
     encode_weight_nibble,
+    game_overall,
     header_counts,
+    player_stats,
 )
 from tests.fixtures import synthetic_snes_rom as fixture
 
@@ -39,10 +41,6 @@ from tests.fixtures import synthetic_snes_rom as fixture
 # tautology: move the constant and the assertion moves with it.
 PLAYER_COUNT_BYTE = fixture.PLAYER_COUNT_OFFSET
 LINE_TABLE_BYTE = fixture.LINE_ASSIGN_OFFSET
-
-#: Bytes one `_records()` entry occupies: a 2-byte length word, a 15-character
-#: name and 8 stat bytes.
-RECORD_SIZE = 2 + 15 + 8
 
 
 def _writer(tmp_path, **kwargs):
@@ -126,38 +124,34 @@ def test_a_writer_over_a_missing_file_fails_to_load(tmp_path):
     assert writer.data is None
 
 
-def test_loading_copies_the_image_rather_than_aliasing_the_readers(tmp_path):
+def test_loading_shares_one_buffer_with_the_reader(tmp_path):
+    """Once `write_rosters` moves a block, the reader's pointers must be the
+    new ones for whatever writes after it (headers, portraits, identity)."""
     writer = _writer(tmp_path)
-    assert writer.data is not writer.reader.data
-    assert writer.data == writer.reader.data
+    assert writer.data is writer.reader.data
 
 
-def test_the_region_runs_from_the_first_record_to_the_end_of_the_terminator(tmp_path):
+def _block_base(data, slot, header=0):
+    """A block's file offset, read from the table the way the game reads it."""
+    entry = header + fixture.team_pointer_offset(slot)
+    return header + fixture.BANK_WINDOW_START + ((data[entry] | data[entry + 1] << 8) & 0x7FFF)
+
+
+def _strings(data, slot, header=0):
+    """The block's four strings, found through bytes 4-5."""
+    base = _block_base(data, slot, header)
+    at = base + (data[base + fixture.STRINGS_OFFSET] | data[base + fixture.STRINGS_OFFSET + 1] << 8)
+    found = []
+    for _ in range(4):
+        length = data[at] | data[at + 1] << 8
+        found.append(bytes(data[at + 2 : at + length]).decode("ascii"))
+        at += length
+    return found
+
+
+def test_a_roster_is_written_and_reads_back_in_order(tmp_path):
     writer = _writer(tmp_path)
-    start, size = writer._get_team_player_region(6)
-    assert start == fixture.team_base(6) + fixture.TEAM_HEADER_SIZE
-    assert size == fixture.roster_region_size(fixture.ROSTER_PLAYERS)
-
-
-def test_a_shorter_existing_roster_gives_a_smaller_region(tmp_path):
-    writer = _writer(tmp_path, players_per_team=10)
-    _, size = writer._get_team_player_region(6)
-    assert size == fixture.roster_region_size(10)
-
-
-def test_a_region_past_the_last_team_is_empty(tmp_path):
-    assert _writer(tmp_path)._get_team_player_region(TEAM_COUNT) == (0, 0)
-
-
-def test_a_roster_that_fits_is_written_whole(tmp_path):
-    writer = _writer(tmp_path)
-    written = writer.write_team_roster(5, _records(10))
-    assert written == 10
-
-
-def test_the_written_names_read_back_in_order(tmp_path):
-    writer = _writer(tmp_path)
-    writer.write_team_roster(5, _records(10))
+    assert writer.write_rosters({5: _records(10)}) == {5}
     assert writer.finalize() is True
     names, _ = _finalized_reader(writer).read_team_roster(5)
     assert names == [f"Fourteen Char{i:02d}" for i in range(10)]
@@ -166,283 +160,369 @@ def test_the_written_names_read_back_in_order(tmp_path):
 def test_the_written_stat_bytes_decode_to_the_records_attributes(tmp_path):
     writer = _writer(tmp_path)
     records = _records(10)
-    writer.write_team_roster(5, records)
+    writer.write_rosters({5: records})
     assert writer.finalize() is True
     _, stats = _finalized_reader(writer).read_team_roster(5)
     decoded = fixture.decode_player_stats(stats[7])
     source = records[7]
+    attributes = source.attributes
+    assert isinstance(attributes, NHL94PlayerAttributes)
     assert decoded["jersey_number"] == source.jersey_number
     assert decoded["weight_class"] == source.weight_class
     assert decoded["handedness"] == source.handedness
-    assert decoded["speed"] == source.attributes.speed
-    assert decoded["agility"] == source.attributes.agility
-    assert decoded["off_awareness"] == source.attributes.off_awareness
-    assert decoded["def_awareness"] == source.attributes.def_awareness
-    assert decoded["shot_power"] == source.attributes.shot_power
-    assert decoded["shot_accuracy"] == source.attributes.shot_accuracy
-    assert decoded["stick_handling"] == source.attributes.stick_handling
-    assert decoded["checking"] == source.attributes.checking
-    assert decoded["endurance"] == source.attributes.endurance
-    assert decoded["roughness"] == source.attributes.roughness
-    assert decoded["pass_accuracy"] == source.attributes.pass_accuracy
-    assert decoded["aggression"] == source.attributes.aggression
+    assert decoded["speed"] == attributes.speed
+    assert decoded["agility"] == attributes.agility
+    assert decoded["off_awareness"] == attributes.off_awareness
+    assert decoded["def_awareness"] == attributes.def_awareness
+    assert decoded["shot_power"] == attributes.shot_power
+    assert decoded["shot_accuracy"] == attributes.shot_accuracy
+    assert decoded["stick_handling"] == attributes.stick_handling
+    assert decoded["checking"] == attributes.checking
+    assert decoded["endurance"] == attributes.endurance
+    assert decoded["roughness"] == attributes.roughness
+    assert decoded["pass_accuracy"] == attributes.pass_accuracy
+    assert decoded["aggression"] == attributes.aggression
+
+
+def test_a_goalie_is_written_in_the_games_goalie_fields():
+    """Agility, speed, awareness (twice, as every cartridge goalie has it), puck
+    control, the glove hand, zeros where no goalie is read, then the four save
+    zones: stick right/left, glove right/left."""
+    goalie = NHL94PlayerRecord(
+        name="Keeper",
+        jersey_number=35,
+        weight_class=6,
+        handedness=1,
+        is_goalie=True,
+        attributes=NHL94GoalieAttributes(
+            agility=6,
+            speed=4,
+            def_awareness=5,
+            puck_control=3,
+            stick_right=2,
+            stick_left=1,
+            glove_right=4,
+            glove_left=6,
+        ),
+    )
+    assert player_stats(goalie) == bytes([0x35, 0x66, 0x45, 0x53, 0x01, 0x00, 0x21, 0x46])
 
 
 def test_every_records_stat_bytes_are_its_own(tmp_path):
     """Rules out a writer that wrote one record's stats into every slot."""
     writer = _writer(tmp_path)
     records = _records(10)
-    writer.write_team_roster(5, records)
+    writer.write_rosters({5: records})
     assert writer.finalize() is True
     _, stats = _finalized_reader(writer).read_team_roster(5)
     jerseys = [fixture.decode_player_stats(block)["jersey_number"] for block in stats]
     assert jerseys == [record.jersey_number for record in records]
 
 
-def test_the_length_word_is_little_endian(tmp_path):
-    """The single byte that tells this format from its Genesis sibling's.
+def test_a_record_is_a_little_endian_length_the_name_and_eight_stat_bytes():
+    record = NHL94PlayerRecord(name="Ab")
+    encoded = encode_records([record])
+    assert encoded == b"\x04\x00Ab" + player_stats(record) + b"\x02\x00"
 
-    A 260-byte name is unreachable, so the two encodings differ only in which
-    byte holds the low half. `0x10 0x00` is 16 little-endian and 4096
-    big-endian, and 4096 is past the reader's ceiling of 40, so a big-endian
-    writer would produce a roster the reader cannot see at all.
-    """
-    writer = _writer(tmp_path)
-    start, _ = writer._get_team_player_region(5)
-    writer.write_team_roster(5, _records(1, name="Fourteen Char"))
+
+def test_an_empty_name_is_written_as_a_length_word_the_reader_reads_as_the_end():
+    # Upstream's behaviour, kept: the mapper never makes an empty name.
+    assert encode_records([NHL94PlayerRecord(name="")])[:2] == b"\x02\x00"
+
+
+def test_a_non_ascii_name_is_replaced_rather_than_raising():
+    # The mapper folds names to ASCII first; this is the writer's own guard.
+    assert encode_records([NHL94PlayerRecord(name="é")])[2:3] == b"?"
+
+
+def test_a_full_length_name_is_written_whole_when_the_old_block_was_smaller(tmp_path):
+    """The slot's 1993 block held ten 8-character names; twenty-five of 19 move
+    the block to room that fits them, and the table follows it."""
+    writer = _writer(tmp_path, players_per_team=10)
     data = writer.data
     assert data is not None
-    assert data[start] == 17  # 15 name bytes + 2
-    assert data[start + 1] == 0
+    before = _block_base(data, 5)
+    long_names = _records(25, name="Nineteen Characte")
+    writer.write_rosters({5: long_names})
+    assert writer.finalize() is True
+    names, _ = _finalized_reader(writer).read_team_roster(5)
+    assert names == [record.name for record in long_names]
+    assert len(names[0]) == 19
+    assert _block_base(data, 5) != before
 
 
-def test_a_roster_is_terminated_with_an_empty_string(tmp_path):
+def test_the_table_holds_the_games_rom_address(tmp_path):
+    # $9C:8000 and up: bit 15 set, as the cartridge stores it.
     writer = _writer(tmp_path)
-    start, _ = writer._get_team_player_region(5)
-    written = writer.write_team_roster(5, _records(10))
+    writer.write_rosters({5: _records(10)})
     data = writer.data
     assert data is not None
-    end_of_records = start + written * RECORD_SIZE
-    assert data[end_of_records] == 0x02
-    assert data[end_of_records + 1] == 0x00
+    entry = fixture.team_pointer_offset(5)
+    assert data[entry + 1] & 0x80
 
 
-def test_the_rest_of_the_region_is_zero_filled(tmp_path):
+def test_every_other_team_keeps_its_roster_header_and_strings(tmp_path):
     writer = _writer(tmp_path)
-    start, size = writer._get_team_player_region(5)
-    written = writer.write_team_roster(5, _records(10))
     data = writer.data
     assert data is not None
-    tail_start = start + written * RECORD_SIZE + 2
-    assert data[tail_start : start + size] == bytes(start + size - tail_start)
-    # 416 - (10 * 25 + 2). The tail is not empty, so the assertion above is not
-    # vacuous -- a writer that zero-filled nothing would pass an empty slice.
-    assert start + size - tail_start == 164
+    reader = writer.reader
+    others = [slot for slot in range(TEAM_COUNT) if slot != 5]
+    before = {
+        slot: (
+            reader.read_team_roster(slot),
+            bytes(data[_block_base(data, slot) : _block_base(data, slot) + 85]),
+            _strings(data, slot),
+        )
+        for slot in others
+    }
+    writer.write_rosters({5: _records(25, name="Nineteen Characte")})
+    after = {
+        slot: (
+            reader.read_team_roster(slot),
+            bytes(data[_block_base(data, slot) : _block_base(data, slot) + 85]),
+            _strings(data, slot),
+        )
+        for slot in others
+    }
+    # Bytes 4-5 move with the block's own layout; everything else is kept.
+    strip = [(roster, head[:4] + head[6:], strings) for roster, head, strings in before.values()]
+    assert [(r, h[:4] + h[6:], s) for r, h, s in after.values()] == strip
 
 
-def test_writing_one_team_leaves_its_neighbours_untouched(tmp_path):
+def test_the_strings_move_with_their_block(tmp_path):
+    writer = _writer(tmp_path, players_per_team=10)
+    data = writer.data
+    assert data is not None
+    writer.write_rosters({5: _records(25, name="Nineteen Characte")})
+    assert _strings(data, 5) == ["Dallas", "DAL", fixture.nickname(5), fixture.arena(5)]
+    assert writer.finalize() is True
+    assert _finalized_reader(writer).get_info().team_slots[5].current_name == "Dallas"
+
+
+def test_the_room_no_block_uses_is_left_as_0xff_padding(tmp_path):
     writer = _writer(tmp_path)
-    before = bytes(writer.reader.data or b"")
-    # Measured before the write: afterwards the scan walks the records this
-    # writer just laid down, which are a different length.
-    start, size = writer._get_team_player_region(5)
-    writer.write_team_roster(5, _records(10))
-    after = bytes(writer.data or b"")
-    assert after[:start] == before[:start]
-    assert after[start + size :] == before[start + size :]
+    data = writer.data
+    assert data is not None
+    writer.write_rosters({slot: _records(12) for slot in range(TEAM_COUNT)})
+    used = set()
+    for slot in range(TEAM_COUNT):
+        base = _block_base(data, slot)
+        strings = _strings(data, slot)
+        end = base + (data[base + 4] | data[base + 5] << 8) + sum(2 + len(s) for s in strings)
+        used.update(range(base, end))
+    seeds = range(fixture.SEED_TABLES, fixture.SEED_TABLES + fixture.SEED_TABLES_SIZE)
+    free = [
+        i
+        for i in range(
+            fixture.POINTER_TABLE_END, fixture.BANK_WINDOW_START + fixture.BANK_WINDOW_SIZE
+        )
+        if i not in used and i not in seeds
+    ]
+    assert free
+    assert all(data[i] == 0xFF for i in free)
+    # The tables between the blocks and the padding are no block's: untouched.
+    assert bytes(data[seeds.start : seeds.stop]) == bytes(len(seeds))
 
 
-def test_the_number_written_is_not_the_number_asked_for(tmp_path):
-    """The regression this port exists to fix, on a fixture where they differ.
-
-    The image holds 23 records of an 8-byte name, so each team's region is
-    23 * 18 + 2 = 416 bytes. A record with a 13-byte name costs 23, and the
-    writer stops while fewer than 13 bytes remain (2 length + 1 name + 8 stats +
-    2 terminator), so 18 fit and 5 of the 23 are dropped. Upstream returned True
-    here and its caller counted 23.
-    """
+def test_full_names_reach_the_padding_that_ends_the_bank(tmp_path):
+    """23 names of 19 characters in every slot need 22 052 bytes; the blocks and
+    the 0xFF between them hold 21 673, so some block goes past the seed tables
+    into the padding that ends the bank, and no name is shortened."""
     writer = _writer(tmp_path)
-    written = writer.write_team_roster(5, _records(23, name="Fourteen Ch"))
-    assert written == 18
+    data = writer.data
+    assert data is not None
+    rosters = {slot: _records(23, name="Nineteen Characte") for slot in range(TEAM_COUNT)}
+    assert writer.write_rosters(rosters) == set(range(TEAM_COUNT))
+    tail = fixture.SEED_TABLES + fixture.SEED_TABLES_SIZE
+    assert any(_block_base(data, slot) >= tail for slot in range(TEAM_COUNT))
+    assert writer.finalize() is True
+    reader = _finalized_reader(writer)
+    for slot in range(TEAM_COUNT):
+        assert reader.read_team_roster(slot)[0] == [r.name for r in rosters[slot]]
+
+
+def test_strings_before_their_block_are_found_through_the_16_bit_wrap(tmp_path):
+    """Bytes 4-5 are added to the block's address in 16 bits, as the game adds
+    them: 0xFF60 reaches 0xA0 bytes before the block."""
+    writer = _writer(tmp_path)
+    data = writer.data
+    assert data is not None
+    base = fixture.team_base(0)
+    strings = _strings(data, 0)
+    moved = b"".join(struct.pack("<H", len(t) + 2) + t.encode() for t in strings)
+    data[base - 0xA0 : base - 0xA0 + len(moved)] = moved
+    struct.pack_into("<H", data, base + fixture.STRINGS_OFFSET, 0xFF60)
+    assert writer.reader.get_info().team_slots[0].current_name == "Anaheim"
+    assert writer.write_rosters({0: _records(10)}) == {0}
+    assert _strings(data, 0) == strings
+
+
+def test_a_patched_image_has_the_same_room_again(tmp_path):
+    """Patching the output reuses the padding the first patch left: a roster
+    that fit once fits again, at full length."""
+    writer = _writer(tmp_path)
+    rosters = {slot: _records(22, name="Nineteen Characte") for slot in range(TEAM_COUNT)}
+    writer.write_rosters(rosters)
+    assert writer.finalize() is True
+    again = NHL94SNESRomWriter(writer.output_path, str(tmp_path / "again.sfc"))
+    assert again.load() is True
+    again.write_rosters(rosters)
+    assert again.finalize() is True
+    reader = NHL94SNESRomReader(str(tmp_path / "again.sfc"))
+    assert reader.load() is True
+    for slot in range(TEAM_COUNT):
+        assert reader.read_team_roster(slot)[0] == [r.name for r in rosters[slot]]
+
+
+def test_when_the_bank_is_full_the_longest_names_lose_their_first_names(tmp_path):
+    writer = _writer(tmp_path)
+    rosters = {
+        slot: _records(25, name="Firstname Lastnam") + _records(3, name="Al Bo", goalies=0)
+        for slot in range(TEAM_COUNT)
+    }
+    writer.write_rosters(rosters)
+    assert writer.finalize() is True
+    reader = _finalized_reader(writer)
+    written = [name for slot in range(TEAM_COUNT) for name in reader.read_team_roster(slot)[0]]
+    wanted = [r.name for slot in range(TEAM_COUNT) for r in rosters[slot]]
+    assert len(written) == len(wanted)
+    # Some long names lost their first names to an initial; no surname was cut,
+    # and the short names (nothing to gain) were left alone.
+    shortened = [w for w, n in zip(written, wanted, strict=True) if w != n]
+    assert shortened
+    assert all(w == abbreviate(n) for w, n in zip(written, wanted, strict=True) if w != n)
+    assert all(w.startswith("F. Lastnam") for w in shortened)
+
+
+def test_the_longest_names_are_the_first_to_lose_their_first_names(tmp_path):
+    """Four 19-character names and 22 of 17 in every slot overflow the bank by
+    about 560 bytes: some 19s become 'L. Abc00', and not one 17."""
+    writer = _writer(tmp_path)
+    rosters = {
+        slot: _records(4, name="Longfirstname Abc") + _records(22, name="Firstname Lastn")
+        for slot in range(TEAM_COUNT)
+    }
+    writer.write_rosters(rosters)
+    assert writer.finalize() is True
+    reader = _finalized_reader(writer)
+    written = [name for slot in range(TEAM_COUNT) for name in reader.read_team_roster(slot)[0]]
+    wanted = [r.name for slot in range(TEAM_COUNT) for r in rosters[slot]]
+    shortened = [(w, n) for w, n in zip(written, wanted, strict=True) if w != n]
+    assert shortened
+    assert all(len(n) == 19 and w == abbreviate(n) for w, n in shortened)
+
+
+def test_names_that_do_not_fit_even_abbreviated_are_refused_and_nothing_is_written(tmp_path):
+    writer = _writer(tmp_path)
+    data = writer.data
+    assert data is not None
+    before = bytes(data)
+    rosters = {slot: _records(30, name="Onewordnameonly") for slot in range(TEAM_COUNT)}
+    with pytest.raises(RomError, match="bank \\$9C"):
+        writer.write_rosters(rosters)
+    assert bytes(data) == before
+
+
+def test_a_block_that_does_not_parse_stays_where_it_is_and_is_not_written(tmp_path):
+    writer = _writer(tmp_path)
+    data = writer.data
+    assert data is not None
+    base = fixture.team_base(13)
+    data[base] = 74  # a header too short for the line table
+    block = bytes(data[base : base + fixture.TEAM_BLOCK_STRIDE])
+    assert writer.write_rosters({5: _records(10), 13: _records(10)}) == {5}
+    assert bytes(data[base : base + fixture.TEAM_BLOCK_STRIDE]) == block
+
+
+def test_no_rosters_change_nothing(tmp_path):
+    writer = _writer(tmp_path)
+    before = bytes(writer.data or b"")
+    assert writer.write_rosters({}) == set()
+    assert bytes(writer.data or b"") == before
+
+
+def test_a_copier_headered_image_is_rebuilt_512_bytes_in(tmp_path):
+    writer = _writer(tmp_path, with_smc_header=True)
+    writer.write_rosters({5: _records(25, name="Nineteen Characte")})
+    data = writer.data
+    assert data is not None
+    assert _strings(data, 5, header=fixture.SMC_HEADER_SIZE)[0] == "Dallas"
     assert writer.finalize() is True
     names, _ = _finalized_reader(writer).read_team_roster(5)
-    assert len(names) == 18
-    assert names[-1] == "Fourteen Ch17"
+    assert len(names) == 25
 
 
-def test_a_region_too_small_for_even_one_record_writes_none(tmp_path):
-    # A ROM whose teams hold no players at all: the region is the terminator
-    # and nothing else, so the first record has 2 - 12 bytes of room for a name.
-    writer = _writer(tmp_path, players_per_team=0)
-    _, size = writer._get_team_player_region(5)
-    assert size == 2
-    assert writer.write_team_roster(5, _records(5)) == 0
+@pytest.mark.parametrize(
+    ("stats", "goalie", "overall"),
+    [
+        (bytes([0x01, 0x03, 0x33, 0x33, 0x30, 0x33, 0x33, 0x33]), False, 60),  # 20 x 3
+        (bytes([0x01, 0x02, 0x22, 0x22, 0x20, 0x22, 0x22, 0x22]), False, 45),  # 40, squashed
+        (bytes([0x01, 0x06, 0x66, 0x66, 0x60, 0x66, 0x66, 0x66]), False, 100),  # capped
+        (bytes([0x01, 0x04, 0x44, 0x44, 0x00, 0x00, 0x44, 0x44]), True, 70),  # (108 + 32) / 2
+        (bytes([0x01, 0x06, 0x66, 0x66, 0x00, 0x00, 0x66, 0x66]), True, 100),
+        # Every weighted nibble its own value, so no two weights can trade
+        # places unseen: agility 1 x 2, speed 5 x 3, off. 2 x 3, def. 4 x 2,
+        # shot power 0, checking 6 x 2, stick 3 x 3, accuracy 1 x 2, endurance
+        # 2, pass 4.
+        (bytes([0x01, 0x71, 0x52, 0x40, 0x61, 0x31, 0x26, 0x45]), False, 60),
+        # Agility 5, awareness 2 and puck control 4 at 9 each, zones 6, 1, 3, 0
+        # at 2 each: 119, halved.
+        (bytes([0x01, 0x75, 0x32, 0x24, 0x01, 0x00, 0x61, 0x30]), True, 59),
+    ],
+)
+def test_the_overall_is_the_games_own_weighting(stats, goalie, overall):
+    assert game_overall(stats, goalie) == overall
 
 
-def test_a_team_index_past_the_last_slot_is_an_error(tmp_path):
-    assert _writer(tmp_path).write_team_roster(TEAM_COUNT, _records(1)) == -1
-
-
-def test_a_team_whose_region_cannot_be_measured_is_an_error(tmp_path):
-    """`_get_team_player_region` answers `(0, 0)` when the pointer will not read.
-
-    Built by truncating the image below the pointer table rather than by
-    poisoning a pointer, because the pointer's own bank is hardcoded and cannot
-    be made to miss.
-    """
-    rom = fixture.build_nhl94_snes_rom()
-    short = tmp_path / "short.sfc"
-    short.write_bytes(bytes(rom[: fixture.POINTER_TABLE_OFFSET]))
-    writer = NHL94SNESRomWriter(str(short), str(tmp_path / "out.sfc"))
-    assert writer.load() is True
-    assert writer.write_team_roster(0, _records(1)) == -1
-
-
-def test_an_empty_roster_erases_the_region_and_reports_nothing_written(tmp_path):
-    """Pins the erasure `patch` exists to keep an empty list away from."""
+def test_the_team_ratings_bytes(tmp_path):
+    """14 the given strength, 15 and 16 zeroed, 18 the mean of line record 0's
+    six game overalls minus 2."""
     writer = _writer(tmp_path)
-    assert writer.write_team_roster(5, []) == 0
-    assert writer.finalize() is True
-    assert _finalized_reader(writer).read_team_roster(5) == ([], [])
+    data = writer.data
+    assert data is not None
+    players = _records(23)
+    writer.write_team_header(5, 14, 7)
+    assert writer.write_team_ratings(5, players, 0x52) is True
+    base = fixture.team_base(5)
+    assert data[base + 14] == 0x52
+    assert data[base + 15 : base + 17] == b"\x00\x00"
+    six = data[base + LINE_TABLE_BYTE : base + LINE_TABLE_BYTE + 6]
+    overalls = [game_overall(player_stats(players[i - 1]), n == 0) for n, i in enumerate(six)]
+    assert data[base + 18] == round(sum(overalls) / 6) - 2
 
 
-def test_a_name_too_long_for_the_remaining_space_is_truncated(tmp_path):
-    """The last record to fit gets whatever bytes are left, not a whole name."""
-    writer = _writer(tmp_path, players_per_team=2)
-    # 2 * 18 + 2 = 38 bytes. The first record takes 2 + 13 + 8 = 23, leaving 15,
-    # so the second gets 15 - 12 = 3 name bytes and the other two do not fit.
-    _, size = writer._get_team_player_region(5)
-    assert size == 38
-    assert writer.write_team_roster(5, _records(4, name="Fourteen Ch")) == 2
-    assert writer.finalize() is True
-    names, _ = _finalized_reader(writer).read_team_roster(5)
-    assert names == ["Fourteen Ch00", "Fou"]
-
-
-def test_an_empty_name_is_written_as_a_length_word_the_reader_reads_as_the_end(tmp_path):
-    """PINS UPSTREAM FIDELITY DELIBERATELY. Do not "fix" this back.
-
-    An empty name encodes a length word of exactly 2, and both
-    `read_team_roster` and `_get_team_player_region` treat any length below 3 as
-    the end of the roster. Written first it buries the terminator at the head of
-    the roster: the writer reports two records written and the reader sees none.
-    Writing one `?` byte keeps the chain intact and this port did that for a
-    while; it writes upstream's bytes again for the reason given at the line,
-    which is the reason `games/nhl94_genesis/rom_writer.py` gives for the
-    identical site. The two ports agree again.
-    """
+def test_no_strength_keeps_the_cartridges_byte(tmp_path):
     writer = _writer(tmp_path)
-    records = _records(2)
-    records[0].name = ""
-    # The writer still counts both, which is the half of the defect that reaches
-    # the caller: `PatchResult.players_patched` overstates the roster.
-    assert writer.write_team_roster(5, records) == 2
-    assert writer.finalize() is True
-    names, stats = _finalized_reader(writer).read_team_roster(5)
-    assert names == []
-    assert stats == []
+    data = writer.data
+    assert data is not None
+    base = fixture.team_base(5)
+    data[base + 14] = 0x41
+    writer.write_team_header(5, 14, 7)
+    writer.write_team_ratings(5, _records(23), None)
+    assert data[base + 14] == 0x41
 
 
-def test_a_one_character_name_is_still_read_back(tmp_path):
-    """Length word 3 is the low edge of the reader's `length < 3` test and an
-    empty name falls one below it, so a one-character name is the shortest
-    record that must not be read as the end of the roster."""
+@pytest.mark.parametrize("header", [0, fixture.SMC_HEADER_SIZE])
+def test_the_hot_cold_fix_sign_extends_the_modifier_and_can_be_undone(tmp_path, header):
+    writer = _writer(tmp_path, with_smc_header=bool(header))
+    data = writer.data
+    assert data is not None
+    at = header + fixture.HOT_COLD_OFFSET
+    assert bytes(data[at : at + 14]) == fixture.HOT_COLD_ROUTINE
+    assert writer.set_hot_cold_fix(True) is True
+    assert (data[at + 8], data[at + 12]) == (0x20, 0xC0)  # BIT #$20 / ORA #$C0
+    assert writer.set_hot_cold_fix(False) is True
+    assert bytes(data[at : at + 14]) == fixture.HOT_COLD_ROUTINE
+
+
+def test_the_hot_cold_fix_touches_nothing_where_the_routine_is_not(tmp_path):
     writer = _writer(tmp_path)
-    records = _records(2)
-    records[0].name = "X"
-    assert writer.write_team_roster(5, records) == 2
-    assert writer.finalize() is True
-    names, _ = _finalized_reader(writer).read_team_roster(5)
-    assert names == ["X", "Fourteen Char01"]
-
-
-def test_a_non_ascii_name_is_replaced_rather_than_raising(tmp_path):
-    writer = _writer(tmp_path)
-    records = _records(1)
-    records[0].name = "Grégoire"
-    assert writer.write_team_roster(5, records) == 1
-    assert writer.finalize() is True
-    names, _ = _finalized_reader(writer).read_team_roster(5)
-    assert names == ["Gr?goire"]
-
-
-class _FixedRegionWriter(NHL94SNESRomWriter):
-    """A writer whose player region is declared rather than measured.
-
-    `_get_team_player_region` on a real image can only answer with a `start`
-    inside bank $9C -- file offsets 0xE0000-0xE7FFF -- so on the 1 MB fixture it
-    is roughly 900 KB from the end and no roster short enough to be a hockey
-    team walks that far. Declaring the region is the only way to put
-    `write_team_roster` in the one state that reaches
-    `_write_player_stats`'s bounds check: a region that both overshoots the
-    image *and* begins within a dozen bytes of its end.
-    """
-
-    def __init__(self, rom_path, output_path, start, size):
-        super().__init__(rom_path, output_path)
-        self._region = (start, size)
-
-    def _get_team_player_region(self, team_index):
-        return self._region
-
-
-def test_the_stat_write_refuses_an_offset_the_image_cannot_hold(tmp_path):
-    # The inherited shape, stated directly: the branch returns the offset it was
-    # given, which no caller can tell from eight bytes written.
-    writer = _writer(tmp_path)
-    end = len(writer.data or b"")
-    assert writer._write_player_stats(_records(1)[0], end - 7) == end - 7
-
-
-def test_the_stat_write_advances_by_eight_when_the_image_can_hold_them(tmp_path):
-    # The other side, so the test above is about the bound and not about the
-    # method never advancing at all.
-    writer = _writer(tmp_path)
-    end = len(writer.data or b"")
-    assert writer._write_player_stats(_records(1)[0], end - 8) == end
-
-
-def test_a_region_that_overshoots_the_image_raises_before_it_can_overlap(tmp_path):
-    """The reason the branch above is preserved rather than fixed.
-
-    Thirteen bytes of region starting ten before the end of the image. The first
-    record's name is truncated to one byte, its stats would start seven bytes
-    from the end and are skipped, and `write_team_roster` then breaks, writes a
-    terminator and zero-fills to a region end that is three bytes past the
-    image. That last step raises, and `patcher.patch` turns it into a `RomError`
-    before anything reaches disk -- which is why making the stat write signal
-    failure would change no observable behaviour.
-
-    Swept every `(start, size, name length)` in a 60x90x7 grid around this
-    shape: the bounds check was reached 18 610 times and every one of those runs
-    raised. This is the smallest of them.
-    """
-    source = fixture.write_nhl94_snes_rom(tmp_path / "in.sfc")
-    probe = NHL94SNESRomWriter(str(source), str(tmp_path / "out.sfc"))
-    assert probe.load() is True
-    end = len(probe.data or b"")
-    writer = _FixedRegionWriter(str(source), str(tmp_path / "out.sfc"), end - 10, 13)
-    assert writer.load() is True
-    with pytest.raises(IndexError):
-        writer.write_team_roster(5, _records(4, name="x"))
-
-
-def test_a_region_inside_the_image_never_reaches_the_stat_bound(tmp_path):
-    """The arithmetic that makes the branch unreachable, at its tightest.
-
-    The loop runs while `end - offset >= 13` and truncates the name to
-    `end - offset - 12`, so the stat write is called with at most `end - 10` and
-    asks for at most `end - 2`. Thirteen bytes ending exactly at the image is
-    the tightest region there is, and the last record still finishes two bytes
-    inside it.
-    """
-    source = fixture.write_nhl94_snes_rom(tmp_path / "in.sfc")
-    probe = NHL94SNESRomWriter(str(source), str(tmp_path / "out.sfc"))
-    assert probe.load() is True
-    end = len(probe.data or b"")
-    writer = _FixedRegionWriter(str(source), str(tmp_path / "out.sfc"), end - 13, 13)
-    assert writer.load() is True
-    assert writer.write_team_roster(5, _records(4, name="x")) == 1
+    data = writer.data
+    assert data is not None
+    data[fixture.HOT_COLD_OFFSET] = 0xEA
+    before = bytes(data)
+    assert writer.set_hot_cold_fix(True) is False
+    assert bytes(data) == before
 
 
 def test_a_roster_that_lost_nothing_keeps_the_counts_it_asked_for():
@@ -651,7 +731,7 @@ def test_a_header_write_with_no_pointer_to_read_is_refused(tmp_path):
 
 def test_finalize_writes_the_buffer_to_the_output_path(tmp_path):
     writer = _writer(tmp_path)
-    writer.write_team_roster(5, _records(10))
+    writer.write_rosters({5: _records(10)})
     assert writer.finalize() is True
     assert (tmp_path / "out.sfc").read_bytes() == bytes(writer.data or b"")
 

@@ -7,7 +7,9 @@
 ROM layout (LoROM, 8 Mbit = 1 048 576 bytes):
   - Pointer table at ROM $9CA5E7 -> file offset 0xE25E7 (headerless)
   - 28 teams, 4 bytes per pointer (only low 2 bytes used; bank $9C hardcoded)
-  - Each team: [2-byte header size][header...][player records...][terminator][strings]
+  - Each team: [header][player records...][terminator][4 strings], located by
+    16-bit offsets from the block's start: word 0 to the first record (the
+    header's size), word 4 to the strings (city, abbreviation, nickname, arena)
   - Player record: [2-byte LE name length (includes self)][name bytes][8 stat bytes]
 
 The length prefix is LITTLE-endian here; the Genesis build stores the same
@@ -43,9 +45,15 @@ ROM_SIZE_WITH_HEADER = 650240  # 0x9EE00
 STATS_SIZE = 8
 
 # Team-data byte 17: high nibble forwards, low nibble defencemen. Goalies are
-# counted in bytes 19-20, one nibble each, which this reader does not read: it
-# reports 2.
+# counted in bytes 19-20, one nonzero nibble each (1 to 3 on the cartridge),
+# which this reader does not read: it reports 2, what the writer writes.
 PLAYER_COUNT_OFFSET = 17
+
+# Team-data bytes 4-5: the offset from the block's start to its strings.
+STRINGS_OFFSET = 4
+
+# Bank $9C, where every team block lives, in a headerless image.
+BANK_FILE_OFFSET = 0xE0000
 
 
 def snes_to_file_offset(rom_addr: int) -> int:
@@ -220,18 +228,21 @@ class NHL94SNESRomReader:
         return team_data_offset + header_size
 
     def _read_team_city(self, team_data_offset: int) -> str:
-        """The city is the first string after the player records."""
+        """The city is the first of the block's strings, found as the game finds
+        it: bytes 4-5 hold their offset from the block's start, added in 16 bits
+        inside bank $9C. A patch may move a block's strings, so walking past its
+        player records would not find them."""
         assert self.data is not None
-        offset = self._skip_team_header(team_data_offset)
-
-        while offset < len(self.data) - 1:
-            length = self.data[offset] | (self.data[offset + 1] << 8)
-            if length < 3:  # terminator, 0x0200 or 0x0000
-                offset += 2
-                break
-            offset += length + STATS_SIZE
-
-        city, _ = self._read_length_prefixed_string(offset)
+        at = team_data_offset + STRINGS_OFFSET
+        if at + 2 > len(self.data):
+            return ""
+        bank = self.header_offset + BANK_FILE_OFFSET
+        address = (
+            0x8000 + team_data_offset - bank + (self.data[at] | self.data[at + 1] << 8)
+        ) & 0xFFFF
+        if address < 0x8000:
+            return ""
+        city, _ = self._read_length_prefixed_string(bank + address - 0x8000)
         return city
 
     def read_team_roster(self, team_index: int) -> tuple[list[str], list[bytes]]:
