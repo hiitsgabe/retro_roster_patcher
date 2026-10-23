@@ -42,7 +42,6 @@ from ...sports import _http
 from ...sports.espn import EspnClient
 from ...sports.models import League, LeagueData, Player, TeamRoster
 from .models import (
-    AL_SLOT_COUNT,
     ATTRIB_BASERUNNING,
     ATTRIB_BATS,
     ATTRIB_BUNTING,
@@ -91,6 +90,7 @@ from .models import (
     PA_PITCH_VELOCITY_OFFSET,
     PA_STAMINA,
     PITCHERS_PER_TEAM,
+    PLAYERS_PER_TEAM,
     POS_STRING_TO_NUM,
     ROSTER_LH_AL_ORDER,
     ROSTER_LH_AL_POS,
@@ -142,6 +142,29 @@ def _database_big_extent_fits(rom_path: Path) -> bool:
         return os.path.getsize(rom_path) >= end
     except OSError:
         return False
+
+
+_OUTFIELD = ("LF", "CF", "RF")
+_INFIELD = ("2B", "3B", "SS")
+_NEAR = {pos: _OUTFIELD for pos in ("OF", *_OUTFIELD)}
+_NEAR |= {pos: _INFIELD for pos in ("IF", *_INFIELD)}
+
+
+def _lineup_positions(own: list[str], wanted: tuple[str, ...]) -> list[str]:
+    """`own`, the starters' positions in order, made to hold each of `wanted` once.
+
+    A player keeps his own position while it is free. The others (duplicates,
+    OF, IF, anything the game has no lineup position for) take what is missing:
+    outfielders and infielders first, from their own part of the field when it
+    has a gap.
+    """
+    out = list(own)
+    free = [pos for pos in wanted if pos not in own]
+    spare = [i for i, pos in enumerate(own) if pos not in wanted or pos in own[:i]]
+    for i in sorted(spare, key=lambda i: own[i] not in _NEAR):
+        out[i] = next((pos for pos in _NEAR.get(own[i], ()) if pos in free), free[0])
+        free.remove(out[i])
+    return out
 
 
 class _HashPool:
@@ -365,9 +388,13 @@ class MVPPSPPatcher(Patcher):
         """Reduce league data to a list of `MVPPlayerRecord` per matched slot.
 
         Sparse: a key exists only for a slot some fetched team mapped to. Each
-        value is up to 25 records in ROM slot order -- fifteen batters, five
-        starters, five relievers -- with `roster_position` and `batting_order`
-        already assigned from the slot index.
+        value is up to 25 records, batters then pitchers, with `roster_position`
+        and `batting_order` already assigned from each one's slot in his own
+        block: batters 0-14 (past the fifteenth, the bench), pitchers 15 on.
+
+        With `order_as_given`, the first nine batters field their own
+        positions, each one once; see `_lineup_positions`. Otherwise slot `i`
+        of the nine fields `LINEUP_POSITIONS[i]`.
         """
         self.check_slot_mapping(slot_mapping)
         teams: dict[int, list[MVPPlayerRecord]] = {}
@@ -382,20 +409,35 @@ class MVPPSPPatcher(Patcher):
             leaders = roster.extra.get("leaders") or {}
             if order_as_given:
                 # Batter and pitcher blocks stay; slots 0-8 are the batting
-                # order and fielding positions, 15-19 the rotation.
+                # order, 15-19 the rotation. Whoever the blocks leave out fills
+                # what is short of 25: batters on the bench, pitchers in long
+                # relief.
                 selected = self._given_blocks(
                     roster.players,
                     [
                         (lambda p: not self.mapper.is_pitcher(p), BATTERS_PER_TEAM),
                         (self.mapper.is_pitcher, PITCHERS_PER_TEAM),
                     ],
+                    total=PLAYERS_PER_TEAM,
                 )
             else:
                 selected = self.mapper.select_roster(roster.players, leaders)
+            # Each kind takes its own block's slots, so a short bench does not
+            # pull the rotation into it.
+            batters = [p for p in selected if not self.mapper.is_pitcher(p)]
+            pitchers = [p for p in selected if self.mapper.is_pitcher(p)]
+            slots = [min(i, BATTERS_PER_TEAM - 1) for i in range(len(batters))]
+            slots += [BATTERS_PER_TEAM + j for j in range(len(pitchers))]
             records = [
-                self._map_one(player, leaders.get(str(player.id), {}), index)
-                for index, player in enumerate(selected)
+                self._map_one(player, leaders.get(str(player.id), {}), slot)
+                for slot, player in zip(slots, batters + pitchers, strict=True)
             ]
+            if order_as_given:
+                # The caller's starters field their own positions.
+                own = [(p.position or "").upper() for p in batters[: len(LINEUP_POSITIONS)]]
+                positions = _lineup_positions(own, LINEUP_POSITIONS)
+                for record, position in zip(records, positions, strict=False):
+                    record.roster_position = position
 
             # `MODERN_MLB_TO_MVP` collapses 32 provider codes onto 30 slots --
             # `OAK`/`ATH` and `CWS`/`CHW` -- so two entries in `data.teams` can
@@ -410,22 +452,21 @@ class MVPPSPPatcher(Patcher):
         self,
         player: Player,
         stats: dict[str, Any],
-        index: int,
+        slot: int,
     ) -> MVPPlayerRecord:
-        """Map one selected player, given his position in the 25-slot order.
+        """Map one selected player, given his slot in the 25-slot layout.
 
         Whether he is mapped as a pitcher comes from his provider position, and
         whether he is mapped as a *starting* pitcher comes from his slot -- 15
-        to 19 is the rotation. The two can disagree: a squad of nine batters and
-        no pitchers puts a batter in slot 15, and he is still mapped as one.
+        to 19 is the rotation.
         """
-        is_starter = BATTERS_PER_TEAM <= index < BATTERS_PER_TEAM + STARTERS_PER_TEAM
+        is_starter = BATTERS_PER_TEAM <= slot < BATTERS_PER_TEAM + STARTERS_PER_TEAM
         if self.mapper.is_pitcher(player):
             record = self.mapper.map_pitcher(player, stats, is_starter=is_starter)
         else:
             record = self.mapper.map_batter(player, stats)
-        record.roster_position = self._slot_to_position(index)
-        record.batting_order = index + 1 if index < len(LINEUP_POSITIONS) else NOT_IN_LINEUP
+        record.roster_position = self._slot_to_position(slot)
+        record.batting_order = slot + 1 if slot < len(LINEUP_POSITIONS) else NOT_IN_LINEUP
         return record
 
     @staticmethod
@@ -433,8 +474,8 @@ class MVPPSPPatcher(Patcher):
         """The game's position string for one of the 25 roster slots.
 
         Slots 0-8 are the batting order, 9-14 the bench, 15-19 the rotation and
-        20-24 the bullpen. A slot past 24, which `select_roster` cannot produce,
-        takes the last bullpen role.
+        20-24 the bullpen. A slot past 24, a pitcher past the tenth, takes the
+        last bullpen role; the disc's own bullpens repeat it too.
         """
         if slot < len(LINEUP_POSITIONS):
             return LINEUP_POSITIONS[slot]
@@ -545,6 +586,7 @@ class MVPPSPPatcher(Patcher):
                     f"Writing {MVP_TEAM_ORDER[slot]} ({len(players)} players)...",
                 )
             team_hash = TEAM_HASHES[MVP_TEAM_ABBREVS[slot]]
+            dh_order = next((p.batting_order for p in players if p.roster_position == "DH"), None)
             for player_index, player in enumerate(players):
                 player.hash_id = pool.take(
                     is_pitcher=player.is_pitcher,
@@ -553,7 +595,7 @@ class MVPPSPPatcher(Patcher):
                 )
                 self._write_player(writer, player)
                 new_roster[f"{roster_counter:0{HASH_ID_CHARS}x}"] = self._build_roster_fields(
-                    team_hash, player, slot
+                    team_hash, player, dh_order
                 )
                 roster_counter += 1
                 players_patched += 1
@@ -684,37 +726,41 @@ class MVPPSPPatcher(Patcher):
     def _build_roster_fields(
         team_hash: str,
         player: MVPPlayerRecord,
-        slot: int,
+        dh_order: int | None,
     ) -> dict[int, str]:
         """One `roster` row: the team, the player, and four lineup assignments.
 
         The game keeps a separate lineup for each combination of the opposing
-        starter's handedness and the host league's designated-hitter rule, so
-        four (position, batting order) pairs. The position is the same in all
-        four; only the batting order differs, set in the pair matching this
-        club's league and -1 in the other.
+        starter's handedness and the host park's designated-hitter rule, so
+        four (position, batting order) pairs. Every club fills all four, as on
+        the retail disc: an AL club plays at NL parks and an NL club at AL ones
+        in interleague and World Series games.
 
-        Which league that is comes from the slot index and `AL_SLOT_COUNT`:
-        `MVP_TEAM_ABBREVS` is ordered fourteen American League clubs then
-        sixteen National, the 2005 league sizes.
+        The AL pair is the player's own. In the NL pair the DH (who batted
+        `dh_order`th, None for a lineup without one) sits on the bench, the
+        starters behind him move up one, and SP1 bats ninth.
 
         Inherited: the two handedness variants get the same lineup, so the
         game's platoon feature does nothing for a patched team. Fixing it needs
         a per-handedness split no provider here supplies.
         """
-        pos = player.roster_position
-        order = str(player.batting_order)
-        al_order = order if slot < AL_SLOT_COUNT else str(NOT_IN_LINEUP)
-        nl_order = str(NOT_IN_LINEUP) if slot < AL_SLOT_COUNT else order
+        pos, order = player.roster_position, player.batting_order
+        nl_pos, nl_order = pos, NOT_IN_LINEUP
+        if pos == "DH":
+            nl_pos = BENCH_POSITION
+        elif order != NOT_IN_LINEUP:
+            nl_order = order - 1 if dh_order is not None and order > dh_order else order
+        elif pos == ROTATION_POSITIONS[0]:
+            nl_order = len(LINEUP_POSITIONS)
         return {
             ROSTER_TEAMID: team_hash,
             ROSTER_PLAYERID: player.hash_id,
             ROSTER_RH_AL_POS: pos,
-            ROSTER_RH_AL_ORDER: al_order,
-            ROSTER_RH_NL_POS: pos,
-            ROSTER_RH_NL_ORDER: nl_order,
+            ROSTER_RH_AL_ORDER: str(order),
+            ROSTER_RH_NL_POS: nl_pos,
+            ROSTER_RH_NL_ORDER: str(nl_order),
             ROSTER_LH_AL_POS: pos,
-            ROSTER_LH_AL_ORDER: al_order,
-            ROSTER_LH_NL_POS: pos,
-            ROSTER_LH_NL_ORDER: nl_order,
+            ROSTER_LH_AL_ORDER: str(order),
+            ROSTER_LH_NL_POS: nl_pos,
+            ROSTER_LH_NL_ORDER: str(nl_order),
         }

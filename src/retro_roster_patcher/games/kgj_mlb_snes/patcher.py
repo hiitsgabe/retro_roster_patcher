@@ -40,8 +40,10 @@ from ...sports import _http
 from ...sports.espn import EspnClient
 from ...sports.models import League, LeagueData, TeamRoster
 from .models import (
+    AL_TEAMS,
     BATTERS_PER_TEAM,
     KGJ_TEAM_ORDER,
+    LINEUP_POSITIONS,
     PLAYERS_PER_TEAM,
     ROSTER_TYPE_BATTER,
     ROSTER_TYPE_RELIEVER,
@@ -74,19 +76,47 @@ def _team_data_fits(reader: KGJRomReader) -> bool:
 def _roster_type_for_slot(slot: int) -> int:
     """Which roster-type nibble (record byte 0x19, high half) a slot gets.
 
-    Upstream's behaviour, known wrong, preserved for byte fidelity: the slot
-    index is right only while all three groups are full. On a short roster a
-    starting pitcher can land in a batter slot and be stamped
-    `ROSTER_TYPE_BATTER` while `write_player` lays down a pitcher-shaped record,
-    so byte 0x19 and byte 0x1D contradict each other. Do not derive the nibble
-    from the mapper's groups instead; `map_rosters`'s `is_starter = index < 20`
-    is the same boundary written a second way and the two are kept in step.
+    Upstream's derivation, from the slot alone. `map_rosters` keeps batter
+    records in slots 0-14 and pitcher records from slot 15 on whatever the
+    squad's shape, so the nibble and the record's 0x1D flag agree.
     """
     if slot < BATTERS_PER_TEAM:
         return ROSTER_TYPE_BATTER
     if slot < BATTERS_PER_TEAM + STARTERS_PER_TEAM:
         return ROSTER_TYPE_STARTER
     return ROSTER_TYPE_RELIEVER
+
+
+def _lineup(slot: int) -> tuple[str, ...]:
+    """The positions a team slot's starting batters field, one each.
+
+    AL clubs (slots 0-13) bat nine with a DH, NL clubs eight without. Upstream's
+    `verify_team_lineups` refuses anything else, and every lineup on the 1994
+    cartridge matches.
+    """
+    return LINEUP_POSITIONS if slot < AL_TEAMS else LINEUP_POSITIONS[:-1]
+
+
+_OUTFIELD = ("LF", "CF", "RF")
+_INFIELD = ("2B", "3B", "SS")
+_NEAR = {pos: _OUTFIELD for pos in ("OF", *_OUTFIELD)}
+_NEAR |= {pos: _INFIELD for pos in ("IF", *_INFIELD)}
+
+
+def _lineup_positions(own: list[str], wanted: tuple[str, ...]) -> list[str]:
+    """`own`, the starters' positions in order, made to hold each of `wanted` once.
+
+    A player keeps his own position while it is free. The others (duplicates,
+    OF, IF, a DH in an NL lineup) take what is missing: outfielders and
+    infielders first, from their own part of the field when it has a gap.
+    """
+    out = list(own)
+    free = [pos for pos in wanted if pos not in own]
+    spare = [i for i, pos in enumerate(own) if pos not in wanted or pos in own[:i]]
+    for i in sorted(spare, key=lambda i: own[i] not in _NEAR):
+        out[i] = next((pos for pos in _NEAR.get(own[i], ()) if pos in free), free[0])
+        free.remove(out[i])
+    return out
 
 
 @register(
@@ -171,12 +201,12 @@ class KGJMLBPatcher(Patcher):
             raise ApiError("The provider returned no MLB teams")
 
         # Only teams that exist as a slot in the 1994 ROM are worth fetching.
-        mapped = [t for t in teams if self.mapper.get_team_slot(t.code) is not None]
+        mapped = [(t, s) for t in teams if (s := self.mapper.get_team_slot(t.code)) is not None]
         if not mapped:
             raise ApiError("No fetched team matches a Ken Griffey Jr. MLB ROM slot")
 
         rosters: list[TeamRoster] = []
-        for i, team in enumerate(mapped):
+        for i, (team, slot) in enumerate(mapped):
             if on_progress is not None:
                 on_progress(i / len(mapped), f"Fetching {team.name}...")
             # The squad endpoint has no season in its URL but does have one in
@@ -188,7 +218,9 @@ class KGJMLBPatcher(Patcher):
                 TeamRoster(
                     team=team,
                     players=players or [],
-                    extra={"leaders": leaders or {}},
+                    # `lineup_size`: how many of the batters start, 9 in the AL
+                    # and 8 in the NL. See `_lineup`.
+                    extra={"leaders": leaders or {}, "lineup_size": len(_lineup(slot))},
                 )
             )
 
@@ -229,6 +261,13 @@ class KGJMLBPatcher(Patcher):
         """Reduce league data to one `KGJTeamRecord` per matched ROM slot.
 
         Sparse: a key exists only for a slot some fetched team mapped to.
+
+        Batters fill slots 0-14 and pitchers start at slot 15 (the first five
+        are the rotation), whatever the squad's shape. A short block is topped
+        up with whoever neither block took, mapped as the slot's kind, and a
+        batter slot nobody is left for is `None`: the ROM keeps its record
+        there. The first batters are then re-stamped to field every position
+        of the club's lineup once; see `_lineup_positions`.
         """
         self.check_slot_mapping(slot_mapping)
         teams: dict[int, KGJTeamRecord] = {}
@@ -238,34 +277,41 @@ class KGJMLBPatcher(Patcher):
                 continue
             leaders = roster.extra.get("leaders") or {}
             if order_as_given:
-                # Batter and pitcher blocks stay; the caller's order sets the
-                # lineup and bench, and the first five pitchers are the rotation.
-                selected = self._given_blocks(
-                    roster.players,
-                    [
-                        (lambda p: not self.mapper.is_pitcher(p), BATTERS_PER_TEAM),
-                        (self.mapper.is_pitcher, PLAYERS_PER_TEAM - BATTERS_PER_TEAM),
-                    ],
+                # The caller's order sets the lineup, the bench, the rotation
+                # and the bullpen within each block.
+                batters = self._given_blocks(
+                    roster.players, [(lambda p: not self.mapper.is_pitcher(p), BATTERS_PER_TEAM)]
+                )
+                pitchers = self._given_blocks(
+                    roster.players, [(self.mapper.is_pitcher, PLAYERS_PER_TEAM - BATTERS_PER_TEAM)]
                 )
             else:
-                selected = self.mapper.select_roster(roster.players, leaders)
+                batters, starters, relievers = self.mapper.select_roster_groups(
+                    roster.players, leaders
+                )
+                pitchers = starters + relievers
+            rest = self._append_unused(batters + pitchers, roster.players)
+            rest = rest[len(batters) + len(pitchers) :]
+            short = BATTERS_PER_TEAM - len(batters)
+            batters = batters + rest[:short]
+            pitchers = (pitchers + rest[short:])[: PLAYERS_PER_TEAM - BATTERS_PER_TEAM]
 
-            records: list[KGJPlayerRecord] = []
-            for index, player in enumerate(selected):
-                player_stats = leaders.get(str(player.id), {})
-                # Upstream's literal, equal to `BATTERS_PER_TEAM +
-                # STARTERS_PER_TEAM`; see `_roster_type_for_slot`.
-                is_starter = index < 20  # slots 15-19 are starters
-                if self.mapper.is_pitcher(player):
-                    record = self.mapper.map_pitcher(
-                        player,
-                        player_stats,
-                        is_starter=is_starter,
-                    )
-                else:
-                    record = self.mapper.map_batter(player, player_stats)
-                record.roster_type = _roster_type_for_slot(index)
-                records.append(record)
+            hitters = [self.mapper.map_batter(p, leaders.get(str(p.id), {})) for p in batters]
+            lineup = hitters[: len(_lineup(slot))]
+            positions = _lineup_positions([r.position for r in lineup], _lineup(slot))
+            for record, position in zip(lineup, positions, strict=True):
+                record.position = position
+            arms = [
+                self.mapper.map_pitcher(
+                    p, leaders.get(str(p.id), {}), is_starter=j < STARTERS_PER_TEAM
+                )
+                for j, p in enumerate(pitchers)
+            ]
+            gap = [None] * (BATTERS_PER_TEAM - len(hitters)) if arms else []
+            records: list[KGJPlayerRecord | None] = [*hitters, *gap, *arms]
+            for index, entry in enumerate(records):
+                if entry is not None:
+                    entry.roster_type = _roster_type_for_slot(index)
 
             # `MODERN_MLB_TO_KGJ` maps 30 codes onto 28 slots: CWS/CHW both name
             # slot 3 and OAK/ATH both name slot 10, so two entries in

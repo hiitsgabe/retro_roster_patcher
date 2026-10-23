@@ -57,6 +57,7 @@ from retro_roster_patcher.games.mvp_psp.models import (
     ROSTER_RH_AL_ORDER,
     ROSTER_RH_AL_POS,
     ROSTER_RH_NL_ORDER,
+    ROSTER_RH_NL_POS,
     ROSTER_TEAMID,
     ROTATION_POSITIONS,
     TEAM_COUNT,
@@ -787,10 +788,12 @@ def test_no_two_synthesised_ids_collide():
     assert len(set(made)) == len(made)
 
 
-def patch_one(tmp_path, squads, leaders=None, spec=DISC, out="out.iso"):
+def patch_one(tmp_path, squads, leaders=None, spec=DISC, out="out.iso", *, order_as_given=False):
     """Map and patch in one step, returning (result, output path)."""
     patcher = make_patcher(tmp_path)
-    rosters = patcher.map_rosters(league(squads=squads, leaders=leaders))
+    rosters = patcher.map_rosters(
+        league(squads=squads, leaders=leaders), order_as_given=order_as_given
+    )
     path = write_iso(tmp_path, spec)
     result = patcher.patch(rom_path=path, output_path=tmp_path / out, rosters=rosters)
     return result, tmp_path / out
@@ -1232,37 +1235,58 @@ def test_an_american_league_club_bats_in_the_al_columns(tmp_path):
     assert orders == {"1", "2", "3", "4", "5", "6", "7", "8", "9", "-1"}
 
 
-def test_an_american_league_club_stores_minus_one_in_the_nl_columns(tmp_path):
+def lineup(out, slot, pos_col, order_col):
+    """Each of a slot's roster rows as (position, batting order), in squad order."""
+    return [(cols[pos_col], cols[order_col]) for cols in roster_rows(out, slot).values()]
+
+
+FIELDERS = [pos for pos in LINEUP_POSITIONS if pos != "DH"]
+
+
+def test_an_american_league_club_also_bats_a_lineup_without_the_dh(tmp_path):
+    # As on the retail disc, where Giambi is the Yankees' DH batting 9th in the
+    # AL columns and a bench player in the NL ones, and their SP1 bats 9th
+    # there. Interleague and World Series games at an NL park read these.
     _, out = patch_one(tmp_path, {1: full_squad(1000)})
-    orders = {cols[ROSTER_RH_NL_ORDER] for cols in roster_rows(out, 0).values()}
-    assert orders == {"-1"}
+    nl = lineup(out, 0, ROSTER_RH_NL_POS, ROSTER_RH_NL_ORDER)
+    assert nl[8] == ("B", "-1")
+    assert [row for row in nl if row[1] != "-1"] == [
+        *zip(FIELDERS, "12345678", strict=True),
+        ("SP1", "9"),
+    ]
 
 
-def test_a_national_league_club_bats_in_the_nl_columns(tmp_path):
+def test_a_national_league_club_also_bats_a_lineup_with_the_dh(tmp_path):
     _, out = patch_one(tmp_path, {3: full_squad(2000)})
-    orders = {cols[ROSTER_RH_NL_ORDER] for cols in roster_rows(out, 14).values()}
-    assert orders == {"1", "2", "3", "4", "5", "6", "7", "8", "9", "-1"}
+    al = lineup(out, 14, ROSTER_RH_AL_POS, ROSTER_RH_AL_ORDER)
+    assert [row for row in al if row[1] != "-1"] == list(
+        zip(LINEUP_POSITIONS, "123456789", strict=True)
+    )
 
 
-def test_a_national_league_club_stores_minus_one_in_the_al_columns(tmp_path):
-    _, out = patch_one(tmp_path, {3: full_squad(2000)})
-    orders = {cols[ROSTER_RH_AL_ORDER] for cols in roster_rows(out, 14).values()}
-    assert orders == {"-1"}
+def test_a_dh_batting_early_moves_the_rest_of_the_nl_lineup_up_one(tmp_path):
+    # The retail Braves: Franco is DH 8th and Langerhans LF 9th in the AL
+    # columns, and Langerhans bats 8th in the NL ones.
+    squad = full_squad(1000)
+    squad.insert(0, squad.pop(8))  # the DH leads off
+    _, out = patch_one(tmp_path, {1: squad}, order_as_given=True)
+    al = lineup(out, 0, ROSTER_RH_AL_POS, ROSTER_RH_AL_ORDER)
+    nl = lineup(out, 0, ROSTER_RH_NL_POS, ROSTER_RH_NL_ORDER)
+    fielders = "C 1B 2B 3B SS LF CF RF".split()
+    assert al[:9] == [("DH", "1"), *zip(fielders, "23456789", strict=True)]
+    assert nl[:9] == [("B", "-1"), *zip(fielders, "12345678", strict=True)]
+    assert nl[15] == ("SP1", "9")
 
 
-def test_the_last_american_league_slot_is_thirteen(tmp_path):
-    # The boundary from the American side. Toronto is slot 13.
-    _, out = patch_one(tmp_path, {2: full_squad(3000)})
-    orders = {cols[ROSTER_RH_AL_ORDER] for cols in roster_rows(out, AL_SLOT_COUNT - 1).values()}
-    assert "9" in orders
-
-
-def test_the_first_national_league_slot_is_fourteen(tmp_path):
-    # And from the National side. Arizona is slot 14, and this is the pair of
-    # tests a wrong `AL_SLOT_COUNT` fails.
-    _, out = patch_one(tmp_path, {3: full_squad(2000)})
-    orders = {cols[ROSTER_RH_AL_ORDER] for cols in roster_rows(out, AL_SLOT_COUNT).values()}
-    assert orders == {"-1"}
+def test_a_clubs_league_changes_nothing_in_its_roster_rows(tmp_path):
+    # Toronto is the last AL slot and Arizona the first NL one.
+    _, out = patch_one(tmp_path, {2: full_squad(1000), 3: full_squad(1000)})
+    columns = range(ROSTER_RH_AL_POS, ROSTER_LH_NL_ORDER + 1)
+    toronto, arizona = (
+        [[row[c] for c in columns] for row in roster_rows(out, slot).values()]
+        for slot in (AL_SLOT_COUNT - 1, AL_SLOT_COUNT)
+    )
+    assert toronto == arizona
 
 
 def test_the_two_handedness_variants_get_the_same_lineup(tmp_path):
@@ -1609,3 +1633,56 @@ def test_without_order_as_given_the_input_order_is_ignored(tmp_path):
     forward = mapped(tmp_path, {1: squad}, leaders).teams[0]
     backward = mapped(tmp_path, {1: squad[::-1]}, leaders).teams[0]
     assert [r.jersey for r in forward] == [r.jersey for r in backward]
+
+
+def given(tmp_path, squad):
+    return make_patcher(tmp_path).map_rosters(league(squads={1: squad}), order_as_given=True)
+
+
+def test_order_as_given_moves_a_batter_up_the_order_without_moving_him_in_the_field(tmp_path):
+    squad = full_squad(1000)
+    squad.insert(0, squad.pop(4))  # the shortstop leads off
+    records = given(tmp_path, squad).teams[0][:9]
+    assert [r.roster_position for r in records] == "SS C 1B 2B 3B LF CF RF DH".split()
+    assert [r.batting_order for r in records] == list(range(1, 10))
+
+
+def test_order_as_given_hands_a_missing_position_to_the_spare_starter(tmp_path):
+    # The catcher swapped with the bench outfielder: someone has to catch.
+    squad = full_squad(1000)
+    squad[0], squad[9] = squad[9], squad[0]
+    records = given(tmp_path, squad).teams[0]
+    assert [r.roster_position for r in records[:10]] == "C 1B 2B 3B SS LF CF RF DH B".split()
+
+
+@pytest.mark.parametrize("order_as_given", [False, True])
+def test_a_short_bench_does_not_pull_the_rotation_into_it(tmp_path, order_as_given):
+    squad = [make_player(100 + i, "LF") for i in range(13)]
+    squad += [make_player(200 + i, "SP") for i in range(5)]
+    squad += [make_player(300 + i, "RP") for i in range(5)]
+    patcher = make_patcher(tmp_path)
+    records = patcher.map_rosters(league(squads={1: squad}), order_as_given=order_as_given)
+    pitchers = [r for r in records.teams[0] if r.is_pitcher]
+    assert [r.roster_position for r in pitchers] == [*ROTATION_POSITIONS, *BULLPEN_POSITIONS]
+    assert [r.primary_position for r in pitchers] == ["SP"] * 5 + ["RP"] * 5
+
+
+def test_order_as_given_sends_spare_pitchers_to_long_relief(tmp_path):
+    squad = [make_player(100 + i, "LF") for i in range(13)]
+    squad += [make_player(200 + i, "P") for i in range(13)]
+    records = given(tmp_path, squad).teams[0]
+    assert len(records) == 25
+    assert [r.roster_position for r in records[13:]] == [
+        *ROTATION_POSITIONS,
+        *BULLPEN_POSITIONS,
+        "LR",
+        "LR",
+    ]
+
+
+def test_order_as_given_sends_spare_batters_to_the_bench(tmp_path):
+    squad = [make_player(100 + i, "LF") for i in range(17)]
+    squad += [make_player(200 + i, "SP") for i in range(8)]
+    records = given(tmp_path, squad).teams[0]
+    assert [(r.roster_position, r.batting_order) for r in records[15:17]] == [("B", -1)] * 2
+    assert len(records) == 25

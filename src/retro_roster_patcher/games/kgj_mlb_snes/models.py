@@ -97,6 +97,11 @@ BATTERS_PER_TEAM = 15
 STARTERS_PER_TEAM = 5
 RELIEVERS_PER_TEAM = 5
 
+# The positions the starting batters field, in the order the default selection
+# fills them. An NL club fields all but the DH. The 1994 cartridge's own
+# lineups hold exactly this set in slots 0-8 (AL) or 0-7 (NL).
+LINEUP_POSITIONS: tuple[str, ...] = ("C", "1B", "2B", "3B", "SS", "LF", "CF", "RF", "DH")
+
 # Roster-type nibble in the high half of record byte 0x19: 3 = batter, 1 =
 # starting pitcher, 0 = relief pitcher. Which one a record gets is decided from
 # the slot index alone; see `patcher._roster_type_for_slot`.
@@ -278,7 +283,8 @@ class KGJPlayerRecord:
 class KGJTeamRecord:
     index: int
     name: str
-    players: list[KGJPlayerRecord] = field(default_factory=list)
+    # In slot order; `None` leaves that slot's ROM record as it is.
+    players: list[KGJPlayerRecord | None] = field(default_factory=list)
 
 
 @dataclass

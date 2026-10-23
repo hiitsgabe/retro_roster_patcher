@@ -9,6 +9,7 @@ from .models import (
     HAND_LEFT,
     HAND_RIGHT,
     HAND_SWITCH,
+    LINEUP_POSITIONS,
     MODERN_MLB_TO_KGJ,
     RELIEVERS_PER_TEAM,
     STARTERS_PER_TEAM,
@@ -218,9 +219,8 @@ class KGJStatMapper:
           [15-19] = starting pitchers, sorted by wins
           [20-24] = relief pitchers, closer first
 
-        Those counts are maxima, not guarantees, and where they are not met the
-        slot index stops saying what kind of player is in it. See
-        `patcher._roster_type_for_slot`.
+        Those counts are maxima, not guarantees, so on a short squad the list
+        index is not the ROM slot. `map_rosters` places the groups itself.
         """
         batters, starters, relievers = self.select_roster_groups(players, stats)
         return batters + starters + relievers
@@ -232,9 +232,8 @@ class KGJStatMapper:
     ) -> tuple[list[Player], list[Player], list[Player]]:
         """The roster as `(batters, starters, relievers)`, each already ordered.
 
-        The group is the one place a player's kind is actually known: a team with
-        12 non-pitchers puts its first three starting pitchers in slots 12-14 and
-        the slot index calls all three batters.
+        The group is the one place a player's kind is actually known, which is
+        why `map_rosters` takes the groups and not the concatenated list.
         """
         stats = stats or {}
 
@@ -296,11 +295,10 @@ class KGJStatMapper:
             pos = self._normalize_position(p.position, is_pitcher=False)
             by_pos.setdefault(pos, []).append(p)
 
-        lineup_order = ["C", "1B", "2B", "3B", "SS", "LF", "CF", "RF", "DH"]
         selected = []
         used = set()
 
-        for pos in lineup_order:
+        for pos in LINEUP_POSITIONS:
             candidates = by_pos.get(pos, [])
             for c in candidates:
                 if id(c) not in used:

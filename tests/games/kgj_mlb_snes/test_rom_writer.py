@@ -471,6 +471,17 @@ def test_an_over_long_roster_does_not_reach_the_next_team(writer):
     assert writer.data[_offset(3, 0)] == before
 
 
+def test_a_none_keeps_the_roms_record_in_its_slot(writer):
+    before = bytes(writer.data[_offset(2, 0) : _offset(2, 1)])
+    assert writer.write_team_roster(2, [None, _batter()]) == 1
+    assert bytes(writer.data[_offset(2, 0) : _offset(2, 1)]) == before
+
+
+def test_a_none_does_not_shift_the_records_after_it(writer):
+    writer.write_team_roster(2, [None, _batter(first_initial="Z")])
+    assert writer.data[_offset(2, 1)] == 0x24  # "Z"
+
+
 def test_an_empty_roster_writes_nothing(writer):
     assert writer.write_team_roster(2, []) == 0
 

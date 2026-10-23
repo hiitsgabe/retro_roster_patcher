@@ -365,10 +365,9 @@ MVP_ABBREV_TO_INDEX: dict[str, int] = {code: i for i, code in enumerate(MVP_TEAM
 # Slots 0-13 are the American League and 14-29 the National: `MVP_TEAM_ABBREVS`
 # is ordered AL first, and the 2005 leagues were 14 clubs and 16.
 #
-# It decides which of the four (position, order) column pairs in a `roster` row
-# carries the real batting order: an AL club bats its lineup in the AL columns
-# and stores -1 in the NL ones, because the NL had no designated hitter in 2005
-# and the game keeps a separate lineup for each rule.
+# It does not pick a `roster` row's lineup columns. On the retail disc every
+# club, AL or NL, fills both the AL (DH) and the NL (pitcher bats) pairs, since
+# either league's club can play under either rule; the patcher does the same.
 AL_SLOT_COUNT = 14
 
 # Game abbreviation -> the nine-hex-digit id the `team` table keys on. Carried

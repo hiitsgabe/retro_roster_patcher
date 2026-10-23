@@ -209,7 +209,7 @@ class KGJRomWriter:
         # 0x1E: saves
         d[off + 0x1E] = max(0, min(255, player.saves))
 
-    def write_team_roster(self, team_index: int, players: list[KGJPlayerRecord]) -> int:
+    def write_team_roster(self, team_index: int, players: list[KGJPlayerRecord | None]) -> int:
         """Write a team's players and return how many were written. The list must
         be ordered:
 
@@ -217,14 +217,15 @@ class KGJRomWriter:
           [15-19] = starting pitchers (5)
           [20-24] = relief pitchers (5)
 
-        `roster_type` is read, never assigned: `patcher.map_rosters` stamps it.
+        A `None` skips its slot, which keeps the ROM's record. `roster_type` is
+        read, never assigned: `patcher.map_rosters` stamps it.
         """
         if not self.data or team_index >= TEAM_COUNT:
             return -1
 
         written = 0
         for slot, player in enumerate(players[:PLAYERS_PER_TEAM]):
-            if self.write_player(team_index, slot, player):
+            if player is not None and self.write_player(team_index, slot, player):
                 written += 1
 
         return written

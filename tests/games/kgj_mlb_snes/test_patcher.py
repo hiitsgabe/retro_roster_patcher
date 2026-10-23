@@ -1,10 +1,9 @@
 """The KGJ MLB patcher against the unified interface.
 
 `_roster_type_for_slot` is where roster-type stamping moved when
-`write_team_roster` stopped mutating the caller's records. The *value* is
-upstream's -- the slot index, which is not right on a roster short of fifteen
-non-pitchers, paired with upstream's `is_starter = idx < 20`. Both are preserved
-deliberately for byte fidelity.
+`write_team_roster` stopped mutating the caller's records. The value is
+upstream's, from the slot index; `map_rosters` keeps pitchers from slot 15 on
+whatever the squad's shape, so the index says what kind of player is there.
 
 Every read-back of a patched ROM goes through a *fresh* reader on the output
 path. `KGJRomWriter.__init__` builds its own reader over the *input* file, so
@@ -311,16 +310,12 @@ def test_a_relief_pitcher_slot_takes_the_reliever_nibble(slot):
 
 
 def test_the_slot_layout_calls_slot_twelve_a_batter_slot():
-    # Which it is. What it does not say is what kind of player is standing in
-    # it, and that is exactly the defect kept here -- see the short-roster tests
-    # near the end of this file.
     assert _roster_type_for_slot(12) == ROSTER_TYPE_BATTER
 
 
 def test_the_starter_boundary_is_the_twenty_upstream_hardcoded():
-    # `map_rosters` writes `index < 20` for `is_starter`, upstream's literal.
-    # This is that literal read off the two constants it stands for, so a change
-    # to either is caught here rather than only in a roster fixture.
+    # Upstream's literal for the end of the rotation, read off the two
+    # constants it stands for.
     assert BATTERS_PER_TEAM + STARTERS_PER_TEAM == 20
 
 
@@ -636,9 +631,7 @@ def test_the_batter_slots_hold_batter_records(patcher):
 
 
 def test_a_starting_pitcher_gets_the_starter_defaults(patcher):
-    # `is_starter` decides which default row a stat-less pitcher takes, and it
-    # is upstream's `index < 20`. Right on this full 25-man roster; the
-    # short-roster tests near the end of this file are where it is not.
+    # `is_starter` decides which default row a stat-less pitcher takes.
     mapped = patcher.map_rosters(_league_data(("SEA", 25)))
     assert mapped.teams[SEA_SLOT].players[BATTERS_PER_TEAM].pitcher_attrs.fatigue == 7
 
@@ -1005,56 +998,41 @@ def test_map_rosters_keeps_slot_zero(patcher):
     assert list(patcher.map_rosters(_league_data(("SEA", 25))).teams) == [0]
 
 
-def test_a_pitcher_in_a_batter_slot_is_typed_a_batter(patcher):
-    """PINS UPSTREAM FIDELITY DELIBERATELY. Do not "fix" this back.
+def test_pitchers_start_at_slot_fifteen_on_a_short_roster(patcher):
+    """Twelve batters: the rotation still opens at slot 15.
 
-    Twelve batters, so slot 12 holds a starting pitcher, and the nibble is taken
-    from the slot index -- upstream's derivation -- so it says batter.
-    `rom_writer.write_player` dispatches on `is_pitcher` and lays down a
-    pitcher-shaped record beside it, which makes the record contradict itself.
-    This port typed it from the selection group for a while. The slot index is
-    back because the group-derived nibble is a byte no released build ever
-    wrote; see `patcher._roster_type_for_slot`.
+    Replaces the pins of upstream's slot-index layout, which wrote the first
+    three starting pitchers into batter slots 12-14 with the batter nibble over
+    a pitcher-shaped record, pushed three relievers into the rotation, and left
+    the last three bullpen slots to the cartridge.
     """
-    mapped = patcher.map_rosters(_uneven_league(12, 5, 5))
-    record = mapped.teams[SEA_SLOT].players[12]
-    assert record.roster_type == ROSTER_TYPE_BATTER
+    players = patcher.map_rosters(_uneven_league(12, 5, 5)).teams[SEA_SLOT].players
+    # Bat.., Sta.. and Rel.. players, by first initial.
+    kinds = [r.first_initial if r else None for r in players[11:]]
+    assert kinds == ["B"] + [None] * 3 + ["S"] * 5 + ["R"] * 5
 
 
-def test_that_pitcher_really_is_in_a_slot_the_layout_calls_a_batter_slot(patcher):
-    # Pins the test above. Without this the fixture might simply be long enough
-    # that slot 12 holds a batter and the assertion says nothing.
-    mapped = patcher.map_rosters(_uneven_league(12, 5, 5))
-    assert mapped.teams[SEA_SLOT].players[12].is_pitcher is True
+def test_a_batter_slot_nobody_is_left_for_keeps_the_cartridges_record(patcher, rom, out):
+    patcher.patch(
+        rom_path=rom, output_path=out, rosters=patcher.map_rosters(_uneven_league(12, 5, 5))
+    )
+    names, _ = _read_back(out, SEA_SLOT)
+    initial = fixture.player_first_initial(SEA_SLOT, 12)
+    assert names[12] == f"{initial}. {fixture.player_last_name(SEA_SLOT, 12)}"
 
 
-def test_three_records_on_a_short_roster_contradict_themselves_about_their_kind(patcher):
-    """PINS UPSTREAM FIDELITY DELIBERATELY: the self-contradiction is the point.
-
-    `rom_writer.write_player` chooses the record layout from `is_pitcher` and
-    `rom_reader.read_player` recovers the kind from the roster-type nibble. On a
-    twelve-batter roster the three pitchers in slots 12, 13 and 14 disagree with
-    themselves, and they are the only ones that do.
-    """
-    mapped = patcher.map_rosters(_uneven_league(12, 5, 5))
+def test_a_short_roster_writes_no_record_that_contradicts_itself(patcher):
+    # Byte 0x1D follows `is_pitcher` and byte 0x19 follows `roster_type`.
+    players = patcher.map_rosters(_uneven_league(12, 5, 5)).teams[SEA_SLOT].players
     disagreeing = [
         index
-        for index, record in enumerate(mapped.teams[SEA_SLOT].players)
-        if record.is_pitcher != (record.roster_type != ROSTER_TYPE_BATTER)
+        for index, record in enumerate(players)
+        if record and record.is_pitcher != (record.roster_type != ROSTER_TYPE_BATTER)
     ]
-    assert disagreeing == [12, 13, 14]
-
-
-def test_a_short_roster_really_does_contain_pitchers(patcher):
-    # And the test above is not vacuous on a roster of batters only.
-    mapped = patcher.map_rosters(_uneven_league(12, 5, 5))
-    assert [r.is_pitcher for r in mapped.teams[SEA_SLOT].players].count(True) == 10
+    assert disagreeing == []
 
 
 def test_a_full_roster_has_no_record_that_contradicts_itself(patcher):
-    # The shape upstream's derivation is right on, and every complete
-    # major-league squad has it. Without this the test above would not
-    # distinguish "the slot index is used" from "the nibble is always batter".
     mapped = patcher.map_rosters(_uneven_league(15, 5, 5))
     disagreeing = [
         index
@@ -1064,28 +1042,13 @@ def test_a_full_roster_has_no_record_that_contradicts_itself(patcher):
     assert disagreeing == []
 
 
-def test_a_reliever_that_shifted_into_a_starter_slot_is_rated_a_starter(patcher):
-    """PINS UPSTREAM FIDELITY DELIBERATELY: the `is_starter` half of the same call.
-
-    Twelve batters, so the relievers occupy slots 17-21, and `index < 20` calls
-    the first three of them starters. A stat-less starter's fatigue default is 7
-    and a reliever's is 3, so slot 17 comes out with a rotation arm's stamina.
-    """
-    mapped = patcher.map_rosters(_uneven_league(12, 5, 5))
-    assert mapped.teams[SEA_SLOT].players[17].pitcher_attrs.fatigue == 7
-
-
-def test_the_reliever_just_past_the_boundary_is_rated_a_reliever(patcher):
-    # Pins the test above to `index < 20`: slot 20 is the first index the
-    # comparison excludes, and it does get the reliever's default.
-    mapped = patcher.map_rosters(_uneven_league(12, 5, 5))
-    assert mapped.teams[SEA_SLOT].players[20].pitcher_attrs.fatigue == 3
+def test_the_rotation_is_rated_as_starters_on_a_short_roster(patcher):
+    # A stat-less starter's fatigue default is 7 and a reliever's 3.
+    players = patcher.map_rosters(_uneven_league(12, 5, 5)).teams[SEA_SLOT].players
+    assert [r.pitcher_attrs.fatigue for r in players[15:25]] == [7] * 5 + [3] * 5
 
 
 def test_a_full_roster_types_every_slot_from_the_slot_layout(patcher):
-    # 15/5/5 is the shape where the slot index and the selection group agree, so
-    # this holds whichever derivation is in place and is here to show which 25
-    # nibbles a complete squad gets.
     mapped = patcher.map_rosters(_uneven_league(15, 5, 5))
     types = [r.roster_type for r in mapped.teams[SEA_SLOT].players]
     assert types == [_roster_type_for_slot(slot) for slot in range(PLAYERS_PER_TEAM)]
@@ -1093,35 +1056,24 @@ def test_a_full_roster_types_every_slot_from_the_slot_layout(patcher):
 
 def test_a_reliever_promoted_into_the_rotation_is_typed_a_starter(patcher):
     # A team with two starting pitchers has three relievers promoted into the
-    # rotation, and the rotation slots are what the promotion is for. Upstream's
-    # slot derivation gets this one right, because the batting group is full.
+    # rotation, and the rotation slots are what the promotion is for.
     mapped = patcher.map_rosters(_uneven_league(15, 2, 12))
     rotation = mapped.teams[SEA_SLOT].players[BATTERS_PER_TEAM : BATTERS_PER_TEAM + 5]
     assert [r.roster_type for r in rotation] == [ROSTER_TYPE_STARTER] * 5
 
 
 def test_a_promoted_reliever_is_rated_as_a_starter_too(patcher):
-    # `index < 20` and the nibble come off the same boundary, so on this shape
-    # the attributes and the nibble cannot disagree either. A reliever's fatigue
-    # default is lower than a starter's, which is what makes this observable.
     promoted = patcher.map_rosters(_uneven_league(15, 2, 12)).teams[SEA_SLOT].players[19]
     starter = patcher.map_rosters(_uneven_league(15, 5, 5)).teams[SEA_SLOT].players[19]
     assert promoted.pitcher_attrs.fatigue == starter.pitcher_attrs.fatigue
 
 
-def test_the_written_record_contradicts_itself_on_the_disc(patcher, rom, out):
-    """PINS UPSTREAM FIDELITY DELIBERATELY: the same claim in bytes, after a patch.
-
-    Byte 0x1D's flag is written from `is_pitcher` and byte 0x19's high nibble
-    from `roster_type`. Slot 12 of a twelve-batter team holds a starting
-    pitcher, so 0x1D reads 0x20 -- a pitcher -- while the nibble reads 3, which
-    `rom_reader.read_player` decodes as not a pitcher.
-    """
+def test_the_first_pitcher_is_written_pitcher_shaped_at_slot_fifteen(patcher, rom, out):
     mapped = patcher.map_rosters(_uneven_league(12, 5, 5))
     patcher.patch(rom_path=rom, output_path=out, rosters=mapped)
-    offset = fixture.player_offset(SEA_SLOT, 12, first_team_offset=FIRST_TEAM_OFFSET)
+    offset = fixture.player_offset(SEA_SLOT, 15, first_team_offset=FIRST_TEAM_OFFSET)
     record = fixture.decode_player_record(out.read_bytes(), offset)
-    assert [record["kind_flag"] & 0xF0, record["roster_type"]] == [0x20, 0x3]
+    assert [record["kind_flag"] & 0xF0, record["roster_type"]] == [0x20, 0x1]
 
 
 def _ranked_league(players):
@@ -1165,3 +1117,75 @@ def test_without_order_as_given_the_input_order_is_ignored(patcher):
     forward = patcher.map_rosters(_ranked_league(squad)).teams[SEA_SLOT].players
     backward = patcher.map_rosters(_ranked_league(squad[::-1])).teams[SEA_SLOT].players
     assert [r.jersey_number for r in forward] == [r.jersey_number for r in backward]
+
+
+def _squad_league(positions, code="SEA"):
+    """One club whose players have these positions, in this order, and no stats."""
+    players = [
+        Player(id=n, name=f"First{n:02d} Last{n:02d}", position=pos, number=n + 1)
+        for n, pos in enumerate(positions)
+    ]
+    return LeagueData(
+        league=League(id=0, name="MLB", country="USA", country_code="US", season=2025),
+        teams=[
+            TeamRoster(
+                team=Team(id=1, name=code, code=code), players=players, extra={"leaders": {}}
+            )
+        ],
+    )
+
+
+AL_LINEUP = ["C", "1B", "2B", "3B", "SS", "LF", "CF", "RF", "DH"]
+STAFF = ["SP"] * 5 + ["RP"] * 5
+
+
+def test_fetch_publishes_how_many_batters_each_club_starts(tmp_path):
+    # Slots 0-13 are the AL, with a DH; 14-27 the NL, without.
+    p = KGJMLBPatcher(cache_dir=tmp_path / "cache")
+    p.api = FakeApi(
+        [Team(id=1, name="Seattle Mariners", code="SEA"), Team(id=2, name="Braves", code="ATL")]
+    )
+    sizes = {r.team.code: r.extra["lineup_size"] for r in p.fetch(season=2025).teams}
+    assert sizes == {"SEA": 9, "ATL": 8}
+
+
+def test_a_bench_outfielder_swapped_in_for_the_catcher_catches(patcher):
+    # The editor swapped the catcher (now 10th) with a bench outfielder (now 1st).
+    given = ["OF", *AL_LINEUP[1:], "C", "C", "IF", *STAFF]
+    players = patcher.map_rosters(_squad_league(given), order_as_given=True).teams[SEA_SLOT].players
+    assert [r.position for r in players[:10]] == [*AL_LINEUP, "C"]
+
+
+def test_an_outfielder_takes_the_outfield_gap_and_a_spare_catcher_the_rest(patcher):
+    given = ["C", "1B", "2B", "3B", "SS", "OF", "CF", "RF", "C", *STAFF]
+    players = patcher.map_rosters(_squad_league(given), order_as_given=True).teams[SEA_SLOT].players
+    assert [players[5].position, players[8].position] == ["LF", "DH"]
+
+
+def test_the_default_lineup_fields_every_position_without_a_listed_dh(patcher):
+    # No DH and no LF listed: the first nine were C,1B,2B,3B,SS,CF,RF,OF,C.
+    squad = ["C", "1B", "2B", "3B", "SS", "CF", "RF", "OF", "C", "OF", "IF", *STAFF]
+    players = patcher.map_rosters(_squad_league(squad)).teams[SEA_SLOT].players
+    assert sorted(r.position for r in players[:9]) == sorted(AL_LINEUP)
+
+
+def test_an_nl_lineup_is_eight_without_a_dh(patcher):
+    # The same order would be a full AL lineup; in the NL the DH bats nowhere.
+    given = ["DH", *AL_LINEUP[1:8], "C", *STAFF]
+    players = patcher.map_rosters(_squad_league(given, code="ATL"), order_as_given=True).teams[14]
+    assert [r.position for r in players.players[:9]] == [*AL_LINEUP[:8], "C"]
+
+
+@pytest.mark.parametrize("order_as_given", [False, True])
+def test_spare_pitchers_fill_a_short_batter_block_as_batters(patcher, order_as_given):
+    data = _uneven_league(13, 5, 8)
+    players = patcher.map_rosters(data, order_as_given=order_as_given).teams[SEA_SLOT].players
+    assert [r.first_initial for r in players[13:16]] == ["R", "R", "S"]
+    assert [r.is_pitcher for r in players] == [False] * 15 + [True] * 10
+
+
+@pytest.mark.parametrize("order_as_given", [False, True])
+def test_spare_batters_fill_a_short_bullpen_so_no_1994_pitcher_stays(patcher, order_as_given):
+    data = _uneven_league(17, 5, 3)
+    players = patcher.map_rosters(data, order_as_given=order_as_given).teams[SEA_SLOT].players
+    assert [(r.first_initial, r.is_pitcher) for r in players[23:]] == [("B", True)] * 2
