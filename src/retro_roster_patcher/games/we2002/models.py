@@ -61,7 +61,8 @@ class WETeamRecord:
     kit_away_image: bytes | None = None
     kit_home_template: int | None = None
     kit_away_template: int | None = None
-    players: list[WEPlayerRecord] = field(default_factory=list)  # Exactly 22
+    # Up to 23 (a national squad); Master League slots keep the first 14 or 15.
+    players: list[WEPlayerRecord] = field(default_factory=list)
     jersey_data: bytes | None = None  # Raw 64-byte jersey to copy from ROM
     flag_style: int | None = None  # Flag/emblem style byte (0-60); None = default stripes
     flag_palette: list[tuple[int, int, int]] | None = None  # 16 RGB colors; None = auto

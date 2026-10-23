@@ -8,6 +8,7 @@ from .models import (
     WEPlayerRecord,
     WETeamRecord,
 )
+from .rom_writer import _PLAYERS_PER_NAT
 
 
 class StatMapper:
@@ -113,8 +114,8 @@ class StatMapper:
     ) -> WETeamRecord:
         """Map team using league-wide percentile normalization.
 
-        `order_as_given`: the squad is the caller's list as it stands (first 22)
-        instead of the stat-ranked best 22.
+        `order_as_given`: the squad is the caller's list as it stands (first 23,
+        a national squad's places) instead of the stat-ranked best 23.
         """
         all_stats = {}
         for roster in all_rosters:
@@ -123,14 +124,14 @@ class StatMapper:
 
         percentiles = self._compute_percentiles(all_stats)
 
-        best_22 = (
-            team_roster.players[:22]
+        squad = (
+            team_roster.players[:_PLAYERS_PER_NAT]
             if order_as_given
-            else self._select_best_22(team_roster.players, team_roster.player_stats)
+            else self._select_best_23(team_roster.players, team_roster.player_stats)
         )
 
         we_players = []
-        for player in best_22:
+        for player in squad:
             stats = team_roster.player_stats.get(player.id)
             attrs = self.map_player(player, stats, percentiles)
             rom_last, rom_first = self._format_player_name(player)
@@ -341,12 +342,12 @@ class StatMapper:
         base = {"Goalkeeper": 3, "Defender": 3, "Midfielder": 5, "Attacker": 5}
         return base.get(player.position, 4)
 
-    def _select_best_22(
+    def _select_best_23(
         self,
         players: list[Player],
         player_stats: dict[int, PlayerStats] | None = None,
     ) -> list[Player]:
-        """Select best 22 players ordered with starting XI first.
+        """Select the best 23 (a national squad's places), starting XI first.
 
         The first 11 slots are the default lineup: 1 GK, 4 DF, 4 MF, 2 FW.
         """
@@ -379,7 +380,7 @@ class StatMapper:
 
         remaining = [p for p in players if p not in squad]
         remaining.sort(key=_sort_key)
-        while len(squad) < 22 and remaining:
+        while len(squad) < _PLAYERS_PER_NAT and remaining:
             squad.append(remaining.pop(0))
 
         # Starting XI is a 4-4-2: 1 GK, 4 DF, 4 MF, 2 FW
@@ -395,7 +396,7 @@ class StatMapper:
             starting.extend(available[:count])
 
         bench = [p for p in squad if p not in starting]
-        return (starting + bench)[:22]
+        return (starting + bench)[:_PLAYERS_PER_NAT]
 
     def _format_player_name(self, player: Player) -> tuple:
         """Build ROM-friendly (last_name, first_name) from a Player.

@@ -1537,7 +1537,9 @@ def _ranked_squad(size):
     return players, {p.id: _stats(p.id, lineups=p.id) for p in players}
 
 
-def test_order_as_given_writes_the_callers_first_22_in_order(patcher):
+def test_order_as_given_writes_the_callers_first_23_in_order(patcher):
+    """23 is a national squad's places; a 22nd-place cut left the last one a
+    dummy keeper with no abilities."""
     players, stats = _ranked_squad(25)
     given = players[::2] + players[1::2]
     data = _league_data([_roster(100, players=given, player_stats=stats)])
@@ -1546,7 +1548,13 @@ def test_order_as_given_writes_the_callers_first_22_in_order(patcher):
         data, slot_mapping=[SlotMapping(slot_index=0, team_id=100)], order_as_given=True
     )
 
-    assert [r.last_name for r in mapped.teams[0].players] == [p.name for p in given[:22]]
+    assert [r.last_name for r in mapped.teams[0].players] == [p.name for p in given[:23]]
+
+
+def test_the_stat_ranked_squad_fills_all_23_national_places(patcher):
+    players, stats = _ranked_squad(25)
+    mapped = _map_one(patcher, _roster(100, players=players, player_stats=stats))
+    assert len(mapped.players) == 23
 
 
 def test_without_order_as_given_the_input_order_is_ignored(patcher):

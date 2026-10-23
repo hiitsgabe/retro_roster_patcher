@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+from collections import Counter
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -61,6 +62,8 @@ from .rom_reader import PlayerTables, RomReader
 from .rom_writer import RomWriter, ascii_fold
 
 GROUP_ORDER = ("Goalkeeper", "Defender", "Midfielder", "Attacker")
+#: The outfield shape the eleven is filled toward when no lineup gives one.
+DEFAULT_SHAPE = {"Defender": 4, "Midfielder": 4, "Attacker": 2}
 #: Squad places that are the club's lineup.
 LINEUP_SIZE = 11
 #: A 1x1 fully transparent PNG: what a blanked icon is painted with.
@@ -188,23 +191,53 @@ def lineup_role(player: Player, lineup: dict[str, Any] | None) -> int | None:
 
 
 def squad_order(players: list[Player], lineup: dict[str, Any] | None = None) -> list[Player]:
-    """Starters first, each group in formation order, then the bench by group.
+    """The eleven first, each group in formation order, then the bench by group.
 
-    `lineup` is what `EspnClient.get_lineup` returns (or `TeamRoster.extra["lineup"]`);
-    without it the squad is just grouped goalkeepers, defenders, midfielders,
-    attackers, keeping the provider's order within a group.
+    The eleven is one keeper and ten outfielders: the lineup's starters (a
+    second keeper among them goes to the bench), completed from the group
+    furthest short of the lineup's shape, or of a 4-4-2 without a lineup. So
+    a starter who has left the club is replaced from his own group, never by
+    a backup keeper; the other keepers head the bench. `lineup` is what
+    `EspnClient.get_lineup` returns (or `TeamRoster.extra["lineup"]`). Within
+    a group the starters keep their formation order and the rest the
+    provider's order.
     """
+    entries = (lineup or {}).get("starters") or []
+    # Ties (every keeper has place 1) go by the lineup's own order: most starts first.
+    place = {int(s["id"]): (int(s.get("place") or 0), k) for k, s in enumerate(entries)}
+    shape = Counter(
+        LINEUP_GROUPS.get(str(s.get("position", "")).upper(), "Midfielder") for s in entries
+    ) or Counter(DEFAULT_SHAPE)
     rank = {g: i for i, g in enumerate(GROUP_ORDER)}
-    starters: dict[int, tuple[int, int]] = {}
-    for s in (lineup or {}).get("starters") or []:
-        group = LINEUP_GROUPS.get(str(s.get("position", "")).upper())
-        starters[int(s["id"])] = (rank.get(group, 2) if group else 2, int(s.get("place") or 0))
-    by_id = {p.id: p for p in players}
-    first = [by_id[i] for i, _ in sorted(starters.items(), key=lambda kv: kv[1]) if i in by_id]
-    rest = sorted(
-        (p for p in players if p.id not in starters), key=lambda p: rank.get(player_group(p), 2)
+    groups = [lineup_group(p, lineup) for p in players]
+    eleven: list[int] = []
+    for i in sorted(
+        (i for i, p in enumerate(players) if p.id in place),
+        key=lambda i: (rank.get(groups[i], 2), place[players[i].id]),
+    ):
+        if groups[i] != "Goalkeeper" or "Goalkeeper" not in {groups[j] for j in eleven}:
+            eleven.append(i)
+    if "Goalkeeper" not in {groups[j] for j in eleven}:
+        eleven += [i for i, g in enumerate(groups) if g == "Goalkeeper"][:1]
+    while len(eleven) < LINEUP_SIZE:
+        have = Counter(groups[j] for j in eleven)
+        outfield = [i for i, g in enumerate(groups) if g != "Goalkeeper" and i not in eleven]
+        if not outfield:
+            break
+        eleven.append(max(outfield, key=lambda i: shape[groups[i]] - have[groups[i]]))
+    eleven.sort(
+        key=lambda i: (rank.get(groups[i], 2), place.get(players[i].id, (LINEUP_SIZE + 1, 0)))
     )
-    return first + rest
+    bench = sorted(
+        (i for i in range(len(players)) if i not in eleven), key=lambda i: rank.get(groups[i], 2)
+    )
+    return [players[i] for i in eleven + bench]
+
+
+def starting_role(player: Player, lineup: dict[str, Any] | None) -> int:
+    """The nibble a starter plays: where the lineup had him, else his group's position."""
+    role = lineup_role(player, lineup)
+    return GROUP_POSITIONS.get(lineup_group(player, lineup), 7) if role is None else role
 
 
 def lineup_group(player: Player, lineup: dict[str, Any] | None) -> str:
@@ -395,9 +428,13 @@ class PES2013PS2Patcher(Patcher):
                         shirt_name=shirt_name(p),
                         number=p.number,
                         position=lineup_group(p, lineup),
-                        role=lineup_role(p, lineup),
+                        # The list's first eleven start (the editor's, with
+                        # order_as_given); `_assign` keeps one keeper among them.
+                        role=starting_role(p, lineup) if i < LINEUP_SIZE else None,
                     )
-                    for p in players[: NATIONAL_SQUAD_SIZE if national else CLUB_SQUAD_SIZE]
+                    for i, p in enumerate(
+                        players[: NATIONAL_SQUAD_SIZE if national else CLUB_SQUAD_SIZE]
+                    )
                 ],
                 team_id=roster.team.id,
                 logo_url=roster.team.logo_url,
@@ -870,11 +907,14 @@ class PES2013PS2Patcher(Patcher):
         in goal). The places of the eleven still free go to the first bench
         player of their group, then any left to the first bench player who can
         play them, so the disc's old player stays in the lineup only when the
-        bench has nobody for it. The bench then takes the remaining
-        records by position group. Whoever is still left (more keepers than
-        the club has keeper records, say) takes a free bench place; one who
-        fits nowhere is not written. Returns (squad place, player index,
-        player) triples.
+        bench has nobody for it. So with two keepers among the starters the
+        second sits on the bench and the first bench player who fits his place
+        starts; with none, the first bench keeper takes the goal and the last
+        outfield starter, who finds no place left, sits on the bench. The
+        bench then takes the remaining records by position group. Whoever is
+        still left (more keepers than the club has keeper records, say) takes
+        a free bench place; one who fits nowhere is not written. Returns
+        (squad place, player index, player) triples.
         """
         squad = [
             (s, idx)

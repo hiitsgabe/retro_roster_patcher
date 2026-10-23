@@ -190,7 +190,7 @@ def test_a_whitespace_named_player_no_longer_aborts_the_whole_team(mapper):
 
     record = mapper.map_team_with_league_context(roster, [roster])
 
-    # Sorted, because `_select_best_22` orders by position and rating and this
+    # Sorted, because `_select_best_23` orders by position and rating and this
     # test is about none of the three being lost, not about their order.
     assert sorted(p.last_name for p in record.players) == ["Neymar", "Silva", "V. Hugo"]
     assert len(record.players) == 3
@@ -421,7 +421,7 @@ def test_a_whole_squad_mapped_with_absent_duel_data_is_uniformly_clumsy(mapper):
 
     `map_team_with_league_context` is what `map_rosters` calls, so this is the
     shape that reaches the ISO. Asserting the multiset rather than a per-player
-    list, because `_select_best_22` reorders.
+    list, because `_select_best_23` reorders.
     """
     all_stats = _squad_stats(ABSENT_FROM_ESPN)
     roster = TeamRoster(

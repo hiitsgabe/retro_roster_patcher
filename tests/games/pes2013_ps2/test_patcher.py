@@ -259,16 +259,18 @@ def test_patch_renames_the_squad_by_position_and_the_club_everywhere(iso, tmp_pa
         tables = reader.player_tables(entry)
         squad = tables.club_squad(0)
         names = [tables.record(i)[:32].decode("utf-16-le").split("\0")[0] for i in squad[:11]]
-        # The keeper took the keeper record (slot 0), defenders the defender
-        # records (1..3), and so on; slots without a new player keep theirs.
+        # All seven start, each on a record of his group's own position: the
+        # keeper in goal (0), defenders at centre back (1, 2), midfielders at
+        # centre midfield (5, 6), forwards at centre forward (9, 10); places
+        # without a new player keep theirs.
         assert names[0] == "DAVID RAYA"
         assert names[1:3] == ["WILLIAM SALIBA", "G. MAGALHÃES"] and names[3] == "PLAYER 4"
-        assert names[4:6] == ["DECLAN RICE", "MARTIN ØDEGAARD"]
-        assert names[8:10] == ["BUKAYO SAKA", "KAI HAVERTZ"] and names[10] == "PLAYER 11"
+        assert names[4:7] == ["PLAYER 5", "DECLAN RICE", "MARTIN ØDEGAARD"]
+        assert names[8:11] == ["PLAYER 9", "BUKAYO SAKA", "KAI HAVERTZ"]
         # Shirt names are surnames, as on the disc.
         assert tables.record(squad[0])[32:48] == b"RAYA".ljust(16, b"\0")
-        assert tables.record(squad[5])[32:48] == b"ODEGAARD".ljust(16, b"\0")
-        assert tables.club_numbers(0)[0] == 21 and tables.club_numbers(0)[4] == 40
+        assert tables.record(squad[6])[32:48] == b"ODEGAARD".ljust(16, b"\0")
+        assert tables.club_numbers(0)[0] == 21 and tables.club_numbers(0)[5] == 40
         assert tables.record(squad[0])[48:] == tables.record(squad[0])[48:]  # abilities kept
     for overlay in (DATABASE_OVERLAY_ENGLISH, 5):
         clubs = reader.overlay_teams(overlay).clubs
@@ -458,7 +460,63 @@ def test_squad_order_puts_the_lineup_first_in_formation_order():
             {"id": 4, "position": "G", "place": 1},
         ],
     }
-    assert [p.id for p in squad_order(players, lineup)] == [4, 3, 0, 1, 2]
+    # The defender completes the eleven; the spare keeper heads the bench.
+    assert [p.id for p in squad_order(players, lineup)] == [4, 2, 3, 0, 1]
+
+
+GROUP = {"G": "Goalkeeper", "D": "Defender", "M": "Midfielder", "F": "Attacker"}
+CODE = {"G": "G", "D": "CD", "M": "CM", "F": "F"}
+
+
+def _squad(names: str) -> list[Player]:
+    """Players named by group letter and number ("G1 D1 M1"), ids from 1."""
+    return [
+        Player(id=i + 1, name=n, first_name=n, last_name=n, position=GROUP[n[0]])
+        for i, n in enumerate(names.split())
+    ]
+
+
+def _lineup(players: list[Player]) -> dict:
+    return {
+        "starters": [
+            {"id": p.id, "position": CODE[p.name[0]], "place": k + 1} for k, p in enumerate(players)
+        ]
+    }
+
+
+def test_without_a_lineup_the_eleven_is_one_keeper_and_a_4_4_2():
+    players = _squad("F1 G1 D1 M1 G2 D2 D3 M2 F2 D4 M3 D5 G3 M4 F3 D6 M5")
+    order = [p.name for p in squad_order(players)]
+    assert order[:11] == "G1 D1 D2 D3 D4 M1 M2 M3 M4 F1 F2".split()
+    assert order[11:] == "G2 G3 D5 D6 M5 F3".split()
+
+
+def test_a_lineup_short_of_a_starter_is_completed_from_his_group_not_by_a_keeper():
+    """A midfielder of the lineup has left the club: the first other
+    midfielder takes his turn in the eleven, the backup keepers wait after it."""
+    players = _squad("G1 D1 D2 D3 D4 M1 M2 M3 F1 F2 F3 G2 D5 M4 M5 G3")
+    gone = Player(id=99, name="MGONE", position="Midfielder")
+    order = [p.name for p in squad_order(players, _lineup(players[:8] + [gone] + players[8:10]))]
+    assert order[:11] == "G1 D1 D2 D3 D4 M1 M2 M3 M4 F1 F2".split()
+    assert order[11:] == "G2 G3 D5 M5 F3".split()
+
+
+def test_a_merged_lineup_with_two_keepers_starts_one():
+    players = _squad("G1 G2 D1 D2 D3 D4 M1 M2 M3 F1 F2 M4")
+    order = [p.name for p in squad_order(players, _lineup(players[:11]))]
+    assert order[:11] == "G1 D1 D2 D3 D4 M1 M2 M3 M4 F1 F2".split()
+    assert order[11:] == ["G2"]
+
+
+def test_keepers_tied_on_place_start_in_the_lineups_order():
+    """A merged lineup lists its starters by starts, and every keeper has
+    place 1: the keeper the lineup lists first starts, not the squad's first."""
+    players = _squad("G2 G1 D1 D2 D3 D4 M1 M2 M3 F1 F2 M4")
+    lineup = _lineup(players[1:11] + players[:1])
+    lineup["starters"][-1]["place"] = 1
+    order = [p.name for p in squad_order(players, lineup)]
+    assert order[0] == "G1"
+    assert order[11:] == ["G2"]
 
 
 def test_every_listed_starter_gets_a_lineup_role():
@@ -742,6 +800,52 @@ def test_a_lineup_without_a_keeper_does_not_put_a_forward_in_goal():
     assert placed["SUB GK"] == 0
     assert placed["WF"] >= 11
     assert {placed[p.display_name] for p in OUTFIELD_TEN} == OUTFIELD_PLACES
+
+
+#: The ESPN lineup the fetch kept in `extra`: a 4-4-2 of G1, D1-D4, M1-M4,
+#: F1, F2; the bench G2, D5, M5, F3.
+CLUB = _squad("G1 D1 D2 D3 D4 M1 M2 M3 M4 F1 F2 G2 D5 M5 F3")
+
+
+def _game_eleven(tmp_path, order: str) -> tuple[set[str], dict[str, int]]:
+    """Map `CLUB` in the editor's `order` with the lineup still attached, as
+    the app sends it, and place it on a 4-4-2 club: who starts, and where."""
+    by_name = {p.name: p for p in CLUB}
+    roster = TeamRoster(
+        team=Team(id=7, name="Order FC", code="ORD"),
+        players=[by_name[n] for n in order.split()],
+        extra={"lineup": _lineup(CLUB[:11])},
+    )
+    data = LeagueData(league=League(id=1, name="L", season=2026), teams=[roster])
+    mapped = PES2013PS2Patcher(tmp_path).map_rosters(
+        data, [SlotMapping(slot_index=0, team_id=7)], order_as_given=True
+    )
+    placed = _placed(mapped.teams[0].players)
+    return {n for n, s in placed.items() if s < 11}, placed
+
+
+def test_the_editors_first_eleven_start_whatever_the_lineup_said(tmp_path):
+    """D4 and M4 started for ESPN but the editor benched them for F3 and M5."""
+    order = "G1 D1 D2 D3 F3 M1 M2 M3 M5 F1 F2 G2 D4 M4 D5"
+    eleven, placed = _game_eleven(tmp_path, order)
+    assert eleven == set(order.split()[:11])
+    assert placed["G1"] == 0
+
+
+def test_two_keepers_in_the_editors_eleven_bench_the_second(tmp_path):
+    """The place G2 cannot play goes to the first bench player who fits it,
+    in the editor's order: D5, not the lineup's D4."""
+    eleven, placed = _game_eleven(tmp_path, "G1 G2 D1 D2 D3 M1 M2 M3 M4 F1 F2 D5 D4 M5 F3")
+    assert eleven == set("G1 D5 D1 D2 D3 M1 M2 M3 M4 F1 F2".split())
+    assert placed["G1"] == 0 and placed["G2"] >= 11
+
+
+def test_no_keeper_in_the_editors_eleven_starts_the_first_bench_keeper(tmp_path):
+    """G2, first keeper below the eleven, keeps goal ahead of the lineup's G1,
+    and F3, the eleventh outfielder, finds no place and sits out."""
+    eleven, placed = _game_eleven(tmp_path, "D1 D2 D3 D4 M1 M2 M3 M4 F1 F2 F3 G2 G1 D5 M5")
+    assert eleven == set("G2 D1 D2 D3 D4 M1 M2 M3 M4 F1 F2".split())
+    assert placed["G2"] == 0 and placed["F3"] >= 11
 
 
 def test_the_kit_table_round_trips_and_flips_a_licensed_kit(iso, tmp_path):
