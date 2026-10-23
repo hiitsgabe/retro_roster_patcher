@@ -40,14 +40,50 @@ FORWARDS_PER_TEAM = 14
 DEFENCEMEN_PER_TEAM = 7
 FORWARD_LINES = 4
 
-# Three pairs, of which only two reach the disc: `generate_team_line_flags`
-# emits `3nLD`/`3nRD`, and this game's ROST has `31` and `32` but no `33`, so
-# `rom_writer.roster_values` drops the third pair on the floor. NHL 2005's ROST
-# names `L1LD`/`L1RD` through `L3LD`/`L3RD` and none of those is ever set. See
-# the label on `generate_team_line_flags` for why that stands.
+# Three even-strength pairs, `L1LD`/`L1RD` through `L3LD`/`L3RD`.
 DEFENCE_PAIRS = 3
 
-SPECIAL_TEAMS_UNIT = 5
+# Every other unit is drawn from the even-strength lines and pairs, as on the
+# retail NHL 07 ROST, which has this game's sixty-four flags (no NHL 2005 disc
+# was checked): unit flag -> the `L` flag whose holder also takes it. `P` power
+# play, `K` penalty kill, `4` four-on-four, `3` five-on-three and `X` the extra
+# attackers. Each unit matches this on 104 to 110 of NHL 07's 110 teams.
+UNIT_ROLES = {
+    **{f"P1{s}": f"L1{s}" for s in ("LW", "C_", "RW", "LD", "RD")},
+    **{f"P2{s}": f"L2{s}" for s in ("LW", "C_", "RW", "LD", "RD")},
+    "K1LW": "L3LW",
+    "K1C_": "L3C_",
+    "K1LD": "L3LD",
+    "K1RD": "L3RD",
+    "K2LW": "L4LW",
+    "K2C_": "L4C_",
+    "K2LD": "L1LD",
+    "K2RD": "L1RD",
+    "41LW": "L1LW",
+    "41C_": "L1C_",
+    "41LD": "L2LD",
+    "41RD": "L2RD",
+    "42LW": "L2LW",
+    "42C_": "L2C_",
+    "42LD": "L3LD",
+    "42RD": "L3RD",
+    "31C_": "L4C_",
+    "31LD": "L2LD",
+    "31RD": "L2RD",
+    "32C_": "L2C_",
+    "32LD": "L1LD",
+    "32RD": "L1RD",
+    "X1__": "L1LW",
+    "X2__": "L2LW",
+}
+
+# `H1__`-`H5__` and `S1__`-`S5__` are numbered slots, filled from these roles
+# in this order (retail: H on 110 of 110 teams, S on 102). A missing role is
+# skipped and the ones after it move up a slot.
+SLOT_ROLES = {
+    "H": ("L1LW", "L1C_", "L1RW", "L1LD", "L1RD"),
+    "S": ("L1LW", "L1RW", "L1C_", "L2LW", "L2RW"),
+}
 
 # Per-position starting points, used whole when a player has no stats and as the
 # base for several derived ratings when he does. Copied, not shared: every read
@@ -481,39 +517,48 @@ class NHL05StatMapper:
         """The ROM slot for a modern team code, or None if the game has none."""
         return MODERN_NHL_TO_NHL05.get(team_abbrev.upper())
 
+    def dressed(self, players: list[NHL05PlayerRecord]) -> list[bool]:
+        """Who dresses, in list order: the first two goalies, twelve forwards and
+        six defencemen. Everyone else is a scratch.
+        """
+        room = {"G": GOALIES_PER_TEAM, "F": FORWARD_LINES * 3, "D": DEFENCE_PAIRS * 2}
+        out: list[bool] = []
+        for p in players:
+            group = "G" if p.is_goalie else "D" if p.position == "D" else "F"
+            out.append(room[group] > 0)
+            room[group] -= 1
+        return out
+
     def generate_team_line_flags(
         self,
         players: list[NHL05PlayerRecord],
     ) -> list[dict[str, int]]:
         """One flag dict per player, in the order the players were given.
 
-        Lines come from natural positions first and gaps are filled with spare
-        centres. A winger is never moved to centre, so a team with no centres
-        ices four lines with no centre.
+        Only the players `dressed` dresses are lined up, so a scratch is never
+        on a line. Lines come from natural positions first and gaps are filled
+        with spare centres. A winger is never moved to centre, so a team with no
+        centres ices four lines with no centre.
 
-        The power play takes line one's forwards and the top defence pair; the
-        penalty kill takes line two's forwards and the next pair. `H1__`-`H5__`
-        and `S1__`-`S5__` are five slots each and both fill positionally, so a
-        team short of defencemen gets a four-man power play rather than a
-        forward in a defenceman's slot.
+        Every other unit is then copied from the lines and pairs, as
+        `UNIT_ROLES` and `SLOT_ROLES` say, so a team short of defencemen gets a
+        four-man `H` rather than a forward in a defenceman's slot.
 
         A player who reaches none of those groups gets an empty dict, which
         `rom_writer.roster_values` turns into all sixty-four flags zeroed.
 
-        Upstream behaviour, known wrong, preserved deliberately: the defence
-        pairs are emitted as `3{pair}{side}`, which is NHL 07's spelling. On this
-        game `31`/`32` are five-on-three units, `33LD`/`33RD` do not exist, and
-        the even-strength pairs `L1LD` through `L3RD` are left zero, so a patched
-        team has no even-strength pairing. Do not change the `3` to an `L`
-        without a field-name dump from a retail DVD.
+        Defence pairs are the even-strength `L{pair}LD`/`L{pair}RD`, where the
+        retail NHL 07 disc (same ROST schema) starts its first pair.
         """
         result: list[dict[str, int]] = [{} for _ in players]
 
-        goalies = [(i, p) for i, p in enumerate(players) if p.is_goalie]
-        centers = [(i, p) for i, p in enumerate(players) if p.position == "C"]
-        left_w = [(i, p) for i, p in enumerate(players) if p.position == "LW"]
-        right_w = [(i, p) for i, p in enumerate(players) if p.position == "RW"]
-        defense = [(i, p) for i, p in enumerate(players) if p.position == "D"]
+        dressed = self.dressed(players)
+        squad = [(i, p) for i, p in enumerate(players) if dressed[i]]
+        goalies = [(i, p) for i, p in squad if p.is_goalie]
+        centers = [(i, p) for i, p in squad if p.position == "C"]
+        left_w = [(i, p) for i, p in squad if p.position == "LW"]
+        right_w = [(i, p) for i, p in squad if p.position == "RW"]
+        defense = [(i, p) for i, p in squad if p.position == "D"]
 
         for gi, (idx, _) in enumerate(goalies[:GOALIES_PER_TEAM]):
             result[idx][f"G{gi + 1}__"] = 1
@@ -522,40 +567,28 @@ class NHL05StatMapper:
         lw_pool = list(left_w)
         rw_pool = list(right_w)
 
-        fwd_line_indices: list[int] = []
-
+        role: dict[str, int] = {}  # `L` flag -> its holder's index
         for line in range(FORWARD_LINES):
             line_num = line + 1
 
             if c_pool:
-                idx, _ = c_pool.pop(0)
-                result[idx][f"L{line_num}C_"] = 1
-                fwd_line_indices.append(idx)
+                role[f"L{line_num}C_"] = c_pool.pop(0)[0]
 
             for wing, pool in (("LW", lw_pool), ("RW", rw_pool)):
                 source = pool if pool else c_pool
                 if source:
-                    idx, _ = source.pop(0)
-                    result[idx][f"L{line_num}{wing}"] = 1
-                    fwd_line_indices.append(idx)
+                    role[f"L{line_num}{wing}"] = source.pop(0)[0]
 
-        d_line_indices: list[int] = []
         for di, (idx, _) in enumerate(defense[: DEFENCE_PAIRS * 2]):
-            pair = di // 2 + 1
-            side = "LD" if di % 2 == 0 else "RD"
-            # `3`, not `L`: NHL 07's spelling, kept deliberately. See above.
-            result[idx][f"3{pair}{side}"] = 1
-            d_line_indices.append(idx)
+            role[f"L{di // 2 + 1}{'LD' if di % 2 == 0 else 'RD'}"] = idx
 
-        # Three forwards and two defencemen. `fwd_line_indices` is positional and
-        # not keyed by line, so [:3] is line one only when line one was complete;
-        # a team missing a right wing puts line two's centre in the third slot.
-        pp_candidates = fwd_line_indices[:3] + d_line_indices[:2]
-        for hi, idx in enumerate(pp_candidates[:SPECIAL_TEAMS_UNIT]):
-            result[idx][f"H{hi + 1}__"] = 1
-
-        pk_candidates = fwd_line_indices[3:6] + d_line_indices[2:4]
-        for si, idx in enumerate(pk_candidates[:SPECIAL_TEAMS_UNIT]):
-            result[idx][f"S{si + 1}__"] = 1
+        for flag, idx in role.items():
+            result[idx][flag] = 1
+        for flag, l_flag in UNIT_ROLES.items():
+            if l_flag in role:
+                result[role[l_flag]][flag] = 1
+        for unit, l_flags in SLOT_ROLES.items():
+            for k, idx in enumerate(role[f] for f in l_flags if f in role):
+                result[idx][f"{unit}{k + 1}__"] = 1
 
         return result

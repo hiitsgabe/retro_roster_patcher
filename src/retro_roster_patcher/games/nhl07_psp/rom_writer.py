@@ -59,46 +59,76 @@ PORTAPT_BH_NAME = "portapt.bh"
 # flag missing from this list keeps whatever the 2006 roster left there and puts
 # a retired player on the power play.
 #
-#   L1C_ .. L4RW   four forward lines, centre / left wing / right wing
-#   31LD .. 33RD   three defence pairs, left and right
-#   G1__, G2__     starting and backup goalie
-#   H1__ .. H5__   the power-play unit
-#   S1__ .. S5__   the penalty-kill unit
+# The retail disc's sixty-four, in its order (ULUS10131's ROST), and the same
+# list as `games/nhl05_ps2`, which explains the families:
 #
-# `31LD` and not `L1LD`: on this game a `3n` prefix is defence pair *n*, and the
-# list carries no other defence flag. On `games/nhl05_ps2` the same `3n` prefix
-# is a three-skater strength unit -- it has `31C_`, which a pair cannot -- and
-# the pairs there are `L1LD`-style. Do not harmonise the two lists.
+#   3n.. five-on-three, 4n.. four-on-four, Kn.. penalty kill, Pn.. power play
+#   Ln.. even strength: L1-L4 forward lines, L1LD/L1RD-L3LD/L3RD defence pairs
+#   G1__, G2__ starting and backup goalie; H, S and X units
 LINE_FLAGS = [
-    "L1C_",
-    "L2C_",
-    "L3C_",
-    "L4C_",
+    "31LD",
+    "41LD",
+    "K1LD",
+    "L1LD",
+    "P1LD",
+    "32LD",
+    "42LD",
+    "K2LD",
+    "L2LD",
+    "P2LD",
+    "L3LD",
+    "31RD",
+    "41RD",
+    "K1RD",
+    "L1RD",
+    "P1RD",
+    "32RD",
+    "42RD",
+    "K2RD",
+    "L2RD",
+    "P2RD",
+    "L3RD",
+    "41LW",
+    "K1LW",
     "L1LW",
+    "P1LW",
+    "42LW",
+    "K2LW",
     "L2LW",
+    "P2LW",
     "L3LW",
     "L4LW",
     "L1RW",
+    "P1RW",
     "L2RW",
+    "P2RW",
     "L3RW",
     "L4RW",
-    "31LD",
-    "32LD",
-    "33LD",
-    "31RD",
-    "32RD",
-    "33RD",
+    "31C_",
+    "41C_",
+    "K1C_",
+    "L1C_",
+    "P1C_",
+    "32C_",
+    "42C_",
+    "K2C_",
+    "L2C_",
+    "P2C_",
+    "L3C_",
+    "L4C_",
     "G1__",
-    "G2__",
     "H1__",
-    "H2__",
-    "H3__",
-    "H4__",
-    "H5__",
     "S1__",
+    "X1__",
+    "G2__",
+    "H2__",
     "S2__",
+    "X2__",
+    "H3__",
     "S3__",
+    "H4__",
     "S4__",
+    "H5__",
     "S5__",
 ]
 
@@ -298,22 +328,24 @@ class NHL07PSPRomWriter:
     @staticmethod
     def roster_values(
         jersey: int,
-        captain: int,
         dressed: int,
         line_flags: Mapping[str, int] | None = None,
     ) -> dict[str, object]:
-        """The value mapping for one ROST record: jersey, captaincy, lines.
+        """The value mapping for one ROST record: jersey, dress, lines.
 
         Set *every* flag in `LINE_FLAGS`, to zero unless `line_flags` names it:
         the record is reused, so its previous occupant's line is still in those
         bits. Drop a key that is not a known flag.
+
+        Leave `CAPT` alone, so the row keeps the disc's letter: nothing in a
+        provider's roster says who wears it. (On the retail disc 1 is the
+        captain and 2 an alternate, the reverse of what upstream wrote.)
 
         Do not write `TEAM` or `INDX`. The record was found by those two, and
         rewriting `INDX` breaks the ROST -> PLAY -> SPBT chain that located it.
         """
         values: dict[str, object] = {
             "JERS": jersey,
-            "CAPT": captain,
             "DRES": dressed,
         }
         for flag in LINE_FLAGS:

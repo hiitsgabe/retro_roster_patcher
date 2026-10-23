@@ -6,7 +6,7 @@ ISO, every write names a four-character field, and the format layers are shared
 -- `formats/ea_tdb.py` for RefPack/BIGF/TDB and `formats/iso9660.py` for the
 Mode 1 / 2048 directory walk.
 
-Four things differ from NHL 07, and each is where a copy-paste port writes the
+Three things differ from NHL 07, and each is where a copy-paste port writes the
 wrong bytes:
 
   * `DB.VIV` is at `/DB/DB.VIV`, one directory from the root and not three
@@ -14,9 +14,9 @@ wrong bytes:
   * The archive holds two TDBs, not three. There is no `nhlbioatt.tdb`, so the
     bio and attribute tables have no mirror and only ROST does (`patcher.py`).
   * `STL` and `SJ` swap slots 24 and 25 (`models.py`).
-  * The ROST table has 64 line-assignment flags where NHL 07 has 30, and they
-    are not a superset: `33LD`/`33RD` are absent and the defence pairs are
-    `L1LD`..`L3RD` (`rom_writer.py`, `stat_mapper.py`).
+
+The ROST table's 64 line-assignment flags are the same as NHL 07's
+(`rom_writer.py`).
 
 Teams map to ROM slots automatically by abbreviation, so no manual slot mapping
 step. Two providers, ESPN for the current season and the NHL API back to 1993.

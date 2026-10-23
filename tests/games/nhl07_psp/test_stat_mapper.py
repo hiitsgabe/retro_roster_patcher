@@ -880,15 +880,31 @@ def test_a_winger_only_team_still_gets_its_wings_assigned():
 
 
 def test_three_defence_pairs_alternate_left_and_right():
+    # The even-strength `Ln` pairs, where the retail disc starts its first pair;
+    # `31LD` is the five-on-three unit.
     result = MAPPER.generate_team_line_flags(records(*(["D"] * 6)))
-    assert [flags_set(result, i)[0] for i in range(6)] == [
-        "31LD",
-        "31RD",
-        "32LD",
-        "32RD",
-        "33LD",
-        "33RD",
+    assert [f for i in range(6) for f in flags_set(result, i) if f[0] == "L"] == [
+        "L1LD",
+        "L1RD",
+        "L2LD",
+        "L2RD",
+        "L3LD",
+        "L3RD",
     ]
+
+
+def test_the_first_two_goalies_twelve_forwards_and_six_defencemen_dress():
+    # The retail disc dresses exactly that many and scratches the rest.
+    team = records(*(["G"] * 3 + ["D"] * 7 + ["C"] * 13))
+    expected = [True] * 2 + [False] + [True] * 6 + [False] + [True] * 12 + [False]
+    assert MAPPER.dressed(team) == expected
+
+
+def test_a_scratch_is_never_on_a_line():
+    # Thirteen forwards in list order: the fourth right wing is the 13th and a
+    # scratch, so the spare fifth centre takes his wing.
+    result = MAPPER.generate_team_line_flags(records(*(["C"] * 5 + ["LW"] * 4 + ["RW"] * 4)))
+    assert (flags_set(result, 12), flags_set(result, 4)) == ([], ["L4RW"])
 
 
 def test_a_seventh_defenceman_gets_no_pair():
@@ -896,33 +912,49 @@ def test_a_seventh_defenceman_gets_no_pair():
     assert flags_set(result, 6) == []
 
 
-def test_the_power_play_is_line_one_and_the_top_pair():
-    result = MAPPER.generate_team_line_flags(records("C", "LW", "RW", "D", "D"))
-    assert [i for i in range(5) if "H1__" in flags_set(result, i)] == [0]
-
-
-def test_all_five_power_play_slots_are_filled_by_a_full_team():
+def test_a_full_team_gets_every_unit_the_retail_disc_builds_from_its_lines():
+    # Line n is C, LW, RW at 3n-3, the pairs start at 12. Boston on the retail
+    # disc: Bergeron, L1LW, also holds 41LW, P1LW, H1__, S1__ and X1__.
     result = MAPPER.generate_team_line_flags(records(*(["C", "LW", "RW"] * 4 + ["D"] * 6)))
-    assigned = sorted(name for r in result for name, v in r.items() if v == 1 and name[0] == "H")
-    assert assigned == ["H1__", "H2__", "H3__", "H4__", "H5__"]
+    assert [flags_set(result, i) for i in range(18)] == [
+        ["41C_", "H2__", "L1C_", "P1C_", "S3__"],
+        ["41LW", "H1__", "L1LW", "P1LW", "S1__", "X1__"],
+        ["H3__", "L1RW", "P1RW", "S2__"],
+        ["32C_", "42C_", "L2C_", "P2C_"],
+        ["42LW", "L2LW", "P2LW", "S4__", "X2__"],
+        ["L2RW", "P2RW", "S5__"],
+        ["K1C_", "L3C_"],
+        ["K1LW", "L3LW"],
+        ["L3RW"],
+        ["31C_", "K2C_", "L4C_"],
+        ["K2LW", "L4LW"],
+        ["L4RW"],
+        ["32LD", "H4__", "K2LD", "L1LD", "P1LD"],
+        ["32RD", "H5__", "K2RD", "L1RD", "P1RD"],
+        ["31LD", "41LD", "L2LD", "P2LD"],
+        ["31RD", "41RD", "L2RD", "P2RD"],
+        ["42LD", "K1LD", "L3LD"],
+        ["42RD", "K1RD", "L3RD"],
+    ]
 
 
-def test_all_five_penalty_kill_slots_are_filled_by_a_full_team():
-    result = MAPPER.generate_team_line_flags(records(*(["C", "LW", "RW"] * 4 + ["D"] * 6)))
-    assigned = sorted(name for r in result for name, v in r.items() if v == 1 and name[0] == "S")
-    assert assigned == ["S1__", "S2__", "S3__", "S4__", "S5__"]
+def test_a_missing_role_is_skipped_and_the_later_slots_move_up():
+    # One centre and two left wings: no right wing on either line, so H and S
+    # close up over L1RW (and S over L2RW).
+    result = MAPPER.generate_team_line_flags(records("C", "LW", "LW", "D", "D"))
+    held = {f: i for i in range(5) for f in flags_set(result, i)}
+    assert [held.get(f"H{k}__") for k in range(1, 6)] == [1, 0, 3, 4, None]
+    assert [held.get(f"S{k}__") for k in range(1, 6)] == [1, 0, 2, None, None]
 
 
-def test_a_team_short_of_defencemen_gets_a_four_man_power_play():
-    # Positional, not padded with a forward: `pp_candidates` is line one's three
-    # forwards plus however many of the top pair exist.
+def test_a_team_short_of_defencemen_gets_a_four_man_h_unit():
     result = MAPPER.generate_team_line_flags(records("C", "LW", "RW", "D"))
     assigned = sorted(name for r in result for name, v in r.items() if v == 1 and name[0] == "H")
     assert assigned == ["H1__", "H2__", "H3__", "H4__"]
 
 
 def test_a_player_on_no_line_gets_an_empty_flag_dict():
-    # Which `rom_writer.roster_values` turns into all thirty flags zeroed -- a
+    # Which `rom_writer.roster_values` turns into all sixty-four flags zeroed -- a
     # dressed scratch, not a player left where the disc had him.
     result = MAPPER.generate_team_line_flags(records(*(["D"] * 8)))
     assert result[7] == {}
@@ -972,24 +1004,6 @@ def test_the_four_forward_lines_are_built_before_the_spare_forwards():
     }
     expected = [ranked[code][line].id for line in range(4) for code in ("C", "LW", "RW")]
     assert [p.id for p in selected[2:14]] == expected
-
-
-def test_the_penalty_kill_takes_line_two_and_not_line_one():
-    # Kills `pk_candidates = fwd_line_indices[3:6]` -> `[2:6]`. The earlier test
-    # asserted only that S1 through S5 were assigned to somebody, which holds
-    # for any five players.
-    result = MAPPER.generate_team_line_flags(records(*(["C", "LW", "RW"] * 4 + ["D"] * 6)))
-    assert [i for i in range(18) if "S1__" in flags_set(result, i)] == [3]
-
-
-def test_the_penalty_kill_ends_with_the_second_defence_pair():
-    result = MAPPER.generate_team_line_flags(records(*(["C", "LW", "RW"] * 4 + ["D"] * 6)))
-    assert [i for i in range(18) if "S5__" in flags_set(result, i)] == [15]
-
-
-def test_the_power_play_starts_with_the_first_line_centre():
-    result = MAPPER.generate_team_line_flags(records(*(["C", "LW", "RW"] * 4 + ["D"] * 6)))
-    assert [i for i in range(18) if "H1__" in flags_set(result, i)] == [0]
 
 
 def test_get_team_slot_folds_the_case_of_the_abbreviation():

@@ -192,9 +192,7 @@ SGAI_RECORD_SIZE = 15  # 16 + 16*6 + 2 = 114 bits
 # test would still pass.
 #
 # `33LD` and `33RD` are absent, exactly as they are absent from the writer's
-# list, and `L3LD`/`L3RD` are present. That asymmetry is what lets a test show
-# where the source's `3n` defence spelling went and where the port's `Ln` one
-# goes instead.
+# list, and `L3LD`/`L3RD` are present.
 LINE_FLAG_NAMES = [
     "31LD",
     "41LD",
@@ -262,17 +260,8 @@ LINE_FLAG_NAMES = [
     "S5__",
 ]
 
-# Flags the game has and nothing in the package ever emits, so a patched row
-# carries them cleared. `X1__`/`X2__` have no counterpart in the mapper at all.
-#
-# `EVEN_STRENGTH_DEFENCE_FLAGS` are there for a different reason. They are the
-# pairs NHL 2005's ROST actually names, and they come back zero from every
-# patch, because `stat_mapper.generate_team_line_flags` emits NHL 07's
-# `3{pair}{side}` spelling instead -- upstream's behaviour, known wrong,
-# preserved deliberately; see the label on that function. So a patched team has
-# no even-strength defence pairing at all, and these four assert it.
-UNREACHABLE_FLAGS = ["X1__", "X2__"]
-EVEN_STRENGTH_DEFENCE_FLAGS = ["L1LD", "L1RD", "L2LD", "L2RD"]
+# The even-strength defence pairs, which `generate_team_line_flags` sets.
+EVEN_STRENGTH_DEFENCE_FLAGS = ["L1LD", "L1RD", "L2LD", "L2RD", "L3LD", "L3RD"]
 
 #   bits  0.. 5  TEAM   6 bits
 #   bits  6..12  JERS   7 bits

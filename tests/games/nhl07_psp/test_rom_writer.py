@@ -130,100 +130,33 @@ GOALIE = NHL07PlayerRecord(
 )
 
 
-def test_there_are_thirty_line_flags():
-    assert len(LINE_FLAGS) == 30
+def test_there_are_sixty_four_line_flags():
+    assert len(LINE_FLAGS) == 64
 
 
 def test_no_line_flag_is_listed_twice():
-    # `roster_values` zeroes each of them and then sets the ones a player has,
-    # so a duplicate would be harmless -- but it would also mean the list is not
-    # what its comment claims, and the count above would stop meaning anything.
     assert sorted(set(LINE_FLAGS)) == sorted(LINE_FLAGS)
 
 
-def test_every_line_flag_is_exactly_four_characters():
-    assert [f for f in LINE_FLAGS if len(f) != 4] == []
+def test_the_list_is_the_retail_discs_in_the_discs_order():
+    # `fixture.LINE_FLAG_NAMES` is the retail ROST's own list, restated. The
+    # thirty-flag list this replaced left 36 of them, the even-strength pairs
+    # among them, as the 2006 roster had them.
+    assert LINE_FLAGS == fixture.LINE_FLAG_NAMES
 
 
-def test_the_defence_pairs_are_numbered_not_lettered():
-    # `31LD` and not `L1LD`, which is the TDB's own spelling and reads like a
-    # transcription slip until you check it.
-    assert [f for f in LINE_FLAGS if f.endswith(("LD", "RD"))] == [
-        "31LD",
-        "32LD",
-        "33LD",
-        "31RD",
-        "32RD",
-        "33RD",
+def test_the_even_strength_defence_pairs_are_lettered():
+    # `L1LD`, where the retail disc starts its first pair. `31LD` is the
+    # five-on-three unit, which also carries a centre.
+    assert [f for f in LINE_FLAGS if f[0] == "L" and f.endswith(("LD", "RD"))] == [
+        "L1LD",
+        "L2LD",
+        "L3LD",
+        "L1RD",
+        "L2RD",
+        "L3RD",
     ]
-
-
-def test_the_list_is_the_sources_thirty_names_in_the_sources_order():
-    """Transcribed from `nhl07_psp_patcher/rom_writer.py`, not from the port.
-
-    The one assertion here that fails if a future port audit "restores" an
-    `L1LD` to this game. There is nothing to restore: the source's list is these
-    thirty and no others, and `L1LD` appears exactly once in the whole source
-    tree, in a *different* game's writer. Written out in full rather than
-    derived, because every derivation above this line is satisfied by more than
-    one list and a reordering would pass all of them.
-    """
-    assert LINE_FLAGS == [
-        "L1C_",
-        "L2C_",
-        "L3C_",
-        "L4C_",
-        "L1LW",
-        "L2LW",
-        "L3LW",
-        "L4LW",
-        "L1RW",
-        "L2RW",
-        "L3RW",
-        "L4RW",
-        "31LD",
-        "32LD",
-        "33LD",
-        "31RD",
-        "32RD",
-        "33RD",
-        "G1__",
-        "G2__",
-        "H1__",
-        "H2__",
-        "H3__",
-        "H4__",
-        "H5__",
-        "S1__",
-        "S2__",
-        "S3__",
-        "S4__",
-        "S5__",
-    ]
-
-
-def test_no_flag_uses_nhl05s_lettered_defence_spelling():
-    assert [f for f in LINE_FLAGS if f in ("L1LD", "L2LD", "L3LD", "L1RD", "L2RD", "L3RD")] == []
-
-
-def test_every_numbered_flag_is_a_defence_slot():
-    """The evidence that `3n` is a defence *pair* on this game and not a unit.
-
-    Group the list by prefix and read off which position suffixes each prefix
-    carries. Here the numbered family carries `LD` and `RD` and nothing else --
-    a pair. NHL 05's numbered family carries `31C_` as well, which is what makes
-    it a three-skater strength unit there; see
-    `tests/games/nhl05_ps2/test_rom_writer.py`. Same prefix, two games, two
-    meanings, which is why one mapper cannot serve both.
-    """
-    assert sorted({flag[2:] for flag in LINE_FLAGS if flag[0].isdigit()}) == ["LD", "RD"]
-
-
-def test_there_are_three_numbered_groups_and_no_more():
-    # Three pairs, because a dressed NHL side ices three. If `3n` were a
-    # strength unit there would be no even-strength defence flag in this list at
-    # all and the game could not pair a defenceman.
-    assert sorted({flag[:2] for flag in LINE_FLAGS if flag[0].isdigit()}) == ["31", "32", "33"]
+    assert "31C_" in LINE_FLAGS
 
 
 def test_the_progress_spans_are_ordered():
@@ -663,48 +596,49 @@ def test_an_attribute_write_past_the_allocation_is_a_no_op(tmp_path):
 
 
 def test_roster_values_carries_the_jersey():
-    assert NHL07PSPRomWriter.roster_values(44, 0, 1)["JERS"] == 44
+    assert NHL07PSPRomWriter.roster_values(44, 1)["JERS"] == 44
 
 
-def test_roster_values_carries_the_captaincy():
-    assert NHL07PSPRomWriter.roster_values(44, 2, 1)["CAPT"] == 2
+def test_roster_values_leaves_the_captaincy_to_the_disc():
+    # Nothing in a provider's roster says who wears the C, so the row keeps it.
+    assert "CAPT" not in NHL07PSPRomWriter.roster_values(44, 1)
 
 
 def test_roster_values_carries_the_dressed_level():
-    assert NHL07PSPRomWriter.roster_values(44, 0, 0)["DRES"] == 0
+    assert NHL07PSPRomWriter.roster_values(44, 0)["DRES"] == 0
 
 
 def test_roster_values_zeroes_every_line_flag_by_default():
-    values = NHL07PSPRomWriter.roster_values(1, 0, 1)
+    values = NHL07PSPRomWriter.roster_values(1, 1)
     assert [f for f in LINE_FLAGS if values[f] != 0] == []
 
 
 def test_roster_values_names_every_line_flag():
     # A record is reused, not created, so a flag left out of the mapping keeps
     # whatever its previous occupant had.
-    values = NHL07PSPRomWriter.roster_values(1, 0, 1)
+    values = NHL07PSPRomWriter.roster_values(1, 1)
     assert sorted(f for f in values if f in LINE_FLAGS) == sorted(LINE_FLAGS)
 
 
 def test_roster_values_sets_only_the_flags_it_was_given():
-    values = NHL07PSPRomWriter.roster_values(1, 0, 1, {"L2LW": 1, "H3__": 1})
+    values = NHL07PSPRomWriter.roster_values(1, 1, {"L2LW": 1, "H3__": 1})
     assert sorted(f for f in LINE_FLAGS if values[f] == 1) == ["H3__", "L2LW"]
 
 
 def test_roster_values_drops_a_flag_name_it_does_not_know():
-    values = NHL07PSPRomWriter.roster_values(1, 0, 1, {"ZZZZ": 1})
+    values = NHL07PSPRomWriter.roster_values(1, 1, {"ZZZZ": 1})
     assert "ZZZZ" not in values
 
 
 def test_roster_values_does_not_write_the_team():
     # The record was found by `TEAM`, and rewriting it would move the row to
     # another team.
-    assert "TEAM" not in NHL07PSPRomWriter.roster_values(1, 0, 1)
+    assert "TEAM" not in NHL07PSPRomWriter.roster_values(1, 1)
 
 
 def test_roster_values_does_not_write_the_index():
     # Rewriting `INDX` breaks the ROST -> PLAY -> SPBT chain that located it.
-    assert "INDX" not in NHL07PSPRomWriter.roster_values(1, 0, 1)
+    assert "INDX" not in NHL07PSPRomWriter.roster_values(1, 1)
 
 
 def test_a_roster_write_clears_the_flag_the_disc_had_set(tmp_path):
@@ -714,7 +648,7 @@ def test_a_roster_write_clears_the_flag_the_disc_had_set(tmp_path):
 
     writer = prepared(tmp_path)
     rost = master(writer).get_table("ROST")
-    rost.write_record(7, NHL07PSPRomWriter.roster_values(9, 0, 1, {"L1C_": 1}))
+    rost.write_record(7, NHL07PSPRomWriter.roster_values(9, 1, {"L1C_": 1}))
     writer.rebuild_and_write({TDB_MASTER: master(writer)})
     record = read_back(
         Path(writer.output_path),
@@ -732,7 +666,7 @@ def test_the_disc_shipped_that_row_with_a_different_flag_set(tmp_path):
     records = fixture.read_table_records(
         fixture.build_master_tdb(), "ROST", fixture.ROST_FIELDS, fixture.ROST_RECORD_SIZE
     )
-    assert [f for f in fixture.LINE_FLAG_NAMES if records[7][f] == 1] == ["L4LW"]
+    assert [f for f in fixture.LINE_FLAG_NAMES if records[7][f] == 1] == ["K2LD"]
 
 
 def test_rebuilding_leaves_the_image_the_same_length(tmp_path):

@@ -167,40 +167,74 @@ SGAI_FIELDS = [FieldSpec("INDX", TYPE_UINT, 0, 16)] + [
 SGAI_FIELDS.append(FieldSpec("FIGH", TYPE_UINT, 16 + len(GOALIE_ATTR_NAMES) * 6, 2))
 SGAI_RECORD_SIZE = 15  # 16 + 16*6 + 2 = 114 bits
 
-# The thirty single-bit line flags, in the order `rom_writer.LINE_FLAGS` gives
-# them. Restated here rather than imported: importing the list under test would
-# let a name dropped from it disappear from the fixture too, and every test
-# would still pass.
+# The sixty-four single-bit line flags of the retail disc's ROST (ULUS10131),
+# in the disc's order. Restated here rather than imported: importing the list
+# under test would let a name dropped from it disappear from the fixture too,
+# and every test would still pass.
 LINE_FLAG_NAMES = [
-    "L1C_",
-    "L2C_",
-    "L3C_",
-    "L4C_",
+    "31LD",
+    "41LD",
+    "K1LD",
+    "L1LD",
+    "P1LD",
+    "32LD",
+    "42LD",
+    "K2LD",
+    "L2LD",
+    "P2LD",
+    "L3LD",
+    "31RD",
+    "41RD",
+    "K1RD",
+    "L1RD",
+    "P1RD",
+    "32RD",
+    "42RD",
+    "K2RD",
+    "L2RD",
+    "P2RD",
+    "L3RD",
+    "41LW",
+    "K1LW",
     "L1LW",
+    "P1LW",
+    "42LW",
+    "K2LW",
     "L2LW",
+    "P2LW",
     "L3LW",
     "L4LW",
     "L1RW",
+    "P1RW",
     "L2RW",
+    "P2RW",
     "L3RW",
     "L4RW",
-    "31LD",
-    "32LD",
-    "33LD",
-    "31RD",
-    "32RD",
-    "33RD",
+    "31C_",
+    "41C_",
+    "K1C_",
+    "L1C_",
+    "P1C_",
+    "32C_",
+    "42C_",
+    "K2C_",
+    "L2C_",
+    "P2C_",
+    "L3C_",
+    "L4C_",
     "G1__",
-    "G2__",
     "H1__",
-    "H2__",
-    "H3__",
-    "H4__",
-    "H5__",
     "S1__",
+    "X1__",
+    "G2__",
+    "H2__",
     "S2__",
+    "X2__",
+    "H3__",
     "S3__",
+    "H4__",
     "S4__",
+    "H5__",
     "S5__",
 ]
 
@@ -209,7 +243,7 @@ LINE_FLAG_NAMES = [
 #   bits 13..28  INDX  16 bits, straddling three bytes
 #   bits 29..30  CAPT   2 bits
 #   bits 31..32  DRES   2 bits, straddling bytes 3 and 4
-#   bits 33..62  the thirty line flags, one bit each
+#   bits 33..96  the sixty-four line flags, one bit each
 ROST_FIELDS = [
     FieldSpec("TEAM", TYPE_UINT, 0, 6),
     FieldSpec("JERS", TYPE_UINT, 6, 7),
@@ -217,7 +251,7 @@ ROST_FIELDS = [
     FieldSpec("CAPT", TYPE_UINT, 29, 2),
     FieldSpec("DRES", TYPE_UINT, 31, 2),
 ] + [FieldSpec(name, TYPE_UINT, 33 + i, 1) for i, name in enumerate(LINE_FLAG_NAMES)]
-ROST_RECORD_SIZE = 8  # 63 bits
+ROST_RECORD_SIZE = 13  # 97 bits
 
 #   bits  0..15  INDX
 #   bits 16..19  TBLE

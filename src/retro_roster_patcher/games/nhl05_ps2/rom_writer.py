@@ -44,8 +44,8 @@ from .rom_reader import ISO_SECTOR_SIZE, NHL05PS2RomReader
 # flag missing from this list keeps whatever the 2004 roster left there and puts
 # a retired player on the power play.
 #
-# Sixty-four flags, where `games/nhl07_psp` has thirty. Do not treat this as
-# that list with more added. Five situations, each with two units, and only even
+# Sixty-four flags, the same list in the same order as the retail NHL 07 disc's
+# ROST (`games/nhl07_psp`). Five situations, each with two units, and only even
 # strength carries a third and fourth line:
 #
 #   3n..  five-on-three          n = 1, 2
@@ -59,13 +59,8 @@ from .rom_reader import ISO_SECTOR_SIZE, NHL05PS2RomReader
 # and two.
 #
 # `33LD` and `33RD` are absent because there is no third five-on-three unit; that
-# is not a hole. Here a `3n` prefix is a three-skater unit -- it carries `31C_`,
-# which a defence pair cannot -- and the even-strength pairs are `L1LD`-style.
-# On `games/nhl07_psp` `3n` is defence pair *n*. Upstream behaviour, known wrong,
-# preserved deliberately: `stat_mapper.generate_team_line_flags` emits NHL 07's
-# `3nLD`/`3nRD`, so pairs one and two land on the five-on-three units, pair three
-# is dropped by `roster_values`' filter, and `L1LD` through `L3RD` stay zero on
-# every patched player.
+# is not a hole. A `3n` prefix is a three-skater unit -- it carries `31C_`, which
+# a defence pair cannot -- and the even-strength pairs are `L1LD` to `L3RD`.
 LINE_FLAGS = [
     "31LD",
     "41LD",
@@ -337,24 +332,23 @@ class NHL05PS2RomWriter:
     @staticmethod
     def roster_values(
         jersey: int,
-        captain: int,
         dressed: int,
         line_flags: Mapping[str, int] | None = None,
     ) -> dict[str, object]:
-        """The value mapping for one ROST record: jersey, captaincy, lines.
+        """The value mapping for one ROST record: jersey, dress, lines.
 
         Set *every* one of the sixty-four flags in `LINE_FLAGS`, to zero unless
         `line_flags` names it: the record is reused, so its previous occupant's
-        line is still in those bits. Drop a key that is not a known flag; that
-        filter is where this game's third defence pair is silently lost, since
-        the mapper emits NHL 07's `33LD`/`33RD`. See `LINE_FLAGS`.
+        line is still in those bits. Drop a key that is not a known flag.
+
+        Leave `CAPT` alone, so the row keeps the disc's letter: nothing in a
+        provider's roster says who wears it.
 
         Do not write `TEAM` or `INDX`. The record was found by those two, and
         rewriting `INDX` breaks the ROST -> PLAY -> SPBT chain that located it.
         """
         values: dict[str, object] = {
             "JERS": jersey,
-            "CAPT": captain,
             "DRES": dressed,
         }
         for flag in LINE_FLAGS:

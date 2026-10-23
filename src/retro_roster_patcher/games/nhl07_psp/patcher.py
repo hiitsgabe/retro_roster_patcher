@@ -72,6 +72,7 @@ from .portraits import (
 )
 from .rom_reader import ISO_SECTOR_SIZE, NHL07PSPRomReader
 from .rom_writer import (
+    LINE_FLAGS,
     PROGRESS_COPY_END,
     PROGRESS_RECORDS_END,
     NHL07PSPRomWriter,
@@ -594,9 +595,18 @@ class NHL07PSPPatcher(Patcher):
             self.status(f"Front-end strings replaced: {changed}")
 
     def suggest_squad_order(self, team_roster):
+        """`select_roster`'s order with the starting six first: the first G, C,
+        LW and RW and the first two D. The ROST output is the same either way,
+        since lines and dressing are taken per position in list order.
+        """
         leaders = team_roster.extra.get("leaders") or {}
         ordered = self.mapper.select_roster(team_roster.players, leaders, max_players=MAX_PLAYERS)
-        return self._append_unused(ordered, team_roster.players)
+        six = [
+            p
+            for code, n in (("G", 1), ("C", 1), ("LW", 1), ("RW", 1), ("D", 2))
+            for p in [q for q in ordered if q.position == code][:n]
+        ]
+        return self._append_unused(self._append_unused(six, ordered), team_roster.players)
 
     def map_rosters(
         self,
@@ -837,9 +847,11 @@ class NHL07PSPPatcher(Patcher):
         ):
             pairs.extend(zip(pool, available, strict=False))
 
-        # From the paired players, not `players`: line numbering must not count
-        # anyone who was never written.
-        all_line_flags = self.mapper.generate_team_line_flags([p for p, _ in pairs])
+        # From the paired players, not `players`: line numbering and dressing
+        # must not count anyone who was never written.
+        written = [p for p, _ in pairs]
+        all_line_flags = self.mapper.generate_team_line_flags(written)
+        dressed = self.mapper.dressed(written)
 
         used: set[int] = set()
         for position, (player, roster_slot) in enumerate(pairs):
@@ -848,26 +860,24 @@ class NHL07PSPPatcher(Patcher):
             photos[roster_slot.bio_index] = player.photo_url
 
             line_flags = all_line_flags[position] if position < len(all_line_flags) else {}
-            # CAPT: 2 is the captain, 1 an alternate, 0 neither. Position in the
-            # paired list, where goalies come first, so the starting goalie
-            # wears the C.
             values = writer.roster_values(
                 jersey=player.jersey_number,
-                captain=2 if position == 0 else (1 if position in (1, 2) else 0),
-                dressed=1,
+                dressed=int(dressed[position]),
                 line_flags=line_flags,
             )
             tables.rost.write_record(roster_slot.rost_index, values)
             mirrors.write_rost(roster_slot.rost_index, values)
 
-        # DRES 0 on every remaining row, so a stale player cannot take the ice.
-        # `team_rows` and not the classified lists: a row whose chain to a bio is
-        # broken is still one of this team's rows and the game would dress it.
+        # Every remaining row undressed and off every line, so a stale player
+        # can neither take the ice nor hold a unit. `team_rows` and not the
+        # classified lists: a row whose chain to a bio is broken is still one of
+        # this team's rows and the game would dress it.
+        cleared: dict[str, object] = {"DRES": 0, **dict.fromkeys(LINE_FLAGS, 0)}
         for rost_index in team_rows:
             if rost_index in used:
                 continue
-            tables.rost.write_record(rost_index, {"DRES": 0})
-            mirrors.write_rost(rost_index, {"DRES": 0})
+            tables.rost.write_record(rost_index, cleared)
+            mirrors.write_rost(rost_index, cleared)
 
         return len(pairs)
 

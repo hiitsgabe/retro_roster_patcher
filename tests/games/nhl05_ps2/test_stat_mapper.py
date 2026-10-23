@@ -40,7 +40,6 @@ from retro_roster_patcher.games.nhl05_ps2.stat_mapper import (
     GOALIES_PER_TEAM,
     MAX_PLAYERS,
     SKATER_DEFAULTS,
-    SPECIAL_TEAMS_UNIT,
     NHL05StatMapper,
     _clamp,
     _defaults_for,
@@ -760,7 +759,7 @@ def test_a_team_of_only_centres_ices_fewer_lines_than_it_has_players():
     # The consequence of the same rule, stated so the test above cannot be read
     # as "the fourth centre always centres the fourth line".
     flags = MAPPER.generate_team_line_flags(records({"C": 4}))
-    assert [f for d in flags for f in d if f.endswith("C_")] == ["L1C_", "L2C_"]
+    assert [f for d in flags for f in d if f[0] == "L" and f.endswith("C_")] == ["L1C_", "L2C_"]
 
 
 def test_a_spare_centre_is_moved_to_the_wing_when_the_wingers_run_out():
@@ -775,49 +774,37 @@ def test_a_winger_is_never_moved_to_centre():
     assert [f for d in flags for f in d if f.endswith("C_")] == []
 
 
-def test_the_first_defence_pair_goes_to_the_first_five_on_three_unit():
-    # PINS UPSTREAM FIDELITY DELIBERATELY, at the layer that produces it, and
-    # this is the bug: `31LD`/`31RD` is NHL 07's spelling, copied into a game
-    # whose `3n` family is a five-on-three unit. Do not "fix" it to `L1LD` --
-    # only a field-name dump from a retail disc could settle which flag the game
-    # reads, and none may enter this repository.
+def test_the_first_defence_pair_is_the_even_strength_pair_one():
+    # `L1LD`/`L1RD`, where the retail NHL 07 disc (same ROST schema) starts its
+    # first pair. `31LD` is the five-on-three unit.
     flags = MAPPER.generate_team_line_flags(records({"D": 2}))
-    assert [flags[0].get("31LD"), flags[1].get("31RD")] == [1, 1]
+    assert [flags[0].get("L1LD"), flags[1].get("L1RD")] == [1, 1]
 
 
-def test_the_second_defence_pair_goes_to_the_second():
-    flags = MAPPER.generate_team_line_flags(records({"D": 4}))
-    assert [flags[2].get("32LD"), flags[3].get("32RD")] == [1, 1]
-
-
-def test_the_third_defence_pair_is_emitted_under_a_name_the_game_lacks():
-    # PINS UPSTREAM FIDELITY DELIBERATELY. `33LD`/`33RD` is not in NHL 2005's
-    # ROST, so `rom_writer.roster_values` drops the key and no patched team ever
-    # ices a third pair. That is upstream's behaviour and it stands.
+def test_the_second_and_third_pairs_follow():
     flags = MAPPER.generate_team_line_flags(records({"D": 6}))
-    assert [flags[4].get("33LD"), flags[5].get("33RD")] == [1, 1]
+    assert [f for d in flags[2:] for f in d if f[0] == "L"] == ["L2LD", "L2RD", "L3LD", "L3RD"]
 
 
-def test_the_third_pairs_flag_is_not_one_this_game_has():
-    # Pins the test above: the reason it matters is that the writer drops it.
-    assert [f for f in LINE_FLAGS if f in ("33LD", "33RD")] == []
+def test_every_flag_a_full_team_gets_is_one_the_game_has():
+    # The writer drops a name the game lacks, so a misspelt flag never lands.
+    team = records({"G": 2, "C": 4, "LW": 4, "RW": 4, "D": 6})
+    flags = MAPPER.generate_team_line_flags(team)
+    assert [f for d in flags for f in d if f not in LINE_FLAGS] == []
 
 
-def test_no_defence_flag_uses_the_even_strength_spelling():
-    # The even-strength pairs this game does name stay zero on every patched
-    # player, because nothing emits them. Stated over every dict the call
-    # returns rather than over the indices the tests above name.
-    flags = MAPPER.generate_team_line_flags(records({"D": 6}))
-    assert [f for d in flags for f in d if f in ("L1LD", "L1RD", "L2LD", "L2RD")] == []
+def test_the_first_two_goalies_twelve_forwards_and_six_defencemen_dress():
+    team = records({"G": 3, "D": 7, "C": 13})
+    expected = [True] * 2 + [False] + [True] * 6 + [False] + [True] * 12 + [False]
+    assert MAPPER.dressed(team) == expected
 
 
-def test_a_defence_pair_carries_a_different_prefix_from_its_lines_centre():
-    # PINS UPSTREAM FIDELITY DELIBERATELY, and the clearest statement of what is
-    # wrong: this one function names line one's centre `L1C_` and line one's
-    # defencemen `31LD`, so a player and his own pairing are marked for two
-    # different situations. Whatever `3n` denotes it is not what `L1` denotes.
-    flags = MAPPER.generate_team_line_flags(records({"C": 1, "D": 1}))
-    assert sorted({f[:2] for d in flags for f in d if not f.endswith("__")}) == ["31", "L1"]
+def test_a_scratch_is_never_on_a_line():
+    # Thirteen forwards in list order: the fourth right wing is the 13th and a
+    # scratch, so the spare fifth centre takes his wing.
+    team = records({"C": 5, "LW": 4, "RW": 4})
+    flags = MAPPER.generate_team_line_flags(team)
+    assert (flags[12], flags[4]) == ({}, {"L4RW": 1})
 
 
 def test_three_defence_pairs_are_generated():
@@ -829,23 +816,48 @@ def test_a_seventh_defenceman_gets_no_pair():
     assert [f for f in flags[6] if f.endswith(("LD", "RD"))] == []
 
 
-def test_the_power_play_takes_line_one_and_the_top_pair():
-    flags = MAPPER.generate_team_line_flags(records({"C": 1, "LW": 1, "RW": 1, "D": 2}))
-    assert [i for i, d in enumerate(flags) if any(f.startswith("H") for f in d)] == [0, 1, 2, 3, 4]
+def test_a_full_team_gets_every_unit_the_retail_nhl07_disc_builds_from_its_lines():
+    # Line n is C, LW, RW at 3n-3, the pairs start at 12. The same ROST schema
+    # as the retail NHL 07 disc, whose Boston LW1 also holds 41LW, P1LW, H1__,
+    # S1__ and X1__.
+    team = [
+        NHL05PlayerRecord(position=p, is_goalie=False) for p in ["C", "LW", "RW"] * 4 + ["D"] * 6
+    ]
+    flags = MAPPER.generate_team_line_flags(team)
+    assert [sorted(d) for d in flags] == [
+        ["41C_", "H2__", "L1C_", "P1C_", "S3__"],
+        ["41LW", "H1__", "L1LW", "P1LW", "S1__", "X1__"],
+        ["H3__", "L1RW", "P1RW", "S2__"],
+        ["32C_", "42C_", "L2C_", "P2C_"],
+        ["42LW", "L2LW", "P2LW", "S4__", "X2__"],
+        ["L2RW", "P2RW", "S5__"],
+        ["K1C_", "L3C_"],
+        ["K1LW", "L3LW"],
+        ["L3RW"],
+        ["31C_", "K2C_", "L4C_"],
+        ["K2LW", "L4LW"],
+        ["L4RW"],
+        ["32LD", "H4__", "K2LD", "L1LD", "P1LD"],
+        ["32RD", "H5__", "K2RD", "L1RD", "P1RD"],
+        ["31LD", "41LD", "L2LD", "P2LD"],
+        ["31RD", "41RD", "L2RD", "P2RD"],
+        ["42LD", "K1LD", "L3LD"],
+        ["42RD", "K1RD", "L3RD"],
+    ]
 
 
-def test_the_power_play_is_five_players():
-    assert SPECIAL_TEAMS_UNIT == 5
+def test_a_missing_role_is_skipped_and_the_later_slots_move_up():
+    # One centre and two left wings: no right wing on either line, so H and S
+    # close up over L1RW (and S over L2RW).
+    flags = MAPPER.generate_team_line_flags(records({"C": 1, "LW": 2, "D": 2}))
+    held = {f: i for i, d in enumerate(flags) for f in d}
+    assert [held.get(f"H{k}__") for k in range(1, 6)] == [1, 0, 3, 4, None]
+    assert [held.get(f"S{k}__") for k in range(1, 6)] == [1, 0, 2, None, None]
 
 
-def test_a_team_short_of_defencemen_ices_a_four_man_power_play():
+def test_a_team_short_of_defencemen_ices_a_four_man_h_unit():
     flags = MAPPER.generate_team_line_flags(records({"C": 1, "LW": 1, "RW": 1, "D": 1}))
     assert sum(1 for d in flags for f in d if f.startswith("H")) == 4
-
-
-def test_the_penalty_kill_takes_line_two_and_the_next_pair():
-    flags = MAPPER.generate_team_line_flags(records({"C": 2, "LW": 2, "RW": 2, "D": 4}))
-    assert sum(1 for d in flags for f in d if f.startswith("S")) == 5
 
 
 def test_a_player_on_no_unit_gets_an_empty_dict():

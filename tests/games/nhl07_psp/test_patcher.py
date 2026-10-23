@@ -1032,26 +1032,20 @@ def test_a_skater_row_the_patch_did_not_reach_keeps_its_ratings(tmp_path):
     assert spai_of(out)[position]["SACC"] == before[position]["SACC"]
 
 
-def test_the_first_written_row_of_a_team_is_the_captain(tmp_path):
-    _, out = patched(tmp_path)
-    assert team_row_records(out, 0)[0]["CAPT"] == 2
-
-
-def test_the_next_two_rows_are_alternates(tmp_path):
+def test_every_row_keeps_the_discs_captaincy(tmp_path):
+    # List position says nothing about who wears the C, so the patch leaves
+    # `CAPT` as the disc had it. The fixture ships `row % 3`.
     _, out = patched(tmp_path)
     rows = team_row_records(out, 0)
-    assert [rows[1]["CAPT"], rows[2]["CAPT"]] == [1, 1]
+    assert [r["CAPT"] for r in rows] == [r % 3 for r in range(fixture.ROWS_PER_TEAM)]
 
 
-def test_the_fourth_row_wears_no_letter(tmp_path):
-    _, out = patched(tmp_path)
-    assert team_row_records(out, 0)[3]["CAPT"] == 0
-
-
-def test_every_written_row_is_dressed(tmp_path):
+def test_two_goalies_twelve_forwards_and_six_defencemen_are_dressed(tmp_path):
+    # As on the retail disc. 2 G, 12 F and 8 D written: the seventh and eighth
+    # defencemen, rows 20 and 21, are scratches.
     _, out = patched(tmp_path)
     rows = team_row_records(out, 1)
-    assert [r["DRES"] for r in rows[:22]] == [1] * 22
+    assert [r["DRES"] for r in rows[:22]] == [1] * 20 + [0, 0]
 
 
 def test_every_row_the_roster_did_not_fill_is_undressed(tmp_path):
@@ -1086,7 +1080,7 @@ def test_four_complete_forward_lines_reach_the_disc(tmp_path):
         name
         for row in rows
         for name in fixture.LINE_FLAG_NAMES
-        if row[name] == 1 and name.startswith("L")
+        if row[name] == 1 and name.startswith("L") and name.endswith(("C_", "LW", "RW"))
     )
     assert assigned == sorted(f"L{n}{s}" for n in (1, 2, 3, 4) for s in ("C_", "LW", "RW"))
 
@@ -1098,19 +1092,17 @@ def test_three_defence_pairs_reach_the_disc(tmp_path):
         name
         for row in rows
         for name in fixture.LINE_FLAG_NAMES
-        if row[name] == 1 and name[0] == "3"
+        if row[name] == 1 and name[0] == "L" and name.endswith(("LD", "RD"))
     )
-    assert assigned == ["31LD", "31RD", "32LD", "32RD", "33LD", "33RD"]
+    assert assigned == ["L1LD", "L1RD", "L2LD", "L2RD", "L3LD", "L3RD"]
 
 
-def test_the_flag_the_disc_had_set_on_an_undressed_row_survives(tmp_path):
-    # An undressed row gets only `DRES: 0`, so its line flags are left where the
-    # disc had them. Deliberate: `DRES` is what keeps the player off the ice.
+def test_a_row_the_patch_leaves_unused_is_taken_off_every_line(tmp_path):
+    # Rows 22-24 ship with a flag set (row 24's is `L1LW`); a stale player must
+    # not hold a line or a unit.
     _, out = patched(tmp_path)
-    row = team_row_records(out, 1)[24]
-    assert [f for f in fixture.LINE_FLAG_NAMES if row[f] == 1] == [
-        fixture.LINE_FLAG_NAMES[24 % len(fixture.LINE_FLAG_NAMES)]
-    ]
+    rows = team_row_records(out, 1)[22:]
+    assert [f for row in rows for f in fixture.LINE_FLAG_NAMES if row[f] == 1] == []
 
 
 def test_a_written_row_keeps_its_team(tmp_path):
@@ -1151,7 +1143,7 @@ def test_the_mirrored_roster_row_is_not_what_the_disc_shipped(tmp_path):
     before = fixture.read_table_records(
         fixture.build_roster_tdb(), "ROST", fixture.ROST_FIELDS, fixture.ROST_RECORD_SIZE
     )
-    assert rost_of(out, TDB_ROSTER)[position]["CAPT"] != before[position]["CAPT"]
+    assert rost_of(out, TDB_ROSTER)[position]["JERS"] != before[position]["JERS"]
 
 
 def test_the_untouched_teams_stea_table_is_unchanged(tmp_path):
@@ -1580,11 +1572,17 @@ def test_line_flags_are_generated_for_the_players_that_got_a_row(tmp_path):
         NHL07PSPRomReader.get_tdb = original
 
     # Row 2 is team 0's first skater row and the second entry in the paired
-    # list. Generated from the pairs it is the first-line centre, and also the
-    # first power-play forward; generated from `players` it would be the backup
-    # goalie, and would carry `G2__` and nothing else.
+    # list. Generated from the pairs it is the first-line centre, with that
+    # role's units; generated from `players` it would be the backup goalie, and
+    # would carry `G2__` and nothing else.
     row = rost_of(out)[fixture.rost_position(0, 2)]
-    assert [f for f in fixture.LINE_FLAG_NAMES if row[f] == 1] == ["L1C_", "H1__"]
+    assert [f for f in fixture.LINE_FLAG_NAMES if row[f] == 1] == [
+        "41C_",
+        "L1C_",
+        "P1C_",
+        "H2__",
+        "S3__",
+    ]
 
 
 def test_no_roster_row_of_that_team_carries_the_backup_goalie_flag(tmp_path):
@@ -1660,7 +1658,7 @@ def test_the_master_still_receives_the_row_the_mirror_could_not_take(tmp_path):
         patcher.patch(rom_path=source, output_path=out, rosters=mapped)
     finally:
         NHL07PSPRomReader.get_tdb = original
-    assert rost_of(out)[shrunk]["CAPT"] == 1
+    assert rost_of(out)[shrunk]["G2__"] == 1
 
 
 def _ranked_squad():
@@ -1683,6 +1681,36 @@ def test_order_as_given_writes_the_callers_first_twenty_five_in_order(tmp_path):
 
     (records,) = mapped.teams.values()
     assert [r.jersey_number for r in records] == [p.number for p in given[:MAX_PLAYERS]]
+
+
+def test_the_suggested_order_puts_the_starting_six_first(tmp_path):
+    roster = league().teams[0]
+    order = build(tmp_path).suggest_squad_order(roster)
+    assert [p.position for p in order] == ["G", "C", "LW", "RW", "D", "D", "G"] + [
+        "C",
+        "LW",
+        "RW",
+    ] * 3 + ["D"] * 6
+    assert sorted(p.id for p in order) == sorted(p.id for p in roster.players)
+
+
+def test_a_defenceman_moved_up_the_list_starts_and_the_last_two_sit(tmp_path):
+    # The eighth defenceman moved in front of the first: he takes the first
+    # even-strength pair, and the sixth and seventh become the scratches.
+    players = squad(1000)
+    given = players[:5] + players[-1:] + players[5:-1]
+    source = iso(tmp_path)
+    patcher = build(tmp_path)
+    data = league(teams=default_teams()[:1], squads={"ANA": given})
+    out = tmp_path / "patched.iso"
+    patcher.patch(
+        rom_path=source,
+        output_path=out,
+        rosters=patcher.map_rosters(data, order_as_given=True),
+    )
+    rows = team_row_records(out, 0)
+    assert (rows[5]["L1LD"], rows[5]["DRES"]) == (1, 1)
+    assert [rows[r]["DRES"] for r in (20, 21)] == [0, 0]
 
 
 def test_without_order_as_given_the_input_order_is_ignored(tmp_path):
