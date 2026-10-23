@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import pytest
 
+from retro_roster_patcher.core import kits as kits_module
 from retro_roster_patcher.core.errors import ApiError, CapabilityError, MappingError, RomError
 from retro_roster_patcher.core.models import MappedRosters, PatchResult, RomSlot, SlotMapping
 from retro_roster_patcher.core.registry import get_patcher, list_patchers
@@ -128,6 +129,13 @@ def _teams(count=4):
         )
         for index in range(count)
     ]
+
+
+@pytest.fixture(autouse=True)
+def no_kit_catalogue(monkeypatch):
+    """The test clubs' ids belong to catalogued clubs (3 is Argentinos
+    Juniors); their kits here come from their colours."""
+    monkeypatch.setattr(kits_module, "_catalog", {"clubs": []})
 
 
 @pytest.fixture
@@ -708,25 +716,27 @@ def test_the_machine_code_patch_is_applied_by_a_whole_patch_run(patcher, rom, ou
     assert [data[p] for p in fixture.DISPLACEMENT_PATCH_POINTS] == [fixture.PATCHED_BANK_BYTE] * 10
 
 
-def test_a_patch_run_writes_the_flag_and_predominant_colour_for_a_coloured_team(patcher, rom, out):
+def test_the_clash_byte_follows_the_home_shirt(patcher, rom, out):
+    """0x8DB2 decides who changes kit, so it is the shirt's colour, not the
+    flag's: a red flag over a blue shirt is blue (1)."""
     rosters = _mapped((0, 15), colours=[(255, 0, 0), (0, 0, 255)])
+    rosters.teams[0].kit_home = ((0, 0, 255), (255, 255, 255), (0, 0, 255))
     patcher.patch(rom_path=rom, output_path=out, rosters=rosters)
-    assert out.read_bytes()[fixture.OFS_PREDOMINANT_COLOR] == 2
+    assert out.read_bytes()[fixture.OFS_PREDOMINANT_COLOR] == 1
 
 
 def test_the_second_flag_colour_reaches_the_palette_as_the_alternate(patcher, rom, out):
     """Both entries, not just the first: `patch` hands the writer a pair, and a
-    pair built from the primary twice would still fill the table."""
+    pair built from the primary twice would still fill the table. The bands
+    show them, on whichever entries after 12, the shirt numbers, pack best."""
+    from tests.games.iss_snes.test_rom_writer import _shown
+
     rosters = _mapped((0, 15), colours=[(255, 0, 0), (0, 0, 255)])
-    patcher.patch(rom_path=rom, output_path=out, rosters=rosters)
-    # Germany is position 0 of the first flag-colour range.
-    start = fixture.OFS_FLAG_COLORS_RANGE1
-    palette = out.read_bytes()[start : start + 4]
-    assert palette[0:2] == (0x001F).to_bytes(2, "little")
-    assert palette[2:4] == (0x7C00).to_bytes(2, "little")
+    patcher.patch(rom_path=rom, output_path=out, rosters=rosters, logos=False)
+    assert _shown(out.read_bytes(), 0) == [[0x001F] * 24] * 8 + [[0x7C00] * 24] * 8
 
 
-def test_a_team_with_no_flag_colours_leaves_the_predominant_byte_alone(patcher, rom, out):
+def test_a_team_with_no_home_kit_leaves_the_predominant_byte_alone(patcher, rom, out):
     before = rom.read_bytes()[fixture.OFS_PREDOMINANT_COLOR]
     patcher.patch(rom_path=rom, output_path=out, rosters=_mapped((0, 15)))
     assert out.read_bytes()[fixture.OFS_PREDOMINANT_COLOR] == before

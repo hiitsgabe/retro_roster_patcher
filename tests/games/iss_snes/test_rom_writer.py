@@ -15,17 +15,25 @@ independently.
 
 from __future__ import annotations
 
+import random
+import struct
+from itertools import permutations
+
 import pytest
 
 from retro_roster_patcher.core.errors import RomError
+from retro_roster_patcher.games.iss_snes.konami import decompress
 from retro_roster_patcher.games.iss_snes.models import (
     PLAYERS_PER_TEAM,
+    TEAM_ENUM_ORDER,
     TOTAL_TEAMS,
+    Flag,
     ISSPlayerAttributes,
     ISSPlayerRecord,
     ISSTeamRecord,
 )
 from retro_roster_patcher.games.iss_snes.rom_writer import (
+    FLAG_ROOM_SIZE,
     MIN_PATCHABLE_SIZE,
     NAME_TILES_CAPACITY,
     ISSRomWriter,
@@ -34,14 +42,19 @@ from retro_roster_patcher.games.iss_snes.rom_writer import (
     _encode_p40000,
     _encode_p48000,
     _encode_team_name_text,
+    _fewer_colours,
+    _flag_blobs,
+    _flag_half_tiles,
     _konami_compress_literal,
     _make_shades,
-    _make_solid_4bpp_tile,
     _render_name_tiles,
     _rgb_to_bgr555,
     _rgb_to_predominant,
     _serialize_2bpp,
     _to_ascii,
+    number_colour,
+    number_first,
+    two_band_flag,
 )
 from tests.fixtures import synthetic_iss_rom as fixture
 
@@ -175,11 +188,13 @@ def test_the_predominant_colour_byte_names_the_five_ordinals(rgb, expected):
     assert _rgb_to_predominant(*rgb) == expected
 
 
-def test_near_black_is_classified_red():
-    """INHERITED ODDITY, pinned rather than fixed. The white arm needs a channel
-    above 200, and with all three equal and low the `r >= g and r >= b` arm wins,
-    so a black kit sets the predominant colour to Red."""
-    assert _rgb_to_predominant(10, 10, 10) == 2
+@pytest.mark.parametrize(
+    ("rgb", "expected"),
+    [((0, 0, 0), 5), ((10, 10, 10), 5), ((190, 190, 190), 0), ((120, 120, 120), 6)],
+)
+def test_a_colour_without_hue_goes_by_brightness(rgb, expected):
+    """Black is not red: a black shirt meets a red one without a change of kit."""
+    assert _rgb_to_predominant(*rgb) == expected
 
 
 def test_p40000_biases_the_high_byte_by_0x80():
@@ -276,12 +291,13 @@ def test_the_glyphs_first_row_lands_on_grid_row_one():
     assert stroke == [14, 15, 16]
 
 
-def test_a_name_with_no_renderable_character_falls_back_to_an_A():
-    assert _render_name_tiles("!!!") == _render_name_tiles("A")
+def test_a_name_with_no_renderable_character_is_left_transparent():
+    assert _render_name_tiles("!!!") == [[0] * 32] * 8
 
 
-def test_an_empty_name_falls_back_to_an_A():
-    assert _render_name_tiles("") == _render_name_tiles("A")
+def test_an_empty_name_is_left_transparent():
+    """A blank slot's (`blank_unused`): no letters and no shadow behind them."""
+    assert _render_name_tiles("") == [[0] * 32] * 8
 
 
 def test_a_name_too_wide_for_the_grid_is_truncated_at_the_boundary():
@@ -321,15 +337,23 @@ def test_the_second_tile_starts_sixteen_bytes_in():
     assert data[0] == 0x00
 
 
-def test_a_solid_4bpp_tile_sets_the_bitplanes_its_colour_code_names():
-    """0x0C is bitplanes 2 and 3, which is palette index 12."""
-    tile = _make_solid_4bpp_tile(0x0C)
-    assert set(tile[:16]) == {0x00}
-    assert set(tile[16:]) == {0xFF}
+def test_flag_colour_zero_is_palette_entry_twelve_in_every_tile():
+    """12 is bitplanes 2 and 3, the second sixteen bytes of each 32-byte tile."""
+    half = _flag_half_tiles([[0] * 24 for _ in range(8)])
+    assert len(half) == 96
+    for tile in range(3):
+        assert set(half[32 * tile : 32 * tile + 16]) == {0x00}
+        assert set(half[32 * tile + 16 : 32 * tile + 32]) == {0xFF}
 
 
-def test_a_solid_4bpp_tile_is_thirty_two_bytes():
-    assert len(_make_solid_4bpp_tile(0x0D)) == 32
+def test_a_flag_pixel_lands_on_its_tile_row_and_bit():
+    """Pixel (row 2, column 9) is tile 1, row 2, bit 6; colour 3 is entry 15,
+    all four planes."""
+    rows = [[0] * 24 for _ in range(8)]
+    rows[2][9] = 3
+    half = _flag_half_tiles(rows)
+    assert half[32 + 4] == 0x40 and half[32 + 5] == 0x40
+    assert half[4] == 0x00 and half[32 + 6] == 0x00
 
 
 def test_a_two_letter_name_encodes_right_to_left_bottom_before_top():
@@ -384,10 +408,10 @@ def test_an_empty_name_encodes_to_a_count_of_zero():
     assert _encode_team_name_text("") == bytes([0])
 
 
-def test_the_minimum_is_the_flag_tile_write_and_nothing_higher():
+def test_the_minimum_is_the_end_of_the_flag_room_and_nothing_higher():
     """Derived in the module from a `max` over its own offsets; retranscribed in
-    the fixture as the flag-tile address plus two compressed 96-byte halves."""
-    assert MIN_PATCHABLE_SIZE == fixture.OFS_FLAG_TILE_NEW + 204
+    the fixture as the end of bank $89's flag room."""
+    assert MIN_PATCHABLE_SIZE == fixture.FLAG_ROOM_END
     assert MIN_PATCHABLE_SIZE == fixture.SIZE_ARITHMETIC_MINIMUM
 
 
@@ -409,7 +433,8 @@ def test_the_bound_is_at_least_the_end_of_every_region_the_writer_touches():
         fixture.OFS_TEAM_NAME_TEXT_PTRS + TOTAL_TEAMS * 2,
         fixture.MAX_NAME_TEXT_ADDR,
         max(fixture.DISPLACEMENT_PATCH_POINTS) + 1,
-        fixture.OFS_FLAG_TILE_NEW + 204,
+        fixture.OFS_FLAG_CELLS + TOTAL_TEAMS * 2,
+        fixture.FLAG_ROOM_END,
     ]
     assert MIN_PATCHABLE_SIZE == max(ends)
 
@@ -746,72 +771,399 @@ def test_the_predominant_colour_touches_no_neighbouring_slot(rom, out):
     assert after[fixture.OFS_PREDOMINANT_COLOR + 8] == before[fixture.OFS_PREDOMINANT_COLOR + 8]
 
 
-def test_the_two_flag_halves_are_written_once_at_the_free_region(rom, out):
-    writer = ISSRomWriter(str(rom), str(out))
-    writer.write_flag_tiles_and_colors({0: ((255, 0, 0), (0, 0, 255))})
-    writer.finalize()
-    half = fixture.konami_literal(_make_solid_4bpp_tile(0x0C) * 3)
-    assert _read(out, fixture.OFS_FLAG_TILE_NEW, len(half)) == half
+def _write_flags(rom, out, flags, fallbacks=None, shirts=None):
+    """Move the name tiles out, as `patch` does first, then write `flags`."""
+    with ISSRomWriter(str(rom), str(out)) as writer:
+        writer.write_name_tiles({})
+        notes = writer.write_flags(flags, fallbacks, shirts)
+        writer.finalize()
+    return notes
 
 
-def test_every_patched_team_points_at_the_one_shared_flag(rom, out):
-    writer = ISSRomWriter(str(rom), str(out))
-    writer.write_flag_tiles_and_colors({0: ((255, 0, 0), (0, 0, 255)), 9: ((0, 255, 0), (0, 0, 0))})
-    writer.finalize()
-    data = out.read_bytes()
-    first = data[fixture.OFS_FLAG_TILE_PTRS : fixture.OFS_FLAG_TILE_PTRS + 4]
-    ninth = data[fixture.OFS_FLAG_TILE_PTRS + 36 : fixture.OFS_FLAG_TILE_PTRS + 40]
-    assert first == ninth
-    assert fixture.decode_p48000(first[:2]) == fixture.OFS_FLAG_TILE_NEW
+def _blobs(image, team):
+    """Team `team`'s two compressed halves, through the flag pointer table."""
+    at = fixture.OFS_FLAG_TILE_PTRS + 4 * team
+    addresses = [fixture.decode_p48000(image[at + k : at + k + 2]) for k in (0, 2)]
+    return [image[a : a + (image[a] | image[a + 1] << 8)] for a in addresses]
 
 
-def test_the_bottom_half_pointer_follows_the_top_halfs_length(rom, out):
-    writer = ISSRomWriter(str(rom), str(out))
-    writer.write_flag_tiles_and_colors({0: ((255, 0, 0), (0, 0, 255))})
-    writer.finalize()
-    entry = _read(out, fixture.OFS_FLAG_TILE_PTRS, 4)
-    half = len(fixture.konami_literal(_make_solid_4bpp_tile(0x0C) * 3))
-    assert fixture.decode_p48000(entry[2:]) == fixture.OFS_FLAG_TILE_NEW + half
+def _pixels(image, team):
+    """Team `team`'s flag as 16 rows of 24 palette entries, decoded from the image."""
+    rows = []
+    for blob in _blobs(image, team):
+        half = decompress(blob)
+        for r in range(8):
+            row = []
+            for t in range(3):
+                planes = [half[32 * t + o + 2 * r] for o in (0, 1, 16, 17)]
+                for c in range(8):
+                    row.append(sum(1 << p for p, b in enumerate(planes) if b & (0x80 >> c)))
+            rows.append(row)
+    return rows
 
 
-def test_an_unpatched_team_keeps_its_original_flag_pointer(rom, out):
-    before = rom.read_bytes()
-    writer = ISSRomWriter(str(rom), str(out))
-    writer.write_flag_tiles_and_colors({0: ((255, 0, 0), (0, 0, 255))})
-    writer.finalize()
-    offset = fixture.OFS_FLAG_TILE_PTRS + 4
-    assert out.read_bytes()[offset : offset + 4] == before[offset : offset + 4]
+def _noise(seed, colours=(0, 1, 2, 3)):
+    rng = random.Random(seed)
+    return Flag(
+        [[rng.choice(colours) for _ in range(24)] for _ in range(16)],
+        [(255, 0, 0), (0, 255, 0), (0, 0, 255), (255, 255, 255)],
+    )
 
 
-def test_the_flag_palette_alternates_primary_and_alternate(rom, out):
-    writer = ISSRomWriter(str(rom), str(out))
-    writer.write_flag_tiles_and_colors({0: ((255, 0, 0), (0, 0, 255))})
-    writer.finalize()
+def test_a_flag_decodes_back_to_its_pixels(rom, out):
+    flag = _noise(1)
+    _write_flags(rom, out, {0: flag})
+    assert _pixels(out.read_bytes(), 0) == [[12 + v for v in row] for row in flag.pixels]
+
+
+def test_the_four_flag_colours_land_in_the_teams_colour_record(rom, out):
+    flag = _noise(1)
+    _write_flags(rom, out, {0: flag})
     # Germany is position 0 of the first flag-colour range.
-    data = _read(out, fixture.OFS_FLAG_COLORS_RANGE1, 8)
-    red = _rgb_to_bgr555(255, 0, 0).to_bytes(2, "little")
-    blue = _rgb_to_bgr555(0, 0, 255).to_bytes(2, "little")
-    assert data == red + blue + red + blue
+    words = struct.unpack("<4H", _read(out, fixture.OFS_FLAG_COLORS_RANGE1, 8))
+    assert list(words) == [_rgb_to_bgr555(*rgb) for rgb in flag.colours]
 
 
 def test_scotland_takes_the_second_flag_colour_range(rom, out):
-    writer = ISSRomWriter(str(rom), str(out))
-    writer.write_flag_tiles_and_colors({5: ((255, 0, 0), (0, 0, 255))})
-    writer.finalize()
+    _write_flags(rom, out, {5: two_band_flag((255, 0, 0), (0, 0, 255))})
     assert _read(out, fixture.OFS_FLAG_COLORS_RANGE2, 2) == _rgb_to_bgr555(255, 0, 0).to_bytes(
         2, "little"
     )
 
 
-def test_no_patched_team_still_writes_the_shared_flag_tiles(rom, out):
-    """The tiles go out unconditionally; only the pointers and palettes are
-    per-team. An empty mapping therefore still changes the image."""
+def test_every_unpatched_team_keeps_its_flag_byte_for_byte(rom, out):
+    """The room is repacked, so the blobs move, but each is the cartridge's own."""
     before = rom.read_bytes()
-    writer = ISSRomWriter(str(rom), str(out))
-    writer.write_flag_tiles_and_colors({})
-    writer.finalize()
-    assert out.read_bytes() != before
-    assert out.read_bytes()[: fixture.OFS_FLAG_TILE_NEW] == before[: fixture.OFS_FLAG_TILE_NEW]
+    _write_flags(rom, out, {0: _noise(1), 9: _noise(2)})
+    after = out.read_bytes()
+    for team in range(TOTAL_TEAMS):
+        if team in (0, 9):
+            continue
+        assert _blobs(after, team) == [fixture.flag_half_blob(team, h) for h in (0, 1)], team
+        name = TEAM_ENUM_ORDER[team]
+        assert _colour_record(after, name) == _colour_record(before, name), team
+
+
+def _colour_record(image, name):
+    from retro_roster_patcher.games.iss_snes import rom_writer
+
+    if name in rom_writer._FLAG_COLORS_RANGE1_TEAMS:
+        at = fixture.OFS_FLAG_COLORS_RANGE1 + 10 * rom_writer._FLAG_COLORS_RANGE1_TEAMS.index(name)
+    else:
+        at = fixture.OFS_FLAG_COLORS_RANGE2 + 10 * rom_writer._FLAG_COLORS_RANGE2_TEAMS.index(name)
+    return image[at : at + 8]
+
+
+def test_one_design_shared_by_two_teams_is_stored_once(rom, out):
+    band = two_band_flag((255, 0, 0), (0, 0, 255))
+    _write_flags(rom, out, {0: band, 9: band})
+    table = _read(out, fixture.OFS_FLAG_TILE_PTRS, 4 * TOTAL_TEAMS)
+    assert table[0:4] == table[36:40]
+
+
+def test_a_two_band_flag_is_the_primary_over_the_alternate(rom, out):
+    _write_flags(rom, out, {0: two_band_flag((255, 0, 0), (0, 0, 255))})
+    assert _pixels(out.read_bytes(), 0) == [[12] * 24] * 8 + [[13] * 24] * 8
+
+
+def test_the_flags_stay_inside_the_room(rom, out):
+    before = rom.read_bytes()
+    _write_flags(rom, out, {team: _noise(team) for team in range(5)})
+    after = out.read_bytes()
+    assert after[fixture.FLAG_ROOM_END :] == before[fixture.FLAG_ROOM_END :]
+    for team in range(TOTAL_TEAMS):
+        at = fixture.OFS_FLAG_TILE_PTRS + 4 * team
+        for k in (0, 2):
+            address = fixture.decode_p48000(after[at + k : at + k + 2])
+            assert fixture.FLAG_ROOM_START <= address < fixture.FLAG_ROOM_END
+
+
+def test_the_flags_refuse_to_go_before_the_name_tiles_move(rom, out):
+    """On the cartridge the name tiles sit inside the flag room."""
+    with ISSRomWriter(str(rom), str(out)) as writer, pytest.raises(RomError, match="name tiles"):
+        writer.write_flags({0: _noise(1)})
+
+
+def _speckled(seed):
+    """Three colours, two of them noise: about 110 bytes, and 78 once the rarest
+    (dark red) joins the red it is nearest."""
+    rng = random.Random(seed)
+    return Flag(
+        [
+            [rng.choices((0, 1, 3), (40, 40, 20))[0] if x < 18 else 0 for x in range(24)]
+            for _ in range(16)
+        ],
+        [(255, 255, 255), (200, 0, 0), (0, 0, 255), (190, 0, 0)],
+    )
+
+
+def test_crests_that_do_not_fit_lose_colours_first(rom, out):
+    """27 speckled crests need more than the room: the largest give up a colour
+    at a time, and each decodes to what its note says."""
+    crests = {team: _speckled(team) for team in range(TOTAL_TEAMS)}
+    bands = {team: two_band_flag((255, 0, 0), (0, 0, 255)) for team in range(TOTAL_TEAMS)}
+    notes = _write_flags(rom, out, crests, bands)
+    image = out.read_bytes()
+    assert any("simplified" in note for note in notes.values())
+    assert not any("did not fit" in note for note in notes.values())
+    for team in range(TOTAL_TEAMS):
+        decoded = _pixels(image, team)
+        note = notes.get(team, "")
+        if "two-band" in note:
+            assert decoded == [[12] * 24] * 8 + [[13] * 24] * 8
+        elif "simplified" in note:
+            kept = int(note.split("simplified to ")[1][0])
+            assert len({v for row in decoded for v in row}) == kept
+        else:
+            assert decoded == [[12 + v for v in row] for row in crests[team].pixels]
+
+
+def test_crests_that_cannot_lose_colours_fall_back(rom, out):
+    """Two-colour noise cannot be simplified: the largest crests take their
+    fallback, the two-band flag or (None) the cartridge's own."""
+    crests = {team: _noise(team, colours=(0, 3)) for team in range(TOTAL_TEAMS)}
+    fallbacks = {
+        team: (None if team % 2 else two_band_flag((255, 0, 0), (0, 0, 255)))
+        for team in range(TOTAL_TEAMS)
+    }
+    notes = _write_flags(rom, out, crests, fallbacks)
+    image = out.read_bytes()
+    assert notes
+    assert not any("simplified" in note for note in notes.values())
+    for team, note in notes.items():
+        if team % 2:
+            assert note == "did not fit; the cartridge's flag stays"
+            assert _blobs(image, team) == [fixture.flag_half_blob(team, h) for h in (0, 1)]
+        else:
+            assert note == "did not fit; two-band flag instead"
+    kept = [team for team in range(TOTAL_TEAMS) if team not in notes]
+    assert kept
+    for team in kept:
+        assert _pixels(image, team) == [[12 + v for v in row] for row in crests[team].pixels]
+
+
+def test_the_flag_room_holds_2688_bytes():
+    assert FLAG_ROOM_SIZE == fixture.FLAG_ROOM_END - fixture.FLAG_ROOM_START == 2688
+
+
+def test_the_eight_borrowing_teams_get_cells_of_their_own(rom, out):
+    before = rom.read_bytes()
+    _write_flags(rom, out, {})
+    after = out.read_bytes()
+    for team, name in enumerate(TEAM_ENUM_ORDER):
+        cell = fixture.OFS_FLAG_CELLS + 2 * team
+        record = fixture.FLAG_SPRITE_BASE + 9 * team
+        if name not in fixture.OWN_FLAG_CELLS:
+            assert after[cell : cell + 2] == before[cell : cell + 2], name
+            assert after[record : record + 9] == before[record : record + 9], name
+            continue
+        tile = fixture.OWN_FLAG_CELLS[name]
+        assert struct.unpack("<H", after[cell : cell + 2])[0] == 0x1000 + (tile - 0x100) * 16
+        expected = bytes([2, 0, 8, (tile + 1) & 0xFF, 0x13, 0, 0, tile & 0xFF, 0x13])
+        assert after[record : record + 9] == expected, name
+
+
+def test_a_sprite_record_that_is_not_two_sprites_is_refused(tmp_path, out):
+    image = fixture.build_iss_rom()
+    image[fixture.FLAG_SPRITE_BASE + 9 * TEAM_ENUM_ORDER.index("Holland")] = 3
+    rom = tmp_path / "odd.sfc"
+    rom.write_bytes(bytes(image))
+    with pytest.raises(RomError, match="Holland"):
+        _write_flags(rom, out, {})
+
+
+WHITE, BLACK, RED, BLUE = (255, 255, 255), (0, 0, 0), (200, 0, 0), (0, 0, 200)
+#: White as `map_rosters` builds it from ESPN's colours (Botafogo's away kit).
+NEAR_WHITE = (250, 250, 252)
+
+
+@pytest.mark.parametrize(
+    "shirts",
+    [None, (WHITE, BLACK), ((0, 0, 255), (255, 255, 0))],
+    ids=["no shirts", "white and black shirts", "blue and yellow shirts"],
+)
+def test_an_incompressible_crest_does_not_cost_the_others_their_place(rom, out, shirts):
+    """Two-colour noise cannot lose a colour, so it keeps its place and the
+    speckled crests shrink instead: nothing falls back. With shirts, red
+    numbers take entry 12 and the crests' white background leaves it; their
+    reds are near enough to take entry 12 once down to two colours, and still
+    nothing falls back."""
+    noise = Flag(_noise(0, colours=(0, 3)).pixels, [WHITE, (20, 20, 20), (235, 235, 235), BLACK])
+    crests = {0: noise} | {team: _speckled(team) for team in range(1, 26)}
+    fallbacks = {team: two_band_flag((255, 0, 0), (0, 0, 255)) for team in crests}
+    total = sum(len(b) for f in crests.values() for b in _flag_blobs(f)) + 12  # + team 26
+    assert total > FLAG_ROOM_SIZE
+    notes = _write_flags(rom, out, crests, fallbacks, shirts and {team: shirts for team in crests})
+    assert not any("did not fit" in note for note in notes.values())
+    assert any("simplified" in note for note in notes.values())
+    assert 0 not in notes
+    image = out.read_bytes()
+    assert _shown(image, 0) == _as_shown(noise)
+    if shirts is not None:
+        assert all(_entry12(image, team) == (255, 0, 0) for team in crests)
+
+
+def test_a_crest_loses_colours_until_that_saves_bytes(rom, out):
+    """Four colours of noise compress no better as three, but far better as
+    two. The others cannot lose a colour, so the noise must go down two steps
+    for everything to fit; given up after one, the largest crest would fall
+    back."""
+    noise = _noise(4)
+    three = _fewer_colours(noise)
+    sizes = [sum(map(len, _flag_blobs(f))) for f in (noise, three, _fewer_colours(three))]
+    assert sizes[0] == sizes[1] > sizes[2]
+    crests = {0: noise} | {team: _noise(team, colours=(0, 3)) for team in range(1, 24)}
+    total = sum(len(b) for f in crests.values() for b in _flag_blobs(f)) + 12 * (27 - 24)
+    assert FLAG_ROOM_SIZE < total <= FLAG_ROOM_SIZE + sizes[0] - sizes[2]
+    fallbacks = {team: two_band_flag((255, 0, 0), (0, 0, 255)) for team in crests}
+    notes = _write_flags(rom, out, crests, fallbacks)
+    assert notes == {0: "simplified to 2 colours to fit"}
+    assert len({v for row in _pixels(out.read_bytes(), 0) for v in row}) == 2
+
+
+def test_a_colour_near_the_number_colour_may_take_entry_12():
+    """Two colours, neither on entry 12: red numbers take the crest's dark red,
+    which then compresses far better; black numbers are too far from it, and
+    a crest cannot go below two colours."""
+    crest = Flag([[1] * 14 + [2] * 10 for _ in range(16)], [(255, 0, 0), WHITE, RED, RED])
+    simpler = _fewer_colours(crest)
+    assert simpler is not None
+    assert _shows(simpler) == [[WHITE] * 14 + [(255, 0, 0)] * 10] * 16
+    assert sum(map(len, _flag_blobs(simpler))) < sum(map(len, _flag_blobs(crest)))
+    assert _fewer_colours(Flag(crest.pixels, [BLACK, WHITE, RED, RED])) is None
+
+
+def _distance(a, b):
+    return sum((x - y) ** 2 for x, y in zip(a, b, strict=True)) ** 0.5
+
+
+def _rgb(word):
+    return tuple((word >> shift & 31) * 255 // 31 for shift in (0, 5, 10))
+
+
+def _six(home, away):
+    """Every shade the shirt numbers sit on: three per shirt, as the game draws them."""
+    return [_rgb(word) for kit in (home, away) for word in _make_shades(*kit, 3)]
+
+
+def _stands_out(colour, shades):
+    """The six-shade rule: 150 or more in RGB from every shade of both shirts."""
+    return min(_distance(colour, shade) for shade in shades) >= 150
+
+
+def _entry12(image, team):
+    """Team `team`'s palette entry 12, the shirt-number colour, as RGB."""
+    return _rgb(struct.unpack("<H", _colour_record(image, TEAM_ENUM_ORDER[team])[:2])[0])
+
+
+def _shown(image, team):
+    """Team `team`'s flag as the BGR555 colours its pixels show."""
+    words = struct.unpack("<4H", _colour_record(image, TEAM_ENUM_ORDER[team]))
+    return [[words[v & 3] for v in row] for row in _pixels(image, team)]
+
+
+def _as_shown(flag):
+    """What `_shown` reads back once `flag` is written as it is."""
+    return [[_rgb_to_bgr555(*flag.colours[v]) for v in row] for row in flag.pixels]
+
+
+def _shows(flag):
+    """`flag` as the colours its pixels show."""
+    return [[flag.colours[v] for v in row] for row in flag.pixels]
+
+
+def test_the_number_colour_is_the_crests_own_when_that_stands_out():
+    crest = Flag([[0] * 12 + [1] * 12] * 16, [RED, WHITE, RED, RED])
+    numbered = number_first(crest, _six(RED, BLUE))
+    assert numbered.colours[0] == WHITE
+    # Nothing is lost: every pixel shows the colour it did.
+    assert _shows(numbered) == _shows(crest)
+
+
+def test_a_number_colour_the_crest_lacks_takes_its_least_missed_colour():
+    """Black and white shirts: no crest colour stands out from all six shades,
+    so red does, and the crest's dark red, the colour nearest it, gives way."""
+    grey = (120, 120, 120)
+    crest = Flag([[0] * 6 + [1] * 6 + [2] * 6 + [3] * 6] * 16, [WHITE, BLACK, grey, RED])
+    assert number_colour(crest, _six(WHITE, BLACK)) == (255, 0, 0)
+    numbered = number_first(crest, _six(WHITE, BLACK))
+    assert numbered.colours[0] == (255, 0, 0)
+    assert _shows(numbered)[0] == [WHITE] * 6 + [BLACK] * 6 + [grey] * 6 + [(255, 0, 0)] * 6
+
+
+@pytest.mark.parametrize(
+    "crest",
+    [[BLACK, WHITE], [BLACK, WHITE, (254, 215, 12)], [WHITE, (255, 243, 19), (8, 108, 57)]],
+    ids=["black and white crest", "gold in the crest", "yellow in the crest"],
+)
+@pytest.mark.parametrize(
+    "home, away", [(BLACK, NEAR_WHITE), (NEAR_WHITE, BLACK)], ids=["black home", "white home"]
+)
+def test_black_and_white_shirts_get_numbers_that_read_on_every_shade(home, away, crest):
+    """Botafogo and Atletico-MG. Mid-grey is the white shirt's dark shade and
+    next to the black one's light shade; gold and yellow are far from white
+    in RGB, but nearly all of it in blue, and read poorly on it. Red stands
+    out from all six shades."""
+    flag = Flag([[i % len(crest) for i in range(24)]] * 16, crest + [crest[-1]] * (4 - len(crest)))
+    shades = _six(home, away)
+    assert number_colour(flag, shades) == (255, 0, 0)
+    assert _stands_out((255, 0, 0), shades)
+
+
+def test_a_two_band_flag_keeps_its_bands_off_entry_12():
+    numbered = number_first(two_band_flag(RED, BLUE), _six(RED, BLUE))
+    assert _shows(numbered) == [[RED] * 24] * 8 + [[BLUE] * 24] * 8
+    assert 0 not in {v for row in numbered.pixels for v in row}
+    assert _stands_out(numbered.colours[0], _six(RED, BLUE))
+
+
+def test_the_colours_after_entry_12_take_their_smallest_order():
+    """Red numbers on white and black shirts: a speckled crest keeps its three
+    colours, its white off entry 12, in whichever order compresses best."""
+    crest = _speckled(1)
+    numbered = number_first(crest, _six(WHITE, BLACK))
+    assert numbered.colours[0] == (255, 0, 0)
+    assert _shows(numbered) == _shows(crest)
+    size = sum(map(len, _flag_blobs(numbered)))
+    for order in permutations((1, 2, 3)):
+        moved = Flag(
+            [[order[v - 1] if v else 0 for v in row] for row in numbered.pixels],
+            [numbered.colours[0]] + [numbered.colours[order.index(k) + 1] for k in (1, 2, 3)],
+        )
+        assert _shows(moved) == _shows(numbered)
+        assert size <= sum(map(len, _flag_blobs(moved)))
+
+
+def test_entry_12_stands_out_from_both_shirts(rom, out):
+    """Crest and two-band alike, against every shade of a white home and a
+    black away shirt."""
+    flags = {0: _noise(1), 9: two_band_flag(WHITE, BLACK)}
+    _write_flags(rom, out, flags, shirts={0: (WHITE, BLACK), 9: (WHITE, BLACK)})
+    image = out.read_bytes()
+    for team in flags:
+        assert _stands_out(_entry12(image, team), _six(WHITE, BLACK)), team
+    assert _shown(image, 9) == _as_shown(two_band_flag(WHITE, BLACK))
+
+
+def test_a_kit_left_alone_is_read_from_the_rom(rom, out):
+    """No away kit given: the cartridge's away shirt counts, all three of its
+    shades read from the ROM."""
+    image = bytearray(rom.read_bytes())
+    away = fixture.OFS_KIT2_RANGE1  # Germany's away kit: three shades
+    cartridge = (0x7FFF, 0x5294, 0x294A)  # white, light grey, dark grey
+    image[away : away + 6] = struct.pack("<3H", *cartridge)
+    rom.write_bytes(bytes(image))
+    _write_flags(rom, out, {0: two_band_flag(BLACK, RED)}, shirts={0: (BLACK, None)})
+    shades = _six(BLACK, BLACK)[:3] + [_rgb(word) for word in cartridge]
+    assert _stands_out(_entry12(out.read_bytes(), 0), shades)
+
+
+def test_new_kits_redraw_the_cartridge_flag_around_the_numbers(rom, out):
+    """The fixture's flag uses two colours, so it loses none to the numbers."""
+    _write_flags(rom, out, {}, shirts={3: (WHITE, BLACK)})
+    image = out.read_bytes()
+    assert _stands_out(_entry12(image, 3), _six(WHITE, BLACK))
+    assert _shown(image, 3) == _shown(rom.read_bytes(), 3)
 
 
 def _name_text_pointers(path, header=0):
@@ -1272,3 +1624,19 @@ def test_writing_after_close_raises_a_library_error_and_not_an_attribute_error(r
     writer.finalize()
     with pytest.raises(RomError, match="already closed"):
         writer.write_predominant_color(0, (255, 0, 0))
+
+
+@pytest.mark.parametrize(
+    ("home", "away"),
+    [
+        ((0xC6, 0x00, 0x00), (0x00, 0x93, 0xEC)),  # Bahia: blue was a point ahead of black
+        ((0x26, 0x58, 0x91), (0xFA, 0xFA, 0xFA)),  # Remo: red was a point ahead of black
+    ],
+)
+def test_a_near_tie_goes_to_the_brighter_number_colour(home, away):
+    """When a hue scores a hair above black, black wins: digits a pixel wide
+    read by brightness, and black on these shirts is the crisper of the two."""
+    from retro_roster_patcher.games.iss_snes.rom_writer import _kit_shades, number_colour
+
+    flag = Flag(pixels=[[0] * 24 for _ in range(16)], colours=[home, away, home, away])
+    assert number_colour(flag, _kit_shades(home) + _kit_shades(away)) == (0, 0, 0)

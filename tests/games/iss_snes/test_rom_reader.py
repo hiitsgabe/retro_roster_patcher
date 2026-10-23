@@ -124,7 +124,7 @@ def test_the_floor_is_a_megabyte_and_the_writer_needs_far_less():
     A guard three and a half times larger than the data it protects is not a
     statement about whether the data fits.
     """
-    assert MIN_PATCHABLE_SIZE == 296140
+    assert MIN_PATCHABLE_SIZE == 297600
     assert fixture.ROM_SIZE == 1048576
 
 
@@ -191,13 +191,15 @@ def test_an_image_one_byte_under_the_arithmetic_minimum_does_not_fit(tmp_path):
 
 #: A body one kilobyte-boundary below `MIN_PATCHABLE_SIZE`, and the next one up.
 #: Both are multiples of 1024, so both become `% 1024 == 512` once 512 bytes of
-#: copier header go in front and `_detect_header` answers True for each.
-_SHORT_BODY = 289 * 1024
-_LONG_BODY = 290 * 1024
+#: copier header go in front and `_detect_header` answers True for each. The
+#: bound (0x48A80) sits 640 bytes past a boundary, so the short one stays short
+#: with its header counted too: no aligned body can straddle it.
+_SHORT_BODY = 290 * 1024
+_LONG_BODY = 291 * 1024
 
 
 def test_the_copier_header_does_not_count_towards_the_arithmetic_minimum(tmp_path):
-    """A file 296 448 bytes long does not fit, because 512 of them are header."""
+    """A file 297 472 bytes long does not fit: 512 of them are header."""
     assert _SHORT_BODY < MIN_PATCHABLE_SIZE
     path = tmp_path / "headered-short.sfc"
     path.write_bytes(bytes(512) + bytes(fixture.build_iss_rom(size=_SHORT_BODY)))

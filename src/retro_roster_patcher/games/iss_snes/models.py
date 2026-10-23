@@ -21,6 +21,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from ...core.kits import KitSpec
+
 #: Canonical order. A `SlotMapping.slot_index` indexes this list.
 TEAM_ENUM_ORDER = [
     "Germany",
@@ -162,10 +164,14 @@ class ISSPlayerRecord:
 class ISSTeamRecord:
     """Complete team record ready to write to ROM.
 
-    `flag_colors` holds the two colours the flag tiles and the predominant-colour
-    byte are built from: empty when the provider gave no primary colour, and then
-    neither is written; otherwise exactly two RGB triples, primary then
-    alternate, with primary repeated when there is no alternate.
+    `flag_colors` holds the two colours the two-band flag is built from: empty
+    when the provider gave no primary colour, and then none is drawn; otherwise
+    exactly two RGB triples, primary then alternate, with primary repeated when
+    there is no alternate.
+
+    `kit_home_spec` / `kit_away_spec` are the kits `patch` draws by default
+    (`core.kits.default_kits`), `kit_home` / `kit_away` their colours; a record
+    with colours and no spec gets plain kits in them.
     """
 
     name: str  # full team name, for the selection screen and the description
@@ -173,8 +179,26 @@ class ISSTeamRecord:
     kit_home: tuple[tuple[int, int, int], ...] = ()  # shirt, shorts, socks
     kit_away: tuple[tuple[int, int, int], ...] = ()
     kit_gk: tuple[tuple[int, int, int], ...] = ()  # shirt, shorts
+    kit_home_spec: KitSpec | None = None
+    kit_away_spec: KitSpec | None = None
     flag_colors: list[tuple[int, int, int]] = field(default_factory=list)
     players: list[ISSPlayerRecord] = field(default_factory=list)  # up to 15
+    # Where the crest comes from: `assets_dir/logos/<team_id>.png`, else the URL.
+    team_id: int | None = None
+    logo_url: str = ""
+
+
+@dataclass
+class Flag:
+    """A 24x16 flag: 16 rows of 24 indices 0-3 into `colours`.
+
+    The four RGB colours land in OBJ palette entries 12-15, in order. Entry 12
+    is also the colour of the team's shirt numbers in a match, on both kits
+    (seen in Mesen 2), so `rom_writer.number_first` picks it.
+    """
+
+    pixels: list[list[int]]
+    colours: list[tuple[int, int, int]]
 
 
 @dataclass

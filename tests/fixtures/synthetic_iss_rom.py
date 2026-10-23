@@ -44,10 +44,9 @@ ROM_SIZE = 0x100000
 SMC_HEADER_SIZE = 512
 
 #: Smallest body `rom_writer.MIN_PATCHABLE_SIZE` accepts. Retranscribed as the
-#: highest write the writer makes: the second Konami-compressed flag half ends
-#: 204 bytes after 0x48400. Two 96-byte halves, each 2 header bytes plus a
-#: control byte per 31-byte run plus the payload: 2 + 4 + 96 = 102 apiece.
-SIZE_ARITHMETIC_MINIMUM = 0x48400 + 204
+#: highest write the writer makes: the end of bank $89's flag room, which
+#: `write_flags` rewrites whole.
+SIZE_ARITHMETIC_MINIMUM = 0x48A80
 
 TOTAL_TEAMS = 27
 PLAYERS_PER_TEAM = 15
@@ -136,7 +135,39 @@ FLAG_COLORS_STEP = 10
 
 OFS_PREDOMINANT_COLOR = 0x8DB2
 OFS_FLAG_TILE_PTRS = 0x941A
-OFS_FLAG_TILE_NEW = 0x48400
+FLAG_ROOM_START = 0x48000
+FLAG_ROOM_END = 0x48A80
+
+#: Each team's flag cell on the preload screens, and its pointer to a two-sprite
+#: record in bank $88 (file 0x40000 + pointer - 0x8000).
+OFS_FLAG_CELLS = 0x39D78
+OFS_FLAG_SPRITES = 0x39DE4
+FLAG_SPRITE_BASE = 0x44500
+#: The eight teams the cartridge gives no cell ($FFFF) and the OBJ tile each gets.
+OWN_FLAG_CELLS = {
+    "Holland": 0x1A1,
+    "England": 0x1A4,
+    "Denmark": 0x1A7,
+    "Norway": 0x1AA,
+    "Ireland": 0x1AD,
+    "Belgium": 0x103,
+    "Austria": 0x106,
+    "Russia": 0x109,
+}
+
+#: The chest-design table: 8 poses x 28 slots of 3-byte SNES addresses, each
+#: of a 2-byte header and a 4bpp 8x8 tile. Every slot points at the blank
+#: design but Germany (the band) and Austria and Argentina (the stripes).
+OFS_CHEST_PTRS = 0x17153
+CHEST_SLOTS = 28
+CHEST_POSES = 8
+BLANK_DESIGN = 0x8CD430
+BAND_DESIGN = 0x9AA209
+STRIPES_DESIGN = 0x9AA319
+POSE_STRIDE = 0x286
+#: The band's rows use entries 13, 14 and 15; the stripes' columns entry 13.
+BAND_TILE = [[0] * 8, [13] * 8, [14] * 8, [15] * 8, [0] * 8, [0] * 8, [0] * 8, [0] * 8]
+STRIPES_TILE = [[13, 0, 0, 13, 0, 0, 13, 0]] * 8
 
 OFS_NAME_TILES_PTRS = 0x93CD
 NAME_TILES_DISPLACED_BASE = 0x17680
@@ -172,12 +203,10 @@ NAME_TEXT_BASE = 0x43000
 NAME_TEXT_ENTRIES = 4
 
 
-#: Where this fixture puts the 27 Konami-compressed tile blobs. The writer's own
-#: comment says the game's data occupies 0x48000-0x483FE and that new flag tiles
-#: go after it at 0x48400, so 27 blobs have 1 022 bytes to share and this
-#: fixture gives each 36. Overrunning that would put the originals under the
-#: flag tiles `write_flag_tiles_and_colors` writes first.
-NAME_TILE_BASE = 0x48000
+#: Where this fixture puts the 27 Konami-compressed tile blobs: right after the
+#: flags, inside the flag room, as on the cartridge. `write_flags` refuses to
+#: run until `write_name_tiles` has moved them out.
+NAME_TILE_BASE = FLAG_ROOM_START + TOTAL_TEAMS * 2 * 6
 NAME_TILE_BLOB_SIZE = 36
 
 
@@ -378,6 +407,53 @@ def konami_literal(raw: bytes) -> bytes:
     return bytes(out)
 
 
+def flag_half_blob(team: int, half: int) -> bytes:
+    """Team `team`'s top (0) or bottom (1) flag half: a 6-byte stream -- one
+    literal byte, `2 * team + half`, then 95 zeros -- so no two are alike."""
+    return bytes([6, 0, 0x81, 2 * team + half, 0xFF, 93])
+
+
+def flag_half_raw(team: int, half: int) -> bytes:
+    """The 96 bytes `flag_half_blob(team, half)` decodes to."""
+    return bytes([2 * team + half]) + bytes(95)
+
+
+def lorom(address: int) -> int:
+    """A LoROM SNES address as a headerless file offset."""
+    return ((address >> 16) & 0x7F) * 0x8000 + (address & 0x7FFF)
+
+
+def tile_4bpp(rows: list[list[int]]) -> bytes:
+    """8 rows of 8 entries as a 32-byte SNES 4bpp tile: planes 0/1 then 2/3."""
+    out = bytearray(32)
+    for y, row in enumerate(rows):
+        for x, value in enumerate(row):
+            for bit, base in ((0, 0), (1, 1), (2, 16), (3, 17)):
+                if value >> bit & 1:
+                    out[base + 2 * y] |= 0x80 >> x
+    return bytes(out)
+
+
+def chest_design(team: int) -> int:
+    """Pose 0 of the design `team` (enum order) wears on this fixture."""
+    if TEAM_ENUM_ORDER[team] == "Germany":
+        return BAND_DESIGN
+    if TEAM_ENUM_ORDER[team] in ("Austria", "Argentina"):
+        return STRIPES_DESIGN
+    return BLANK_DESIGN
+
+
+def chest_pointer(team: int, pose: int) -> int:
+    design = chest_design(team) if team < TOTAL_TEAMS else BLANK_DESIGN
+    return design if design == BLANK_DESIGN else design + pose * POSE_STRIDE
+
+
+def flag_sprite_record(team: int) -> bytes:
+    """Team `team`'s two 16x16 sprites: count, then (y, x, tile, attr) twice."""
+    tile = 0x20 + 3 * team
+    return bytes([2, 0, 8, tile + 1, 0x13, 0, 0, tile, 0x13])
+
+
 def name_tile_blob(team: int, size: int = NAME_TILE_BLOB_SIZE) -> bytes:
     """One name-tile blob: a 2-byte little-endian length, then `size - 2` bytes.
 
@@ -554,6 +630,23 @@ def build_iss_rom(
         # negative file offset.
         body[OFS_TEAM_NAME_TEXT_PTRS + 13 * 2 + 1] = 0x7F
 
+    # -- flags: two halves per team from the start of the flag room, the cells
+    # of the preload screens, and the sprite records that draw them
+    addr = FLAG_ROOM_START
+    for team in range(TOTAL_TEAMS):
+        halves = [flag_half_blob(team, half) for half in (0, 1)]
+        put(addr, halves[0] + halves[1])
+        put(OFS_FLAG_TILE_PTRS + team * 4, encode_p48000(addr) + encode_p48000(addr + 6))
+        addr += 12
+        borrows = TEAM_ENUM_ORDER[team] in OWN_FLAG_CELLS
+        put(
+            OFS_FLAG_CELLS + team * 2,
+            struct.pack("<H", 0xFFFF if borrows else 0x1000 + 0x30 * team),
+        )
+        record = FLAG_SPRITE_BASE + team * 9
+        put(OFS_FLAG_SPRITES + team * 2, struct.pack("<H", record - 0x40000 + 0x8000))
+        put(record, flag_sprite_record(team))
+
     # -- in-game name tiles: pointer table then blobs
     addr = name_tile_base
     for team in range(TOTAL_TEAMS):
@@ -571,6 +664,16 @@ def build_iss_rom(
         # end, which a 1 MB image cannot reach: a P48000 pointer tops out at
         # 0x4FFFF and a 16-bit length cannot carry it past 0x5FFFE.
         put(name_tile_base, bytes([name_tile_declared_size & 0xFF, name_tile_declared_size >> 8]))
+
+    # -- chest designs: the table, the blank tile and the two designs' poses
+    if size > lorom(STRIPES_DESIGN + 7 * POSE_STRIDE) + 34:
+        for pose in range(CHEST_POSES):
+            for team in range(CHEST_SLOTS):
+                at = OFS_CHEST_PTRS + (pose * CHEST_SLOTS + team) * 3
+                put(at, chest_pointer(team, pose).to_bytes(3, "little"))
+            for design, rows in ((BAND_DESIGN, BAND_TILE), (STRIPES_DESIGN, STRIPES_TILE)):
+                put(lorom(design + pose * POSE_STRIDE), b"\x20\x00" + tile_4bpp(rows))
+        put(lorom(BLANK_DESIGN), b"\x20\x00" + bytes(32))
 
     # -- descriptions: pointer table then blocks
     for team in range(TOTAL_TEAMS):
