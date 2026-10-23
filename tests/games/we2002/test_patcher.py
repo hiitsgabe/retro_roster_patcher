@@ -396,6 +396,31 @@ def test_a_stats_failure_costs_the_ratings_and_not_the_squad(tmp_path):
     assert status == ["Team 1: stats unavailable, ratings will use position defaults"]
 
 
+class LineupApi(FakeApi):
+    """A `FakeApi` with `get_lineup`: team 100's keeper is a recent starter,
+    team 101's lineup request fails."""
+
+    def get_lineup(self, team_id, league_id):
+        self.calls.append(("get_lineup", team_id, league_id))
+        if team_id == 101:
+            raise RuntimeError("summary endpoint down")
+        return {"formation": "4-4-2", "event": 1, "starters": [{"id": 10000, "position": "G"}]}
+
+
+def test_fetch_keeps_each_teams_recent_lineup_and_survives_a_failed_one(tmp_path):
+    # Optional, like the stats: a failed lineup costs the lineup, not the squad.
+    p = _make_patcher(tmp_path)
+    p.api = LineupApi(team_count=2)
+
+    data = p.fetch(season=2024, league_id=39)
+
+    assert ("get_lineup", 100, 39) in p.api.calls
+    assert data.teams[0].extra["lineup"]["starters"] == [{"id": 10000, "position": "G"}]
+    assert "lineup" not in data.teams[1].extra
+    assert [len(tr.players) for tr in data.teams] == [11, 11]
+    assert [tr.error for tr in data.teams] == ["", ""]
+
+
 def test_fetch_keys_player_stats_by_player_id(tmp_path):
     # The client returns a list; `TeamRoster.player_stats` is a dict keyed by
     # player id, and `map_team_with_league_context` calls `.items()` on it.
@@ -529,6 +554,9 @@ def _espn_transport():
                     ]
                 }
             ).encode()
+        if url.endswith("/schedule"):
+            # No completed match, so `get_lineup` has no lineup to give.
+            return json.dumps({"events": []}).encode()
         if url.endswith("/leaders"):
             return json.dumps(
                 {
@@ -613,8 +641,12 @@ def test_fetch_over_espn_asks_for_the_squad_before_the_statistics(tmp_path):
         "https://sports.core.api.espn.com/v2/sports/soccer/leagues/eng.1"
         "/seasons/2025/types/1/teams/364/leaders",
     ]
-    # The athlete documents are fetched concurrently, so only their set is defined.
-    assert sorted(calls[3:]) == sorted(
+    # The athlete documents are fetched concurrently, so only their set is
+    # defined. The schedule (for the recent lineup) comes last.
+    assert (
+        calls[-1] == "https://site.api.espn.com/apis/site/v2/sports/soccer/eng.1/teams/364/schedule"
+    )
+    assert sorted(calls[3:-1]) == sorted(
         "https://sports.core.api.espn.com/v2/sports/soccer/leagues/eng.1"
         f"/seasons/2025/types/1/teams/364/athletes/{pid}/statistics"
         for pid, _, _, _ in _ESPN_SQUAD
@@ -1555,6 +1587,29 @@ def test_the_stat_ranked_squad_fills_all_23_national_places(patcher):
     players, stats = _ranked_squad(25)
     mapped = _map_one(patcher, _roster(100, players=players, player_stats=stats))
     assert len(mapped.players) == 23
+
+
+@pytest.mark.parametrize("slot", [0, MAX_ML_SLOTS + 8])
+def test_the_squad_written_is_the_order_the_editor_opens_on(patcher, slot):
+    """A national team: no season stats, only the recent lineup, in a Master
+    League slot and in a national-only one. The writer gets `suggest_squad_order`'s
+    first 23, so the app's editor and the game agree."""
+    groups = ["Goalkeeper"] * 3 + ["Defender"] * 8 + ["Midfielder"] * 8 + ["Attacker"] * 6
+    players = [Player(id=i, name=f"P{i:02d}", position=g) for i, g in enumerate(groups)]
+    codes = ["G", "RB", "CD", "CD", "LB", "DM", "CM", "AM", "LW", "CF", "RW"]
+    starters = [2, 10, 9, 8, 7, 18, 17, 16, 24, 23, 22]
+    roster = _roster(100, players=players)
+    roster.extra["lineup"] = {
+        "starters": [{"id": i, "position": c} for i, c in zip(starters, codes, strict=True)]
+    }
+
+    mapped = patcher.map_rosters(
+        _league_data([roster]), slot_mapping=[SlotMapping(slot_index=slot, team_id=100)]
+    )
+
+    order = patcher.suggest_squad_order(roster)
+    assert {p.id for p in order[:11]} == set(starters)
+    assert [r.last_name for r in mapped.teams[slot].players] == [p.name for p in order[:23]]
 
 
 def test_without_order_as_given_the_input_order_is_ignored(patcher):

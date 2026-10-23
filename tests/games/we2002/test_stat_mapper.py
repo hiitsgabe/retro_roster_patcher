@@ -431,3 +431,181 @@ def test_a_whole_squad_mapped_with_absent_duel_data_is_uniformly_clumsy(mapper):
     assert sorted(p.attributes.body_balance for p in record.players) == [1, 1, 1, 1, 1, 1, 1]
     assert sorted(p.attributes.dribble for p in record.players) == [1, 1, 1, 1, 1, 1, 1]
     assert sorted(p.attributes.technique for p in record.players) == [1, 1, 1, 1, 1, 2, 2]
+
+
+# The squad order: the first 11 slots are a 4-4-2 (keeper, four defenders, four
+# midfielders, two forwards), then the bench. Master League slots keep the
+# first 14 or 15.
+
+
+def _squad(**counts):
+    """Players numbered from 0 in group order: `_squad(Goalkeeper=3, ...)`."""
+    groups = [g for g, n in counts.items() for _ in range(n)]
+    return [Player(id=i, name=f"P{i:02d}", position=g) for i, g in enumerate(groups)]
+
+
+def _starts(players, **lineups):
+    """Season stats with `lineups` falling with the id, so low ids are regulars."""
+    return {
+        p.id: replace(_BASE_STATS, player_id=p.id, lineups=lineups.get(p.name, 40 - p.id))
+        for p in players
+    }
+
+
+def _lineup(*starters):
+    """A `get_lineup` result: (player id, ESPN position code), most starts first."""
+    return {
+        "formation": "",
+        "event": 1,
+        "starters": [{"id": i, "position": c} for i, c in starters],
+    }
+
+
+def _groups(players):
+    return [p.position[0] for p in players]
+
+
+def _lines(order):
+    """The keeper and the sets of ids in the 4-4-2's defence, midfield and attack."""
+    return (
+        order[0].id,
+        {p.id for p in order[1:5]},
+        {p.id for p in order[5:9]},
+        {p.id for p in order[9:11]},
+    )
+
+
+SEASON = _squad(Goalkeeper=3, Defender=9, Midfielder=8, Attacker=7)
+
+
+def test_without_a_lineup_the_season_regulars_start(mapper):
+    order = mapper._select_best_23(SEASON, _starts(SEASON))
+    assert [p.id for p in order[:11]] == [0, 3, 4, 5, 6, 12, 13, 14, 15, 20, 21]
+    # The bench takes one of each group in turn, so a Master League slot's few
+    # subs are a keeper and an outfielder of each line.
+    assert _groups(order[11:15]) == ["G", "D", "M", "A"]
+    assert sorted(_groups(order)) == sorted("G" * 3 + "D" * 7 + "M" * 6 + "A" * 6 + "D")
+    assert len(order) == 23
+
+
+def test_every_recent_starter_starts_in_his_lineup_line(mapper):
+    # The season's regulars are the low ids; the recent eleven mostly is not.
+    lineup = _lineup(
+        (2, "G"),
+        (11, "RB"),
+        (10, "CD"),
+        (9, "CD"),
+        (8, "LB"),
+        (19, "DM"),
+        (18, "CM"),
+        (17, "AM"),
+        (16, "LM"),
+        (25, "CF"),
+        (24, "CF"),
+    )
+    order = mapper._select_best_23(SEASON, _starts(SEASON), lineup)
+    assert _lines(order) == (2, {8, 9, 10, 11}, {16, 17, 18, 19}, {24, 25})
+    # Back to front within a line too: centre-backs, then full-backs.
+    assert [p.id for p in order[1:5]] == [10, 9, 8, 11]
+    # The regulars he displaced lead the bench.
+    assert [p.id for p in order[11:15]] == [0, 3, 12, 20]
+
+
+def test_a_front_three_sends_its_widest_forward_to_midfield(mapper):
+    # A 4-3-3: a winger takes the fourth midfield place, ahead of every
+    # midfielder who did not start.
+    lineup = _lineup(
+        (0, "G"),
+        (3, "RB"),
+        (4, "CD"),
+        (5, "CD"),
+        (6, "LB"),
+        (12, "DM"),
+        (13, "CM"),
+        (14, "CM"),
+        (20, "LW"),
+        (21, "CF"),
+        (22, "RW"),
+    )
+    order = mapper._select_best_23(SEASON, _starts(SEASON), lineup)
+    assert _lines(order) == (0, {3, 4, 5, 6}, {12, 13, 14, 20}, {21, 22})
+
+
+def test_a_back_three_takes_a_midfielder_and_midfield_a_forward(mapper):
+    # A 3-4-2-1 as ESPN codes it: the wing-backs are LM/RM and the two behind
+    # the striker CF-L/CF-R. Every line moves back one, so no forward ends
+    # up in defence.
+    lineup = _lineup(
+        (0, "G"),
+        (4, "CD-L"),
+        (5, "CD"),
+        (6, "CD"),
+        (12, "RM"),
+        (13, "LM"),
+        (14, "CM-R"),
+        (15, "CM-L"),
+        (20, "F"),
+        (21, "CF-R"),
+        (22, "CF-L"),
+    )
+    order = mapper._select_best_23(SEASON, _starts(SEASON), lineup)
+    assert _lines(order) == (0, {4, 5, 6, 13}, {12, 14, 15, 22}, {20, 21})
+
+
+def test_an_eleven_of_six_midfielders_still_gets_a_midfield_sub(mapper):
+    # A 4-2-3-1 as ESPN often codes it: the pivots LM/RM and four AMs. The
+    # bench counts the 4-4-2's places, not the eleven's groups, so the four
+    # subs a Master League slot keeps still cover every line.
+    lineup = _lineup(
+        (0, "G"),
+        (3, "CD-L"),
+        (4, "CD-R"),
+        (5, "RB"),
+        (12, "LM"),
+        (13, "RM"),
+        (14, "AM-L"),
+        (15, "AM"),
+        (16, "AM-R"),
+        (17, "AM"),
+        (20, "F"),
+    )
+    order = mapper._select_best_23(SEASON, _starts(SEASON), lineup)
+    assert _groups(order[11:15]) == ["G", "D", "M", "A"]
+
+
+def test_a_line_the_squad_cannot_fill_takes_an_outfielder_not_a_keeper(mapper):
+    order = mapper._select_best_23(_squad(Goalkeeper=3, Defender=3, Midfielder=8, Attacker=6))
+    assert _groups(order[:11]) == list("GDDDMMMMMAA")
+
+
+def test_a_midfielder_who_started_up_front_plays_up_front(mapper):
+    # The lineup group decides, not the provider's position.
+    lineup = _lineup((0, "G"), (12, "LF"))
+    order = mapper._select_best_23(SEASON, _starts(SEASON), lineup)
+    assert [p.id for p in order[9:11]] == [12, 20]
+    assert 12 not in [p.id for p in order[5:9]]
+
+
+def test_a_second_keeper_in_the_lineup_sits_first_on_the_bench(mapper):
+    lineup = _lineup((1, "G"), (2, "G"), (3, "CD"))
+    order = mapper._select_best_23(SEASON, _starts(SEASON), lineup)
+    assert [p.id for p in order[:2]] == [1, 3]
+    assert order[11].id == 2
+
+
+def test_a_starter_who_left_the_club_leaves_his_place_to_a_regular(mapper):
+    lineup = _lineup((0, "G"), (99, "CD"), (8, "CD"))
+    order = mapper._select_best_23(SEASON, _starts(SEASON), lineup)
+    assert [p.id for p in order[1:5]] == [8, 3, 4, 5]
+
+
+def test_the_lineup_reaches_the_record_the_writer_gets(mapper):
+    lineup = _lineup((2, "G"), (11, "CD"))
+    roster = TeamRoster(
+        team=Team(id=100, name="Utd", code="UTD"),
+        players=SEASON,
+        player_stats=_starts(SEASON),
+        extra={"lineup": lineup},
+    )
+    record = mapper.map_team_with_league_context(roster, [roster])
+    assert [p.last_name for p in record.players[:2]] == ["P02", "P11"]

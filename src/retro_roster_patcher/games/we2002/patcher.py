@@ -242,6 +242,17 @@ class WE2002Patcher(Patcher):
                     self.status(
                         f"{team.name}: stats unavailable, ratings will use position defaults"
                     )
+                # The eleven who started most of the team's last few matches pick
+                # the starting places (`_select_best_23`); the season's starts
+                # only fill what the lineup leaves open. Optional, and plain data
+                # for the JSON boundary.
+                if hasattr(self.api, "get_lineup"):
+                    try:
+                        lineup = self.api.get_lineup(team.id, league_id)
+                    except Exception:
+                        lineup = None
+                    if lineup:
+                        roster.extra["lineup"] = lineup
             except Exception as exc:
                 # Deliberately broad: a provider can fail in ways this module has
                 # no list of. `TransportLeak` is a `BaseException` so the network
@@ -255,7 +266,9 @@ class WE2002Patcher(Patcher):
         return LeagueData(league=league, teams=rosters)
 
     def suggest_squad_order(self, team_roster):
-        ordered = self.mapper._select_best_23(team_roster.players, team_roster.player_stats)
+        ordered = self.mapper._select_best_23(
+            team_roster.players, team_roster.player_stats, team_roster.extra.get("lineup")
+        )
         return self._append_unused(ordered, team_roster.players)
 
     def map_rosters(

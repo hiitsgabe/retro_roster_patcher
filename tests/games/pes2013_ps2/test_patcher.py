@@ -1074,3 +1074,31 @@ def test_kits_none_or_empty_draw_the_defaults_and_false_keeps_the_disc(iso, tmp_
         reader = RomReader(str(out))
         reader.load()
         assert reader.kits().clubs[1][HOME].parametric is expect_parametric
+
+
+class _LineupApi:
+    """Two clubs; club 2's lineup request fails with a non-`ApiError`."""
+
+    def get_leagues(self, id, season):
+        return [League(id=id, name="League", logo_url="http://x/l.png")]
+
+    def get_teams(self, league_id, season):
+        return [Team(id=1, name="One", code="ONE"), Team(id=2, name="Two", code="TWO")]
+
+    def get_squad(self, team_id, season):
+        return [Player(id=team_id * 10, name="Keeper", position="Goalkeeper")]
+
+    def get_lineup(self, team_id, league_id):
+        if team_id == 2:
+            raise KeyError("formationPlace")
+        return {"formation": "", "event": 1, "starters": [{"id": 10, "position": "G"}]}
+
+
+def test_fetch_survives_a_failed_lineup(tmp_path):
+    # A failed lineup costs that club its lineup, not its squad or the league.
+    patcher = PES2013PS2Patcher(tmp_path)
+    patcher.api = _LineupApi()
+    data = patcher.fetch(season=2026, league_id=7)
+    assert [t.extra.get("lineup", {}).get("event") for t in data.teams] == [1, None]
+    assert [len(t.players) for t in data.teams] == [1, 1]
+    assert [t.error for t in data.teams] == ["", ""]

@@ -1,5 +1,9 @@
 """Maps real-world player stats to WE2002's 1-9 attribute scale."""
 
+from collections import Counter
+from itertools import zip_longest
+
+from ...sports.espn import LINEUP_GROUPS
 from .models import (
     Player,
     PlayerStats,
@@ -127,7 +131,9 @@ class StatMapper:
         squad = (
             team_roster.players[:_PLAYERS_PER_NAT]
             if order_as_given
-            else self._select_best_23(team_roster.players, team_roster.player_stats)
+            else self._select_best_23(
+                team_roster.players, team_roster.player_stats, team_roster.extra.get("lineup")
+            )
         )
 
         we_players = []
@@ -342,61 +348,87 @@ class StatMapper:
         base = {"Goalkeeper": 3, "Defender": 3, "Midfielder": 5, "Attacker": 5}
         return base.get(player.position, 4)
 
+    #: The ten outfield places of the first 11 slots, after the keeper's: a 4-4-2.
+    XI_LINES = (("Defender", 4), ("Midfielder", 4), ("Attacker", 2))
+    #: The bench by line: with the eleven's places, a 3 / 7 / 6 / 6 squad. Per
+    #: place, not per player: an eleven of six midfielders still gets two
+    #: midfield subs.
+    BENCH_PLACES = (("Goalkeeper", 2), ("Defender", 3), ("Midfielder", 2), ("Attacker", 4))
+    #: ESPN lineup codes from the back to the front. The ten outfielders take
+    #: the 4-4-2 in this order, so a line with more players than the 4-4-2 has
+    #: moves its most advanced one up (a back five's wing-back to midfield)
+    #: and a short line takes the next line's deepest (a back three a holding
+    #: or wide midfielder), rather than a forward playing at the back.
+    DEPTH = (
+        ("SW", "CD", "CD-L", "CD-R", "LB", "RB", "LWB", "RWB")
+        + ("DM", "LM", "RM", "CM", "CM-L", "CM-R", "AM-L", "AM-R", "AM")
+        + ("LW", "RW", "LF", "RF", "CF-L", "CF-R", "LCF", "RCF", "F", "CF")
+    )
+    #: Where a player with no lineup code stands in his line.
+    LINE_CODES = {"Defender": "CD", "Midfielder": "CM", "Attacker": "CF"}
+
     def _select_best_23(
         self,
         players: list[Player],
         player_stats: dict[int, PlayerStats] | None = None,
+        lineup: dict | None = None,
     ) -> list[Player]:
-        """Select the best 23 (a national squad's places), starting XI first.
+        """The 23 (a national squad's places; a Master League slot keeps the
+        first 14 or 15): the starting eleven, then the bench.
 
-        The first 11 slots are the default lineup: 1 GK, 4 DF, 4 MF, 2 FW.
+        The eleven is the keeper, then ten outfielders in the 4-4-2 of the
+        first 11 slots. When `lineup` (what `EspnClient.get_lineup` returns)
+        has the team's recent starters, every one of them plays (a second
+        keeper sits), back to front by his lineup position (`DEPTH`). Places
+        still open go to the season's most frequent starters, from a line the
+        lineup left short first. The bench then takes up to 2 keepers,
+        3 defenders, 2 midfielders and 4 forwards (`BENCH_PLACES`), recent
+        starters and regulars first, one of each line in turn so the few subs
+        a Master League slot keeps cover every line; the best of the rest fill
+        what is left. A player moved to another line keeps his own position
+        (the byte the game shows): the patcher writes no formation.
         """
         stats = player_stats or {}
+        recent = {int(s["id"]): (i, s) for i, s in enumerate((lineup or {}).get("starters") or [])}
 
-        def _sort_key(p: Player) -> tuple:
-            """Higher lineups first, then appearances, then minutes."""
+        def code(p: Player) -> str:
+            return str(recent[p.id][1].get("position", "")).upper() if p.id in recent else ""
+
+        def group(p: Player) -> str:
+            return LINEUP_GROUPS.get(code(p), p.position)
+
+        def depth(p: Player) -> int:
+            c = code(p)
+            return self.DEPTH.index(c if c in self.DEPTH else self.LINE_CODES.get(group(p), "CM"))
+
+        def key(p: Player) -> tuple[int, int, int, int]:
+            """Recent starters first, then lineups, appearances and minutes."""
             s = stats.get(p.id)
-            if s:
-                return (-s.lineups, -s.appearances, -s.minutes)
-            return (0, 0, 0)
+            return (
+                recent[p.id][0] if p.id in recent else len(recent),
+                -(s.lineups if s else 0),
+                -(s.appearances if s else 0),
+                -(s.minutes if s else 0),
+            )
 
-        squad_targets = {
-            "Goalkeeper": 3,
-            "Defender": 7,
-            "Midfielder": 6,
-            "Attacker": 6,
-        }
+        # Stable, so players the key ties keep the provider's order.
+        pool = sorted(players, key=key)
+        keeper = [p for p in pool if group(p) == "Goalkeeper"][:1]
+        outfield = [p for p in pool if p.id in recent and group(p) != "Goalkeeper"][:10]
+        short = Counter(dict(self.XI_LINES)) - Counter(group(p) for p in outfield)
+        for p in pool:
+            if len(outfield) < 10 and short[group(p)] > 0 and p not in outfield:
+                outfield.append(p)
+                short[group(p)] -= 1
+        spare = [p for p in pool if group(p) != "Goalkeeper" and p not in outfield]
+        outfield += spare[: 10 - len(outfield)]
+        eleven = keeper + sorted(outfield, key=depth)
 
-        by_position: dict[str, list[Player]] = {}
-        for p in players:
-            by_position.setdefault(p.position, []).append(p)
-        for pos in by_position:
-            by_position[pos].sort(key=_sort_key)
-
-        squad = []
-        for pos, count in squad_targets.items():
-            available = by_position.get(pos, [])
-            squad.extend(available[:count])
-
-        remaining = [p for p in players if p not in squad]
-        remaining.sort(key=_sort_key)
-        while len(squad) < _PLAYERS_PER_NAT and remaining:
-            squad.append(remaining.pop(0))
-
-        # Starting XI is a 4-4-2: 1 GK, 4 DF, 4 MF, 2 FW
-        xi_targets = {"Goalkeeper": 1, "Defender": 4, "Midfielder": 4, "Attacker": 2}
-        squad_by_pos: dict[str, list[Player]] = {}
-        for p in squad:
-            squad_by_pos.setdefault(p.position, []).append(p)
-
-        starting = []
-        for pos in ["Goalkeeper", "Defender", "Midfielder", "Attacker"]:
-            available = squad_by_pos.get(pos, [])
-            count = xi_targets[pos]
-            starting.extend(available[:count])
-
-        bench = [p for p in squad if p not in starting]
-        return (starting + bench)[:_PLAYERS_PER_NAT]
+        rest = [p for p in pool if p not in eleven]
+        subs = [[p for p in rest if group(p) == g][:n] for g, n in self.BENCH_PLACES]
+        bench = [p for row in zip_longest(*subs) for p in row if p is not None]
+        bench += [p for p in rest if p not in bench]
+        return (eleven + bench)[:_PLAYERS_PER_NAT]
 
     def _format_player_name(self, player: Player) -> tuple:
         """Build ROM-friendly (last_name, first_name) from a Player.

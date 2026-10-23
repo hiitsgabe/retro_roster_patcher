@@ -371,11 +371,15 @@ class PES2013PS2Patcher(Patcher):
             roster = TeamRoster(team=team)
             try:
                 roster.players = self.api.get_squad(team.id, season)
-                # The latest match's starting eleven decides who fills the
+                # The recent starting eleven (ESPN's last five matches) fills the
                 # first squad places; optional, and plain data for the JSON
-                # boundary.
+                # boundary. Deliberately broad, as in WE2002 and ISS: a failed
+                # lineup costs the lineup, not the squad or the league.
                 if hasattr(self.api, "get_lineup"):
-                    lineup = self.api.get_lineup(team.id, league_id)
+                    try:
+                        lineup = self.api.get_lineup(team.id, league_id)
+                    except Exception:
+                        lineup = None
                     if lineup:
                         roster.extra["lineup"] = lineup
             except ApiError as exc:
