@@ -18,7 +18,6 @@ from __future__ import annotations
 import pytest
 
 from retro_roster_patcher.games.iss_snes.models import (
-    HAIR_STYLES,
     PLAYERS_PER_TEAM,
     TEAM_ENUM_ORDER,
     TEAM_NAME_ORDER,
@@ -122,17 +121,12 @@ def test_fifteen_players_a_side():
     assert PLAYERS_PER_TEAM == 15
 
 
-def test_the_hair_style_table_has_eleven_entries():
-    """`write_player_data` clamps to `len(HAIR_STYLES) - 1`, so this is the 10."""
-    assert len(HAIR_STYLES) == 11
-
-
 def test_a_player_record_defaults_to_its_own_attributes_object():
     """`default_factory`, not a shared instance handed to every record."""
     first = ISSPlayerRecord(name="A")
     second = ISSPlayerRecord(name="B")
-    first.attributes.speed = 1
-    assert second.attributes.speed == 8
+    first.attributes.dash = 1
+    assert second.attributes.dash == 10
 
 
 def test_a_team_record_defaults_to_its_own_player_list():
@@ -149,9 +143,15 @@ def test_a_team_record_defaults_to_its_own_flag_colour_list():
     assert second.flag_colors == []
 
 
-def test_the_default_attributes_are_the_midpoints_of_the_two_scales():
-    attrs = ISSPlayerAttributes()
-    assert attrs.speed == 8
-    assert attrs.stamina == 8
-    assert attrs.shooting == 7
-    assert attrs.technique == 7
+def test_the_default_attributes_are_the_retail_outfield_medians():
+    assert ISSPlayerAttributes() == ISSPlayerAttributes(
+        dribble=7,
+        dash=10,
+        ball_dash=9,
+        kick=4,
+        shooting=4,
+        technique=3,
+        stamina=10,
+        defense=8,
+        offense=7,
+    )

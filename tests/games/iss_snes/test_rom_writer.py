@@ -19,7 +19,6 @@ import pytest
 
 from retro_roster_patcher.core.errors import RomError
 from retro_roster_patcher.games.iss_snes.models import (
-    HAIR_STYLES,
     PLAYERS_PER_TEAM,
     TOTAL_TEAMS,
     ISSPlayerAttributes,
@@ -42,8 +41,6 @@ from retro_roster_patcher.games.iss_snes.rom_writer import (
     _rgb_to_bgr555,
     _rgb_to_predominant,
     _serialize_2bpp,
-    _shooting_to_rom,
-    _speed_to_rom,
     _to_ascii,
 )
 from tests.fixtures import synthetic_iss_rom as fixture
@@ -59,18 +56,26 @@ def out(tmp_path):
     return tmp_path / "patched.sfc"
 
 
+#: One value per field, all different, so a field written to the wrong bits
+#: shows up as another field's value.
+_DISTINCT = dict(
+    dribble=5,
+    dash=12,
+    ball_dash=9,
+    kick=3,
+    shooting=6,
+    technique=2,
+    stamina=11,
+    defense=13,
+    offense=4,
+)
+
+
 def _player(index, **kwargs):
-    attrs = ISSPlayerAttributes(
-        speed=kwargs.pop("speed", 9),
-        shooting=kwargs.pop("shooting", 11),
-        stamina=kwargs.pop("stamina", 13),
-        technique=kwargs.pop("technique", 5),
-    )
+    attrs = ISSPlayerAttributes(**{f: kwargs.pop(f, v) for f, v in _DISTINCT.items()})
     return ISSPlayerRecord(
         name=kwargs.pop("name", f"WRITE{index:02d}"[:8]),
         shirt_number=kwargs.pop("shirt_number", index + 1),
-        hair_style=kwargs.pop("hair_style", index % len(HAIR_STYLES)),
-        is_special=kwargs.pop("is_special", False),
         attributes=attrs,
         **kwargs,
     )
@@ -175,109 +180,6 @@ def test_near_black_is_classified_red():
     above 200, and with all three equal and low the `r >= g and r >= b` arm wins,
     so a black kit sets the predominant colour to Red."""
     assert _rgb_to_predominant(10, 10, 10) == 2
-
-
-@pytest.mark.parametrize(
-    ("value", "expected"),
-    [(1, 0), (3, 1), (5, 2), (7, 3), (9, 4), (11, 5), (13, 6), (15, 7)],
-)
-def test_every_odd_shooting_value_maps_to_its_own_three_bit_index(value, expected):
-    assert _shooting_to_rom(value) == expected
-
-
-def test_an_even_shooting_value_rounds_down_on_a_tie():
-    """`d < best_dist`, strictly, so 4 is equidistant from 3 and 5 and takes 3."""
-    assert _shooting_to_rom(4) == _shooting_to_rom(3)
-
-
-def test_a_shooting_value_above_the_scale_saturates():
-    assert _shooting_to_rom(99) == 7
-
-
-def test_a_shooting_value_below_the_scale_saturates():
-    assert _shooting_to_rom(-5) == 0
-
-
-@pytest.mark.parametrize("value", [1, 2, 3, 4, 5, 6, 7])
-def test_the_low_half_of_the_speed_scale_encodes_to_multiples_of_0x20(value):
-    """To 7, which is where upstream stopped it. 0xE0 is the largest multiple of
-    0x20 a byte holds, so the decoder's exact branch would cover 1-8 and this
-    branch covers one fewer; `_speed_to_rom` says why the short version ships.
-    """
-    assert _speed_to_rom(value) == (value - 1) * 0x20
-
-
-def _decode_speed(byte):
-    """The decoder `_speed_to_rom`'s docstring quotes from SkillData.java."""
-    if byte % 0x20 == 0:
-        return byte // 0x20 + 1
-    return (byte + 1) // 0x20 + 8
-
-
-@pytest.mark.parametrize("value", [1, 2, 3, 4, 5, 6, 7, 9, 10, 11, 12, 13, 14, 15, 16])
-def test_every_speed_but_eight_round_trips_through_the_games_own_decoder(value):
-    """Fifteen of the sixteen. 8 is the exception and has its own test below."""
-    assert _decode_speed(_speed_to_rom(value)) == value
-
-
-def test_the_scales_midpoint_encodes_to_zero():
-    """PINS UPSTREAM FIDELITY DELIBERATELY. Do not "fix" this back.
-
-    `clamped <= 7` sends 8 down the high branch, where `(8 - 8) * 0x20 - 1` is
-    -1 and `max(0, -1)` is 0. This port encoded it as 0xE0 for a while, which
-    round-trips; 0x00 is the byte upstream wrote and no released build ever
-    wrote the other. See `_speed_to_rom`.
-    """
-    assert _speed_to_rom(8) == 0x00
-
-
-def test_the_scales_midpoint_therefore_reads_back_as_the_slowest_speed():
-    """The cost of the line above, stated separately: 0 is a multiple of 0x20, so
-    the decoder takes its first branch and answers 1 rather than 8."""
-    assert _decode_speed(_speed_to_rom(8)) == 1
-
-
-def test_the_default_speed_no_provider_measured_is_the_one_that_breaks():
-    """Why the single broken value is the expensive one: it is the default every
-    player the provider measured nothing for gets."""
-    assert ISSPlayerAttributes().speed == 8
-
-
-def test_the_two_speed_branches_meet_with_an_overlap_at_the_bottom():
-    """PINS UPSTREAM FIDELITY DELIBERATELY: sixteen values, fifteen distinct
-    bytes. Speed 1 and speed 8 both encode to 0x00."""
-    encoded = [_speed_to_rom(value) for value in range(1, 17)]
-    assert encoded == [
-        0x00,
-        0x20,
-        0x40,
-        0x60,
-        0x80,
-        0xA0,
-        0xC0,
-        0x00,
-        31,
-        63,
-        95,
-        127,
-        159,
-        191,
-        223,
-        255,
-    ]
-    assert len(set(encoded)) == 15
-
-
-@pytest.mark.parametrize("value", list(range(1, 17)))
-def test_every_encoded_speed_fits_in_the_byte_it_is_written_to(value):
-    """`max(0, ...)` is load-bearing for 8 alone -- the expression is -1 there --
-    and `& 0xFF` for nothing; both are upstream's and both are back."""
-    assert _speed_to_rom(value) in range(0x100)
-
-
-def test_speed_is_clamped_at_both_ends():
-    assert _speed_to_rom(0) == _speed_to_rom(1)
-    assert _speed_to_rom(99) == _speed_to_rom(16)
 
 
 def test_p40000_biases_the_high_byte_by_0x80():
@@ -601,143 +503,128 @@ def _record(path, slot, player, header=0):
     return path.read_bytes()[base + header : base + header + 6]
 
 
+def _decode(record):
+    """The verified record layout, transcribed independently of the writer."""
+    b0, b1, b2, b3, b4, b5 = record
+    return dict(
+        dribble=b0 & 0x0F,
+        dash=b0 >> 4,
+        kick=b1 & 0x07,
+        shooting=(b1 >> 4) & 0x07,
+        technique=b2 & 0x07,
+        stamina=b2 >> 4,
+        ball_dash=b3 >> 4,
+        defense=b4 & 0x0F,
+        offense=b4 >> 4,
+    )
+
+
+#: The largest value each field's bits hold.
+_TOPS = dict(
+    dribble=15,
+    dash=15,
+    ball_dash=15,
+    kick=7,
+    shooting=7,
+    technique=7,
+    stamina=15,
+    defense=15,
+    offense=15,
+)
+
+
 def test_player_data_lands_in_the_enum_order_block_for_slot_five(rom, out):
     """Player data uses the *other* order, so slot 5 writes at index 5."""
     writer = ISSRomWriter(str(rom), str(out))
-    writer.write_player_data(5, [_player(0, speed=16)])
+    writer.write_player_data(5, [_player(0)])
     writer.finalize()
-    assert _record(out, 5, 0)[0] == _speed_to_rom(16)
+    assert _decode(_record(out, 5, 0)) == _DISTINCT
     assert _record(out, 24, 0) == fixture.player_data_record(24, 0)
 
 
-def test_the_speed_byte_is_replaced_outright(rom, out):
+@pytest.mark.parametrize(("field", "top"), list(_TOPS.items()))
+def test_every_value_of_each_field_round_trips_through_its_own_bits(rom, out, field, top):
+    """Every value of one field, with the other eight held at distinct values,
+    so a field written into a neighbour's bits fails here."""
+    values = list(range(top + 1))
     writer = ISSRomWriter(str(rom), str(out))
-    writer.write_player_data(0, [_player(0, speed=3)])
+    for slot in (0, 1):
+        chunk = values[slot * PLAYERS_PER_TEAM : (slot + 1) * PLAYERS_PER_TEAM]
+        if chunk:
+            writer.write_player_data(slot, [_player(i, **{field: v}) for i, v in enumerate(chunk)])
     writer.finalize()
-    assert _record(out, 0, 0)[0] == 0x40
+    for value in values:
+        decoded = _decode(_record(out, *divmod(value, PLAYERS_PER_TEAM)))
+        assert decoded == {**_DISTINCT, field: value}
 
 
-def test_the_default_speed_reaches_the_image_as_zero(rom, out):
-    """PINS UPSTREAM FIDELITY DELIBERATELY, in the bytes. Do not "fix" this back.
-
-    8 is `ISSPlayerAttributes.speed`'s default and two of the four position
-    fallback rows carry it, so this is the byte most patched players get.
-    `_speed_to_rom` says why 0x00 rather than 0xE0 ships.
-    """
+def test_every_field_at_its_top_writes_retails_super_star_record(rom, out):
+    """Retail's Super Star records read ff 77 f7 fN ff: every field at its top."""
     writer = ISSRomWriter(str(rom), str(out))
-    writer.write_player_data(0, [_player(0, speed=8)])
+    writer.write_player_data(0, [_player(0, shirt_number=1, **_TOPS)])
     writer.finalize()
-    assert _record(out, 0, 0)[0] == 0x00
+    assert _record(out, 0, 0)[:5] == bytes([0xFF, 0x77, 0xF7, 0xF0, 0xFF])
 
 
-def test_that_zero_is_a_change_to_the_image_and_not_a_byte_left_alone(rom, out):
-    """Without this the test above passes against a writer that skipped the
-    field entirely, if the fixture happened to hold 0x00 there."""
-    assert fixture.player_data_record(0, 0)[0] != 0x00
-
-
-def test_the_shooting_index_replaces_only_the_low_three_bits(rom, out):
+def test_a_field_past_its_bits_is_clamped_and_not_wrapped(rom, out):
     writer = ISSRomWriter(str(rom), str(out))
-    writer.write_player_data(0, [_player(0, shooting=15)])
+    writer.write_player_data(0, [_player(0, kick=99, stamina=16, dash=-3, shooting=8, technique=9)])
     writer.finalize()
-    original = fixture.player_data_record(0, 0)[1]
-    assert _record(out, 0, 0)[1] == (original & 0xF8) | 7
-    assert original & 0xF8 == 0xC8
+    record = _record(out, 0, 0)
+    decoded = _decode(record)
+    assert (decoded["kick"], decoded["stamina"], decoded["dash"]) == (7, 15, 0)
+    assert (decoded["shooting"], decoded["technique"]) == (7, 7)
+    assert record[1] & 0x88 == 0 and record[2] & 0x08 == 0  # no spill into the unknown bits
 
 
-def test_the_shooting_write_preserves_low_bits_that_were_already_set(rom, out):
-    """The record at (0, 0) has a low nibble of 0, so it cannot tell `& 0xF8`
-    from `& 0xFF`. The eighth record of team 0 has all three low bits set, and a
-    shooting value of 1 encodes to index 0, so the mask is the only thing that
-    can clear them."""
-    original = fixture.player_data_record(0, 7)[1]
-    assert original & 0x07 == 0x07
+def test_the_unknown_bits_are_written_zero(rom, out):
+    """b1 bits 3 and 7 and b2 bit 3 are 0 in every retail record. The fixture
+    sets them, so this is a write and not a byte left alone."""
+    original = fixture.player_data_record(0, 0)
+    assert original[1] & 0x88 == 0x88 and original[2] & 0x08 == 0x08
     writer = ISSRomWriter(str(rom), str(out))
-    writer.write_player_data(0, [_player(i, shooting=1) for i in range(8)])
+    writer.write_player_data(0, [_player(0, **_TOPS)])
     writer.finalize()
-    assert _record(out, 0, 7)[1] == original & 0xF8
-
-
-def test_the_technique_write_preserves_low_bits_that_were_already_set(rom, out):
-    """The same hole in byte 2. (0, 5) has a low nibble of 0b000 in byte 1 but
-    byte 2 there is 0xA8; (0, 4) is 0xAF, which has all three set."""
-    original = fixture.player_data_record(0, 4)[2]
-    assert original & 0x07 == 0x07
-    writer = ISSRomWriter(str(rom), str(out))
-    writer.write_player_data(0, [_player(i, technique=1) for i in range(5)])
-    writer.finalize()
-    assert _record(out, 0, 4)[2] == original & 0xF8
-
-
-def test_the_technique_index_replaces_only_the_low_three_bits(rom, out):
-    writer = ISSRomWriter(str(rom), str(out))
-    writer.write_player_data(0, [_player(0, technique=1)])
-    writer.finalize()
-    original = fixture.player_data_record(0, 0)[2]
-    assert _record(out, 0, 0)[2] == original & 0xF8
+    record = _record(out, 0, 0)
+    assert record[1] & 0x88 == 0
+    assert record[2] & 0x08 == 0
 
 
 def test_the_shirt_number_is_stored_as_one_less_in_the_low_nibble(rom, out):
     writer = ISSRomWriter(str(rom), str(out))
-    writer.write_player_data(0, [_player(0, shirt_number=10)])
+    writer.write_player_data(0, [_player(0, shirt_number=10, ball_dash=6)])
     writer.finalize()
-    original = fixture.player_data_record(0, 0)[3]
-    assert _record(out, 0, 0)[3] == (original & 0xF0) | 9
+    assert _record(out, 0, 0)[3] == 0x69
 
 
-def test_the_shirt_number_is_clamped_to_one_through_sixteen(rom, out):
+def test_the_shirt_number_is_clamped_to_one_through_fifteen(rom, out):
+    """Retail numbers run 1-15; 16 fits the nibble but the game never uses it."""
     writer = ISSRomWriter(str(rom), str(out))
     writer.write_player_data(0, [_player(0, shirt_number=99), _player(1, shirt_number=0)])
     writer.finalize()
-    assert _record(out, 0, 0)[3] & 0x0F == 15
+    assert _record(out, 0, 0)[3] & 0x0F == 14
     assert _record(out, 0, 1)[3] & 0x0F == 0
 
 
-def test_stamina_is_stored_as_one_less_in_the_low_nibble(rom, out):
+def test_the_hair_byte_is_zero_but_for_the_discs_palette_bit(rom, out):
+    """Hair 0 for everyone, bits 4, 5 and 7 cleared, bit 6 kept. The fixture
+    sets all four high bits and a non-zero hair style."""
+    assert fixture.player_data_record(0, 0)[5] & 0xF0 == 0xF0
     writer = ISSRomWriter(str(rom), str(out))
-    writer.write_player_data(0, [_player(0, stamina=16)])
+    writer.write_player_data(0, [_player(0)])
     writer.finalize()
-    original = fixture.player_data_record(0, 0)[4]
-    assert _record(out, 0, 0)[4] == (original & 0xF0) | 15
+    assert _record(out, 0, 0)[5] == 0x40
 
 
-def test_the_special_flag_sets_bit_six(rom, out):
+def test_a_clear_palette_bit_stays_clear(rom, out):
+    """The other half: bit 6 comes from the disc, never from the player."""
+    image = bytearray(rom.read_bytes())
+    image[fixture.OFS_PLAYER_DATA + 5] &= ~0x40
+    rom.write_bytes(image)
     writer = ISSRomWriter(str(rom), str(out))
-    writer.write_player_data(0, [_player(0, is_special=True, hair_style=0)])
+    writer.write_player_data(0, [_player(0)])
     writer.finalize()
-    assert _record(out, 0, 0)[5] & 0x40 == 0x40
-
-
-def test_an_ordinary_player_clears_bit_six(rom, out):
-    """The fixture record has it set, so this is a write and not a no-op."""
-    assert fixture.player_data_record(0, 0)[5] & 0x40 == 0x40
-    writer = ISSRomWriter(str(rom), str(out))
-    writer.write_player_data(0, [_player(0, is_special=False)])
-    writer.finalize()
-    assert _record(out, 0, 0)[5] & 0x40 == 0x00
-
-
-def test_bits_seven_five_and_four_of_the_hair_byte_are_preserved(rom, out):
-    writer = ISSRomWriter(str(rom), str(out))
-    writer.write_player_data(0, [_player(0, hair_style=2)])
-    writer.finalize()
-    original = fixture.player_data_record(0, 0)[5]
-    assert _record(out, 0, 0)[5] & 0xB0 == original & 0xB0
-    assert original & 0xB0 == 0xB0
-
-
-def test_the_hair_style_is_clamped_to_the_length_of_the_style_table(rom, out):
-    writer = ISSRomWriter(str(rom), str(out))
-    writer.write_player_data(0, [_player(0, hair_style=99)])
-    writer.finalize()
-    assert _record(out, 0, 0)[5] & 0x0F == len(HAIR_STYLES) - 1
-
-
-def test_a_negative_hair_style_is_clamped_to_zero(rom, out):
-    writer = ISSRomWriter(str(rom), str(out))
-    writer.write_player_data(0, [_player(0, hair_style=-3)])
-    writer.finalize()
-    assert _record(out, 0, 0)[5] & 0x0F == 0
+    assert _record(out, 0, 0)[5] == 0x00
 
 
 def test_writing_data_returns_the_count_written(rom, out):

@@ -85,21 +85,6 @@ TEAM_NAME_ORDER = [
     "Super Star",
 ]
 
-#: Hair-style ordinals, in the order the ROM's low nibble numbers them.
-HAIR_STYLES = [
-    "Short",
-    "Curly",
-    "Long Curly",
-    "Long Beard",
-    "Long Straight",
-    "Dreadlocks",
-    "Afro",
-    "Ponytail",
-    "Bald",
-    "Mid Length",
-    "Long Ribbon",
-]
-
 PLAYERS_PER_TEAM = 15
 TOTAL_TEAMS = 27
 
@@ -119,18 +104,44 @@ def name_storage_index(enum_index: int) -> int:
 
 @dataclass
 class ISSPlayerAttributes:
-    """One player's four ISS ratings, on the two scales the ROM stores.
+    """One player's nine ability fields, as the game stores them.
 
-    `speed` and `stamina` are 1-16 and occupy a whole byte and a nibble
-    respectively. `shooting` and `technique` are 1-15 odd-only: the ROM stores a
-    3-bit index into `rom_writer._SHOOTING_VALUES`, so the eight representable
-    values are 1, 3, 5, ..., 15 and an even number is rounded to the nearest.
+    The 6-byte record at 0x387EC (15 per team, `TEAM_ENUM_ORDER`), traced in the
+    game code and checked in Mesen 2 against the DATA bars of the pre-match
+    "Substituting" screen:
+
+      * b0: low nibble `dribble` (base speed and a dash's floor), high nibble
+        `dash` (dash top speed without the ball).
+      * b1: bits 0-2 `kick` (power cap of passes and charged kicks), bits 4-6
+        `shooting`. Bits 3 and 7 are 0.
+      * b2: bits 0-2 `technique`, high nibble `stamina` (energy pool
+        `(16 + 4 * stamina) << 4`). Bit 3 is 0.
+      * b3: low nibble shirt number - 1, high nibble `ball_dash` (dash top
+        speed with the ball).
+      * b4: low nibble `defense`, high nibble `offense`, an opposed pair the game
+        compares in duels.
+      * b5: low nibble hair style; bit 6 the team's alternate skin and hair
+        palette. Bits 4, 5 and 7 are 0.
+
+    The bars read technique `2 * technique`, shooting `2 * shooting`, speed
+    `(2 * dribble + dash + ball_dash) >> 2` and stamina `stamina`. The kick-off
+    condition adds -5..+2 to every field and speeds floor at 0x1C, so a low
+    value plays worse than it reads. Super Star records hold every field at its
+    maximum.
+
+    Four-bit fields are 0-15 and three-bit fields 0-7. The defaults are the
+    retail outfield medians.
     """
 
-    speed: int = 8  # 1-16
-    shooting: int = 7  # 1-15, odd
-    stamina: int = 8  # 1-16
-    technique: int = 7  # 1-15, odd
+    dribble: int = 7  # 0-15
+    dash: int = 10  # 0-15
+    ball_dash: int = 9  # 0-15
+    kick: int = 4  # 0-7
+    shooting: int = 4  # 0-7
+    technique: int = 3  # 0-7
+    stamina: int = 10  # 0-15
+    defense: int = 8  # 0-15
+    offense: int = 7  # 0-15
 
 
 @dataclass
@@ -142,10 +153,8 @@ class ISSPlayerRecord:
     """
 
     name: str  # 8 characters max, ISS custom encoding
-    shirt_number: int = 1  # 1-16
+    shirt_number: int = 1  # 1-15, each once per team
     position: int = 2  # 0=GK, 1=DF, 2=MF, 3=FW; not stored in the ROM
-    hair_style: int = 0  # index into HAIR_STYLES
-    is_special: bool = False  # star player: unique in-game appearance
     attributes: ISSPlayerAttributes = field(default_factory=ISSPlayerAttributes)
 
 

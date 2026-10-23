@@ -52,11 +52,16 @@ _OFS_PLAYER_DATA = 0x387EC
 # two copies is a real finding rather than a silent shared edit.
 _OFS_TEAM_NAME_TEXT_PTRS = 0x39DAE  # 27 x 2 bytes, P40000 (high byte biased 0x80)
 _OFS_NAME_TILES_PTRS = 0x93CD  # 27 x 2 bytes, P48000 (raw 16-bit from 0x40000)
+#: The bank operand of the code that reads the name tiles: $89 on the cartridge,
+#: $82 once `write_name_tiles` has moved them and rewritten the table as P17000.
+_OFS_NAME_TILES_BANK = 0x93C6
+_RELOCATED_NAME_TILES_BANK = 0x82
 _OFS_DESC_PTRS = 0x38000  # 27 x 2 bytes, SNES bank $02 addresses
 _MAX_NAME_TEXT_ADDR = 0x44478
 _P40000_BASE = 0x40000
 _P40000_HIGH_BIAS = 0x80
 _DESC_BANK_SNES_BASE = 0x8000
+_BANK_02_FILE_BASE = 0x10000
 #: Smallest a Konami-compressed blob can be: the 2-byte little-endian length
 #: header, and nothing else.
 _MIN_COMPRESSED_BLOB = 2
@@ -167,7 +172,9 @@ class ISSRomReader:
             the 0x44478 ceiling or `write_team_name_texts`' budget is not
             positive.
           * the name-tile table is P48000, unbiased, so every entry lands in
-            0x40000..0x4FFFF by construction; what is checked is that its 2-byte
+            0x40000..0x4FFFF by construction; or, when the code that reads it
+            names bank $82 (a ROM this patcher already wrote), P17000, biased
+            like P40000 but from 0x10000. What is checked is that its 2-byte
             length header, and the blob that header describes, are in the file.
           * the description table holds SNES bank-$02 addresses.
             `write_team_descriptions` maps one to `0x10000 + (addr - 0x8000)`,
@@ -207,9 +214,17 @@ class ISSRomReader:
         if min(name_text_addrs) >= _MAX_NAME_TEXT_ADDR:
             return False
 
-        # Name tiles: P48000, unbiased, 2-byte length header.
+        # Name tiles: P48000, unbiased, or P17000 after relocation; 2-byte
+        # length header.
+        relocated = data[base + _OFS_NAME_TILES_BANK] == _RELOCATED_NAME_TILES_BANK
         for i in range(TOTAL_TEAMS):
-            addr = _P40000_BASE + _le16(data, base + _OFS_NAME_TILES_PTRS + i * 2)
+            ptr = _le16(data, base + _OFS_NAME_TILES_PTRS + i * 2)
+            if relocated and ptr < _DESC_BANK_SNES_BASE:
+                return False
+            # Bank $82 mirrors the descriptions' bank $02.
+            addr = (
+                _BANK_02_FILE_BASE + ptr - _DESC_BANK_SNES_BASE if relocated else _P40000_BASE + ptr
+            )
             if base + addr + _MIN_COMPRESSED_BLOB > size:
                 return False
             blob_size = _le16(data, base + addr)

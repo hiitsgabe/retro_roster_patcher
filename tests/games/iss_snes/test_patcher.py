@@ -823,6 +823,20 @@ def test_analysing_a_patched_image_still_recognises_it(patcher, rom, out):
     assert patcher.analyze_rom(out).is_valid is True
 
 
+def test_analysing_a_patched_image_reads_the_relocated_name_tile_table(patcher, tmp_path, out):
+    """A patch moves the name tiles to bank $82 and rewrites their table as
+    P17000. Read as the cartridge's P48000, its pointers land around 0x4F680,
+    zeros here as at 0x4F70A in the retail ROM, and `analyze` rejected every
+    patched image."""
+    image = fixture.build_iss_rom()
+    image[0x4F600:0x50000] = bytes(0xA00)
+    rom = tmp_path / "iss.sfc"
+    rom.write_bytes(image)
+    patcher.patch(rom_path=rom, output_path=out, rosters=_mapped((0, 15)))
+    assert out.read_bytes()[fixture.DISPLACEMENT_PATCH_POINTS[0]] == fixture.PATCHED_BANK_BYTE
+    assert patcher.analyze_rom(out).is_valid is True
+
+
 def test_patching_twice_gives_the_same_image(patcher, rom, tmp_path):
     """Deterministic, and the second run reads a ROM the first one rewrote --
     the name-tile pointer table now holds P17000 pointers, and `write_name_tiles`
@@ -890,3 +904,36 @@ def test_without_order_as_given_the_input_order_is_ignored(patcher):
     data.teams[0].players.reverse()
     backward = [r.name for r in patcher.map_rosters(data, mapping).teams[0].players]
     assert forward == backward
+
+
+def _tile_blob(image, team):
+    """Team `team`'s name-tile blob, read through the relocated P17000 table."""
+    at = fixture.OFS_NAME_TILES_PTRS + 2 * team
+    address = fixture.decode_p17000(image[at : at + 2])
+    size = image[address] | (image[address + 1] << 8)
+    return image[address : address + size]
+
+
+def test_a_partial_patch_keeps_every_unpatched_teams_name_tiles(patcher, tmp_path, out):
+    """The flags go to 0x48400, inside the bank whose name tiles run to 0x48A7F
+    on the cartridge. Written before the tiles moved out, they overwrote the
+    tiles of teams left unpatched (or made the patch raise)."""
+    size = 60  # 27 blobs reach past 0x48400, as the retail ones do
+    rom = tmp_path / "iss.sfc"
+    rom.write_bytes(bytes(fixture.build_iss_rom(name_tile_blob_size=size)))
+    rosters = _mapped((26, 15), colours=[(200, 0, 0), (0, 0, 200)])
+    patcher.patch(rom_path=rom, output_path=out, rosters=rosters)
+    image = out.read_bytes()
+    for team in range(26):
+        assert _tile_blob(image, team) == fixture.name_tile_blob(team, size), team
+
+
+def test_a_patched_image_can_be_patched_again(patcher, rom, tmp_path):
+    """A second patch reads the name-tile table the first one relocated: the
+    first patch's team keeps its tiles and the image stays valid."""
+    first = tmp_path / "first.sfc"
+    second = tmp_path / "second.sfc"
+    patcher.patch(rom_path=rom, output_path=first, rosters=_mapped((0, 15)))
+    patcher.patch(rom_path=first, output_path=second, rosters=_mapped((1, 15)))
+    assert _tile_blob(second.read_bytes(), 0) == _tile_blob(first.read_bytes(), 0)
+    assert patcher.analyze_rom(second).is_valid is True

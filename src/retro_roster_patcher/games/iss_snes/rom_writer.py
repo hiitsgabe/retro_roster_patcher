@@ -8,7 +8,8 @@ ISS (International Superstar Soccer, 1994, SNES) uses a standard .sfc ROM.
 27 teams x 15 players = 405 players total.
 
 Player names use ISS custom character encoding (not ASCII).
-Player data (abilities, number, hair, special) is a 6-byte interleaved block.
+Player data (nine ability fields, shirt number, hair, palette) is a 6-byte
+record; `models.ISSPlayerAttributes` states its layout.
 Kit colors use SNES BGR555 (15-bit, little-endian).
 
 This is not a field writer with a table of offsets. Four things in it are ROM
@@ -53,7 +54,6 @@ from typing import IO
 
 from ...core.errors import RomError
 from .models import (
-    HAIR_STYLES,
     PLAYERS_PER_TEAM,
     TEAM_ENUM_ORDER,
     TOTAL_TEAMS,
@@ -68,10 +68,8 @@ from .models import (
 _OFS_PLAYER_NAMES = 0x3B62C
 _PLAYER_NAME_LENGTH = 8
 
-# Player data: 6 bytes per player, stored in TEAM_ENUM_ORDER
-# Byte layout within each 6-byte record:
-#   [0] speed data   [1] shooting data   [2] shooting+technique
-#   [3] shirt number [4] stamina data    [5] hair_style | special_flag
+# Player data: 6 bytes per player, stored in TEAM_ENUM_ORDER. Layout in
+# `models.ISSPlayerAttributes`.
 _OFS_PLAYER_DATA = 0x387EC
 _PLAYER_DATA_LENGTH = 6
 
@@ -232,9 +230,6 @@ _NAME_SPACE_WIDTH = 3
 _NAME_DEFAULT_WIDTH = 9
 _MAX_NAME_WIDTH = 70
 
-# Shooting/technique value table: 3-bit index -> odd values 1-15.
-_SHOOTING_VALUES = [1, 3, 5, 7, 9, 11, 13, 15]
-
 
 def _build_char_to_byte() -> dict[str, int]:
     """The ISS font's character-to-byte table.
@@ -284,43 +279,6 @@ def _rgb_to_bgr555(r: int, g: int, b: int) -> int:
     g5 = min(31, g * 31 // 255)
     b5 = min(31, b * 31 // 255)
     return r5 | (g5 << 5) | (b5 << 10)
-
-
-def _shooting_to_rom(value: int) -> int:
-    """Map a shooting/technique value (1-15) to the 3-bit ROM index (0-7)."""
-    best_idx = 0
-    best_dist = abs(_SHOOTING_VALUES[0] - value)
-    for i, sv in enumerate(_SHOOTING_VALUES):
-        d = abs(sv - value)
-        if d < best_dist:
-            best_dist = d
-            best_idx = i
-    return best_idx
-
-
-def _speed_to_rom(value: int) -> int:
-    """Encode speed value (1-16) to the ROM byte format.
-
-    The decoder, from SkillData.java:
-      if (b % 0x20 == 0) return b / 0x20 + 1;
-      return ((int) b + 1) / 0x20 + 8;
-
-    KNOWN WRONG AND DELIBERATELY PRESERVED: the low branch stops at 7, so speed 8
-    takes the other branch, where `(8 - 8) * 0x20 - 1` is -1 and `max(0, -1)` is
-    0 -- a multiple of 0x20, which the decoder reads back as 1. The scale's
-    midpoint, and the default every unmeasured player gets, reaches the cartridge
-    as the slowest speed in the game. Do not move the boundary to 8: byte
-    fidelity to an original nothing here has been validated against wins.
-
-    `max(0, ...)` is load-bearing for exactly that value; for 9..16 the
-    expression runs 31..255 and neither guard can fire.
-    """
-    clamped = max(1, min(16, value))
-    # Decoder: multiples of 0x20 give b/0x20+1, so V -> (V-1)*0x20 for V in 1..7
-    if clamped <= 7:
-        return (clamped - 1) * 0x20
-    # Decoder: ((b+1)/0x20) + 8 = V -> b = (V-8)*0x20 - 1
-    return max(0, (clamped - 8) * 0x20 - 1) & 0xFF
 
 
 def _char_top_tile(c: str) -> int | None:
@@ -792,51 +750,42 @@ class ISSRomWriter:
         return written
 
     def write_player_data(self, enum_index: int, players: list[ISSPlayerRecord]) -> int:
-        """Write player abilities, shirt numbers, hair and the special flag.
+        """Write each player's ability fields and shirt number.
 
-        Player data is stored in TEAM_ENUM_ORDER.
-        6 bytes per player:
-          [0] speed   [1] shooting (high nibble)
-          [2] shooting(low) + technique(high)  [3] shirt_number
-          [4] stamina [5] hair_style | special_flag
+        Player data is stored in TEAM_ENUM_ORDER, 6 bytes per player, laid out
+        as `ISSPlayerAttributes` documents. Every field is clamped to its bit
+        width and the shirt number to 1-15. Hair is 0, the retail default: the
+        engine updates only two hair objects per team. b5 bit 6 (the alternate
+        palette) is kept from the disc; every other unknown bit is written 0.
 
         Returns the records actually written, the squad size capped at
         `PLAYERS_PER_TEAM`: `PatchResult.players_patched` counts what reached the
         image, so counting the squad handed in would over-report.
         """
+
+        def nib(value: int, top: int = 15) -> int:
+            return max(0, min(top, value))
+
         base = _OFS_PLAYER_DATA + enum_index * PLAYERS_PER_TEAM * _PLAYER_DATA_LENGTH
         written = 0
         for i, player in enumerate(players[:PLAYERS_PER_TEAM]):
+            self._seek(base + i * _PLAYER_DATA_LENGTH + 5)
+            palette = self._file.read(1)[0] & 0x40
+            a = player.attributes
+            number = max(1, min(PLAYERS_PER_TEAM, player.shirt_number))
             self._seek(base + i * _PLAYER_DATA_LENGTH)
-            existing = bytearray(self._file.read(_PLAYER_DATA_LENGTH))
-            self._seek(base + i * _PLAYER_DATA_LENGTH)
-
-            attrs = player.attributes
-
-            # Byte 0: speed
-            existing[0] = _speed_to_rom(attrs.speed)
-
-            # Bytes 1-2: shooting + technique, 3 bits each, other bits preserved
-            shoot_idx = _shooting_to_rom(attrs.shooting)
-            tech_idx = _shooting_to_rom(attrs.technique)
-            existing[1] = (existing[1] & 0xF8) | (shoot_idx & 0x07)
-            existing[2] = (existing[2] & 0xF8) | (tech_idx & 0x07)
-
-            # Byte 3: shirt number (low nibble = number - 1, preserve high nibble)
-            number = max(1, min(16, player.shirt_number))
-            existing[3] = (existing[3] & 0xF0) | ((number - 1) & 0x0F)
-
-            # Byte 4: stamina (low nibble = stamina - 1)
-            stamina = max(1, min(16, attrs.stamina))
-            existing[4] = (existing[4] & 0xF0) | ((stamina - 1) & 0x0F)
-
-            # Byte 5: hair_style (low nibble) | special (bit 6). Clamp against
-            # `len(HAIR_STYLES) - 1`, never a transcribed literal.
-            hair = max(0, min(len(HAIR_STYLES) - 1, player.hair_style))
-            special_bit = 0x40 if player.is_special else 0x00
-            existing[5] = (existing[5] & 0xB0) | special_bit | (hair & 0x0F)
-
-            self._file.write(bytes(existing))
+            self._file.write(
+                bytes(
+                    [
+                        nib(a.dash) << 4 | nib(a.dribble),
+                        nib(a.shooting, 7) << 4 | nib(a.kick, 7),
+                        nib(a.stamina) << 4 | nib(a.technique, 7),
+                        nib(a.ball_dash) << 4 | (number - 1),
+                        nib(a.offense) << 4 | nib(a.defense),
+                        palette,
+                    ]
+                )
+            )
             written += 1
         return written
 
@@ -1087,21 +1036,24 @@ class ISSRomWriter:
 
         patched_names: dict of {slot_index: name_str} for teams to update.
 
-        Call this LAST of the writes that touch 0x48000 and up:
-        `write_flag_tiles_and_colors` writes at 0x48400 and the first step below
-        reads the original blobs back out of the same bank.
+        Call this BEFORE `write_flag_tiles_and_colors`: on a retail ROM the
+        blobs sit in bank $89 from 0x48000, where the flags go (0x48400), and
+        the first step below reads them all back. Flags written first corrupt
+        the tiles of every team left unpatched among the first few.
         """
-        # Read the original pointer table and compressed data for all 27 teams.
+        # A ROM this writer already patched keeps the tiles in bank $82 (the
+        # code bytes point there): P17000 pointers, biased by 0x8000 from file
+        # 0x10000. A retail ROM keeps them in bank $89: P48000, raw offsets from
+        # 0x40000.
+        self._seek(_DISPLACEMENT_PATCH_POINTS[0])
+        relocated = self._file.read(1)[0] == _DISPLACEMENT_PATCH_BYTE
         orig_ptrs = []
         orig_blobs = []
         self._seek(_OFS_NAME_TILES_PTRS)
         raw_ptrs = self._file.read(TOTAL_TEAMS * 2)
         for i in range(TOTAL_TEAMS):
-            b1 = raw_ptrs[i * 2]
-            b2 = raw_ptrs[i * 2 + 1]
-            # Original pointers are P48000 (SNES bank $89): unbiased raw 16-bit
-            # LE offset from 0x40000.
-            addr = 0x40000 + b1 + (b2 << 8)
+            ptr = raw_ptrs[i * 2] | (raw_ptrs[i * 2 + 1] << 8)
+            addr = 0x10000 + ptr - 0x8000 if relocated else 0x40000 + ptr
             orig_ptrs.append(addr)
             # Each blob starts with its own 2-byte LE size.
             self._seek(addr)

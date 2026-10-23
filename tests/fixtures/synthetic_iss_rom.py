@@ -297,23 +297,20 @@ def player_name(name_team: int, slot: int) -> str:
 def player_data_record(enum_team: int, slot: int) -> bytes:
     """One 6-byte player-data record, indexed by *enum-order* team.
 
-    Every byte varies with both coordinates, and the bits the writer preserves
-    are all set to something other than what it would write:
-
-      * bytes 1 and 2 keep their high five bits, so those are non-zero here;
-      * byte 3 keeps its high nibble and byte 4 keeps its high nibble;
-      * byte 5 keeps bits 7, 5 and 4, and byte 5's bit 6 is the "special" flag
-        the writer replaces, set here so clearing it is observable.
+    Every byte varies with both coordinates, and every bit the writer must
+    clear or keep is set: b1 bits 3 and 7 and b2 bit 3 (unknown, 0 in retail),
+    b5's hair nibble and bits 4, 5 and 7 (written 0), and b5 bit 6 (the
+    alternate palette, kept).
     """
     salt = enum_team * 17 + slot
     return bytes(
         [
-            0x21 + (salt % 0x40),  # speed: not a multiple of 0x20
-            0xC8 | (salt % 8),  # shooting: high five bits preserved
-            0xA8 | ((salt + 3) % 8),  # technique: high five bits preserved
-            0x50 | ((salt + 5) % 16),  # shirt number: high nibble preserved
-            0x30 | ((salt + 7) % 16),  # stamina: high nibble preserved
-            0xF0 | ((salt + 9) % 16),  # hair/special: bits 7,6,5,4 all set
+            0x21 + (salt % 0x40),  # dribble | dash
+            0xC8 | (salt % 8),  # kick | shooting, bits 3 and 7 set
+            0xA8 | ((salt + 3) % 8),  # technique | stamina, bit 3 set
+            0x50 | ((salt + 5) % 16),  # shirt number - 1 | ball_dash
+            0x30 | ((salt + 7) % 16),  # defense | offense
+            0xF0 | ((salt + 9) % 16),  # hair | palette bit 6, bits 7, 5, 4 set
         ]
     )
 

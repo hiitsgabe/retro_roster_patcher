@@ -11,8 +11,6 @@ season in its URL while `get_player_stats` honours the season in its path, so a
 2019 patch gets 2025's names carrying 2019's numbers. The season still reaches
 `get_squad` because it is part of the cache key.
 
-`speed` and `stamina` come out of one formula -- see `stat_mapper.py`.
-
 The writer is a ROM hack and `rom_writer.py`'s docstring is the map. Two
 consequences reach this module: the order of the write calls in `patch` is load
 bearing, and there is no ROM version check anywhere, so a revision other than
@@ -299,8 +297,9 @@ class ISSPatcher(Patcher):
                     if on_progress is not None:
                         on_progress(i / len(slots), f"Patching {record.name}...")
 
-                    # Write order is load bearing: the three calls below the loop
-                    # share a bank -- see `ISSRomWriter.write_name_tiles`.
+                    # Write order is load bearing: the name tiles leave bank $89
+                    # before any flag is written there -- see
+                    # `ISSRomWriter.write_name_tiles`.
                     writer.write_player_names(slot, record.players)
                     written = writer.write_player_data(slot, record.players)
                     writer.write_kit_colors(slot, record)
@@ -318,17 +317,17 @@ class ISSPatcher(Patcher):
                     players_patched += written
 
                 if on_progress is not None:
-                    on_progress(0.80, "Writing flags...")
-                writer.write_flag_tiles_and_colors(patched_flag_colors)
-
-                if on_progress is not None:
-                    on_progress(0.85, "Writing team names...")
+                    on_progress(0.80, "Writing team names...")
                 writer.write_team_name_texts(patched_names)
                 writer.write_team_descriptions(patched_names)
 
                 if on_progress is not None:
-                    on_progress(0.90, "Writing in-game name tiles...")
+                    on_progress(0.85, "Writing in-game name tiles...")
                 writer.write_name_tiles(patched_tile_names)
+
+                if on_progress is not None:
+                    on_progress(0.90, "Writing flags...")
+                writer.write_flag_tiles_and_colors(patched_flag_colors)
 
                 if on_progress is not None:
                     on_progress(0.95, "Finalizing...")

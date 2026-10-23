@@ -1,22 +1,30 @@
-"""Maps real-world player stats to ISS's attribute scales.
+"""Maps real-world player stats onto ISS's nine ability fields.
 
-ISS has a simpler attribute system than WE2002:
-- Speed: 1-16 (stored as complex byte encoding)
-- Shooting: 1-15 (odd values only, 3-bit encoding)
-- Stamina: 1-16 (stored as nibble + 1)
-- Technique: 1-15 (odd values only, 3-bit encoding)
+Every field lands inside the range the 390 retail non-Super-Star records use,
+never the full 0-15 scale: the kick-off condition takes up to 5 off every field
+and speeds floor at 0x1C, so a value below retail plays worse than it reads.
+The top value (15, or 7 on the 3-bit fields) is kept for the top few percent.
 
-Players are mapped from the provider's data using percentile ranking.
+  * shooting 1-7: goals and shots on target.
+  * technique 1-7: pass accuracy, averaged with dribble success when supplied.
+  * stamina 7-15: minutes per appearance.
+  * kick 2-7: passes per game, else the mean of shooting and technique.
+  * offense / defense: the position's retail slot median, moved by up to 2 with
+    the (goals + assists) and (tackles + interceptions) per game percentiles,
+    ranked within the position so the median player keeps the baseline.
+    Defense stays at the baseline when tackles are not supplied.
+  * speed: nothing ESPN reports measures pace, so `dash` is the position's
+    baseline with an age rule, `ball_dash` one less and `dribble` three less,
+    which keeps retail's order dribble <= ball_dash <= dash.
 
-`speed` and `stamina` are the same number for every ranked player: both come
-from `minutes / appearances` and both go through `_percentile_to_speed`. Leave
-it collapsed -- nothing ESPN reports measures pace, and deriving speed from
-something else would be a judgement about how the game ought to play applied to
-405 players. The collapse belongs to the ranking, not the record: the four
-`FALLBACK_ATTRS` rows give speed and stamina different values.
+A player with no appearances gets the retail medians, his position's offense
+and defense, and the same speed rule.
 """
 
 from __future__ import annotations
+
+from bisect import bisect_left, bisect_right
+from collections.abc import Callable
 
 from ...sports.espn import LINEUP_GROUPS
 from ...sports.models import Player, PlayerStats, TeamRoster
@@ -28,43 +36,68 @@ from .models import (
 )
 from .rom_writer import _to_ascii
 
+#: (percentile floor, value) rows, highest first. Tuned so the league's p10,
+#: median and p90 land on retail's.
+Table = list[tuple[float, int]]
+
 
 def _any_unsupplied(stats: PlayerStats, fields: tuple[str, ...]) -> bool:
     return any(name in stats.unsupplied for name in fields)
 
 
+def _lookup(table: Table, percentile: float) -> int:
+    return next((value for floor, value in table if percentile >= floor), table[-1][1])
+
+
+def _ranks(raw: dict[int, float]) -> dict[int, float]:
+    """Percentile of each value: the share below it, ties at their mean rank.
+
+    Ties share the middle of the ranks they span, so a group that is all zero
+    (keepers' goals) sits at the 50th percentile rather than at the bottom.
+    """
+    values = sorted(raw.values())
+    n = len(values)
+    out = {}
+    for pid, value in raw.items():
+        below = bisect_left(values, value)
+        ties = bisect_right(values, value) - below
+        out[pid] = (below + (ties - 1) / 2) / n * 100
+    return out
+
+
+def _per_game(total: Callable[[PlayerStats], float]) -> Callable[[PlayerStats], float]:
+    return lambda s: total(s) / max(s.appearances, 1)
+
+
 class ISSStatMapper:
-    # Map percentile -> ISS shooting/technique (odd 1-15 scale)
-    SHOOTING_TABLE = [
-        (95, 15),
+    SHOOTING_TABLE: Table = [(97, 7), (92, 6), (65, 5), (35, 4), (15, 3), (5, 2), (0, 1)]
+    TECHNIQUE_TABLE: Table = [(97, 7), (92, 6), (80, 5), (55, 4), (25, 3), (12, 2), (0, 1)]
+    STAMINA_TABLE: Table = [
+        (97, 15),
+        (92, 14),
         (85, 13),
-        (70, 11),
-        (50, 9),
-        (35, 7),
-        (20, 5),
-        (10, 3),
-        (0, 1),
+        (70, 12),
+        (55, 11),
+        (35, 10),
+        (20, 9),
+        (8, 8),
+        (0, 7),
     ]
+    KICK_TABLE: Table = [(97, 7), (85, 6), (65, 5), (40, 4), (15, 3), (0, 2)]
+    #: How far offense and defense move off the position baseline.
+    SHIFT_TABLE: Table = [(90, 2), (70, 1), (30, 0), (10, -1), (0, -2)]
 
-    # Map percentile -> ISS speed/stamina (1-16 scale)
-    SPEED_TABLE = [
-        (95, 16),
-        (88, 14),
-        (75, 12),
-        (60, 10),
-        (45, 8),
-        (30, 6),
-        (15, 4),
-        (5, 2),
-        (0, 1),
-    ]
-
-    FALLBACK_ATTRS = {
-        "Goalkeeper": dict(speed=6, shooting=3, stamina=8, technique=5),
-        "Defender": dict(speed=8, shooting=5, stamina=9, technique=5),
-        "Midfielder": dict(speed=8, shooting=7, stamina=10, technique=9),
-        "Attacker": dict(speed=10, shooting=11, stamina=7, technique=9),
+    #: (defense, offense, dribble, dash, ball_dash) by position: the retail
+    #: medians of the slots each position plays (keepers from slot 0 alone).
+    POSITION_BASELINES = {
+        "Goalkeeper": (12, 2, 5, 6, 5),
+        "Defender": (11, 4, 7, 10, 9),
+        "Midfielder": (8, 7, 7, 10, 9),
+        "Attacker": (4, 10, 8, 11, 10),
     }
+
+    #: No speed below retail's slowest (4), however old the player.
+    MIN_SPEED = 4
 
     POSITION_CODES = {
         "Goalkeeper": 0,
@@ -73,23 +106,18 @@ class ISSStatMapper:
         "Attacker": 3,
     }
 
-    HAIR_BY_POSITION = {
-        "Goalkeeper": 0,  # Short
-        "Defender": 0,  # Short
-        "Midfielder": 9,  # Mid length
-        "Attacker": 4,  # Long straight
-    }
-
     #: The `PlayerStats` fields each category's formula cannot do without. A
     #: player missing one is dropped from that category's ranking, not ranked on
     #: the zero his record carries. Spell the names exactly as on `PlayerStats`:
     #: a typo can never match `PlayerStats.unsupplied` and the gate silently
     #: stops gating.
     CATEGORY_INPUTS = {
-        "speed": ("minutes", "appearances"),
         "shooting": ("goals", "shots_on"),
-        "stamina": ("minutes", "appearances"),
         "technique": ("passes_accuracy",),
+        "stamina": ("minutes", "appearances"),
+        "kick": ("passes_total", "appearances"),
+        "offense": ("goals", "assists", "appearances"),
+        "defense": ("tackles_total", "interceptions", "appearances"),
     }
 
     #: Inputs a category is *better* with and survives without. ESPN measures
@@ -101,44 +129,42 @@ class ISSStatMapper:
         "technique": ("dribbles_success", "dribbles_attempts"),
     }
 
+    #: Categories ranked within the player's position: offense and defense shift
+    #: off a position baseline instead of restating it, and technique (pass
+    #: accuracy) and kick (passes per game) would otherwise hand centre-backs
+    #: the best touch and the league's top scorers the worst.
+    RANKED_BY_POSITION = ("offense", "defense", "technique", "kick")
+
     def map_team_with_league_context(
         self,
         team_roster: TeamRoster,
         all_rosters: list[TeamRoster],
         order_as_given: bool = False,
     ) -> ISSTeamRecord:
-        all_stats = {}
-        for roster in all_rosters:
-            for pid, ps in roster.player_stats.items():
-                all_stats[pid] = ps
+        # Rank only the players some team writes: bench and youth players
+        # with stats would push every written fifteen up the scale.
+        written = {p.id for r in all_rosters for p in self._fifteen(r, order_as_given)}
+        all_stats = {
+            pid: s for r in all_rosters for pid, s in r.player_stats.items() if pid in written
+        }
+        positions = {p.id: p.position for r in all_rosters for p in r.players}
 
-        percentiles = self._compute_percentiles(all_stats)
+        percentiles = self._compute_percentiles(all_stats, positions)
+        best_15 = self._fifteen(team_roster, order_as_given)
 
-        # `order_as_given`: the caller's list as it stands; slot index is the
-        # role in this ROM, so index 0 keeps goal.
-        best_15 = (
-            team_roster.players[:PLAYERS_PER_TEAM]
-            if order_as_given
-            else self._select_best_15(
-                team_roster.players, team_roster.player_stats, team_roster.extra.get("lineup")
+        iss_players = [
+            ISSPlayerRecord(
+                name=rom_name,
+                shirt_number=number,
+                position=self.POSITION_CODES.get(player.position, 2),
+                attributes=self.map_player(
+                    player, team_roster.player_stats.get(player.id), percentiles
+                ),
             )
-        )
-
-        iss_players = []
-        for player, rom_name in zip(best_15, self._distinct_names(best_15), strict=True):
-            stats = team_roster.player_stats.get(player.id)
-            attrs = self.map_player(player, stats, percentiles)
-            hair = self.HAIR_BY_POSITION.get(player.position, 0)
-            iss_players.append(
-                ISSPlayerRecord(
-                    name=rom_name,
-                    shirt_number=player.number or 1,
-                    position=self.POSITION_CODES.get(player.position, 2),
-                    hair_style=hair,
-                    is_special=self._is_star_player(player, stats),
-                    attributes=attrs,
-                )
+            for player, rom_name, number in zip(
+                best_15, self._distinct_names(best_15), self._shirt_numbers(best_15), strict=True
             )
+        ]
 
         return ISSTeamRecord(
             name=_to_ascii(team_roster.team.name),
@@ -156,19 +182,60 @@ class ISSStatMapper:
         stats: PlayerStats | None,
         percentiles: dict[str, dict[int, float]],
     ) -> ISSPlayerAttributes:
+        defense, offense, dribble, dash, ball_dash = self.POSITION_BASELINES.get(
+            player.position, self.POSITION_BASELINES["Midfielder"]
+        )
+        age = player.age  # 0 when unknown: no adjustment
+        step = 0
+        if age and age <= 23:
+            step = 1
+        elif age and age >= 34:
+            step = -2
+        elif age and age >= 31:
+            step = -1
+        attrs = ISSPlayerAttributes(
+            dribble=max(self.MIN_SPEED, dribble + step),
+            dash=max(self.MIN_SPEED, dash + step),
+            ball_dash=max(self.MIN_SPEED, ball_dash + step),
+            defense=defense,
+            offense=offense,
+        )
         if not stats or stats.appearances == 0:
-            return self._fallback_attributes(player)
+            return attrs
 
         pid = stats.player_id
-        return ISSPlayerAttributes(
-            speed=self._percentile_to_speed(percentiles.get("speed", {}).get(pid, 50)),
-            shooting=self._percentile_to_shooting(percentiles.get("shooting", {}).get(pid, 50)),
-            # Same lambda, same table as `speed` above, so the two cannot
-            # differ. Keep the categories separate anyway, so the collapse stays
-            # visible and a provider that one day measures pace has a slot.
-            stamina=self._percentile_to_speed(percentiles.get("stamina", {}).get(pid, 50)),
-            technique=self._percentile_to_shooting(percentiles.get("technique", {}).get(pid, 50)),
+
+        def pct(category: str) -> float | None:
+            return percentiles.get(category, {}).get(pid)
+
+        # An empty or gated category rates the player at the median.
+        attrs.shooting = _lookup(self.SHOOTING_TABLE, percentiles.get("shooting", {}).get(pid, 50))
+        attrs.technique = _lookup(
+            self.TECHNIQUE_TABLE, percentiles.get("technique", {}).get(pid, 50)
         )
+        attrs.stamina = _lookup(self.STAMINA_TABLE, percentiles.get("stamina", {}).get(pid, 50))
+        kick = pct("kick")
+        attrs.kick = (
+            _lookup(self.KICK_TABLE, kick)
+            if kick is not None
+            else max(2, min(7, (attrs.shooting + attrs.technique + 1) // 2))
+        )
+        # Keepers keep their baseline: tackles, interceptions and goals say
+        # little about them, and no traced code shows what they save with.
+        if player.position != "Goalkeeper":
+            if (off := pct("offense")) is not None:
+                attrs.offense += _lookup(self.SHIFT_TABLE, off)
+            if (dfn := pct("defense")) is not None:
+                attrs.defense += _lookup(self.SHIFT_TABLE, dfn)
+        return attrs
+
+    def _fifteen(self, roster: TeamRoster, order_as_given: bool) -> list[Player]:
+        """The fifteen this mapper writes for `roster`: the caller's list as it
+        stands when `order_as_given` (slot index is the role in this ROM, so
+        index 0 keeps goal), else the selection."""
+        if order_as_given:
+            return roster.players[:PLAYERS_PER_TEAM]
+        return self._select_best_15(roster.players, roster.player_stats, roster.extra.get("lineup"))
 
     def _technique_value(self, stats: PlayerStats) -> float:
         """Raw technique score: dribble success rate and pass accuracy, averaged.
@@ -182,81 +249,53 @@ class ISSStatMapper:
         ) / 2
 
     def _compute_percentiles(
-        self, all_stats: dict[int, PlayerStats]
+        self, all_stats: dict[int, PlayerStats], positions: dict[int, str] | None = None
     ) -> dict[str, dict[int, float]]:
         """Compute league-wide percentiles for each stat category.
 
         `n` is per-category and not `len(all_stats)`: a player whose provider did
-        not measure one of a category's required inputs is skipped for it.
+        not measure one of a category's required inputs is skipped for it. The
+        `RANKED_BY_POSITION` categories rank each position (from `positions`)
+        on its own.
         """
         if not all_stats:
             return {}
 
-        categories = {
-            "speed": lambda s: s.minutes / max(s.appearances, 1),  # Proxy: endurance
-            "shooting": lambda s: s.goals + s.shots_on * 0.3 if s.shots_on else s.goals,
-            "stamina": lambda s: s.minutes / max(s.appearances, 1),
+        categories: dict[str, Callable[[PlayerStats], float]] = {
+            "shooting": lambda s: s.goals + s.shots_on * 0.3,
             "technique": self._technique_value,
+            "stamina": _per_game(lambda s: s.minutes),
+            "kick": _per_game(lambda s: s.passes_total),
+            "offense": _per_game(lambda s: s.goals + s.assists),
+            "defense": _per_game(lambda s: s.tackles_total + s.interceptions),
         }
 
         percentiles: dict[str, dict[int, float]] = {}
         for cat_name, extract_fn in categories.items():
-            inputs = self.CATEGORY_INPUTS[cat_name]
-            raw_values = {}
+            groups: dict[str, dict[int, float]] = {}
             for pid, stats in all_stats.items():
-                if _any_unsupplied(stats, inputs):
+                if _any_unsupplied(stats, self.CATEGORY_INPUTS[cat_name]):
                     continue
-                raw_values[pid] = extract_fn(stats)
-
-            sorted_values = sorted(raw_values.values())
-            n = len(sorted_values)
-            if n == 0:
-                percentiles[cat_name] = {}
-                continue
-
-            cat_percentiles = {}
-            for pid, value in raw_values.items():
-                below = sum(1 for v in sorted_values if v < value)
-                cat_percentiles[pid] = (below / n) * 100
-            percentiles[cat_name] = cat_percentiles
+                group = (positions or {}).get(pid, "")
+                if cat_name not in self.RANKED_BY_POSITION:
+                    group = ""
+                groups.setdefault(group, {})[pid] = extract_fn(stats)
+            percentiles[cat_name] = {
+                pid: rank for raw in groups.values() for pid, rank in _ranks(raw).items()
+            }
 
         return percentiles
 
-    def _percentile_to_shooting(self, percentile: float) -> int:
-        for threshold, rating in self.SHOOTING_TABLE:
-            if percentile >= threshold:
-                return rating
-        return 1
-
-    def _percentile_to_speed(self, percentile: float) -> int:
-        for threshold, rating in self.SPEED_TABLE:
-            if percentile >= threshold:
-                return rating
-        return 1
-
-    def _fallback_attributes(self, player: Player) -> ISSPlayerAttributes:
-        defaults = self.FALLBACK_ATTRS.get(player.position, self.FALLBACK_ATTRS["Midfielder"])
-        attrs = ISSPlayerAttributes(**defaults)
-
-        age = player.age
-        if age and age < 23:
-            attrs.speed = min(16, attrs.speed + 2)
-            attrs.stamina = min(16, attrs.stamina + 1)
-        elif age and age > 32:
-            attrs.speed = max(1, attrs.speed - 2)
-            attrs.stamina = max(1, attrs.stamina - 2)
-            attrs.technique = min(15, attrs.technique + 2)
-
-        return attrs
-
-    def _is_star_player(self, player: Player, stats: PlayerStats | None) -> bool:
-        if not stats:
-            return False
-        if stats.appearances < 5:
-            return False
-        goals_per_game = stats.goals / max(stats.appearances, 1)
-        assists_per_game = stats.assists / max(stats.appearances, 1)
-        return goals_per_game >= 0.5 or assists_per_game >= 0.4
+    def _shirt_numbers(self, players: list[Player]) -> list[int]:
+        """Unique numbers 1-15, the only ones retail uses. A real number of 15
+        or below that is still free stays; everyone else takes the lowest free
+        numbers in squad order."""
+        kept: list[int | None] = []
+        for p in players:
+            free = p.number is not None and 1 <= p.number <= PLAYERS_PER_TEAM
+            kept.append(p.number if free and p.number not in kept else None)
+        spare = iter(n for n in range(1, PLAYERS_PER_TEAM + 1) if n not in kept)
+        return [n or next(spare) for n in kept]
 
     #: The fifteen's starting places by group: slot 0 keeps goal, then a 4-4-2.
     XI_PLACES = (("Goalkeeper", 1), ("Defender", 4), ("Midfielder", 4), ("Attacker", 2))
