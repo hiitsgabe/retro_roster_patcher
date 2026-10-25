@@ -286,8 +286,7 @@ def export(rom_path: Path, out_dir: Path) -> list[Path]:
         bad = _off_cartridge(rom, slot)
         if bad is not None:
             raise RomError(
-                f"The {slot.name} screen's resource {bad} is not the cartridge's this patcher "
-                f"knows"
+                f"The {slot.name} screen's resource {bad} is not the cartridge's this patcher knows"
             )
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
