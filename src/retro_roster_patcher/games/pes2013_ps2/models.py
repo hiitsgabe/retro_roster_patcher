@@ -46,6 +46,14 @@ DISPLAY_NAME_CHARS = DISPLAY_NAME_BYTES // 2 - 1
 SHIRT_NAME_BYTES = 16
 SHIRT_NAME_CHARS = SHIRT_NAME_BYTES - 1
 POSITION_BYTE = 53
+#: The look fields `RomWriter.set_look` writes (PCSX2, 2026-10-24): the skin
+#: colour, the licensed face and hair flags the game clears on an edit, and
+#: the edited flag it sets.
+SKIN_BYTE = 115
+PRESET_BYTE = 101
+PRESET_MASK = 0x28
+EDITED_BYTE = 113
+EDITED_BIT = 0x40
 
 CLUB_COUNT = 139
 CLUB_SQUAD_SIZE = 32
@@ -137,8 +145,16 @@ POSITION_GROUPS = {
 
 
 @dataclass
+class PESLook:
+    """How the game draws a player: his skin colour (byte 115 bits 0-2, 0-5,
+    shown as 1-6 in the editor). `rom_writer.RomWriter.set_look` writes it."""
+
+    skin: int = 0
+
+
+@dataclass
 class PESPlayer:
-    """One player to write: names only; the record's abilities are kept."""
+    """One player to write: names, and his look; the record's abilities are kept."""
 
     display_name: str
     shirt_name: str
@@ -149,6 +165,13 @@ class PESPlayer:
     #: Starters take the squad places whose records hold that position, which
     #: is how the club's formation is laid out.
     role: int | None = None
+    #: The provider's player, for his look (`looks.dress`): id and photo for
+    #: the head shot, nationality for the East Asian colour.
+    player_id: int = 0
+    photo_url: str = ""
+    nationality: str = ""
+    #: Set by `looks.dress`; None leaves the record's look alone.
+    look: PESLook | None = None
 
 
 @dataclass

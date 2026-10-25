@@ -1102,3 +1102,77 @@ def test_fetch_survives_a_failed_lineup(tmp_path):
     assert [t.extra.get("lineup", {}).get("event") for t in data.teams] == [1, None]
     assert [len(t.players) for t in data.teams] == [1, 1]
     assert [t.error for t in data.teams] == ["", ""]
+
+
+# -- looks -----------------------------------------------------------------
+
+
+def test_set_look_changes_only_the_skin_bits_and_the_edited_flags(iso, tmp_path):
+    from retro_roster_patcher.games.pes2013_ps2.models import PESLook
+
+    tables = RomReader(str(iso)).__class__(str(iso))
+    tables.load()
+    t = tables.player_tables()
+    before = t.record(5)
+    RomWriter.set_look(t, 5, PESLook(skin=5))
+    after = t.record(5)
+    assert after[115] & 7 == 5 and after[115] & ~7 == before[115] & ~7
+    # What the game itself does when a player is edited: the licensed face
+    # and hair flags off (byte 101 bits 3 and 5), the edited flag on (113 bit 6).
+    assert after[101] == before[101] & ~0x28 and after[113] == before[113] | 0x40
+    assert {i for i in range(124) if after[i] != before[i]} <= {101, 113, 115}
+
+
+def _league_with_photos(photo_url):
+    team = roster(
+        10, "Arsenal", "ARS", [("David Raya", "Goalkeeper", 22), ("Kai Havertz", "Attacker", 29)]
+    )
+    team.players[1].photo_url = photo_url
+    team.players[0].nationality = "Japan"
+    return LeagueData(league=League(id=1, name="Fixture League", season=2026), teams=[team])
+
+
+def _written_looks(out):
+    reader = RomReader(str(out))
+    reader.load()
+    found = {}
+    for entry in PLAYER_ENTRIES:
+        t = reader.player_tables(entry)
+        for i in range(t.player_count):
+            rec = t.record(i)
+            name = rec[:32].decode("utf-16-le").split("\0")[0]
+            if name in ("DAVID RAYA", "KAI HAVERTZ"):
+                found.setdefault(name, []).append((rec[115] & 7, rec[101] & 0x28, rec[113] & 0x40))
+    return found
+
+
+def test_patch_writes_the_skin_from_the_head_shot_into_both_entries(iso, tmp_path):
+    pytest.importorskip("PIL")
+    from tests.fixtures.synthetic_headshot import headshot
+
+    dark = headshot((95, 60, 40))
+    patcher = PES2013PS2Patcher(tmp_path, transport=lambda url, headers, timeout: dark)
+    rosters = patcher.map_rosters(
+        _league_with_photos("https://x/1.png"), [SlotMapping(slot_index=0, team_id=10)]
+    )
+    out = tmp_path / "out.iso"
+    patcher.patch(rom_path=iso, output_path=out, rosters=rosters, logos=False, kits=False)
+    found = _written_looks(out)
+    assert found["KAI HAVERTZ"] == [(3, 0, 0x40)] * 2  # the darkest colour, in entries 46 and 47
+    assert found["DAVID RAYA"] == [(1, 0, 0x40)] * 2  # East Asian by nationality
+
+
+def test_looks_off_downloads_nothing_and_writes_the_plain_default(iso, tmp_path):
+    def transport(url, headers, timeout):
+        raise AssertionError("no head shot may be fetched with looks off")
+
+    patcher = PES2013PS2Patcher(tmp_path, transport=transport)
+    rosters = patcher.map_rosters(
+        _league_with_photos("https://x/1.png"), [SlotMapping(slot_index=0, team_id=10)]
+    )
+    out = tmp_path / "out.iso"
+    patcher.patch(
+        rom_path=iso, output_path=out, rosters=rosters, logos=False, kits=False, looks=False
+    )
+    found = _written_looks(out)
+    assert found["KAI HAVERTZ"] == [(0, 0, 0x40)] * 2

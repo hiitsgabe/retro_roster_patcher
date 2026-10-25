@@ -20,6 +20,8 @@ from .models import (
     CLUB_SQUAD_SIZE,
     DISPLAY_NAME_BYTES,
     DISPLAY_NAME_CHARS,
+    EDITED_BIT,
+    EDITED_BYTE,
     EMBLEM_ENTRIES,
     EMBLEM_PAIRS,
     LEAGUE_NAME_ANCHOR,
@@ -30,10 +32,14 @@ from .models import (
     PART_PLAYERS,
     PLAYER_RECORD_SIZE,
     POSITION_BYTE,
+    PRESET_BYTE,
+    PRESET_MASK,
     SHIRT_NAME_BYTES,
     SHIRT_NAME_CHARS,
+    SKIN_BYTE,
     TEXT_AFS,
     TEXT_LANGUAGE_AFS,
+    PESLook,
 )
 from .rom_reader import OverlayTeams, PlayerTables, RomReader
 
@@ -125,6 +131,20 @@ class RomWriter:
         players = bytearray(tables.players)
         at = index * PLAYER_RECORD_SIZE + POSITION_BYTE
         players[at] = (players[at] & 0x0F) | ((nibble & 0xF) << 4)
+        tables.parts[PART_PLAYERS] = bytes(players)
+
+    @staticmethod
+    def set_look(tables: PlayerTables, index: int, look: PESLook) -> None:
+        """Put a player's look into his record: the skin colour in byte 115
+        bits 0-2, and what the game itself does when a player is edited: the
+        licensed face and hair flags off (byte 101 bits 3 and 5, so the
+        generic face takes the colour) and the edited flag on (byte 113 bit 6).
+        Checked in PCSX2 on 2026-10-24."""
+        players = bytearray(tables.players)
+        at = index * PLAYER_RECORD_SIZE
+        players[at + SKIN_BYTE] = (players[at + SKIN_BYTE] & ~0x07) | (max(0, min(5, look.skin)))
+        players[at + PRESET_BYTE] &= ~PRESET_MASK & 0xFF
+        players[at + EDITED_BYTE] |= EDITED_BIT
         tables.parts[PART_PLAYERS] = bytes(players)
 
     @staticmethod

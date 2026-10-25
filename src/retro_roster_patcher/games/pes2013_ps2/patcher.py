@@ -14,11 +14,13 @@ from __future__ import annotations
 import base64
 import hashlib
 from collections import Counter
+from copy import deepcopy
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
 from ...core.errors import ApiError, CapabilityError, MappingError, RomError, as_rom_error
+from ...core.headshots import measure_faces
 from ...core.kits import KitSpec, default_kits, kit_from_image
 from ...core.models import (
     MappedRosters,
@@ -35,7 +37,7 @@ from ...core.registry import register
 from ...sports import _http
 from ...sports.espn import LINEUP_GROUPS, EspnClient
 from ...sports.models import LeagueData, Player, TeamRoster
-from . import kit_textures
+from . import kit_textures, looks
 from .kits import AWAY, HOME, apply_spec
 from .models import (
     CLUB_COUNT,
@@ -437,6 +439,9 @@ class PES2013PS2Patcher(Patcher):
                         # The list's first eleven start (the editor's, with
                         # order_as_given); `_assign` keeps one keeper among them.
                         role=starting_role(p, lineup) if i < LINEUP_SIZE else None,
+                        player_id=p.id or 0,
+                        photo_url=p.photo_url or "",
+                        nationality=p.nationality or "",
                     )
                     for i, p in enumerate(
                         players[: NATIONAL_SQUAD_SIZE if national else CLUB_SQUAD_SIZE]
@@ -469,6 +474,8 @@ class PES2013PS2Patcher(Patcher):
         # Every kit choice is read and checked before the disc is copied, so a
         # bad picture is refused up front instead of after a 2 GB write.
         kit_choices = self._resolve_kits(rosters, options.get("kits", True))
+        # Looks, on a copy: the caller's records are left as mapped.
+        rosters = self._dress(rosters, bool(options.get("looks", True)))
         with as_rom_error(rom_path):
             writer = RomWriter(str(rom_path), str(output_path))
             self.status("Copying ISO...")
@@ -493,6 +500,8 @@ class PES2013PS2Patcher(Patcher):
                 for squad_slot, index, player in assignments:
                     for t in tables.values():
                         RomWriter.set_player_names(t, index, player.display_name, player.shirt_name)
+                        if player.look is not None:
+                            RomWriter.set_look(t, index, player.look)
                         if player.number:
                             RomWriter.set_club_number(t, slot, squad_slot, player.number)
                 players_patched += len(assignments)
@@ -529,6 +538,22 @@ class PES2013PS2Patcher(Patcher):
             teams_patched=len(slots) + len(national_slots),
             players_patched=players_patched,
         )
+
+    def _dress(self, rosters: MappedRosters, measure: bool) -> MappedRosters:
+        """A copy of `rosters` with every player's `look` set (`looks.dress`):
+        from his head shot when `measure`, else from nationality and the
+        default alone, with no download at all."""
+        urls = {
+            player.player_id: player.photo_url
+            for record in rosters.teams.values()
+            for player in record.players
+            if player.player_id and player.photo_url
+        }
+        faces = measure_faces(self.cache_dir, urls, self._transport, self.status) if measure else {}
+        dressed = deepcopy(rosters)
+        for record in dressed.teams.values():
+            looks.dress(record.players, faces)
+        return dressed
 
     def _fit_player_tables(
         self,
@@ -631,6 +656,8 @@ class PES2013PS2Patcher(Patcher):
             for player, idx in zip(record.players, take, strict=False):
                 for t in tables.values():
                     RomWriter.set_player_names(t, idx, player.display_name, player.shirt_name)
+                    if player.look is not None:
+                        RomWriter.set_look(t, idx, player.look)
                     RomWriter.set_position(
                         t,
                         idx,
