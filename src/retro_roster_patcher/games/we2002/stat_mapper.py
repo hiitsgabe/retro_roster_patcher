@@ -148,6 +148,12 @@ class StatMapper:
                     position=self.POSITION_CODES.get(player.position, 2),
                     shirt_number=player.number or 0,
                     attributes=attrs,
+                    player_id=player.id or 0,
+                    photo_url=player.photo_url or "",
+                    nationality=player.nationality or "",
+                    height_cm=round(player.height * 2.54) if player.height > 0 else 0,
+                    weight_lb=player.weight or 0.0,
+                    age=player.age or 0,
                 )
             )
 

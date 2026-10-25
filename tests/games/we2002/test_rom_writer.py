@@ -13,7 +13,7 @@ not the number it was handed; and `write_flag` gives every slot a style byte
 while giving two of the thirty-two no palette at all.
 """
 
-from retro_roster_patcher.games.we2002.models import WEPlayerRecord, WETeamRecord
+from retro_roster_patcher.games.we2002.models import WELook, WEPlayerRecord, WETeamRecord
 from retro_roster_patcher.games.we2002.rom_writer import (
     _ML_COLOR_OFFSETS,
     _OFS_BANDIERE_COLORE1,
@@ -25,6 +25,7 @@ from retro_roster_patcher.games.we2002.rom_writer import (
     _SQUADRE_NAZ,
     RomWriter,
     _build_flag_data,
+    _encode_player_carat,
     _slot_player_range,
 )
 
@@ -249,3 +250,22 @@ def test_the_reader_and_the_writer_agree_on_where_national_team_31_is(tmp_path):
     }
     assert palettes[31].primary == (255, 0, 0)
     assert palettes[30].primary == (0, 0, 0)
+
+
+def test_the_carat_bits_carry_the_look_where_the_editor_source_puts_them():
+    look = WELook(skin=3, hair_style=21, hair_colour=7, beard=2, beard_colour=7, build=4)
+    record = WEPlayerRecord("A", "B", 2, 9, height_cm=190, age=31, look=look)
+    c = _encode_player_carat(record)
+    assert (c[0] >> 4) | ((c[1] & 1) << 4) == 21 and (c[1] >> 1) & 7 == 7 and (c[1] >> 5) & 7 == 2
+    assert (c[2] >> 1) & 7 == 7 and 148 + ((c[2] >> 4) | ((c[3] & 3) << 4)) == 190
+    assert c[4] & 3 == 3 and (c[4] >> 2) & 7 == 4 and 15 + ((c[4] >> 5) | ((c[5] & 3) << 3)) == 31
+    assert ((c[3] >> 2) & 0x1F) + 1 == 9 and c[0] & 7 == 3  # the number and position still land
+
+
+def test_height_and_age_are_clamped_not_wrapped():
+    tall = _encode_player_carat(WEPlayerRecord("A", "B", 2, 1, height_cm=215, age=16))
+    assert 148 + ((tall[2] >> 4) | ((tall[3] & 3) << 4)) == 202
+    assert 15 + ((tall[4] >> 5) | ((tall[5] & 3) << 3)) == 18
+    short = _encode_player_carat(WEPlayerRecord("A", "B", 2, 1, height_cm=140, age=44))
+    assert 148 + ((short[2] >> 4) | ((short[3] & 3) << 4)) == 155
+    assert 15 + ((short[4] >> 5) | ((short[5] & 3) << 3)) == 40

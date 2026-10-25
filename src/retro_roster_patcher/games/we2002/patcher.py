@@ -22,6 +22,7 @@ the JSON-serialisable `core.models` one crosses this interface.
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import shutil
 import struct
@@ -30,6 +31,7 @@ from typing import Any
 
 from ...core.assets import MissingAssetError
 from ...core.errors import ApiError, CapabilityError, MappingError, RomError, as_rom_error
+from ...core.headshots import measure_faces
 from ...core.kits import KitSpec, KitTemplate, default_kits, kit_from_image
 from ...core.models import (
     MappedRosters,
@@ -46,6 +48,7 @@ from ...core.registry import register
 from ...sports import _http
 from ...sports.espn import EspnClient
 from ...sports.models import LeagueData, Team, TeamRoster
+from . import looks
 from .flag_atlas import VALID_STYLES, LogoImages, assign_styles
 from .jersey_tex import JERSEY_TEMPLATES, apply_choice, is_page_png, page_png, template_preview
 from .logo_render import render_logos
@@ -358,6 +361,10 @@ class WE2002Patcher(Patcher):
         if isinstance(kits, dict):
             self._apply_kit_choices(rosters, slots, kits)
 
+        # Looks, on a copy: the caller's records are left as mapped (kit
+        # choices above do land on them, as they always have).
+        rosters = self._dress(rosters, slots, bool(options.get("looks", True)))
+
         # `Patcher.patch` promises `RomError` on any write failure, and
         # `validate_rom` above is size-only, so an unreadable image reaches the
         # writer's `shutil.copy2`. Only `OSError` is converted; anything else
@@ -439,6 +446,22 @@ class WE2002Patcher(Patcher):
             teams_patched=teams_patched,
             players_patched=players_patched,
         )
+
+    def _dress(self, rosters: MappedRosters, slots: list[int], measure: bool) -> MappedRosters:
+        """A copy of `rosters` with every player in `slots` dressed
+        (`looks.dress`): from his head shot when `measure`, else from the
+        no-photo picks alone, with no download at all."""
+        urls = {
+            record.player_id: record.photo_url
+            for slot in slots
+            for record in rosters.teams[slot].players
+            if record.player_id and record.photo_url
+        }
+        faces = measure_faces(self.cache_dir, urls, self._transport, self.status) if measure else {}
+        dressed = copy.deepcopy(rosters)
+        for slot in slots:
+            looks.dress(dressed.teams[slot].players, faces)
+        return dressed
 
     def _prepare_logos(
         self,

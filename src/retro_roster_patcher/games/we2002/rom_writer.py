@@ -1084,6 +1084,16 @@ def _we_val(attr: int) -> int:
     return min(7, max(0, attr - 1))
 
 
+#: What the retail disc's players span (cm, years); the fields hold more
+#: (148-211, 15-46) but nothing past these was seen drawn.
+HEIGHT_RANGE = (155, 202)
+AGE_RANGE = (18, 40)
+
+
+def _clamp(value: int, low: int, high: int) -> int:
+    return min(high, max(low, value))
+
+
 def _encode_player_carat(player: WEPlayerRecord) -> bytes:
     """Encode WEPlayerRecord attributes into the 12-byte str_carat format.
 
@@ -1104,14 +1114,18 @@ def _encode_player_carat(player: WEPlayerRecord) -> bytes:
     a = player.attributes
 
     posizione = _POS_MAP.get(player.position, 1)
-    stile_capelli = 0
-    col_capelli = 0
-    stile_barba = 0
-    col_barba = 0
-    col_pelle = 0
-    corporatura = 2
-    altezza = 178
-    eta = 25
+    look = player.look
+    stile_capelli = _clamp(look.hair_style, 0, 31)
+    col_capelli = _clamp(look.hair_colour, 0, 7)
+    stile_barba = _clamp(look.beard, 0, 7)
+    col_barba = _clamp(look.beard_colour, 0, 7)
+    col_pelle = _clamp(look.skin, 0, 3)
+    corporatura = _clamp(look.build, 0, 7)
+    # Clamped, never masked: a 6-bit height wraps a 2.10 m keeper to a dwarf.
+    altezza = (
+        _clamp(player.height_cm, HEIGHT_RANGE[0], HEIGHT_RANGE[1]) if player.height_cm > 0 else 178
+    )
+    eta = _clamp(player.age, AGE_RANGE[0], AGE_RANGE[1]) if player.age > 0 else 25
     scarpe = 0
     piede = 0
     fuori_ruolo = 0

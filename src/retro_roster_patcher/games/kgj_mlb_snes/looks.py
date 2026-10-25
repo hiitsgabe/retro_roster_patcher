@@ -19,9 +19,9 @@ the sprite, and some reset or hang the game (Mesen 2, retail cartridge).
 
 from __future__ import annotations
 
-import hashlib
 from collections.abc import Mapping, Sequence
 
+from ...core.looks import pick as _pick
 from .models import KGJPlayerRecord
 
 #: The ITA (`core.skin`) between the game's tones 0-5, lightest first. Set by
@@ -66,16 +66,6 @@ _REPICKS = 16
 #: $85:D1B4: LDA team / CMP #$3A (AL All-Stars) / BEQ / CMP #$32 (Seattle) /
 #: BNE / LDA jersey / CMP #, then the jersey compared with: 24.
 _GRIFFEY_RULE = bytes.fromhex("c93a00f005c93200d016adf512c9")
-
-
-def _pick(weights: Sequence[int], key: str) -> int:
-    """A weighted choice that the same key always makes."""
-    h = int.from_bytes(hashlib.sha256(key.encode()).digest()[:8], "big") % sum(weights)
-    for value, weight in enumerate(weights):
-        if h < weight:
-            return value
-        h -= weight
-    raise AssertionError("unreachable")
 
 
 def build(player_id: int, height_in: float, weight_lb: float) -> tuple[int, int]:

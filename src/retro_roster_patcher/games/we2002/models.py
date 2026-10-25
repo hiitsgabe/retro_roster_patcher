@@ -35,12 +35,36 @@ class WEPlayerAttributes:
 
 
 @dataclass
+class WELook:
+    """How the game draws a player (the carat record's look fields, see
+    `rom_writer._encode_player_carat`). Defaults are the retail disc's
+    commonest values; `looks.dress` picks each player's own."""
+
+    skin: int = 0  # 0 pale, 1 East Asian, 2 brown, 3 dark
+    hair_style: int = 20  # 0-31
+    hair_colour: int = 1  # 0 black, 1 brown, 7 blond (2-6 unverified)
+    beard: int = 0  # 0 none, 1-6 styles
+    beard_colour: int = 1  # the hair colours
+    build: int = 5  # 3 tall to 6 short on the disc; 0 is the untouched default
+
+
+@dataclass
 class WEPlayerRecord:
     last_name: str
     first_name: str
     position: int  # 0=GK, 1=DF, 2=MF, 3=FW
     shirt_number: int
     attributes: WEPlayerAttributes = field(default_factory=WEPlayerAttributes)
+    # The provider's player, for his look (`looks.dress`): id and photo for
+    # the head shot, nationality for the East Asian tone, bio for build,
+    # height and age. Zero or empty when the provider gave none.
+    player_id: int = 0
+    photo_url: str = ""
+    nationality: str = ""
+    height_cm: int = 0
+    weight_lb: float = 0.0
+    age: int = 0
+    look: WELook = field(default_factory=WELook)
 
 
 @dataclass

@@ -1617,3 +1617,53 @@ def test_without_order_as_given_the_input_order_is_ignored(patcher):
     forward = _map_one(patcher, _roster(100, players=players, player_stats=stats))
     backward = _map_one(patcher, _roster(100, players=players[::-1], player_stats=stats))
     assert [r.last_name for r in forward.players] == [r.last_name for r in backward.players]
+
+
+def _recording_writer_class(log, written):
+    """The fake writer, also keeping the player records each slot was handed."""
+    base = _fake_writer_class(log)
+
+    class RecordingWriter(base):
+        def write_nat_team(self, nat_index, team, players=None, include_flag=True):
+            written[nat_index] = list(players or [])
+            return super().write_nat_team(nat_index, team, players, include_flag)
+
+    return RecordingWriter
+
+
+def _patch_one_squad(tmp_path, monkeypatch, players, transport, **options):
+    patcher = _make_patcher(tmp_path, transport=transport)
+    data = _league_data([_roster(100, players=players)])
+    mapped = patcher.map_rosters(data, slot_mapping=[SlotMapping(slot_index=0, team_id=100)])
+    written = {}
+    monkeypatch.setattr(patcher_module, "RomWriter", _recording_writer_class([], written))
+    _silence_translation(monkeypatch)
+    patcher.patch(
+        rom_path=_valid_rom(tmp_path), output_path=tmp_path / "out.bin", rosters=mapped, **options
+    )
+    return written[0], mapped.teams[0].players
+
+
+def test_looks_off_downloads_nothing_and_still_dresses_every_player(tmp_path, monkeypatch):
+    def transport(url, headers, timeout):
+        raise AssertionError("no head shot may be fetched with looks off")
+
+    players = [Player(id=i, name=f"P{i}", position="Midfielder", photo_url="p") for i in range(3)]
+    written, _ = _patch_one_squad(tmp_path, monkeypatch, players, transport, looks=False)
+    assert len(written) == 3
+    for record in written:
+        assert 0 <= record.look.skin <= 3 and 3 <= record.look.build <= 6
+
+
+def test_looks_on_dresses_the_player_from_his_head_shot_on_a_copy(tmp_path, monkeypatch):
+    pytest.importorskip("PIL")
+    from tests.fixtures.synthetic_headshot import headshot
+
+    blond = headshot((225, 180, 150), hair=(215, 185, 115))
+    players = [Player(id=1, name="P1", position="Midfielder", photo_url="http://x/1.png")]
+    written, mapped = _patch_one_squad(
+        tmp_path, monkeypatch, players, lambda url, headers, timeout: blond
+    )
+    assert written[0].look.hair_colour == 7 and written[0].look.skin == 0
+    # The caller's records are left as mapped.
+    assert mapped[0].look.hair_colour == 1

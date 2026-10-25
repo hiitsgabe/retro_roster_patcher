@@ -609,3 +609,20 @@ def test_the_lineup_reaches_the_record_the_writer_gets(mapper):
     )
     record = mapper.map_team_with_league_context(roster, [roster])
     assert [p.last_name for p in record.players[:2]] == ["P02", "P11"]
+
+
+def test_a_mapped_record_carries_the_players_bio_for_his_look(mapper):
+    player = Player(
+        id=7,
+        name="Pedro Silva",
+        position="Midfielder",
+        photo_url="p",
+        nationality="Brazil",
+        height=70.9,
+        weight=160.0,
+        age=29,
+    )
+    roster = TeamRoster(team=Team(id=100, name="Team", code="TEA"), players=[player])
+    (record,) = mapper.map_team_with_league_context(roster, [roster]).players
+    assert (record.player_id, record.photo_url, record.nationality) == (7, "p", "Brazil")
+    assert (record.height_cm, record.weight_lb, record.age) == (180, 160.0, 29)
