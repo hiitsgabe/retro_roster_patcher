@@ -220,7 +220,7 @@ def test_the_lazy_export_still_refuses_a_name_it_does_not_have():
 def test_the_games_that_dress_players_from_head_shots_say_so():
     from retro_roster_patcher import get_patcher
 
-    for game in ("kgj-mlb-snes", "we2002", "nhl07-psp", "pes2013-ps2"):
+    for game in ("kgj-mlb-snes", "we2002", "nhl07-psp", "pes2013-ps2", "iss-snes"):
         assert get_patcher(game).supports_looks is True, game
-    for game in ("nhl94-snes", "iss-snes"):
+    for game in ("nhl94-snes",):
         assert get_patcher(game).supports_looks is False, game
