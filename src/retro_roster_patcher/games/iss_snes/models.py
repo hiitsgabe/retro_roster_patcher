@@ -158,6 +158,28 @@ class ISSPlayerRecord:
     shirt_number: int = 1  # 1-15, each once per team
     position: int = 2  # 0=GK, 1=DF, 2=MF, 3=FW; not stored in the ROM
     attributes: ISSPlayerAttributes = field(default_factory=ISSPlayerAttributes)
+    #: The provider's id and head shot, and the nationality, for `looks`.
+    player_id: int = 0
+    photo_url: str = ""
+    nationality: str = ""
+    #: b5 bit 6, the team's alternate look (`ISSLook`); None keeps the disc's.
+    alternate: bool | None = None
+
+
+@dataclass(frozen=True)
+class ISSLook:
+    """How a team's players look: the team's own palette (`skin`, `hair`), the
+    alternate one its b5-bit-6 players wear (`alt_skin`, `alt_hair`, None for
+    the team's own), and the keeper's. Skins index `looks.SKIN_RAMPS`, hairs
+    name `looks.HAIR`. The default is the plain look of a player without a
+    photo: the lightest skin and black hair."""
+
+    skin: int = 0
+    hair: str = "black"
+    alt_skin: int | None = None
+    alt_hair: str | None = None
+    keeper_skin: int = 0
+    keeper_hair: str = "black"
 
 
 @dataclass
@@ -186,6 +208,8 @@ class ISSTeamRecord:
     # Where the crest comes from: `assets_dir/logos/<team_id>.png`, else the URL.
     team_id: int | None = None
     logo_url: str = ""
+    #: Set by `looks.dress`; None leaves the cartridge's palettes alone.
+    look: ISSLook | None = None
 
 
 @dataclass

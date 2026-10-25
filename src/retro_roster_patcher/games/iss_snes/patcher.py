@@ -20,10 +20,12 @@ the one the ten 65816 patch addresses belong to is patched just as willingly.
 from __future__ import annotations
 
 import hashlib
+from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
 from ...core.errors import ApiError, CapabilityError, MappingError, RomError, as_rom_error
+from ...core.headshots import measure_faces
 from ...core.kits import KitSpec, KitTemplate, default_kits
 from ...core.models import (
     MappedRosters,
@@ -40,7 +42,7 @@ from ...core.registry import register
 from ...sports import _http
 from ...sports.espn import EspnClient
 from ...sports.models import LeagueData, Team, TeamRoster
-from . import kits, screens
+from . import kits, looks, screens
 from .models import (
     PLAYERS_PER_TEAM,
     TEAM_ENUM_ORDER,
@@ -111,6 +113,11 @@ class ISSPatcher(Patcher):
     #: crest's colours; `{"template": n}` copies one of the 26 cartridge kits
     #: `kit_templates` lists, its chest design included.
     supports_kits: bool = True
+    #: `patch(looks=True)`, the default: each mapped team's two looks (its own
+    #: palette and the alternate its b5-bit-6 players wear) and its keeper's,
+    #: from the players' head shots (`looks`). `looks=False` downloads nothing
+    #: and leaves the cartridge's palettes and each slot's bit 6 as they were.
+    supports_looks: bool = True
 
     #: Screen art `patch(images={name: png})` can replace; `export_images`
     #: writes the cartridge's current art for each. See `screens.SLOTS`.
@@ -340,6 +347,9 @@ class ISSPatcher(Patcher):
         blank = bool(options.get("blank_unused", False))
         unused = [s for s in range(TOTAL_TEAMS) if s not in slots] if blank else []
         flags, fallbacks = self._flags(rosters, slots, logos=options.get("logos", True))
+        dress = bool(options.get("looks", True))
+        if dress:
+            rosters = self._dress(rosters, slots)
 
         patched_names: dict[int, str] = {}
         patched_tile_names: dict[int, str] = {}
@@ -353,6 +363,8 @@ class ISSPatcher(Patcher):
             # The constructor copies the input over the output and holds a
             # handle; `with` releases it when `write_name_tiles` raises.
             with ISSRomWriter(str(rom_path), str(output_path), reader.header_offset) as writer:
+                if dress:
+                    writer.write_look_records()
                 for i, slot in enumerate(slots):
                     record: ISSTeamRecord = rosters.teams[slot]
                     if on_progress is not None:
@@ -363,6 +375,8 @@ class ISSPatcher(Patcher):
                     # `ISSRomWriter.write_name_tiles`.
                     writer.write_player_names(slot, record.players)
                     written = writer.write_player_data(slot, record.players)
+                    if record.look is not None:
+                        writer.write_look(slot, record.look)
                     # The shirt numbers (flag entry 12) are set against the
                     # shirts the team now wears; `None`: the cartridge's kit.
                     shirts[slot] = (None, None)
@@ -439,6 +453,22 @@ class ISSPatcher(Patcher):
             teams_patched=teams_patched,
             players_patched=players_patched,
         )
+
+    def _dress(self, rosters: MappedRosters, slots: list[int]) -> MappedRosters:
+        """A copy of `rosters` with every team in `slots` dressed from its
+        players' head shots (`looks.dress`); the caller's records stay as
+        mapped."""
+        urls = {
+            player.player_id: player.photo_url
+            for slot in slots
+            for player in rosters.teams[slot].players
+            if player.player_id and player.photo_url
+        }
+        faces = measure_faces(self.cache_dir, urls, self._transport, self.status)
+        dressed = deepcopy(rosters)
+        for slot in slots:
+            looks.dress(dressed.teams[slot], faces)
+        return dressed
 
     @staticmethod
     def _kit_plans(

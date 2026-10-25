@@ -1640,3 +1640,131 @@ def test_a_near_tie_goes_to_the_brighter_number_colour(home, away):
 
     flag = Flag(pixels=[[0] * 24 for _ in range(16)], colours=[home, away, home, away])
     assert number_colour(flag, _kit_shades(home) + _kit_shades(away)) == (0, 0, 0)
+
+
+# --- Looks -----------------------------------------------------------------
+#
+# A team's hair and five skin shades sit 12 bytes before each of its kits;
+# its alternate look is a pointer per team into bank $85 at $81:8D3C (skin)
+# and $81:8D74 (hair); its keeper's hair and three shades sit 8 bytes before
+# the keeper's gloves. Traced in the code at $80:ADDA-$80:AE7A.
+
+from retro_roster_patcher.games.iss_snes import looks as iss_looks  # noqa: E402
+from retro_roster_patcher.games.iss_snes.models import ISSLook  # noqa: E402
+from retro_roster_patcher.games.iss_snes.rom_writer import (  # noqa: E402
+    ALT_HAIR_RECORDS,
+    ALT_SKIN_RECORDS,
+)
+
+
+def _words(path, offset, count):
+    return list(struct.unpack(f"<{count}H", _read(path, offset, 2 * count)))
+
+
+def _bank85(address):
+    return 0x28000 + address - 0x8000
+
+
+def _colours(*rgbs):
+    """Exact BGR555: the cartridge's colours are 5-bit values times 8."""
+    return [(r >> 3) | (g >> 3) << 5 | (b >> 3) << 10 for r, g, b in rgbs]
+
+
+def test_a_look_puts_the_hair_and_five_shades_before_both_kits(rom, out):
+    writer = ISSRomWriter(str(rom), str(out))
+    writer.write_look(0, ISSLook(skin=iss_looks.DARK, hair="blond"))
+    writer.finalize()
+    expected = _colours(iss_looks.HAIR["blond"], *iss_looks.SKIN_RAMPS[iss_looks.DARK])
+    assert _words(out, fixture.OFS_KIT1_RANGE1 - 12, 6) == expected
+    assert _words(out, fixture.OFS_KIT2_RANGE1 - 12, 6) == expected
+
+
+def test_a_second_range_team_gets_its_look_before_its_own_kits(rom, out):
+    scotland = TEAM_ENUM_ORDER.index("Scotland")  # second of the eight in range 2
+    writer = ISSRomWriter(str(rom), str(out))
+    writer.write_look(scotland, ISSLook(skin=iss_looks.TAN, hair="red"))
+    writer.finalize()
+    expected = _colours(iss_looks.HAIR["red"], *iss_looks.SKIN_RAMPS[iss_looks.TAN])
+    assert _words(out, fixture.OFS_KIT1_RANGE2 + 32 - 12, 6) == expected
+    assert _words(out, fixture.OFS_KIT2_RANGE2 + 32 - 12, 6) == expected
+
+
+def test_a_look_leaves_the_kits_alone(rom, out):
+    before = _read(rom, fixture.OFS_KIT1_RANGE1, 16) + _read(rom, fixture.OFS_KIT2_RANGE1, 16)
+    writer = ISSRomWriter(str(rom), str(out))
+    writer.write_look(0, ISSLook(skin=iss_looks.DARK, hair="blond"))
+    writer.finalize()
+    after = _read(out, fixture.OFS_KIT1_RANGE1, 16) + _read(out, fixture.OFS_KIT2_RANGE1, 16)
+    assert after == before
+
+
+def test_the_alternate_points_at_the_shared_records(rom, out):
+    slot = TEAM_ENUM_ORDER.index("Brazil")
+    writer = ISSRomWriter(str(rom), str(out))
+    writer.write_look(slot, ISSLook(skin=iss_looks.TAN, alt_skin=iss_looks.DARK, alt_hair="blond"))
+    writer.write_look(0, ISSLook())
+    writer.finalize()
+    assert _words(out, 0x8D3C + 2 * slot, 1) == [0xEA05]
+    assert _words(out, 0x8D74 + 2 * slot, 1) == [0xEA1D]
+    # No alternate: 0, the team's own look.
+    assert _words(out, 0x8D3C, 1) == [0] and _words(out, 0x8D74, 1) == [0]
+
+
+def test_the_shared_records_hold_the_ramps_and_hairs_they_are_named_for(rom, out):
+    writer = ISSRomWriter(str(rom), str(out))
+    writer.write_look_records()
+    writer.finalize()
+    for skin, address in ALT_SKIN_RECORDS.items():
+        assert _words(out, _bank85(address), 6) == [0x0009, *_colours(*iss_looks.SKIN_RAMPS[skin])]
+    for hair, address in ALT_HAIR_RECORDS.items():
+        assert _words(out, _bank85(address), 2) == [0x0001, *_colours(iss_looks.HAIR[hair])]
+    assert set(ALT_SKIN_RECORDS) == set(iss_looks.ALT_SKINS)
+    assert set(ALT_HAIR_RECORDS) == set(iss_looks.ALT_HAIRS)
+
+
+def test_the_shared_records_the_retail_cartridge_points_at_keep_their_colours(rom, out):
+    """Unpatched teams point at four skin and three hair records: rewriting
+    them must not change how those teams look."""
+    retail = {
+        0xE9E1: [(128, 64, 24), (184, 88, 64), (200, 136, 112), (208, 184, 168), (224, 224, 216)],
+        0xE9F9: [(88, 40, 16), (112, 56, 24), (168, 88, 64), (192, 136, 88), (224, 208, 176)],
+        0xEA05: [(56, 32, 0), (72, 48, 0), (104, 56, 0), (168, 96, 0), (224, 168, 128)],
+        0xEA11: [(128, 96, 0)],
+        0xEA15: [(104, 24, 0)],
+        0xEA19: [(32, 16, 0)],
+    }
+    writer = ISSRomWriter(str(rom), str(out))
+    writer.write_look_records()
+    writer.finalize()
+    for address, colours in retail.items():
+        assert _words(out, _bank85(address) + 2, len(colours)) == _colours(*colours)
+
+
+def test_the_keeper_gets_his_hair_and_three_shades(rom, out):
+    writer = ISSRomWriter(str(rom), str(out))
+    writer.write_look(0, ISSLook(keeper_skin=iss_looks.DARKEST, keeper_hair="grey"))
+    writer.finalize()
+    ramp = iss_looks.SKIN_RAMPS[iss_looks.DARKEST]
+    expected = _colours(iss_looks.HAIR["grey"], ramp[1], ramp[3], ramp[4])
+    assert _words(out, fixture.OFS_GK_RANGE1 - 8, 4) == expected
+
+
+def test_super_star_has_no_keeper_record_to_dress(rom, out):
+    before = rom.read_bytes()
+    writer = ISSRomWriter(str(rom), str(out))
+    writer.write_look(TEAM_ENUM_ORDER.index("Super Star"), ISSLook(keeper_skin=iss_looks.DARK))
+    writer.finalize()
+    gk_area = slice(fixture.OFS_GK_RANGE1 - 8, fixture.OFS_GK_RANGE1 + 18 * 24)
+    assert out.read_bytes()[gk_area] == before[gk_area]
+
+
+@pytest.mark.parametrize("alternate, expected", [(True, 0x40), (False, 0x00)])
+def test_a_players_alternate_look_sets_bit_six_whatever_the_disc_had(rom, out, alternate, expected):
+    for disc in (0x00, 0x40):
+        image = bytearray(rom.read_bytes())
+        image[fixture.OFS_PLAYER_DATA + 5] = (image[fixture.OFS_PLAYER_DATA + 5] & ~0x40) | disc
+        rom.write_bytes(image)
+        writer = ISSRomWriter(str(rom), str(out))
+        writer.write_player_data(0, [_player(0, alternate=alternate)])
+        writer.finalize()
+        assert _record(out, 0, 0)[5] == expected

@@ -65,11 +65,13 @@ from typing import IO
 from ...core.errors import RomError
 from ...core.text import to_ascii as _to_ascii
 from .konami import compress, decompress
+from .looks import BROWN, DARK, HAIR, LIGHT, SKIN_RAMPS, TAN
 from .models import (
     PLAYERS_PER_TEAM,
     TEAM_ENUM_ORDER,
     TOTAL_TEAMS,
     Flag,
+    ISSLook,
     ISSPlayerRecord,
     ISSTeamRecord,
     name_storage_index,
@@ -107,12 +109,35 @@ _OFS_GK_RANGE2 = 0x2F2E7  # GK kit, range 2 (8 teams, 24 bytes each)
 _OUTFIELD_KIT_STRIDE = 32
 _GK_KIT_STRIDE = 24
 
-# This team's hair and skin colours sit 12 bytes before its kit. Nothing here
-# writes them.
+# This team's hair and skin colours sit 12 bytes before its kit (`write_look`).
 _OFS_HAIR_SKIN1_RANGE1 = 0x2EA2F  # = 0x2EA3B - 12
 _OFS_HAIR_SKIN1_RANGE2 = 0x2F0DF  # = 0x2F0EB - 12
 _OFS_HAIR_SKIN2_RANGE1 = 0x2ECAF  # = 0x2ECBB - 12
 _OFS_HAIR_SKIN2_RANGE2 = 0x2F1DF  # = 0x2F1EB - 12
+
+# Looks (`looks`, `write_look`): the code at $80:ADDA-$80:AE7A loads a team's
+# kit record into OBJ palettes 0 and 2 (the second team: 1 and 3), then gives
+# palette 2 the team's alternate skin and hair: the bank $85 records these two
+# tables point at, one word per team in TEAM_ENUM_ORDER, 0 for the team's own.
+# A player with b5 bit 6 set is drawn in palette 2.
+_OFS_ALT_SKIN = 0x8D3C
+_OFS_ALT_HAIR = 0x8D74
+_BANK_85 = 0x28000
+#: The shared records an alternate look points at: a header (byte count - 1)
+#: and five skin shades, or one hair colour. The retail tables point at the
+#: light, tan and dark ramps and the brown, red and black hairs, which keep
+#: their colours; $E9ED, $EA1D and $EA21 nothing points at, so they take the
+#: brown ramp, blond and dark brown.
+ALT_SKIN_RECORDS = {LIGHT: 0xE9E1, BROWN: 0xE9ED, TAN: 0xE9F9, DARK: 0xEA05}
+ALT_HAIR_RECORDS = {
+    "brown": 0xEA11,
+    "red": 0xEA15,
+    "black": 0xEA19,
+    "blond": 0xEA1D,
+    "dark_brown": 0xEA21,
+}
+#: The keeper's three shades, of the five a ramp has.
+_KEEPER_SHADES = (1, 3, 4)
 
 # Flag tile pointer table: 4 bytes per team (top half, bottom half), P48000 format
 _OFS_FLAG_TILE_PTRS = 0x941A  # 27 entries, 4 bytes each
@@ -329,6 +354,14 @@ def _encode_iss_name(name: str, max_len: int = _PLAYER_NAME_LENGTH) -> bytes:
     for i, c in enumerate(ascii_name[:max_len]):
         encoded[i] = CHAR_TO_BYTE.get(c, 0x00)
     return bytes(encoded)
+
+
+def _exact_bgr555(*colours: tuple[int, int, int]) -> bytes:
+    """Colours whose channels are 5-bit values times 8 (the cartridge's own),
+    as little-endian BGR555 words, exactly."""
+    return b"".join(
+        struct.pack("<H", (r >> 3) | (g >> 3) << 5 | (b >> 3) << 10) for r, g, b in colours
+    )
 
 
 def _rgb_to_bgr555(r: int, g: int, b: int) -> int:
@@ -936,6 +969,17 @@ def _kit_offsets(slot: int) -> tuple[int, int]:
     return _OFS_KIT1_RANGE2 + pos, _OFS_KIT2_RANGE2 + pos
 
 
+def _gk_offset(slot: int) -> int | None:
+    """Where `slot`'s keeper record's gloves start (record + 10); None for
+    Super Star, which has no keeper record."""
+    name = TEAM_ENUM_ORDER[slot]
+    if name in _GK_RANGE1_TEAMS:
+        return _OFS_GK_RANGE1 + _GK_RANGE1_TEAMS.index(name) * _GK_KIT_STRIDE
+    if name in _KIT_RANGE2_TEAMS:
+        return _OFS_GK_RANGE2 + _KIT_RANGE2_TEAMS.index(name) * _GK_KIT_STRIDE
+    return None
+
+
 def outfield_block(colors: tuple[tuple[int, int, int], ...]) -> bytes:
     """The 16 bytes of an outfield kit: shirt and shorts in three shades and
     socks in two (`_make_shades`, dark->light). One colour is the whole kit, two
@@ -1085,7 +1129,8 @@ class ISSRomWriter:
         as `ISSPlayerAttributes` documents. Every field is clamped to its bit
         width and the shirt number to 1-15. Hair is 0, the retail default: the
         engine updates only two hair objects per team. b5 bit 6 (the alternate
-        palette) is kept from the disc; every other unknown bit is written 0.
+        palette) is the player's `alternate`, or kept from the disc when that
+        is None; every other unknown bit is written 0.
 
         Returns the records actually written, the squad size capped at
         `PLAYERS_PER_TEAM`: `PatchResult.players_patched` counts what reached the
@@ -1100,6 +1145,8 @@ class ISSRomWriter:
         for i, player in enumerate(players[:PLAYERS_PER_TEAM]):
             self._seek(base + i * _PLAYER_DATA_LENGTH + 5)
             palette = self._file.read(1)[0] & 0x40
+            if player.alternate is not None:
+                palette = 0x40 if player.alternate else 0
             a = player.attributes
             number = max(1, min(PLAYERS_PER_TEAM, player.shirt_number))
             self._seek(base + i * _PLAYER_DATA_LENGTH)
@@ -1140,14 +1187,46 @@ class ISSRomWriter:
 
     def write_gk_kit(self, enum_index: int, colors: tuple[tuple[int, int, int], ...]) -> None:
         """Write the goalkeeper's shirt and shorts; Super Star has no keeper record."""
-        enum_name = TEAM_ENUM_ORDER[enum_index]
-        if enum_name in _GK_RANGE1_TEAMS:
-            offset = _OFS_GK_RANGE1 + _GK_RANGE1_TEAMS.index(enum_name) * _GK_KIT_STRIDE
-        elif enum_name in _KIT_RANGE2_TEAMS:
-            offset = _OFS_GK_RANGE2 + _KIT_RANGE2_TEAMS.index(enum_name) * _GK_KIT_STRIDE
-        else:
-            return
-        self._write_gk_kit(offset, colors)
+        offset = _gk_offset(enum_index)
+        if offset is not None:
+            self._write_gk_kit(offset, colors)
+
+    def write_look(self, enum_index: int, look: ISSLook) -> None:
+        """Put a team's looks in: its hair and five skin shades before both
+        its kits, its alternate look's pointers (0 for the team's own), and
+        its keeper's hair and three shades. `write_look_records` fills what
+        the pointers point at."""
+        own = _exact_bgr555(HAIR[look.hair], *SKIN_RAMPS[look.skin])
+        for kit in _kit_offsets(enum_index):
+            self._seek(kit - 12)
+            self._file.write(own)
+        skin = 0
+        if look.alt_skin is not None and look.alt_skin != look.skin:
+            skin = ALT_SKIN_RECORDS[look.alt_skin]
+        hair = 0
+        if look.alt_hair is not None and look.alt_hair != look.hair:
+            hair = ALT_HAIR_RECORDS[look.alt_hair]
+        self._seek(_OFS_ALT_SKIN + 2 * enum_index)
+        self._file.write(struct.pack("<H", skin))
+        self._seek(_OFS_ALT_HAIR + 2 * enum_index)
+        self._file.write(struct.pack("<H", hair))
+        keeper = _gk_offset(enum_index)
+        if keeper is not None:
+            ramp = SKIN_RAMPS[look.keeper_skin]
+            self._seek(keeper - 8)
+            self._file.write(
+                _exact_bgr555(HAIR[look.keeper_hair], *(ramp[i] for i in _KEEPER_SHADES))
+            )
+
+    def write_look_records(self) -> None:
+        """Fill the shared bank $85 records `ALT_SKIN_RECORDS` and
+        `ALT_HAIR_RECORDS` name, header and colours."""
+        for skin, address in ALT_SKIN_RECORDS.items():
+            self._seek(_BANK_85 + address - 0x8000)
+            self._file.write(struct.pack("<H", 9) + _exact_bgr555(*SKIN_RAMPS[skin]))
+        for hair, address in ALT_HAIR_RECORDS.items():
+            self._seek(_BANK_85 + address - 0x8000)
+            self._file.write(struct.pack("<H", 1) + _exact_bgr555(HAIR[hair]))
 
     def _write_outfield_kit(self, offset: int, colors: tuple[tuple[int, int, int], ...]) -> None:
         if not colors:

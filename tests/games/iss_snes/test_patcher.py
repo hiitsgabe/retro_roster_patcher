@@ -13,6 +13,8 @@ the output handle for its whole lifetime and `finalize` is what flushes it.
 
 from __future__ import annotations
 
+import struct
+
 import pytest
 
 from retro_roster_patcher.core import kits as kits_module
@@ -947,3 +949,70 @@ def test_a_patched_image_can_be_patched_again(patcher, rom, tmp_path):
     patcher.patch(rom_path=first, output_path=second, rosters=_mapped((1, 15)))
     assert _tile_blob(second.read_bytes(), 0) == _tile_blob(first.read_bytes(), 0)
     assert patcher.analyze_rom(second).is_valid is True
+
+
+# --- Looks -----------------------------------------------------------------
+
+
+def test_the_patcher_offers_player_looks():
+    assert ISSPatcher.supports_looks is True
+
+
+def test_the_mapper_keeps_what_looks_need(patcher):
+    data = patcher.fetch(season=2026, league_id=2001)
+    roster = data.teams[0]
+    for player in roster.players:
+        player.photo_url, player.nationality = f"http://x/{player.id}.png", f"N{player.id}"
+    mapped = patcher.map_rosters(data, [SlotMapping(slot_index=0, team_id=roster.team.id)])
+    written = mapped.teams[0].players
+    assert len(written) == PLAYERS_PER_TEAM
+    for player in written:
+        assert player.player_id in {p.id for p in roster.players}
+        assert player.photo_url == f"http://x/{player.player_id}.png"
+        assert player.nationality == f"N{player.player_id}"
+
+
+def _looks_rosters():
+    players = [
+        ISSPlayerRecord(name=f"L{i:02d}", shirt_number=i + 1, player_id=i + 1, photo_url=f"u{i}")
+        for i in range(PLAYERS_PER_TEAM)
+    ]
+    team = ISSTeamRecord(name="Looks FC", short_name="LKS", players=players)
+    return MappedRosters(game_id="iss-snes", teams={0: team})
+
+
+def _hair_skin(path, offset):
+    return path.read_bytes()[offset - 12 : offset]
+
+
+def test_looks_off_downloads_nothing_and_leaves_the_palettes(tmp_path, rom, out):
+    calls = []
+
+    def transport(url, headers, timeout):
+        calls.append(url)
+        return b""
+
+    p = ISSPatcher(cache_dir=tmp_path / "cache", transport=transport)
+    p.patch(rom_path=rom, output_path=out, rosters=_looks_rosters(), looks=False, logos=False)
+    assert calls == []
+    assert _hair_skin(out, fixture.OFS_KIT1_RANGE1) == _hair_skin(rom, fixture.OFS_KIT1_RANGE1)
+
+
+def test_looks_on_dresses_the_team_from_its_head_shots_on_a_copy(tmp_path, rom, out):
+    pytest.importorskip("PIL")
+    from retro_roster_patcher.games.iss_snes import looks
+    from tests.fixtures.synthetic_headshot import headshot
+
+    dark = headshot((95, 60, 40), hair=(20, 14, 10))
+    p = ISSPatcher(cache_dir=tmp_path / "cache", transport=lambda url, h, t: dark)
+    rosters = _looks_rosters()
+    p.patch(rom_path=rom, output_path=out, rosters=rosters, logos=False)
+    hair, *ramp = struct.unpack("<6H", _hair_skin(out, fixture.OFS_KIT1_RANGE1))
+    tones = {
+        tuple((r >> 3) | (g >> 3) << 5 | (b >> 3) << 10 for r, g, b in ramp_rgb): index
+        for index, ramp_rgb in enumerate(looks.SKIN_RAMPS)
+    }
+    assert tones[tuple(ramp)] in (looks.DARK, looks.DARKEST)
+    # The caller's records are left as mapped.
+    assert rosters.teams[0].look is None
+    assert all(player.alternate is None for player in rosters.teams[0].players)

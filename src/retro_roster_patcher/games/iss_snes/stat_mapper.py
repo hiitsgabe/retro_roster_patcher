@@ -160,6 +160,9 @@ class ISSStatMapper:
                 attributes=self.map_player(
                     player, team_roster.player_stats.get(player.id), percentiles
                 ),
+                player_id=player.id,
+                photo_url=player.photo_url,
+                nationality=player.nationality,
             )
             for player, rom_name, number in zip(
                 best_15, self._distinct_names(best_15), self._shirt_numbers(best_15), strict=True
