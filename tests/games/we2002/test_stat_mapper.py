@@ -625,4 +625,4 @@ def test_a_mapped_record_carries_the_players_bio_for_his_look(mapper):
     roster = TeamRoster(team=Team(id=100, name="Team", code="TEA"), players=[player])
     (record,) = mapper.map_team_with_league_context(roster, [roster]).players
     assert (record.player_id, record.photo_url, record.nationality) == (7, "p", "Brazil")
-    assert (record.height_cm, record.weight_lb, record.age) == (180, 160.0, 29)
+    assert (record.height_cm, record.age) == (180, 29)

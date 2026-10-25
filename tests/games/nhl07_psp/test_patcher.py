@@ -1830,8 +1830,11 @@ def test_patching_writes_each_players_skin_from_his_head_shot(tmp_path):
 
 
 def test_looks_off_downloads_nothing_and_still_writes_a_skin(tmp_path):
+    calls = []
+
     def transport(url, headers, timeout):
-        raise AssertionError("no head shot may be fetched with looks off")
+        calls.append(url)
+        return b""
 
     squads = {t.code: squad(1000 * (i + 1)) for i, t in enumerate(default_teams())}
     squads["ANA"][5].photo_url = "https://example.test/5.png"
@@ -1842,5 +1845,6 @@ def test_looks_off_downloads_nothing_and_still_writes_a_skin(tmp_path):
         rom_path=iso(tmp_path), output_path=out, rosters=rosters, portraits=False, looks=False
     )
     written = _written(out)
+    assert calls == []
     assert len(written) == fixture.TEAM_COUNT * 22
     assert all(r["SKIN"] in looks.SKIN_VALUES for r in written.values())

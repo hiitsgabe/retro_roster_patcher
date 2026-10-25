@@ -26,7 +26,8 @@ from .models import PESLook, PESPlayer
 
 #: The game's colours lightest first, and the ITA cuts between them.
 SKIN_VALUES = (0, 4, 2, 5, 3)
-SKIN_CUTS = (28.0, 15.0, 0.0, -25.0)
+#: Set on 110 labelled ESPN NHL and FotMob photos (2026-10-25).
+SKIN_CUTS = (28.0, 18.0, 5.0, -20.0)
 EAST_ASIAN_SKIN = 1
 #: A player without a head shot: the palest, the plain default the user asked for.
 DEFAULT_SKIN = 0

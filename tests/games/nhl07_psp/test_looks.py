@@ -8,11 +8,11 @@ from retro_roster_patcher.games.nhl07_psp.models import NHL07PlayerRecord
 
 def test_a_measured_face_lands_on_the_games_shades():
     angles = (50.0, 30.0, 10.0, -10.0, -30.0, -50.0)
-    assert [looks.skin(7, ita) for ita in angles] == [1, 2, 3, 5, 6, 7]
+    assert [looks.skin(ita) for ita in angles] == [1, 2, 3, 5, 6, 7]
 
 
 def test_without_a_photo_the_shade_is_the_lightest():
-    assert {looks.skin(pid, None) for pid in range(300)} == {1}
+    assert looks.skin(None) == 1
 
 
 def test_dress_sets_every_records_skin():

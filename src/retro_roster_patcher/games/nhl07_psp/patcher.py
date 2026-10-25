@@ -668,6 +668,10 @@ class NHL07PSPPatcher(Patcher):
         # string id never leaves a half-written output behind.
         pictures = self._decode_images(self._collect_images(options.get("images")))
         texts = self._collect_texts(options.get("texts"))
+        # Looks first, on a copy: the head shots are measured before the
+        # multi-hundred-MB copy, so a bad network fails fast and the caller's
+        # records are left as mapped.
+        rosters = self._dress(rosters, bool(options.get("looks", True)))
 
         with as_rom_error(rom_path):
             compressed = _compressed_image_format(rom_path)
@@ -706,8 +710,6 @@ class NHL07PSPPatcher(Patcher):
             master_tdb, bioatt_tdb, roster_tdb = self._parse_tdbs(writer)
             tables = _MasterTables.of(master_tdb)
             mirrors = _MirrorTables.of(bioatt_tdb, roster_tdb)
-
-            rosters = self._dress(rosters, bool(options.get("looks", True)))
 
             self.status("Writing rosters...")
             photos: dict[int, str] = {}

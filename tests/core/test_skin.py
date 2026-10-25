@@ -7,7 +7,7 @@ import pytest
 from retro_roster_patcher.core.skin import face_ita, tone
 
 PIL = pytest.importorskip("PIL")
-from PIL import Image  # noqa: E402
+from PIL import Image, ImageDraw  # noqa: E402
 
 from tests.fixtures.synthetic_headshot import headshot  # noqa: E402
 
@@ -70,3 +70,29 @@ def test_tone_counts_the_cuts_an_angle_is_below():
 def test_tone_fits_any_number_of_tones():
     assert [tone(a, (0.0,)) for a in (10, -10)] == [0, 1]
     assert tone(5, ()) == 0
+
+
+def test_a_flash_highlight_on_the_forehead_does_not_lighten_the_measure():
+    """Real faces shade smoothly from a lit brow to a shadowed chin, and a
+    studio flash adds one flat bright patch over a third of the face box.
+    The measure follows the typical skin, not that one dense bright cluster
+    (the histogram mode did, and read dark faces as pale)."""
+
+    def shaded(shine):
+        picture = Image.new("RGBA", (600, 436), (0, 0, 0, 0))
+        draw = ImageDraw.Draw(picture)
+        for i in range(19):
+            t = i / 18
+            colour = (int(150 - 90 * t), int(100 - 62 * t), int(70 - 45 * t), 255)
+            draw.rectangle((220, 110 + i * 10, 380, 120 + i * 10), fill=colour)
+        if shine:
+            draw.ellipse((236, 142, 364, 218), fill=(210, 168, 142, 255))
+        draw.rectangle((215, 50, 385, 150), fill=(20, 30, 70, 255))
+        draw.rectangle((60, 330, 540, 436), fill=(250, 250, 250, 255))
+        out = io.BytesIO()
+        picture.save(out, "PNG")
+        return face_ita(out.getvalue())
+
+    plain, shiny = shaded(False), shaded(True)
+    assert plain is not None and shiny is not None
+    assert shiny < 0 and shiny - plain < 30, (plain, shiny)

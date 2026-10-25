@@ -1163,8 +1163,11 @@ def test_patch_writes_the_skin_from_the_head_shot_into_both_entries(iso, tmp_pat
 
 
 def test_looks_off_downloads_nothing_and_writes_the_plain_default(iso, tmp_path):
+    calls = []
+
     def transport(url, headers, timeout):
-        raise AssertionError("no head shot may be fetched with looks off")
+        calls.append(url)
+        return b""
 
     patcher = PES2013PS2Patcher(tmp_path, transport=transport)
     rosters = patcher.map_rosters(
@@ -1175,4 +1178,5 @@ def test_looks_off_downloads_nothing_and_writes_the_plain_default(iso, tmp_path)
         rom_path=iso, output_path=out, rosters=rosters, logos=False, kits=False, looks=False
     )
     found = _written_looks(out)
+    assert calls == []
     assert found["KAI HAVERTZ"] == [(0, 0, 0x40)] * 2

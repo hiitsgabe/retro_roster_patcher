@@ -85,10 +85,6 @@ def _team_data_fits(reader: KGJRomReader) -> bool:
 #: The slot whose #24 the game draws as Griffey (`looks.free_number_24`).
 _SEATTLE = MODERN_MLB_TO_KGJ["SEA"]
 
-#: How many head shots one batch measures before reporting status to the app.
-#: The app kills a job that stays silent for 15 minutes, so a whole league of
-#: them at once would trip it on a slow connection.
-
 
 def _is_al(slot: int) -> bool:
     """Does this team slot play in the American League (a DH, the AL derby)?"""

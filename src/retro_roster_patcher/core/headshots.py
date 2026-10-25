@@ -81,15 +81,19 @@ def measure_faces(
     if importlib.util.find_spec("PIL") is None:
         say("Pillow is not installed; player looks not taken from head shots")
         return {}
-    from .hair import hair_colour
-    from .skin import face_ita
+    from .hair import hair_colour_of
+    from .skin import _frame, face_lab, ita_of
 
     def measure(url: str) -> Face:
         png = load_headshot(Path(cache_dir), url, transport)
         if png is None:
             return Face(None, None)
         try:
-            return Face(face_ita(png), hair_colour(png))
+            frame = _frame(png)
+            colour = face_lab(frame) if frame is not None else None
+            if frame is None or colour is None:
+                return Face(None, None)
+            return Face(ita_of(colour), hair_colour_of(frame, colour))
         except Exception:  # noqa: BLE001 - Pillow's errors (a decompression bomb among them) share no base
             return Face(None, None)
 

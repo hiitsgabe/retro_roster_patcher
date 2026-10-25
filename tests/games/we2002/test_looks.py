@@ -24,13 +24,18 @@ def _dressed(pid, face=None, **fields):
 
 
 def test_a_look_is_the_same_every_time_and_stays_in_range():
-    for pid in range(500):
-        fields = dict(height_cm=160 + pid % 45, age=18 + pid % 22)
-        a, b = _dressed(pid, **fields), _dressed(pid, **fields)
+    hairs = ("black", "dark_brown", "brown", "blond", "red", "grey", "bald")
+    for pid in range(1, 500):
+        # Every tone group's tables (a measured tone, or none), every hair.
+        face = (Face((60.0, 10.0, -40.0)[pid % 3], hairs[pid % 7]), None)[pid % 5 == 0]
+        fields = dict(
+            height_cm=160 + pid % 45, age=18 + pid % 22, nationality=("", "Japan")[pid % 11 == 0]
+        )
+        a, b = _dressed(pid, face, **fields), _dressed(pid, face, **fields)
         assert a == b
         look = a.look
         assert 0 <= look.skin <= 3 and 0 <= look.hair_style <= 31, look
-        assert look.hair_colour in (0, 1, 4, 7) and 0 <= look.beard <= 6, look
+        assert look.hair_colour in (0, 1, 2, 4, 7) and 0 <= look.beard <= 6, look
         assert 0 <= look.beard_colour <= 7 and 3 <= look.build <= 6, look
         assert 155 <= a.height_cm <= 202 and 18 <= a.age <= 40
 
@@ -61,13 +66,14 @@ def test_east_asian_nationals_get_tone_one_whatever_the_photo():
 
 
 def test_a_measured_tone_wins_over_the_pick_and_the_cuts_are_the_specs():
-    assert [_dressed(7, Face(ita, None)).look.skin for ita in (40.0, 0.0, -30.0)] == [0, 2, 3]
+    assert [_dressed(7, Face(ita, None)).look.skin for ita in (40.0, 10.0, -30.0)] == [0, 2, 3]
 
 
 def test_hair_colour_follows_the_photo_and_bald_takes_the_bald_style():
     assert _dressed(7, Face(40.0, "blond")).look.hair_colour == 7
     assert _dressed(7, Face(40.0, "black")).look.hair_colour == 0
     assert _dressed(7, Face(40.0, "grey")).look.hair_colour == 4
+    assert _dressed(7, Face(40.0, "dark_brown")).look.hair_colour == 2
     bald = _dressed(7, Face(40.0, "bald")).look
     assert (bald.hair_colour, bald.hair_style) == (0, looks.BALD_STYLE)
 

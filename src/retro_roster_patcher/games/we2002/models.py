@@ -37,14 +37,15 @@ class WEPlayerAttributes:
 @dataclass
 class WELook:
     """How the game draws a player (the carat record's look fields, see
-    `rom_writer._encode_player_carat`). Defaults are the retail disc's
-    commonest values; `looks.dress` picks each player's own."""
+    `rom_writer._encode_player_carat`). The defaults are the plain look a
+    player without a photo gets (`looks.DEFAULT_LOOK`); `looks.dress` picks
+    each player's own."""
 
-    skin: int = 0  # 0 pale, 1 East Asian, 2 brown, 3 dark
-    hair_style: int = 20  # 0-31
-    hair_colour: int = 1  # 0 black, 1 brown, 7 blond (2-6 unverified)
+    skin: int = 0  # the disc's tones 0-3, lightest first (1 is its East Asian face)
+    hair_style: int = 20  # 0-31; 20 is the disc's commonest
+    hair_colour: int = 0  # A-H as DuckStation draws them: 0 black, 1 brown, 4 grey, 7 blond
     beard: int = 0  # 0 none, 1-6 styles
-    beard_colour: int = 1  # the hair colours
+    beard_colour: int = 0  # the hair colours
     build: int = 5  # 3 tall to 6 short on the disc; 0 is the untouched default
 
 
@@ -62,7 +63,6 @@ class WEPlayerRecord:
     photo_url: str = ""
     nationality: str = ""
     height_cm: int = 0
-    weight_lb: float = 0.0
     age: int = 0
     look: WELook = field(default_factory=WELook)
 

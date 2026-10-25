@@ -19,7 +19,7 @@ player the user asked for: pale skin, black hair in the disc's commonest
 style, no beard. Never the disc's occupant, never a guess.
 
 Only values the retail disc uses are picked (1911 records read on
-2026-10-24): hair colours 0, 1, 4 and 7, builds 3-6, beard styles 0-6.
+2026-10-24): hair colours 0, 1, 2, 4 and 7, builds 3-6, beard styles 0-6.
 Skin as drawn: A pale, B yellow (the East Asian face), C brown, D dark.
 """
 
@@ -32,20 +32,21 @@ from ...core.looks import EAST_ASIAN, pick
 from ...core.skin import tone
 from .models import WELook, WEPlayerRecord
 
-#: The ITA (`core.skin`) between the game's tones 0 (pale), 2 (brown) and 3
-#: (dark), lightest first; tone 1 is the East Asian face, by nationality.
-SKIN_CUTS = (20.0, -15.0)
+#: The ITA (`core.skin`) between the game's tones 0, 2 and 3, lightest first;
+#: tone 1 is the disc's East Asian face, by nationality. Set on 110 labelled
+#: ESPN NHL and FotMob photos (2026-10-25).
+SKIN_CUTS = (25.0, 0.0)
 SKIN_LADDER = (0, 2, 3)
-#: A player without a head shot: pale, black hair in the disc's commonest
-#: style (value 20), no beard.
-DEFAULT_LOOK = WELook(skin=0, hair_style=20, hair_colour=0, beard=0, beard_colour=0)
+#: A player without a head shot: the plain look (`WELook`'s own defaults:
+#: tone 0, black hair in the disc's commonest style, no beard).
+DEFAULT_LOOK = WELook()
 #: The game's colour for what `core.hair` read, as DuckStation draws the
 #: eight (容姿設定, 2026-10-24): A black, B brown, C dark brown, D near
 #: black, E grey, F yellow blond, G light brown, H golden blond (what the
 #: disc's Scandinavians wear). No red: a redhead is drawn brown.
 HAIR_COLOUR = {
     "black": 0,
-    "dark_brown": 1,
+    "dark_brown": 2,
     "brown": 1,
     "blond": 7,
     "red": 1,
@@ -54,9 +55,8 @@ HAIR_COLOUR = {
 }
 #: No style is shaved; 19 (value 18) is the closest crop (DuckStation).
 BALD_STYLE = 18
-#: The disc's own shares, by tone group (tone 0, tone 1, tones 2-3), as
-#: weights for each value from 0 up. Hair colours other than 0, 1 and 7 are
-#: left out until they are seen drawn.
+#: The disc's own shares of hair styles and beards, by tone group (tone 0,
+#: tone 1, tones 2-3), as weights for each value from 0 up.
 HAIR_STYLE_BY_GROUP = (
     (
         231,
@@ -168,8 +168,7 @@ BEARD_BY_GROUP = (
 )
 #: Builds on the disc run tall to short: 3 averages 188 cm, 4 185, 5 180,
 #: 6 175. 0 is the untouched default of squads the designers never dressed,
-#: 7 too rare to read; neither is picked.
-BUILD_WITHOUT_HEIGHT = (0, 0, 0, 25, 494, 832, 257, 0)
+#: 7 too rare to read; neither is written.
 BUILD_FROM = ((188, 3), (183, 4), (177, 5), (0, 6))
 #: The disc's mean height by position (GK, DF, MF, FW), the centre of the
 #: spread a player without a height is given.
@@ -195,10 +194,8 @@ def skin_tone(nationality: str, ita: float | None) -> int:
     return DEFAULT_LOOK.skin
 
 
-def build(height_cm: int, key: str) -> int:
-    """The build for a height, or a disc-weighted pick without one."""
-    if height_cm <= 0:
-        return pick(BUILD_WITHOUT_HEIGHT, key + "build")
+def build(height_cm: int) -> int:
+    """The build for a height (`dress` fills a missing one first)."""
     return next(value for floor, value in BUILD_FROM if height_cm >= floor)
 
 
@@ -216,8 +213,8 @@ def dress(records: Sequence[WEPlayerRecord], faces: Mapping[int, Face] | None = 
         look.skin = skin_tone(record.nationality, face.ita if face else None)
         hair = face.hair if face else None
         if hair is None:
-            # No face, or no hair read from it: the plain default, in the
-            # measured tone when there is one.
+            # No face: the plain default. (`measure_faces` reads the tone and
+            # the hair from one frame, so a face always brings both.)
             look.hair_colour, look.hair_style = DEFAULT_LOOK.hair_colour, DEFAULT_LOOK.hair_style
             look.beard, look.beard_colour = DEFAULT_LOOK.beard, DEFAULT_LOOK.beard_colour
         else:
@@ -234,6 +231,6 @@ def dress(records: Sequence[WEPlayerRecord], faces: Mapping[int, Face] | None = 
                 centre + pick((1,) * (2 * HEIGHT_SPREAD + 1), key + "height") - HEIGHT_SPREAD
             )
         record.height_cm = min(HEIGHT_RANGE[1], max(HEIGHT_RANGE[0], record.height_cm))
-        look.build = build(record.height_cm, key)
+        look.build = build(record.height_cm)
         if record.age <= 0:
             record.age = AGE_WITHOUT_DATA

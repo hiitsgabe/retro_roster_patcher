@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import math
 
-from .skin import _frame, _lab, _typical, face_lab
+from .skin import _Frame, _frame, _lab, _typical, face_lab
 
 #: Every answer `hair_colour` gives.
 COLOURS = ("black", "dark_brown", "brown", "blond", "red", "grey", "bald")
@@ -54,8 +54,12 @@ def hair_colour(png: bytes) -> str | None:
     if frame is None:
         return None
     skin = face_lab(frame)
-    if skin is None:
-        return None
+    return None if skin is None else hair_colour_of(frame, skin)
+
+
+def hair_colour_of(frame: _Frame, skin: tuple[float, float, float]) -> str:
+    """`hair_colour` for a frame and face colour already found, so one
+    decode serves both measures (`core.headshots.measure_faces`)."""
     skin_l, skin_a, skin_b = skin
     w, h, top, cx = frame.w, frame.h, frame.top, frame.cx
     band = 0
@@ -72,7 +76,7 @@ def hair_colour(png: bytes) -> str | None:
                 hair.append(colour)
     if not hair:
         return "bald"
-    lightness, red, yellow = _typical(hair, 8)
+    lightness, red, yellow = _typical(hair, 8, mode=True)
     chroma = math.hypot(red, yellow)
     if lightness >= GREY[0] and chroma < GREY[1]:
         return "grey"

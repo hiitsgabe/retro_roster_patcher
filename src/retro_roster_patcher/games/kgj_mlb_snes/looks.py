@@ -26,10 +26,12 @@ from .models import KGJPlayerRecord
 
 #: The ITA (`core.skin`) between the game's tones 0-5, lightest first. Set by
 #: eye on the 681 ESPN head shots of 2026 sorted by ITA, against the tones'
-#: lightest shades (0 is 255,205,156 and 5 is 74,41,8 at the plate). The 2026
-#: league comes out 66/13/7/7/4/2 % from light to dark; the 1994 cartridge's
-#: batters are 47/8/9/8/19/8 %.
-SKIN_CUTS = (30.0, 18.0, 10.0, -10.0, -40.0)
+#: lightest shades (0 is 255,205,156 and 5 is 74,41,8 at the plate), when the
+#: measure was the histogram mode (30, 18, 10, -10, -40); moved on 2026-10-25
+#: to the angles that give the same shares on 268 ESPN MLB faces now that it
+#: is the median. The 2026 league comes out 66/13/7/7/4/2 % from light to
+#: dark; the 1994 cartridge's batters are 47/8/9/8/19/8 %.
+SKIN_CUTS = (23.0, 13.0, 5.0, -8.0, -34.0)
 
 #: A player without a head shot: tones weighted like the 2026 faces, so about
 #: one in sixteen comes out tone 4-5 (the cartridge's weights would make it one

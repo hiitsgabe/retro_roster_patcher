@@ -9,10 +9,14 @@ for a tanned pale one; the yellow in b* tells them apart.
 
 `face_ita` finds the face in a provider head shot and measures it, and `tone`
 cuts the angle into however many tones a game has, at the game's own cut
-points. Tuned on ESPN's 681 MLB head shots of 2026 (cut-outs, cap at the top,
-fixed framing); every one had a face found. About one face in eight comes out
-a tone off from what the eye says, mostly between the middle tones: warm
-light reads a pale face darker, bright light a brown face lighter.
+points. Framing tuned on ESPN's 681 MLB head shots of 2026 (cut-outs, cap at
+the top); every one had a face found. The skin's L* is the median of the
+face box's skin pixels: the histogram mode was tried first and, on FotMob's
+flash-lit photos, locked onto the flat bright patch on the brow and read
+brown faces as pale (checked on 110 labelled ESPN NHL and FotMob photos,
+2026-10-25). About one face in eight still comes out a tone off from what the
+eye says, mostly between the middle tones, and a fringe over the brow can
+read a pale face dark.
 
 Pillow is imported inside `_frame`, so the rest of the library stays
 importable without the `images` extra. `core.hair` reads the same frame.
@@ -114,21 +118,29 @@ def _frame(png: bytes) -> _Frame | None:
     return _Frame(w, h, raw, top, centres[len(centres) // 2], inside)
 
 
-def _typical(pixels: list[tuple[float, float, float]], window: int) -> tuple[float, float, float]:
-    """The mode of L* (a 7-unit window of the histogram), with the median a*
-    and b* of the pixels within `window` of it: a beard, teeth, glasses or a
-    shadow, each a minor cluster, do not move it."""
-    histogram = [0] * 101
-    for lightness, _, _ in pixels:
-        histogram[min(100, max(0, round(lightness)))] += 1
-    smoothed = [sum(histogram[max(0, i - 3) : i + 4]) for i in range(101)]
-    mode = max(range(101), key=smoothed.__getitem__)
-    near = [(a, b) for lightness, a, b in pixels if abs(lightness - mode) <= window] or [
+def _typical(
+    pixels: list[tuple[float, float, float]], window: int, *, mode: bool = False
+) -> tuple[float, float, float]:
+    """The typical colour of a cluster of pixels: the median L* (or, with
+    `mode`, the mode of a 7-unit window of its histogram), with the median a*
+    and b* of the pixels within `window` of it. A beard, teeth, glasses or a
+    shadow, each a minor cluster, do not move the median; a flat flash
+    highlight moves the mode, which is why the skin uses the median."""
+    lightnesses = sorted(lightness for lightness, _, _ in pixels)
+    if mode:
+        histogram = [0] * 101
+        for lightness in lightnesses:
+            histogram[min(100, max(0, round(lightness)))] += 1
+        smoothed = [sum(histogram[max(0, i - 3) : i + 4]) for i in range(101)]
+        typical = float(max(range(101), key=smoothed.__getitem__))
+    else:
+        typical = lightnesses[len(lightnesses) // 2]
+    near = [(a, b) for lightness, a, b in pixels if abs(lightness - typical) <= window] or [
         (a, b) for _, a, b in pixels
     ]
     reds = sorted(a for a, _ in near)
     yellows = sorted(b for _, b in near)
-    return float(mode), reds[len(reds) // 2], yellows[len(yellows) // 2]
+    return typical, reds[len(reds) // 2], yellows[len(yellows) // 2]
 
 
 def face_lab(frame: _Frame) -> tuple[float, float, float] | None:
@@ -137,8 +149,8 @@ def face_lab(frame: _Frame) -> tuple[float, float, float] | None:
     The face box hangs from the top of the figure: rows 0.20 to 0.50 of the
     picture's height below it, 0.11 of its width either side of the head's
     centre. That is brim to chin in ESPN's framing. The colour is `_typical`
-    of the skin pixels (`_is_skin`) in it; fewer than `MIN_SKIN_PIXELS` of
-    them is no face.
+    (the median) of the skin pixels (`_is_skin`) in it; fewer than
+    `MIN_SKIN_PIXELS` of them is no face.
     """
     w, h, top, cx = frame.w, frame.h, frame.top, frame.cx
     skin: list[tuple[float, float, float]] = []
@@ -152,6 +164,12 @@ def face_lab(frame: _Frame) -> tuple[float, float, float] | None:
     return _typical(skin, 3)
 
 
+def ita_of(colour: tuple[float, float, float]) -> float:
+    """The ITA of a skin colour (L*, a*, b*)."""
+    lightness, _, yellow = colour
+    return math.degrees(math.atan2(lightness - 50, yellow))
+
+
 def face_ita(png: bytes) -> float | None:
     """The ITA of the face in a head shot (PNG or JPEG), or None when there is
     no face to measure (`_frame`, `face_lab`). Raises whatever Pillow raises
@@ -160,10 +178,7 @@ def face_ita(png: bytes) -> float | None:
     if frame is None:
         return None
     colour = face_lab(frame)
-    if colour is None:
-        return None
-    lightness, _, yellow = colour
-    return math.degrees(math.atan2(lightness - 50, yellow))
+    return None if colour is None else ita_of(colour)
 
 
 def tone(ita: float, cuts: Sequence[float]) -> int:

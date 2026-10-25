@@ -1645,11 +1645,17 @@ def _patch_one_squad(tmp_path, monkeypatch, players, transport, **options):
 
 
 def test_looks_off_downloads_nothing_and_still_dresses_every_player(tmp_path, monkeypatch):
+    # A transport that records: `load_headshot` swallows every exception, so
+    # a raising stub would prove nothing.
+    calls = []
+
     def transport(url, headers, timeout):
-        raise AssertionError("no head shot may be fetched with looks off")
+        calls.append(url)
+        return b""
 
     players = [Player(id=i, name=f"P{i}", position="Midfielder", photo_url="p") for i in range(3)]
     written, _ = _patch_one_squad(tmp_path, monkeypatch, players, transport, looks=False)
+    assert calls == []
     assert len(written) == 3
     for record in written:
         assert 0 <= record.look.skin <= 3 and 3 <= record.look.build <= 6
@@ -1666,4 +1672,4 @@ def test_looks_on_dresses_the_player_from_his_head_shot_on_a_copy(tmp_path, monk
     )
     assert written[0].look.hair_colour == 7 and written[0].look.skin == 0
     # The caller's records are left as mapped.
-    assert mapped[0].look.hair_colour == 1
+    assert mapped[0].look.hair_colour == 0 and mapped[0].look.skin == 0
