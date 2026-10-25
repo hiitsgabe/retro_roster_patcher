@@ -1,15 +1,14 @@
-"""Each player's skin tone in NHL 07, the one look the bio table holds.
+"""Each player's skin tone in NHL 07: the bio's `SKIN` and his face texture.
 
-SPBT `SKIN` is 3 bits. The retail disc uses 1 and 2 for pale players (1427
-and 1734 of 3260 bios), 3 for tan (72), 5 and 6 for dark (10 and 12: Laraque,
-Weekes and Brashear 5; Iginla, Grier and Emery 6), 7 for the darkest (4), and
-4 once; 0 never. The shades were ordered by eye on those players; the cut
-points below are the ITA angles (`core.skin`) between them.
-PPSSPP (2026-10-24) showed the value landing in the table but not on screen:
-the game draws each bio its own face texture, and the Player Editor's head
-did not change across `SKIN` 0-7, so until the face-texture mapping is found
-a new player keeps the 2006 occupant's face. Players wear helmets, so there
-is no hair to set. Without a head shot a player gets the first shade.
+SPBT `SKIN` is 3 bits. On the retail disc 1 and 2 are pale (1427 and 1734
+of 3260 bios), 3 olive (72: Luongo), 6 brown (12: Iginla, Grier, Emery,
+Malhotra) and 5 the darkest (10: Laraque, Brashear, Weekes, Carter); 4 is
+Richard Park alone, and 7 marks four pale players. The order of 5 and 6 is
+the cheek colour of those players' own face textures (`faces.FACE_TONES`).
+The game draws the face from the texture the bio's `ART_` names, not from
+`SKIN`, so the patcher also writes each player a generic face in his shade
+(`faces`). Players wear helmets, so there is no hair to set. Without a head
+shot a player gets the first shade.
 """
 
 from __future__ import annotations
@@ -21,8 +20,8 @@ from ...core.skin import tone
 from .models import NHL07PlayerRecord
 
 #: The game's shades, lightest first, and the ITA cuts between them.
-SKIN_VALUES = (1, 2, 3, 5, 6, 7)
-SKIN_CUTS = (45.0, 20.0, 5.0, -15.0, -40.0)
+SKIN_VALUES = (1, 2, 3, 6, 5)
+SKIN_CUTS = (45.0, 20.0, 5.0, -20.0)
 #: A player without a head shot: the lightest shade, the plain default the
 #: user asked for.
 DEFAULT_SKIN = 1

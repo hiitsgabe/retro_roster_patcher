@@ -56,6 +56,15 @@ from ...sports.espn import EspnClient
 from ...sports.models import League, LeagueData, TeamRoster
 from ...sports.nhl import NhlApiClient
 from . import looks
+from .faces import (
+    FACE_TONES,
+    FACES_PATH,
+    GENERIC_FACE,
+    face_targets,
+    read_face,
+    repack_faces,
+    toned_face,
+)
 from .models import (
     NHL07_TEAM_NAMES,
     SLOT_COUNT,
@@ -727,6 +736,17 @@ class NHL07PSPPatcher(Patcher):
             if options.get("portraits", True):
                 self._write_portraits(writer, master_tdb, photos)
 
+            # The face the game draws is the texture the bio's ART_ names, not
+            # its SKIN, so every written bio gets a face in its shade.
+            spbt = master_tdb.get_table("SPBT")
+            if spbt is not None:
+                shades = {bio: spbt.read_record(bio).get("SKIN") for bio in photos}
+                self._write_faces(
+                    writer,
+                    master_tdb,
+                    {bio: shade for bio, shade in shades.items() if isinstance(shade, int)},
+                )
+
             if pictures:
                 self._write_images(writer, pictures)
 
@@ -944,6 +964,45 @@ class NHL07PSPPatcher(Patcher):
         if drawn:
             writer.write_portraits(archive, new_archive)
         self.status(f"Portraits drawn: {drawn}")
+        return drawn
+
+    def _write_faces(
+        self, writer: NHL07PSPRomWriter, master_tdb: TDBFile, skins: Mapping[int, int]
+    ) -> int:
+        """Give each written bio, by its `ART_` (`faces.face_targets`), the
+        generic face toned to its `SKIN` (`faces`): the game draws that, and no
+        2006 face stays on a new player. A bio without a face of its own keeps
+        the generic one. Needs Pillow; skipped with a status line without it.
+        Returns how many faces went in."""
+        spbt = master_tdb.get_table("SPBT")
+        if spbt is None or not skins:
+            return 0
+        art_of = {i: spbt.read_record(i).get("ART_") for i in _live_records(spbt)}
+        wanted = face_targets(art_of, skins)
+        if not wanted:
+            return 0
+        if importlib.util.find_spec("PIL") is None:
+            self.status("Faces skipped: Pillow is not installed")
+            return 0
+        with open(writer.output_path, "rb") as f:
+            found = iso_entry(f, FACES_PATH)
+            if found is None:
+                return 0
+            f.seek(found[0].extent.offset)
+            archive = f.read(found[0].extent.size)
+        generic = read_face(archive, GENERIC_FACE)
+        if generic is None:
+            return 0
+        toned = {
+            shade: toned_face(generic, FACE_TONES.get(shade, FACE_TONES[looks.DEFAULT_SKIN]))
+            for shade in set(wanted.values())
+        }
+        new_archive, drawn = repack_faces(
+            archive, {art: toned[shade] for art, shade in wanted.items()}
+        )
+        if drawn:
+            writer.write_faces(archive, new_archive)
+        self.status(f"Faces drawn: {drawn}")
         return drawn
 
     @staticmethod

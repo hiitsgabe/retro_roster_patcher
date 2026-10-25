@@ -1825,7 +1825,7 @@ def test_patching_writes_each_players_skin_from_his_head_shot(tmp_path):
     out = tmp_path / "out.iso"
     patcher.patch(rom_path=iso(tmp_path), output_path=out, rosters=rosters, portraits=False)
     written = _written(out)
-    assert written["Family1005"]["SKIN"] in (5, 6, 7)
+    assert written["Family1005"]["SKIN"] in (5, 6)
     assert all(r["SKIN"] in looks.SKIN_VALUES for r in written.values())
 
 
@@ -1848,3 +1848,34 @@ def test_looks_off_downloads_nothing_and_still_writes_a_skin(tmp_path):
     assert calls == []
     assert len(written) == fixture.TEAM_COUNT * 22
     assert all(r["SKIN"] in looks.SKIN_VALUES for r in written.values())
+
+
+def test_every_written_bio_gets_a_face_in_its_shade(tmp_path, monkeypatch):
+    """The face texture is what the game draws (`faces`), so every written
+    bio's shade reaches the face step, by bio record."""
+    pytest.importorskip("PIL")
+    from tests.fixtures.synthetic_headshot import headshot
+
+    seen = {}
+
+    def write_faces(self, writer, master_tdb, skins):
+        seen.update(skins)
+        return 0
+
+    monkeypatch.setattr(NHL07PSPPatcher, "_write_faces", write_faces)
+    dark = headshot((95, 60, 40))
+    squads = {t.code: squad(1000 * (i + 1)) for i, t in enumerate(default_teams())}
+    squads["ANA"][5].photo_url = "https://example.test/5.png"
+    patcher = build(tmp_path, transport=lambda url, headers, timeout: dark)
+    out = tmp_path / "out.iso"
+    patcher.patch(
+        rom_path=iso(tmp_path),
+        output_path=out,
+        rosters=patcher.map_rosters(league(squads=squads)),
+        portraits=False,
+    )
+    by_bio = {i: r for i, r in enumerate(spbt_of(out))}
+    assert len(seen) == fixture.TEAM_COUNT * 22
+    assert {by_bio[bio]["SKIN"] for bio in seen} <= set(looks.SKIN_VALUES)
+    assert all(seen[bio] == by_bio[bio]["SKIN"] for bio in seen)
+    assert 5 in seen.values() or 6 in seen.values()

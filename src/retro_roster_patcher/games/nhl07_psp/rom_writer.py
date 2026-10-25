@@ -34,6 +34,7 @@ from ...formats.ea_tdb import (
     refpack_compress,
     refpack_decompress,
 )
+from .faces import FACES_BH_NAME, FACES_PATH
 from .models import (
     NAME_FIELD_CHARS,
     POSITION_REVERSE,
@@ -486,6 +487,23 @@ class NHL07PSPRomWriter:
             write_in_place(f, *found, new_archive)
             for holder in HEADER_CACHE_HOLDERS:
                 sync_header_cache(f, holder, PORTAPT_BH_NAME, old_archive, new_archive)
+            f.flush()
+            os.fsync(f.fileno())
+
+    def write_faces(self, old_archive: bytes, new_archive: bytes) -> None:
+        """Write a repacked `FACES.VIV` and every cached copy of its directory.
+
+        Raises:
+            RomError: the archive, or a holder of its cached directory, does not
+                fit before the next file.
+        """
+        with open(self.output_path, "r+b") as f:
+            found = iso_entry(f, FACES_PATH)
+            if found is None:
+                raise RomError(f"Cannot find {FACES_PATH} inside {self.output_path}")
+            write_in_place(f, *found, new_archive)
+            for holder in HEADER_CACHE_HOLDERS:
+                sync_header_cache(f, holder, FACES_BH_NAME, old_archive, new_archive)
             f.flush()
             os.fsync(f.fileno())
 
