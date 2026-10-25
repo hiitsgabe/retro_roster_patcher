@@ -1287,7 +1287,7 @@ def test_patch_takes_each_players_skin_from_his_head_shot(tmp_path, rom, out):
         if record.is_pitcher:
             assert looks_[7] & 0x0F == tone
     assert len(asked) == 25
-    assert "Skin tones from head shots: 25 of 25 players" in messages
+    assert "Faces measured from head shots: 25 of 25 players" in messages
     assert mapped == before  # the caller's rosters keep the looks they were mapped with
 
 
@@ -1314,7 +1314,7 @@ def test_without_pillow_the_looks_come_from_the_id_and_a_status_says_so(
     p = KGJMLBPatcher(cache_dir=tmp_path / "cache", transport=transport, on_status=messages.append)
     mapped = p.map_rosters(_photo_league())
     p.patch(rom_path=rom, output_path=out, rosters=mapped)
-    assert "Pillow is not installed; player skin tones not taken from head shots" in messages
+    assert "Pillow is not installed; player looks not taken from head shots" in messages
     first = mapped.teams[SEA_SLOT].players[0].batter_appearance
     assert _look_bytes(out.read_bytes(), SEA_SLOT, 0)[0] == first.skin << 4 | first.head
 

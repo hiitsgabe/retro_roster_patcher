@@ -1,12 +1,17 @@
 """Provider head shots, downloaded once into `cache_dir/headshots`, for every
-game that draws or measures players' faces."""
+game that draws or measures players' faces; and `measure_faces`, the pass that
+measures a whole league's skin tones and hair colours from them."""
 
 from __future__ import annotations
 
 import hashlib
+import importlib.util
+from collections.abc import Callable, Mapping
 from pathlib import Path
+from typing import NamedTuple
 
 from ..sports import _http
+from .concurrency import parallel_map
 
 #: What a head shot body must start with to be kept: PNG or JPEG.
 IMAGE_MAGIC = (b"\x89PNG\r\n\x1a\n", b"\xff\xd8\xff")
@@ -43,3 +48,58 @@ def load_headshot(
     except OSError:
         pass
     return content
+
+
+class Face(NamedTuple):
+    """What a head shot says about a player: the face's ITA (`core.skin`) and
+    the hair colour (`core.hair`), each None when it could not be measured."""
+
+    ita: float | None
+    hair: str | None
+
+
+#: Head shots measured per status line: a whole league can run past the app's
+#: stall watchdog (it kills a job that stays silent for 15 minutes) on a slow
+#: connection.
+MEASURE_CHUNK = 25
+
+
+def measure_faces(
+    cache_dir: Path | str,
+    urls: Mapping[int, str],
+    transport: _http.Transport | None = None,
+    status: Callable[[str], None] | None = None,
+) -> dict[int, Face]:
+    """The `Face` of every player (by id) whose head shot at `urls[id]` shows
+    a face or hair to measure. Each URL is loaded once (`load_headshot`),
+    the loads overlapped in chunks of `MEASURE_CHUNK` with a status line per
+    chunk. A photo that will not load, or that Pillow cannot read, gives no
+    entry. Without Pillow, nothing is measured and `status` says so."""
+    say = status or (lambda line: None)
+    if not urls:
+        return {}
+    if importlib.util.find_spec("PIL") is None:
+        say("Pillow is not installed; player looks not taken from head shots")
+        return {}
+    from .hair import hair_colour
+    from .skin import face_ita
+
+    def measure(url: str) -> Face:
+        png = load_headshot(Path(cache_dir), url, transport)
+        if png is None:
+            return Face(None, None)
+        try:
+            return Face(face_ita(png), hair_colour(png))
+        except Exception:  # noqa: BLE001 - Pillow's errors (a decompression bomb among them) share no base
+            return Face(None, None)
+
+    say("Loading head shots...")
+    unique = sorted(set(urls.values()))
+    measured: dict[str, Face] = {}
+    for at in range(0, len(unique), MEASURE_CHUNK):
+        batch = unique[at : at + MEASURE_CHUNK]
+        measured.update(zip(batch, parallel_map(measure, batch), strict=True))
+        say(f"Head shots {min(at + MEASURE_CHUNK, len(unique))}/{len(unique)}...")
+    faces = {pid: face for pid, url in urls.items() if (face := measured[url]) != (None, None)}
+    say(f"Faces measured from head shots: {len(faces)} of {len(urls)} players")
+    return faces

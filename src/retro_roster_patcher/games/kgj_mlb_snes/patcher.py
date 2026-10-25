@@ -22,14 +22,13 @@ from __future__ import annotations
 
 import copy
 import hashlib
-import importlib.util
 import io
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from ...core.concurrency import parallel_map
 from ...core.errors import ApiError, RomError, as_rom_error
-from ...core.headshots import load_headshot
+from ...core.headshots import measure_faces
 from ...core.models import (
     MappedRosters,
     PartialFn,
@@ -42,7 +41,7 @@ from ...core.models import (
 )
 from ...core.patcher import Patcher
 from ...core.registry import register
-from ...core.skin import face_ita, tone
+from ...core.skin import tone
 from ...sports import _http
 from ...sports.espn import EspnClient
 from ...sports.models import League, LeagueData, TeamRoster
@@ -89,7 +88,6 @@ _SEATTLE = MODERN_MLB_TO_KGJ["SEA"]
 #: How many head shots one batch measures before reporting status to the app.
 #: The app kills a job that stays silent for 15 minutes, so a whole league of
 #: them at once would trip it on a slow connection.
-_HEADSHOT_CHUNK = 25
 
 
 def _is_al(slot: int) -> bool:
@@ -511,45 +509,20 @@ class KGJMLBPatcher(Patcher):
     def _skin_tones(self, rosters: MappedRosters) -> MappedRosters:
         """`rosters` with each player whose head shot shows a face dressed for
         that face's skin tone (`looks.dress`), as a copy: the caller's are left
-        as mapped. Without Pillow the looks stay as mapped, which says so in a
-        status line when there were head shots to measure."""
+        as mapped. Without Pillow the looks stay as mapped, which
+        `measure_faces` says in a status line."""
         urls = {
             record.player_id: record.photo_url
             for team in rosters.teams.values()
             for record in team.players
             if record is not None and record.photo_url
         }
-        if not urls:
-            return rosters
-        if importlib.util.find_spec("PIL") is None:
-            self.status("Pillow is not installed; player skin tones not taken from head shots")
-            return rosters
-        self.status("Loading head shots...")
-
-        def measure(url: str) -> float | None:
-            png = load_headshot(self.cache_dir, url, self._transport)
-            try:
-                return face_ita(png) if png else None
-            except Exception:  # noqa: BLE001 - Pillow's errors (a decompression bomb among them) share no base
-                return None
-
-        # A whole-league batch can run past the app's stall watchdog (it kills
-        # a job that stays silent for 15 minutes) on a slow connection, so a
-        # status names progress every chunk.
-        unique = sorted(set(urls.values()))
-        angles: dict[str, float | None] = {}
-        done = 0
-        for at in range(0, len(unique), _HEADSHOT_CHUNK):
-            batch = unique[at : at + _HEADSHOT_CHUNK]
-            angles.update(zip(batch, parallel_map(measure, batch), strict=True))
-            done += len(batch)
-            self.status(f"Head shots {done}/{len(unique)}...")
+        faces = measure_faces(self.cache_dir, urls, self._transport, self.status)
         tones = {
-            pid: tone(angle, looks.SKIN_CUTS)
-            for pid, url in urls.items()
-            if (angle := angles[url]) is not None
+            pid: tone(face.ita, looks.SKIN_CUTS)
+            for pid, face in faces.items()
+            if face.ita is not None
         }
-        self.status(f"Skin tones from head shots: {len(tones)} of {len(urls)} players")
         if not tones:
             return rosters
         dressed = copy.deepcopy(rosters)
