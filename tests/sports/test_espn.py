@@ -240,6 +240,20 @@ def test_a_hockey_squad_carries_height_and_head_shot(tmp_path):
     assert (player.height, player.photo_url) == (75.0, "https://a.espncdn.com/x.png")
 
 
+def test_a_soccer_squad_carries_height_and_weight(tmp_path):
+    body = json.loads(_soccer_roster("Alpha One"))
+    body["athletes"][0].update({"height": 75.0, "weight": 170.0})
+    transport = _roster_transport({"eng.1": json.dumps(body).encode()})
+    (player,) = EspnClient(str(tmp_path), transport=transport).get_squad(83, league_code="eng.1")
+    assert (player.height, player.weight) == (75.0, 170.0)
+
+
+def test_a_soccer_squad_without_them_reports_zero(tmp_path):
+    transport = _roster_transport({"eng.1": _soccer_roster("Alpha One")})
+    (player,) = EspnClient(str(tmp_path), transport=transport).get_squad(83, league_code="eng.1")
+    assert (player.height, player.weight) == (0.0, 0.0)
+
+
 def test_a_baseball_squad_carries_height_weight_and_head_shot(tmp_path):
     body = json.loads(_grouped_roster("Cal Raleigh"))
     body["athletes"][0]["items"][0].update(

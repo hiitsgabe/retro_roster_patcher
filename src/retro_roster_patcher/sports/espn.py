@@ -1107,6 +1107,8 @@ class EspnClient:
                         else ""
                     ),
                     birth_date=str(athlete.get("dateOfBirth") or "")[:10],
+                    weight=float(athlete.get("weight", 0) or 0),
+                    height=float(athlete.get("height", 0) or 0),
                 )
             )
         return players

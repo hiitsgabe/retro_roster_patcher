@@ -278,6 +278,8 @@ class FotmobClient:
                         else None,
                         photo_url=photo_url(_as_int(member["id"])),
                         birth_date=str(member.get("dateOfBirth") or "")[:10],
+                        # FotMob's height is centimetres; `Player.height` is inches.
+                        height=round(float(member.get("height") or 0) / 2.54, 1),
                     )
                 )
         return players

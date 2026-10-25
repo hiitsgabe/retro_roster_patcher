@@ -47,6 +47,7 @@ SQUAD = {
                         "shirtNumber": 22,
                         "cname": "Brazil",
                         "age": 36,
+                        "height": 180,
                         "dateOfBirth": "1990-07-22",
                         "goals": 0,
                         "ycards": 2,
@@ -92,6 +93,13 @@ def test_get_squad_drops_coaches_and_maps_positions(tmp_path):
     ]
     assert squad[0].photo_url == photo_url(268171)
     assert squad[1].last_name == "Souza"
+
+
+def test_a_squad_carries_height_in_inches_and_no_weight(tmp_path):
+    client = FotmobClient(str(tmp_path), transport=_transport({"/teams?id=10272": SQUAD}))
+    everson, hulk = client.get_squad(10272)
+    assert (everson.height, everson.weight) == (70.9, 0.0)
+    assert (hulk.height, hulk.weight) == (0.0, 0.0)
 
 
 def test_squad_is_served_from_cache_the_second_time(tmp_path):
