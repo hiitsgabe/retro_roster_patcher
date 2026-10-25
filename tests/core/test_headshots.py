@@ -96,3 +96,17 @@ def test_measure_faces_with_nothing_to_measure_is_quiet(tmp_path):
     lines = []
     assert measure_faces(tmp_path, {}, lambda u, h, t: PNG, lines.append) == {}
     assert lines == []
+
+
+def test_measure_faces_reads_the_beard_too(tmp_path):
+    pytest.importorskip("PIL")
+    from tests.fixtures.synthetic_headshot import headshot
+
+    bearded = headshot((225, 180, 150), hair=(22, 16, 12), beard=True)
+    shaven = headshot((225, 180, 150), hair=(22, 16, 12))
+
+    def transport(url, headers, timeout):
+        return bearded if url == "a" else shaven
+
+    faces = measure_faces(tmp_path, {1: "a", 2: "b"}, transport)
+    assert (faces[1].beard, faces[2].beard) == (True, False)

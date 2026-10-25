@@ -1107,20 +1107,52 @@ def test_fetch_survives_a_failed_lineup(tmp_path):
 # -- looks -----------------------------------------------------------------
 
 
-def test_set_look_changes_only_the_skin_bits_and_the_edited_flags(iso, tmp_path):
+def test_set_look_writes_a_built_face_with_the_skin_hair_and_beard(iso, tmp_path):
+    """The fields as PCSX2's editor shows them (2026-10-25): face type Build
+    (byte 102 bits 0-1), skin (115 bits 0-2), a plain hairstyle (92, 93 bits
+    0-2) with the special-hairstyle flag off (99 bit 6), the colour in RGB
+    (94 low 6 = 62; R, G, B 0-63 stored as 63 minus the value in 102 bits
+    2-7, 103 and 104 low 6) and the beard (95 low 7, its colour the hair's:
+    96 low 6 = 62)."""
+    from retro_roster_patcher.games.pes2013_ps2 import looks as pes_looks
     from retro_roster_patcher.games.pes2013_ps2.models import PESLook
 
-    tables = RomReader(str(iso)).__class__(str(iso))
-    tables.load()
-    t = tables.player_tables()
-    before = t.record(5)
-    RomWriter.set_look(t, 5, PESLook(skin=5))
+    reader = RomReader(str(iso))
+    reader.load()
+    t = reader.player_tables()
+    before = bytearray(t.record(5))
+    before[99] |= 0x40  # a special hairstyle, as most disc records have
+    before[102] = (before[102] & ~3) | 2  # a preset face
+    players = bytearray(t.players)
+    players[5 * 124 : 6 * 124] = before
+    t.parts[0] = bytes(players)
+    RomWriter.set_look(t, 5, PESLook(skin=5, hair="blond", beard=True, style=108))
     after = t.record(5)
     assert after[115] & 7 == 5 and after[115] & ~7 == before[115] & ~7
-    # What the game itself does when a player is edited: the licensed face
-    # and hair flags off (byte 101 bits 3 and 5), the edited flag on (113 bit 6).
-    assert after[101] == before[101] & ~0x28 and after[113] == before[113] | 0x40
-    assert {i for i in range(124) if after[i] != before[i]} <= {101, 113, 115}
+    assert after[102] & 3 == 0
+    assert after[92] | (after[93] & 7) << 8 == 108 and after[93] & ~7 == before[93] & ~7
+    assert after[99] & 0x40 == 0 and after[99] & ~0x40 == before[99] & ~0x40
+    assert after[94] & 63 == 62 and after[94] & 0xC0 == before[94] & 0xC0
+    rgb = (63 - (after[102] >> 2), 63 - (after[103] & 63), 63 - (after[104] & 63))
+    assert rgb == pes_looks.HAIR_RGB["blond"]
+    assert after[103] & 0xC0 == before[103] & 0xC0 and after[104] & 0xC0 == before[104] & 0xC0
+    assert after[95] & 127 == pes_looks.BEARD and after[95] & 128 == before[95] & 128
+    assert after[96] & 63 == 62 and after[96] & 0xC0 == before[96] & 0xC0
+    changed = {i for i in range(124) if after[i] != before[i]}
+    assert changed <= {92, 93, 94, 95, 96, 99, 102, 103, 104, 115}
+
+
+def test_set_look_without_a_beard_clears_it(iso, tmp_path):
+    from retro_roster_patcher.games.pes2013_ps2.models import PESLook
+
+    reader = RomReader(str(iso))
+    reader.load()
+    t = reader.player_tables()
+    players = bytearray(t.players)
+    players[5 * 124 + 95] = 0x80 | 97
+    t.parts[0] = bytes(players)
+    RomWriter.set_look(t, 5, PESLook())
+    assert t.record(5)[95] == 0x80
 
 
 def _league_with_photos(photo_url):
@@ -1142,7 +1174,7 @@ def _written_looks(out):
             rec = t.record(i)
             name = rec[:32].decode("utf-16-le").split("\0")[0]
             if name in ("DAVID RAYA", "KAI HAVERTZ"):
-                found.setdefault(name, []).append((rec[115] & 7, rec[101] & 0x28, rec[113] & 0x40))
+                found.setdefault(name, []).append((rec[115] & 7, rec[102] & 3, rec[99] & 0x40))
     return found
 
 
@@ -1158,8 +1190,9 @@ def test_patch_writes_the_skin_from_the_head_shot_into_both_entries(iso, tmp_pat
     out = tmp_path / "out.iso"
     patcher.patch(rom_path=iso, output_path=out, rosters=rosters, logos=False, kits=False)
     found = _written_looks(out)
-    assert found["KAI HAVERTZ"] == [(3, 0, 0x40)] * 2  # the darkest colour, in entries 46 and 47
-    assert found["DAVID RAYA"] == [(1, 0, 0x40)] * 2  # East Asian by nationality
+    # The darkest colour on a built face with a plain hairstyle, in entries 46 and 47.
+    assert found["KAI HAVERTZ"] == [(3, 0, 0)] * 2
+    assert found["DAVID RAYA"] == [(1, 0, 0)] * 2  # East Asian by nationality
 
 
 def test_looks_off_downloads_nothing_and_writes_the_plain_default(iso, tmp_path):
@@ -1179,7 +1212,7 @@ def test_looks_off_downloads_nothing_and_writes_the_plain_default(iso, tmp_path)
     )
     found = _written_looks(out)
     assert calls == []
-    assert found["KAI HAVERTZ"] == [(0, 0, 0x40)] * 2
+    assert found["KAI HAVERTZ"] == [(0, 0, 0)] * 2
 
 
 # -- a player already on the disc keeps the disc's look ---------------------
@@ -1225,4 +1258,4 @@ def test_a_player_already_on_the_disc_gets_that_records_look(tmp_path, monkeypat
         }
         havertz, raya = by_name["KAI HAVERTZ"], by_name["DAVID RAYA"]
         assert havertz[92:124] == bytes([0xAB]) * 32  # the disc's look, licensed flags and all
-        assert raya[113] & 0x40 and raya[101] & 0x28 == 0  # an unmapped player is dressed as usual
+        assert raya[102] & 3 == 0  # an unmapped player is dressed as usual: a built face

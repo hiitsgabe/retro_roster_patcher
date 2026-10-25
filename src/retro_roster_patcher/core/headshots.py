@@ -51,11 +51,13 @@ def load_headshot(
 
 
 class Face(NamedTuple):
-    """What a head shot says about a player: the face's ITA (`core.skin`) and
-    the hair colour (`core.hair`), each None when it could not be measured."""
+    """What a head shot says about a player: the face's ITA (`core.skin`), the
+    hair colour (`core.hair`) and whether he has a beard (`core.beard`), each
+    None when it could not be measured."""
 
     ita: float | None
     hair: str | None
+    beard: bool | None = None
 
 
 #: Head shots measured per status line: a whole league can run past the app's
@@ -81,6 +83,7 @@ def measure_faces(
     if importlib.util.find_spec("PIL") is None:
         say("Pillow is not installed; player looks not taken from head shots")
         return {}
+    from .beard import beard_of
     from .hair import hair_colour_of
     from .skin import _frame, face_lab, ita_of
 
@@ -93,7 +96,7 @@ def measure_faces(
             colour = face_lab(frame) if frame is not None else None
             if frame is None or colour is None:
                 return Face(None, None)
-            return Face(ita_of(colour), hair_colour_of(frame, colour))
+            return Face(ita_of(colour), hair_colour_of(frame, colour), beard_of(frame, colour))
         except Exception:  # noqa: BLE001 - Pillow's errors (a decompression bomb among them) share no base
             return Face(None, None)
 
@@ -104,6 +107,6 @@ def measure_faces(
         batch = unique[at : at + MEASURE_CHUNK]
         measured.update(zip(batch, parallel_map(measure, batch), strict=True))
         say(f"Head shots {min(at + MEASURE_CHUNK, len(unique))}/{len(unique)}...")
-    faces = {pid: face for pid, url in urls.items() if (face := measured[url]) != (None, None)}
+    faces = {pid: face for pid, url in urls.items() if (face := measured[url]) != Face(None, None)}
     say(f"Faces measured from head shots: {len(faces)} of {len(urls)} players")
     return faces

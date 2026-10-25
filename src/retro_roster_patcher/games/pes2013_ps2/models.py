@@ -46,14 +46,28 @@ DISPLAY_NAME_CHARS = DISPLAY_NAME_BYTES // 2 - 1
 SHIRT_NAME_BYTES = 16
 SHIRT_NAME_CHARS = SHIRT_NAME_BYTES - 1
 POSITION_BYTE = 53
-#: The look fields `RomWriter.set_look` writes (PCSX2, 2026-10-24): the skin
-#: colour, the licensed face and hair flags the game clears on an edit, and
-#: the edited flag it sets.
+#: The look fields `RomWriter.set_look` writes, the layout PES 6's (the
+#: COFPES option-file editor's attribute files), checked one by one in
+#: PCSX2's Edit Player on 2026-10-25:
+#: face type, byte 102 bits 0-1 (0 Build, the generic face that takes the
+#: skin and hair; 1 Special; 2 Preset, a face model that ignores them); skin
+#: colour, byte 115 bits 0-2; hairstyle, byte 92 and byte 93 bits 0-2, with
+#: the special-hairstyle flag (a licensed player's hair, which ignores the
+#: colour) in byte 99 bit 6; hair colour, byte 94 bits 0-5 (a pattern 0-61,
+#: or 62 for RGB) and R, G, B 0-63, each stored as 63 minus the value: R in
+#: byte 102 bits 2-7, G and B in bytes 103 and 104 bits 0-5; beard, byte 95
+#: bits 0-6 (0 none; bit 7 the cap), its colour byte 96 bits 0-5 (62: the
+#: hair's).
 SKIN_BYTE = 115
-PRESET_BYTE = 101
-PRESET_MASK = 0x28
-EDITED_BYTE = 113
-EDITED_BIT = 0x40
+FACE_TYPE_BYTE = 102
+FACE_TYPE_MASK = 0x03
+HAIRSTYLE_BYTE = 92
+SPECIAL_HAIR_BYTE = 99
+SPECIAL_HAIR_BIT = 0x40
+HAIR_COLOUR_BYTE = 94
+COLOUR_RGB = 62
+BEARD_BYTE = 95
+BEARD_COLOUR_BYTE = 96
 #: Nationality (the national-team row order, 0 Austria .. 59 New Zealand,
 #: then nations without a squad) and age (bits 1-5 of byte 113, plus 15), as
 #: the disc's national squads and known players showed them (2026-10-25).
@@ -160,12 +174,17 @@ POSITION_GROUPS = {
 
 @dataclass
 class PESLook:
-    """How the game draws a player: his skin colour (byte 115 bits 0-2, 0-5,
-    shown as 1-6 in the editor), written by `rom_writer.RomWriter.set_look`;
-    or, for a player who is already on the disc, the record whose whole look
-    region he keeps (`RomWriter.copy_look`), licensed face and all."""
+    """How the game draws a player, written by `rom_writer.RomWriter.set_look`
+    on a built face: his skin colour (0-5, shown as 1-6 in the editor), hair
+    colour (a `looks.HAIR_RGB` name, or "bald"), beard and hairstyle; or, for
+    a player who is already on the disc, the record whose whole look region
+    he keeps (`RomWriter.copy_look`), licensed face and all. The default is
+    the plain look of a player without a photo: pale, black hair, no beard."""
 
     skin: int = 0
+    hair: str = "black"
+    beard: bool = False
+    style: int = 85
     disc_record: int | None = None
 
 

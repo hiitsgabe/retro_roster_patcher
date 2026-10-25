@@ -1,5 +1,6 @@
-"""Each player's skin colour in PES 2013, the look the record holds in a
-field this patcher knows (calibrated in PCSX2 on 2026-10-24).
+"""Each player's look in PES 2013: skin colour, hair colour and beard from his
+head shot, on the generic built face (calibrated in PCSX2 on 2026-10-24 and
+2026-10-25; the fields are in `models`).
 
 Byte 115 bits 0-2 is the editor's "Skin Color" less one. Only 0-5 draw (6
 and 7 draw garbage). By the lightness of the neck and ears the game draws
@@ -8,17 +9,19 @@ them: 0 pale, 1 pale yellow (the East Asian face: Japan, Korea and China are
 darkest. So a measured face walks the ladder (0, 4, 2, 5, 3), an East Asian
 national gets 1, and a player without a photo the palest.
 
-A licensed ("Preset") face keeps its own face texture whatever the colour,
-so `rom_writer.RomWriter.set_look` also does what the game does when a
-player is edited: it turns the licensed face and hair off, and the generic
-face takes the colour. Hair colour and beard are in the record too but
-their bits were not found; the game's own on the record stay.
+A face model ("Preset" in the editor, licensed or not) ignores skin and hair,
+and so does a licensed player's special hairstyle, which most disc records
+have; so `rom_writer.RomWriter.set_look` makes the face the generic built one
+and the hairstyle a plain short one (a stable pick from `HAIR_STYLES` by the
+player's id, or `BALD_STYLE`), then sets the hair's colour in RGB
+(`HAIR_RGB`) and the beard (`BEARD`, a short full beard, or none), the beard
+in the hair's colour. A player without a photo gets the plain default: pale
+skin, black hair, no beard.
 
-A player who is on the 2012 disc already (Neymar at Santos, Hulk at Zenit)
-keeps the disc's own look of him wherever he plays now: `disc_players` maps
-ESPN ids to disc records (`assets/pes2013_disc_players.json`, built by
-`assets/pes2013_players/match.py`), and `RomWriter.copy_look` moves that
-record's look region onto his new record, licensed face and all.
+A player who is on the 2012 disc already (Neymar, Hulk) keeps the disc's own
+look of him wherever he plays now: `disc_players` maps ESPN ids to disc
+records (`assets/pes2013_disc_players.json`), and `RomWriter.copy_look`
+moves that record's look region onto his new record, licensed face and all.
 """
 
 from __future__ import annotations
@@ -29,7 +32,7 @@ from functools import cache
 
 from ...core.assets import package_bytes
 from ...core.headshots import Face
-from ...core.looks import EAST_ASIAN
+from ...core.looks import EAST_ASIAN, pick
 from ...core.skin import tone
 from .models import PESLook, PESPlayer
 
@@ -50,6 +53,24 @@ def skin(nationality: str, ita: float | None) -> int:
         return SKIN_VALUES[tone(ita, SKIN_CUTS)]
     return DEFAULT_SKIN
 
+
+#: Hair colours as the editor's RGB (0-63 each): black and dark brown as the
+#: disc has Cristiano Ronaldo's and Casillas', the blond checked on screen.
+HAIR_RGB: dict[str, tuple[int, int, int]] = {
+    "black": (4, 2, 0),
+    "dark_brown": (16, 9, 5),
+    "brown": (26, 17, 9),
+    "blond": (50, 40, 10),
+    "red": (42, 16, 4),
+    "grey": (40, 40, 40),
+}
+#: The plain short hairstyles a player gets, equally likely, each seen on a
+#: built face in PCSX2: Short Hair 1 from 85, Short Hair 2 from 108. (One
+#: lower is not: 4-84 are buzz cuts so light they read bald.)
+HAIR_STYLES = (85, 96, 109, 120)
+BALD_STYLE = 0
+#: A short full beard, the disc's most common.
+BEARD = 92
 
 DISC_PLAYERS_FILE = "pes2013_disc_players.json"
 
@@ -74,7 +95,12 @@ def dress(
     on_disc = globals()["disc_players"]() if disc_players is None else disc_players
     for player in players:
         face = (faces or {}).get(player.player_id) if player.player_id else None
+        hair = (face.hair if face else None) or "black"
+        style = HAIR_STYLES[pick([1] * len(HAIR_STYLES), f"pes-hair:{player.player_id}")]
         player.look = PESLook(
             skin=skin(player.nationality, face.ita if face else None),
+            hair=hair,
+            beard=bool(face and face.beard),
+            style=BALD_STYLE if hair == "bald" else style,
             disc_record=on_disc.get(player.player_id) if player.player_id else None,
         )

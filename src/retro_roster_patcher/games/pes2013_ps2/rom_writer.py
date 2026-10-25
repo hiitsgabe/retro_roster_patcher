@@ -17,13 +17,17 @@ from .afs import Table, unwrap, wrap
 from .emblems import CLUB_TABLE, Atlas, copy_club_table, paint_logos
 from .kits import KIT_ENTRY, KitTable
 from .models import (
+    BEARD_BYTE,
+    BEARD_COLOUR_BYTE,
     CLUB_SQUAD_SIZE,
+    COLOUR_RGB,
     DISPLAY_NAME_BYTES,
     DISPLAY_NAME_CHARS,
-    EDITED_BIT,
-    EDITED_BYTE,
     EMBLEM_ENTRIES,
     EMBLEM_PAIRS,
+    FACE_TYPE_BYTE,
+    HAIR_COLOUR_BYTE,
+    HAIRSTYLE_BYTE,
     LEAGUE_NAME_ANCHOR,
     LEAGUE_NAME_ENTRIES,
     LOOK_END,
@@ -34,11 +38,11 @@ from .models import (
     PART_PLAYERS,
     PLAYER_RECORD_SIZE,
     POSITION_BYTE,
-    PRESET_BYTE,
-    PRESET_MASK,
     SHIRT_NAME_BYTES,
     SHIRT_NAME_CHARS,
     SKIN_BYTE,
+    SPECIAL_HAIR_BIT,
+    SPECIAL_HAIR_BYTE,
     TEXT_AFS,
     TEXT_LANGUAGE_AFS,
     PESLook,
@@ -137,16 +141,29 @@ class RomWriter:
 
     @staticmethod
     def set_look(tables: PlayerTables, index: int, look: PESLook) -> None:
-        """Put a player's look into his record: the skin colour in byte 115
-        bits 0-2, and what the game itself does when a player is edited: the
-        licensed face and hair flags off (byte 101 bits 3 and 5, so the
-        generic face takes the colour) and the edited flag on (byte 113 bit 6).
-        Checked in PCSX2 on 2026-10-24."""
+        """Put a player's look into his record, on the generic built face that
+        takes it (face type Build): the skin colour, a plain hairstyle with the
+        special-hairstyle flag off, the hair colour in RGB, and the beard in
+        the hair's colour. Every other bit of those bytes stays. The layout is
+        `models`'; checked in PCSX2's Edit Player on 2026-10-25."""
+        from .looks import BEARD, HAIR_RGB
+
         players = bytearray(tables.players)
         at = index * PLAYER_RECORD_SIZE
-        players[at + SKIN_BYTE] = (players[at + SKIN_BYTE] & ~0x07) | (max(0, min(5, look.skin)))
-        players[at + PRESET_BYTE] &= ~PRESET_MASK & 0xFF
-        players[at + EDITED_BYTE] |= EDITED_BIT
+        rec = memoryview(players)[at : at + PLAYER_RECORD_SIZE]
+        rec[SKIN_BYTE] = (rec[SKIN_BYTE] & ~0x07) | max(0, min(5, look.skin))
+        rec[HAIRSTYLE_BYTE] = look.style & 0xFF
+        rec[HAIRSTYLE_BYTE + 1] = (rec[HAIRSTYLE_BYTE + 1] & ~0x07) | (look.style >> 8 & 0x07)
+        rec[SPECIAL_HAIR_BYTE] &= ~SPECIAL_HAIR_BIT & 0xFF
+        red, green, blue = HAIR_RGB.get(look.hair, HAIR_RGB["black"])
+        rec[HAIR_COLOUR_BYTE] = (rec[HAIR_COLOUR_BYTE] & 0xC0) | COLOUR_RGB
+        # Face type Build in bits 0-1, R in bits 2-7.
+        rec[FACE_TYPE_BYTE] = (63 - red) << 2
+        rec[FACE_TYPE_BYTE + 1] = (rec[FACE_TYPE_BYTE + 1] & 0xC0) | (63 - green)
+        rec[FACE_TYPE_BYTE + 2] = (rec[FACE_TYPE_BYTE + 2] & 0xC0) | (63 - blue)
+        rec[BEARD_BYTE] = (rec[BEARD_BYTE] & 0x80) | (BEARD if look.beard else 0)
+        rec[BEARD_COLOUR_BYTE] = (rec[BEARD_COLOUR_BYTE] & 0xC0) | COLOUR_RGB
+        rec.release()
         tables.parts[PART_PLAYERS] = bytes(players)
 
     @staticmethod
