@@ -119,6 +119,7 @@ class WE2002Patcher(Patcher):
     languages: tuple[str, ...] = tuple(LANGUAGE_CODES)
     #: `patch` draws each team's logo into the flag slots unless `logos=False`.
     supports_logos: bool = True
+    supports_looks: bool = True
     #: `patch(blank_unused=True)` empties the name and flag of every slot the
     #: mapping leaves out, in both tables.
     supports_blank_unused: bool = True

@@ -54,6 +54,10 @@ class Patcher(ABC):
     #: `KitSpec` from it with `kit_from_image`), `{"template": n}` (one of the
     #: game's own jersey designs, see `kit_templates`) or None (the default).
     supports_kits: bool = False
+    #: `patch(looks=...)`: True (the default) dresses each player after his
+    #: provider head shot (`core.headshots.measure_faces`); False skips the
+    #: photos and gives every player one plain default look.
+    supports_looks: bool = False
     #: (name, first slot, count) for games whose slots form named groups.
     slot_groups: tuple[tuple[str, int, int], ...] = ()
     #: How many leagues one patch takes, the k-th filling `slot_groups[k]`. 1

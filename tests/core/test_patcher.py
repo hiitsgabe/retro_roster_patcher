@@ -247,6 +247,7 @@ def test_given_blocks_with_a_total_past_the_squad_return_everyone_once():
 
 def test_the_base_declares_no_kits_slot_groups_or_nationals():
     assert Patcher.supports_kits is False
+    assert Patcher.supports_looks is False
     assert Patcher.slot_groups == ()
     assert Patcher.max_leagues == 1
     assert Patcher.supports_nationals is False and Patcher.national_slot_base is None

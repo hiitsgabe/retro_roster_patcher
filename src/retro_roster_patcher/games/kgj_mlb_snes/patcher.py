@@ -167,6 +167,7 @@ class KGJMLBPatcher(Patcher):
     #: id>.png`) unless `logos=False`, which keeps the cartridge's. Names,
     #: abbreviations, divisions and uniform colours are always the club's.
     supports_logos: bool = True
+    supports_looks: bool = True
     #: Screen art `patch(images={name: png})` can replace; `export_images`
     #: writes the cartridge's current art for each. See `screens.SLOTS`.
     image_slots: tuple[str, ...] = screens.IMAGE_SLOT_NAMES

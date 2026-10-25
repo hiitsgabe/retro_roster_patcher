@@ -316,6 +316,7 @@ class NHL07PSPPatcher(Patcher):
     #: Screen art `patch(images={name: png})` can replace; `export_images`
     #: writes the disc's current art for each. See `screens.SLOTS`.
     image_slots: tuple[str, ...] = IMAGE_SLOT_NAMES
+    supports_looks: bool = True
 
     def __init__(
         self,

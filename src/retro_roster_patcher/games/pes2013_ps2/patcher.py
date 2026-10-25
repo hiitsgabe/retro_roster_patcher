@@ -260,6 +260,7 @@ def lineup_group(player: Player, lineup: dict[str, Any] | None) -> str:
 class PES2013PS2Patcher(Patcher):
     #: `patch` draws each team's logo into the emblem atlases unless `logos=False`.
     supports_logos: bool = True
+    supports_looks: bool = True
     supports_blank_unused: bool = True
     #: `patch(kits=...)` as `Patcher` describes it; `{"template": n}` is refused,
     #: the disc has no jersey designs to pick from.
