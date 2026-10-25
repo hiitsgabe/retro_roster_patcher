@@ -6,17 +6,21 @@ and an age. They are picked per player here:
 
 * skin from his head shot (`core.skin`, cut at `SKIN_CUTS`), or the East
   Asian tone for an East Asian national (`core.looks.EAST_ASIAN`: on the disc
-  that tone is Japan, Korea and China and nobody else); without a head shot,
-  a pick weighted like the disc;
-* hair colour from his head shot (`core.hair`, through `HAIR_COLOUR`), else
-  weighted like the disc's players of his tone; the beard takes the colour;
+  that tone is Japan, Korea and China and nobody else);
+* hair colour from his head shot (`core.hair`, through `HAIR_COLOUR`); the
+  beard takes the colour;
 * hair style and beard a stable pick from the player, weighted like the
   disc's players of his tone (`BALD_STYLE` for a shaved head);
 * build from his height (`build`), height and age from the provider, else
   from the disc's spread by position and 25.
 
+A player without a usable head shot gets `DEFAULT_LOOK`, the plainest
+player the user asked for: pale skin, black hair in the disc's commonest
+style, no beard. Never the disc's occupant, never a guess.
+
 Only values the retail disc uses are picked (1911 records read on
-2026-10-24): hair colours 0, 1 and 7, builds 3-6, beard styles 0-6.
+2026-10-24): hair colours 0, 1, 4 and 7, builds 3-6, beard styles 0-6.
+Skin as drawn: A pale, B yellow (the East Asian face), C brown, D dark.
 """
 
 from __future__ import annotations
@@ -26,28 +30,30 @@ from collections.abc import Mapping, Sequence
 from ...core.headshots import Face
 from ...core.looks import EAST_ASIAN, pick
 from ...core.skin import tone
-from .models import WEPlayerRecord
+from .models import WELook, WEPlayerRecord
 
 #: The ITA (`core.skin`) between the game's tones 0 (pale), 2 (brown) and 3
 #: (dark), lightest first; tone 1 is the East Asian face, by nationality.
 SKIN_CUTS = (20.0, -15.0)
 SKIN_LADDER = (0, 2, 3)
-#: A player without a head shot: the disc's shares of tones 0-3 (tone 1 is
-#: never picked, it is given by nationality).
-SKIN_WITHOUT_PHOTO = (1242, 0, 313, 246)
-#: The game's colour for what `core.hair` read. 0 black, 1 brown and 7 blond
-#: are the disc's; red and grey wait for the DuckStation check of values 2-6.
+#: A player without a head shot: pale, black hair in the disc's commonest
+#: style (value 20), no beard.
+DEFAULT_LOOK = WELook(skin=0, hair_style=20, hair_colour=0, beard=0, beard_colour=0)
+#: The game's colour for what `core.hair` read, as DuckStation draws the
+#: eight (容姿設定, 2026-10-24): A black, B brown, C dark brown, D near
+#: black, E grey, F yellow blond, G light brown, H golden blond (what the
+#: disc's Scandinavians wear). No red: a redhead is drawn brown.
 HAIR_COLOUR = {
     "black": 0,
     "dark_brown": 1,
     "brown": 1,
     "blond": 7,
     "red": 1,
-    "grey": 1,
+    "grey": 4,
     "bald": 0,
 }
-#: The hair style of a shaved head (to be pinned in DuckStation).
-BALD_STYLE = 0
+#: No style is shaved; 19 (value 18) is the closest crop (DuckStation).
+BALD_STYLE = 18
 #: The disc's own shares, by tone group (tone 0, tone 1, tones 2-3), as
 #: weights for each value from 0 up. Hair colours other than 0, 1 and 7 are
 #: left out until they are seen drawn.
@@ -155,11 +161,6 @@ HAIR_STYLE_BY_GROUP = (
         1,
     ),
 )
-HAIR_COLOUR_BY_GROUP = (
-    (228, 808, 0, 0, 0, 0, 0, 197),
-    (57, 47, 0, 0, 0, 0, 0, 5),
-    (389, 161, 0, 0, 0, 0, 0, 3),
-)
 BEARD_BY_GROUP = (
     (1175, 8, 28, 0, 5, 20, 6),
     (102, 1, 5, 0, 0, 2, 0),
@@ -184,14 +185,14 @@ def _key(record: WEPlayerRecord) -> str:
     return f"{record.player_id}:{record.last_name}:{record.first_name}:"
 
 
-def skin_tone(nationality: str, ita: float | None, key: str) -> int:
+def skin_tone(nationality: str, ita: float | None) -> int:
     """The game's tone: East Asian nationals 1, a measured face by the
-    ladder, anyone else a stable pick weighted like the disc."""
+    ladder, anyone else the default's pale."""
     if nationality in EAST_ASIAN:
         return 1
     if ita is not None:
         return SKIN_LADDER[tone(ita, SKIN_CUTS)]
-    return pick(SKIN_WITHOUT_PHOTO, key + "skin")
+    return DEFAULT_LOOK.skin
 
 
 def build(height_cm: int, key: str) -> int:
@@ -212,19 +213,21 @@ def dress(records: Sequence[WEPlayerRecord], faces: Mapping[int, Face] | None = 
         key = _key(record)
         face = (faces or {}).get(record.player_id) if record.player_id else None
         look = record.look
-        look.skin = skin_tone(record.nationality, face.ita if face else None, key)
-        group = min(look.skin, 2)
+        look.skin = skin_tone(record.nationality, face.ita if face else None)
         hair = face.hair if face else None
-        look.hair_colour = (
-            HAIR_COLOUR[hair]
-            if hair in HAIR_COLOUR
-            else pick(HAIR_COLOUR_BY_GROUP[group], key + "haircol")
-        )
-        look.hair_style = (
-            BALD_STYLE if hair == "bald" else pick(HAIR_STYLE_BY_GROUP[group], key + "hair")
-        )
-        look.beard = pick(BEARD_BY_GROUP[group], key + "beard")
-        look.beard_colour = look.hair_colour
+        if hair is None:
+            # No face, or no hair read from it: the plain default, in the
+            # measured tone when there is one.
+            look.hair_colour, look.hair_style = DEFAULT_LOOK.hair_colour, DEFAULT_LOOK.hair_style
+            look.beard, look.beard_colour = DEFAULT_LOOK.beard, DEFAULT_LOOK.beard_colour
+        else:
+            group = min(look.skin, 2)
+            look.hair_colour = HAIR_COLOUR[hair]
+            look.hair_style = (
+                BALD_STYLE if hair == "bald" else pick(HAIR_STYLE_BY_GROUP[group], key + "hair")
+            )
+            look.beard = pick(BEARD_BY_GROUP[group], key + "beard")
+            look.beard_colour = look.hair_colour
         if record.height_cm <= 0:
             centre = HEIGHT_BY_POSITION[min(max(record.position, 0), 3)]
             record.height_cm = (
