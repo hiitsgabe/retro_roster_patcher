@@ -7,26 +7,20 @@ import pytest
 from retro_roster_patcher.core.skin import face_ita, tone
 
 PIL = pytest.importorskip("PIL")
-from PIL import Image, ImageDraw  # noqa: E402
+from PIL import Image  # noqa: E402
+
+from tests.fixtures.synthetic_headshot import headshot  # noqa: E402
 
 LIGHT = (232, 190, 160)
 DARK = (95, 60, 40)
 CUTS = (30.0, 18.0, 10.0, -10.0, -40.0)
 
 
+CAP = (20, 30, 70)
+
+
 def _headshot(face, *, transparent=True, beard=False):
-    """A 600x436 head shot framed like ESPN's: a navy cap at the top, the face
-    below it, a white jersey at the bottom."""
-    picture = Image.new("RGBA", (600, 436), (0, 0, 0, 0) if transparent else (235, 235, 235, 255))
-    draw = ImageDraw.Draw(picture)
-    draw.ellipse((220, 110, 380, 300), fill=(*face, 255))
-    if beard:
-        draw.rectangle((240, 230, 360, 300), fill=(30, 20, 15, 255))
-    draw.rectangle((215, 50, 385, 150), fill=(20, 30, 70, 255))
-    draw.rectangle((60, 330, 540, 436), fill=(250, 250, 250, 255))
-    out = io.BytesIO()
-    picture.save(out, "PNG")
-    return out.getvalue()
+    return headshot(face, cap=CAP, transparent=transparent, beard=beard)
 
 
 @pytest.mark.parametrize("transparent", [True, False])
