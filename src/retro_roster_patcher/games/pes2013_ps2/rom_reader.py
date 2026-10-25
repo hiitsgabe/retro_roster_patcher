@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import struct
+import zlib
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, BinaryIO
 
@@ -22,6 +23,7 @@ from .models import (
     CLUB_SQUAD_SIZE,
     DATABASE_OVERLAY_ENGLISH,
     FIRST_CLUB_ENTRY,
+    LIBERTADORES_ENTRY,
     NATIONAL_NAMED,
     NATIONAL_SQUAD_SIZE,
     OVER_AFS,
@@ -241,6 +243,17 @@ class RomReader:
         if len(parts[PART_PLAYERS]) % PLAYER_RECORD_SIZE:
             raise RomError(f"{TEXT_AFS} entry {index}: player table is not whole records")
         return PlayerTables(header, table, part_headers, parts)
+
+    def libertadores_players(self, index: int = LIBERTADORES_ENTRY) -> bytes:
+        """The South American clubs' player records (part 0 of `index`), or
+        nothing when the disc has no such table there."""
+        try:
+            _header, payload = unwrap(self.read(TEXT_AFS, index))
+            blocks = Table.parse(payload).parts
+            records = unwrap(blocks[0])[1] if blocks and blocks[0] else b""
+        except (RomError, IndexError, ValueError, struct.error, zlib.error):
+            return b""
+        return records if len(records) % PLAYER_RECORD_SIZE == 0 else b""
 
     # -- team names --------------------------------------------------------
 

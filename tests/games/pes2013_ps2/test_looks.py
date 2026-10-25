@@ -61,9 +61,14 @@ def test_every_hair_colour_has_an_rgb_the_editor_takes():
 
 
 def test_the_disc_player_mapping_is_well_formed():
+    """Records of the main table (4941) and, from `LIBERTADORES_BASE`, of the
+    South American clubs' table (943)."""
+    from retro_roster_patcher.games.pes2013_ps2.models import LIBERTADORES_BASE
+
     mapping = looks.disc_players()
     assert mapping and all(isinstance(k, int) and isinstance(v, int) for k, v in mapping.items())
-    assert all(0 < v < 4941 for v in mapping.values())
+    assert all(0 < v < 4941 or 0 <= v - LIBERTADORES_BASE < 943 for v in mapping.values())
+    assert any(v >= LIBERTADORES_BASE for v in mapping.values())
     assert len(set(mapping.values())) == len(mapping)  # one disc record per player
 
 

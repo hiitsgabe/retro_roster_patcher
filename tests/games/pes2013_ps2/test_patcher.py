@@ -1259,3 +1259,60 @@ def test_a_player_already_on_the_disc_gets_that_records_look(tmp_path, monkeypat
         havertz, raya = by_name["KAI HAVERTZ"], by_name["DAVID RAYA"]
         assert havertz[92:124] == bytes([0xAB]) * 32  # the disc's look, licensed flags and all
         assert raya[102] & 3 == 0  # an unmapped player is dressed as usual: a built face
+
+
+# -- the South American clubs' table (0_TEXT.AFS entries 48/49) -------------
+
+
+def test_the_reader_gives_the_libertadores_records_or_nothing(tmp_path):
+    with_table = tmp_path / "lib.iso"
+    fixture.write_iso(with_table, libertadores_entry=fixture.build_libertadores_entry(count=5))
+    reader = RomReader(str(with_table))
+    reader.load()
+    assert len(reader.libertadores_players()) == 5 * 124
+    plain = tmp_path / "plain.iso"
+    fixture.write_iso(plain)
+    reader = RomReader(str(plain))
+    reader.load()
+    assert reader.libertadores_players() == b""
+
+
+def test_a_player_on_a_libertadores_squad_gets_that_records_look(tmp_path, monkeypatch):
+    from retro_roster_patcher.games.pes2013_ps2.models import LIBERTADORES_BASE
+
+    iso = tmp_path / "lib.iso"
+    fixture.write_iso(
+        iso, libertadores_entry=fixture.build_libertadores_entry({3: bytes([0xCD]) * 32})
+    )
+    monkeypatch.setattr(looks, "disc_players", lambda: {101: LIBERTADORES_BASE + 3})
+    patcher = PES2013PS2Patcher(tmp_path)
+    rosters = patcher.map_rosters(_league_with_photos(""), [SlotMapping(slot_index=0, team_id=10)])
+    out = tmp_path / "out.iso"
+    patcher.patch(
+        rom_path=iso, output_path=out, rosters=rosters, logos=False, kits=False, looks=False
+    )
+    reader = RomReader(str(out))
+    reader.load()
+    for entry in PLAYER_ENTRIES:
+        t = reader.player_tables(entry)
+        by_name = {
+            t.record(i)[:32].decode("utf-16-le").split("\0")[0]: t.record(i)
+            for i in range(t.player_count)
+        }
+        assert by_name["KAI HAVERTZ"][92:124] == bytes([0xCD]) * 32
+
+
+def test_without_the_libertadores_table_such_a_player_is_dressed_as_usual(tmp_path, monkeypatch):
+    from retro_roster_patcher.games.pes2013_ps2.models import LIBERTADORES_BASE
+
+    iso = tmp_path / "plain.iso"
+    fixture.write_iso(iso)
+    monkeypatch.setattr(looks, "disc_players", lambda: {101: LIBERTADORES_BASE + 3})
+    patcher = PES2013PS2Patcher(tmp_path)
+    rosters = patcher.map_rosters(_league_with_photos(""), [SlotMapping(slot_index=0, team_id=10)])
+    out = tmp_path / "out.iso"
+    patcher.patch(
+        rom_path=iso, output_path=out, rosters=rosters, logos=False, kits=False, looks=False
+    )
+    found = _written_looks(out)
+    assert found["KAI HAVERTZ"] == [(0, 0, 0)] * 2  # pale, built face, plain hairstyle

@@ -33,6 +33,12 @@ OVER_AFS = "OVER.AFS"
 PLAYER_ENTRY_LATIN = 47
 PLAYER_ENTRY_JAPANESE = 46
 PLAYER_ENTRIES = (PLAYER_ENTRY_LATIN, PLAYER_ENTRY_JAPANESE)
+#: The South American clubs' players (Copa Libertadores, 2012): 943 records of
+#: the same 124 bytes in part 0 of entry 49 (48 in Japanese), 38 squads of 25
+#: in part 1 (each u16 0xA000 + record). A disc record from this table is
+#: `LIBERTADORES_BASE` + its index wherever a record number is kept.
+LIBERTADORES_ENTRY = 49
+LIBERTADORES_BASE = 10000
 #: Parts inside each of those entries.
 PART_PLAYERS = 0
 PART_NATIONAL_SQUADS = 1

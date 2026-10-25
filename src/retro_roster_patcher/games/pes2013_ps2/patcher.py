@@ -15,7 +15,7 @@ import base64
 import hashlib
 from collections import Counter
 from copy import deepcopy
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -48,6 +48,7 @@ from .models import (
     IMAGE_SLOT_NAMES,
     IMAGE_SLOTS,
     LEAGUE_GROUPS,
+    LIBERTADORES_BASE,
     NATIONAL_NAMED,
     NATIONAL_SLOT_BASE,
     NATIONAL_SQUAD_SIZE,
@@ -248,6 +249,28 @@ def lineup_group(player: Player, lineup: dict[str, Any] | None) -> str:
         if int(s["id"]) == player.id:
             return LINEUP_GROUPS.get(str(s.get("position", "")).upper(), player_group(player))
     return player_group(player)
+
+
+@dataclass(frozen=True)
+class _Disc:
+    """The disc's player records as they were before any write: the main
+    table, and the South American clubs' (empty on a disc without it)."""
+
+    main: bytes
+    libertadores: bytes = b""
+
+    def record(self, number: int | None) -> bytes | None:
+        """Record `number` (`LIBERTADORES_BASE` and up: the second table), or
+        None when there is none such."""
+        if number is None or number < 0:
+            return None
+        table, at = self.main, number
+        if number >= LIBERTADORES_BASE:
+            table, at = self.libertadores, number - LIBERTADORES_BASE
+        start = at * PLAYER_RECORD_SIZE
+        if start + PLAYER_RECORD_SIZE > len(table):
+            return None
+        return table[start : start + PLAYER_RECORD_SIZE]
 
 
 @register(
@@ -487,7 +510,7 @@ class PES2013PS2Patcher(Patcher):
             # The disc's records as they are, before any write: a player who
             # is on the disc keeps the look of his old record even when that
             # record has already been given to someone else.
-            disc = primary.players
+            disc = _Disc(primary.players, reader.libertadores_players())
             slots = sorted(slot for slot in rosters.teams if 0 <= slot < CLUB_COUNT)
             national_slots = sorted(
                 slot
@@ -560,14 +583,14 @@ class PES2013PS2Patcher(Patcher):
         return dressed
 
     @staticmethod
-    def _write_look(t: PlayerTables, index: int, player: PESPlayer, disc: bytes) -> None:
+    def _write_look(t: PlayerTables, index: int, player: PESPlayer, disc: _Disc) -> None:
         """The player's look onto record `index`: his old disc record's whole
-        look region when he is on the disc, else his measured colour."""
+        look region when he is on the disc, else the look from his photo."""
         if player.look is None:
             return
-        if player.look.disc_record is not None:
-            at = player.look.disc_record * PLAYER_RECORD_SIZE
-            RomWriter.copy_look(t, index, disc[at : at + PLAYER_RECORD_SIZE])
+        source = disc.record(player.look.disc_record)
+        if source is not None:
+            RomWriter.copy_look(t, index, source)
         else:
             RomWriter.set_look(t, index, player.look)
 
@@ -577,7 +600,7 @@ class PES2013PS2Patcher(Patcher):
         tables: dict[int, PlayerTables],
         rosters: MappedRosters,
         national_slots: list[int],
-        disc: bytes,
+        disc: _Disc,
     ) -> tuple[int, dict[int, bytes]]:
         """Write the national squads and deflate both player entries into their
         room; returns national players written and the built entries.
@@ -634,7 +657,7 @@ class PES2013PS2Patcher(Patcher):
         tables: dict[int, PlayerTables],
         rosters: MappedRosters,
         slots: list[int],
-        disc: bytes,
+        disc: _Disc,
         pool_limit: int | None = None,
     ) -> tuple[int, int]:
         """Give each national row its new squad without touching a club.

@@ -192,6 +192,18 @@ def build_overlay(
     return bytes(data)
 
 
+def build_libertadores_entry(looks: dict[int, bytes] | None = None, count: int = 8) -> bytes:
+    """Entry 48/49: the South American clubs' players (part 0, `count`
+    records) and their squads (part 1, 0xA000 + record). `looks` gives chosen
+    records a look region of their own (see `player_record`)."""
+    players = b"".join(
+        player_record(f"LIB {i}", f"L{i}", 5, (looks or {}).get(i)) for i in range(count)
+    )
+    squads = struct.pack(f"<{count}H", *(0xA000 + i for i in range(count)))
+    parts = [block(players, compress=True), block(squads, compress=True)]
+    return block(table(parts), compress=False) + b"\0" * 4096
+
+
 def build_afs(entries: dict[int, bytes], count: int) -> bytes:
     """An AFS with `count` entries; unlisted ones are two bytes of nothing."""
     head_len = 8 + 8 * count + 8
@@ -217,11 +229,14 @@ def build_iso(
     player_entry: bytes | None = None,
     overlays: dict[int, bytes] | None = None,
     boot_name: str = "SLUS_219.55",
+    libertadores_entry: bytes | None = None,
 ) -> bytes:
     player_entry = player_entry or build_player_entry()
     if overlays is None:
         overlays = {DATABASE_OVERLAY_ENGLISH: build_overlay("u"), 5: build_overlay("b")}
     entries = {46: player_entry, 47: player_entry}
+    if libertadores_entry is not None:
+        entries[48] = entries[49] = libertadores_entry
     for index, side in ((600, 32), (602, 32), (604, 64), (606, 64)):
         entries[index] = block(build_atlas(side), compress=False) + b"\0" * 1024
     entries[54] = build_kit_entry() + b"\0" * 2048

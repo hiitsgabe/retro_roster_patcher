@@ -34,7 +34,7 @@ from ...core.assets import package_bytes
 from ...core.headshots import Face
 from ...core.looks import EAST_ASIAN, pick
 from ...core.skin import tone
-from .models import PESLook, PESPlayer
+from .models import LIBERTADORES_BASE, PESLook, PESPlayer
 
 #: The game's colours lightest first, and the ITA cuts between them.
 SKIN_VALUES = (0, 4, 2, 5, 3)
@@ -77,10 +77,15 @@ DISC_PLAYERS_FILE = "pes2013_disc_players.json"
 
 @cache
 def disc_players() -> dict[int, int]:
-    """ESPN player id -> the disc record (index into entry 46/47 part 0)
-    that is that player, for everyone the matcher could pair by name."""
+    """ESPN player id -> the disc record that is that player: an index into
+    the main table (entry 46/47 part 0), or `LIBERTADORES_BASE` plus an index
+    into the South American clubs' table (entry 48/49 part 0)."""
     raw = json.loads(package_bytes("retro_roster_patcher.assets", DISC_PLAYERS_FILE))
-    return {int(k): int(v) for k, v in raw["players"].items()}
+    found = {int(k): int(v) for k, v in raw["players"].items()}
+    found.update(
+        (int(k), LIBERTADORES_BASE + int(v)) for k, v in raw.get("libertadores", {}).items()
+    )
+    return found
 
 
 def dress(
