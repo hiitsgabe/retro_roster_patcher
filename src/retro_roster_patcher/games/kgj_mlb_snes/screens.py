@@ -164,15 +164,24 @@ def _iss(slot: Slot) -> iss.Slot:
     )
 
 
-def _check(rom: bytes | bytearray, slot: Slot) -> None:
+def _off_cartridge(rom: bytes | bytearray, slot: Slot) -> int | None:
+    """The slot's first entry that is neither the cartridge's own nor a patch's
+    (in its slot's region), or None when all three entries are known shapes."""
     for i in (slot.tiles, slot.tile_map, slot.palette):
         codec, _length, at = found = resources.entry(rom, i)
         patched = codec == resources.STORED and slot.at <= at < slot.at + _SPAN
         if found != _RETAIL[i] and not patched:
-            raise RomError(
-                f"The {slot.name} screen's resource {i} is not the cartridge's this patcher "
-                f"knows; screen art left alone"
-            )
+            return i
+    return None
+
+
+def _check(rom: bytes | bytearray, slot: Slot) -> None:
+    bad = _off_cartridge(rom, slot)
+    if bad is not None:
+        raise RomError(
+            f"The {slot.name} screen's resource {bad} is not the cartridge's this patcher "
+            f"knows; screen art left alone"
+        )
     for at, retail, ours in slot.pokes:
         if bytes(rom[at : at + len(retail)]) not in (retail, ours):
             raise RomError(
@@ -265,9 +274,21 @@ def load_images(given: Any, status: Callable[[str], None]) -> dict[str, Any]:
 
 
 def export(rom_path: Path, out_dir: Path) -> list[Path]:
-    """Write each slot's current art as `<out_dir>/<slot>.png`."""
+    """Write each slot's current art as `<out_dir>/<slot>.png`.
+
+    A ROM that is not the cartridge this module was written against (or already
+    patched) is refused up front, the same thing `write` checks, instead of
+    failing mid-decode with a codec error.
+    """
     data = Path(rom_path).read_bytes()
     rom = data[header_size(len(data)) :]
+    for slot in SLOTS:
+        bad = _off_cartridge(rom, slot)
+        if bad is not None:
+            raise RomError(
+                f"The {slot.name} screen's resource {bad} is not the cartridge's this patcher "
+                f"knows"
+            )
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     written = []

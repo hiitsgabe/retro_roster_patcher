@@ -86,6 +86,11 @@ def _team_data_fits(reader: KGJRomReader) -> bool:
 #: The slot whose #24 the game draws as Griffey (`looks.free_number_24`).
 _SEATTLE = MODERN_MLB_TO_KGJ["SEA"]
 
+#: How many head shots one batch measures before reporting status to the app.
+#: The app kills a job that stays silent for 15 minutes, so a whole league of
+#: them at once would trip it on a slow connection.
+_HEADSHOT_CHUNK = 25
+
 
 def _is_al(slot: int) -> bool:
     """Does this team slot play in the American League (a DH, the AL derby)?"""
@@ -528,8 +533,17 @@ class KGJMLBPatcher(Patcher):
             except Exception:  # noqa: BLE001 - Pillow's errors (a decompression bomb among them) share no base
                 return None
 
+        # A whole-league batch can run past the app's stall watchdog (it kills
+        # a job that stays silent for 15 minutes) on a slow connection, so a
+        # status names progress every chunk.
         unique = sorted(set(urls.values()))
-        angles = dict(zip(unique, parallel_map(measure, unique), strict=True))
+        angles: dict[str, float | None] = {}
+        done = 0
+        for at in range(0, len(unique), _HEADSHOT_CHUNK):
+            batch = unique[at : at + _HEADSHOT_CHUNK]
+            angles.update(zip(batch, parallel_map(measure, batch), strict=True))
+            done += len(batch)
+            self.status(f"Head shots {done}/{len(unique)}...")
         tones = {
             pid: tone(angle, looks.SKIN_CUTS)
             for pid, url in urls.items()
@@ -580,6 +594,7 @@ class KGJMLBPatcher(Patcher):
             return {}
         pictures: dict[int, Image.Image] = {}
         for slot, (record, override) in sources.items():
+            self.status(f"Fetching {record.name or record.code} logo...")
             try:
                 png = override.read_bytes() if override else self._load_logo(record.logo_url)
                 picture = Image.open(io.BytesIO(png))

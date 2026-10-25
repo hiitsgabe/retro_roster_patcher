@@ -441,7 +441,7 @@ def test_patch_writes_the_identity_and_grows_the_rom(tmp_path):
     assert data[0x7FDE] | data[0x7FDF] << 8 == sum(snes.fix_checksum(data)) & 0xFFFF
     reader = KGJRomReader(str(tmp_path / "out.sfc"))
     assert reader.load() and reader.validate()
-    assert messages == ["Validating ROM...", "Initializing ROM writer...", "Saving patched ROM..."]
+    assert messages == ["Validating ROM...", "Initializing ROM writer...", "Fetching BOS logo...", "Saving patched ROM..."]
 
 
 def test_patch_moves_houston_and_milwaukee_and_sorts_the_grid(tmp_path):
