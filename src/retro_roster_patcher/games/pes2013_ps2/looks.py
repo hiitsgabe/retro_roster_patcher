@@ -13,12 +13,21 @@ so `rom_writer.RomWriter.set_look` also does what the game does when a
 player is edited: it turns the licensed face and hair off, and the generic
 face takes the colour. Hair colour and beard are in the record too but
 their bits were not found; the game's own on the record stay.
+
+A player who is on the 2012 disc already (Neymar at Santos, Hulk at Zenit)
+keeps the disc's own look of him wherever he plays now: `disc_players` maps
+ESPN ids to disc records (`assets/pes2013_disc_players.json`, built by
+`assets/pes2013_players/match.py`), and `RomWriter.copy_look` moves that
+record's look region onto his new record, licensed face and all.
 """
 
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping, Sequence
+from functools import cache
 
+from ...core.assets import package_bytes
 from ...core.headshots import Face
 from ...core.looks import EAST_ASIAN
 from ...core.skin import tone
@@ -42,9 +51,30 @@ def skin(nationality: str, ita: float | None) -> int:
     return DEFAULT_SKIN
 
 
-def dress(players: Sequence[PESPlayer], faces: Mapping[int, Face] | None = None) -> None:
-    """Give every player his `look`: from `faces` (what `measure_faces` read,
-    by player id) where it has a tone, else nationality and the default."""
+DISC_PLAYERS_FILE = "pes2013_disc_players.json"
+
+
+@cache
+def disc_players() -> dict[int, int]:
+    """ESPN player id -> the disc record (index into entry 46/47 part 0)
+    that is that player, for everyone the matcher could pair by name."""
+    raw = json.loads(package_bytes("retro_roster_patcher.assets", DISC_PLAYERS_FILE))
+    return {int(k): int(v) for k, v in raw["players"].items()}
+
+
+def dress(
+    players: Sequence[PESPlayer],
+    faces: Mapping[int, Face] | None = None,
+    disc_players: Mapping[int, int] | None = None,
+) -> None:
+    """Give every player his `look`: the disc's own record for a player who
+    is on the disc (`disc_players`, the packaged mapping by default), else
+    the colour from `faces` (what `measure_faces` read, by player id) where
+    it has a tone, else nationality and the default."""
+    on_disc = globals()["disc_players"]() if disc_players is None else disc_players
     for player in players:
         face = (faces or {}).get(player.player_id) if player.player_id else None
-        player.look = PESLook(skin=skin(player.nationality, face.ita if face else None))
+        player.look = PESLook(
+            skin=skin(player.nationality, face.ita if face else None),
+            disc_record=on_disc.get(player.player_id) if player.player_id else None,
+        )

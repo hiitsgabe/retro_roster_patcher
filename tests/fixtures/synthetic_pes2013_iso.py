@@ -39,10 +39,14 @@ SLOT_POSITIONS = [0, 3, 3, 4, 5, 7, 7, 8, 11, 12, 12]
 NATIONAL_ROW_0 = [1, 2, 3, 34, 35, 36]
 
 
-def player_record(display: str, shirt: str, position: int) -> bytes:
+def player_record(display: str, shirt: str, position: int, look: bytes | None = None) -> bytes:
+    """A 124-byte record; `look` replaces bytes 92-123 (the look region a
+    patch copies between records) when given."""
     name = display.encode("utf-16-le")[:30].ljust(32, b"\0")
     stats = bytearray(b"\x11" * 76)
     stats[53 - 48] = (position << 4) | 1
+    if look is not None:
+        stats[92 - 48 : 124 - 48] = look[:32].ljust(32, b"\x11")
     return name + shirt.encode("ascii")[:15].ljust(16, b"\0") + bytes(stats)
 
 
@@ -68,13 +72,16 @@ def table(parts: list[bytes]) -> bytes:
     return head + b"\0" * (pos - len(head)) + body
 
 
-def build_player_entry(names: list[tuple[str, str]] | None = None) -> bytes:
-    """Entry 46/47: players, national squads, club squads, order, numbers, extra."""
+def build_player_entry(
+    names: list[tuple[str, str]] | None = None, looks: dict[int, bytes] | None = None
+) -> bytes:
+    """Entry 46/47: players, national squads, club squads, order, numbers, extra.
+    `looks` gives chosen records a look region of their own (see `player_record`)."""
     names = names or [(f"PLAYER {i}", f"P{i}") for i in range(PLAYER_COUNT)]
     players = b""
     for i, (display, shirt) in enumerate(names):
         pos = SLOT_POSITIONS[(i - 1) % len(SLOT_POSITIONS)] if i else 0
-        players += player_record(display, shirt, pos)
+        players += player_record(display, shirt, pos, (looks or {}).get(i))
     # Clubs 0..2 get players 1..11, 12..22, 23..33 in their first eleven slots.
     squads = bytearray(CLUB_COUNT * CLUB_SQUAD_SIZE * 2)
     numbers = bytearray(CLUB_COUNT * CLUB_SQUAD_SIZE)

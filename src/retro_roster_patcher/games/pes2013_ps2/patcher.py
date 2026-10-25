@@ -484,6 +484,10 @@ class PES2013PS2Patcher(Patcher):
             reader = writer.reader
             tables = {index: reader.player_tables(index) for index in PLAYER_ENTRIES}
             primary = tables[PLAYER_ENTRIES[0]]
+            # The disc's records as they are, before any write: a player who
+            # is on the disc keeps the look of his old record even when that
+            # record has already been given to someone else.
+            disc = primary.players
             slots = sorted(slot for slot in rosters.teams if 0 <= slot < CLUB_COUNT)
             national_slots = sorted(
                 slot
@@ -501,14 +505,13 @@ class PES2013PS2Patcher(Patcher):
                 for squad_slot, index, player in assignments:
                     for t in tables.values():
                         RomWriter.set_player_names(t, index, player.display_name, player.shirt_name)
-                        if player.look is not None:
-                            RomWriter.set_look(t, index, player.look)
+                        self._write_look(t, index, player, disc)
                         if player.number:
                             RomWriter.set_club_number(t, slot, squad_slot, player.number)
                 players_patched += len(assignments)
             if on_progress is not None:
                 on_progress(0.8, "Compressing player tables...")
-            written, blocks = self._fit_player_tables(writer, tables, rosters, national_slots)
+            written, blocks = self._fit_player_tables(writer, tables, rosters, national_slots, disc)
             players_patched += written
             for index, t in tables.items():
                 writer.write_player_tables(index, t, blocks[index])
@@ -556,12 +559,25 @@ class PES2013PS2Patcher(Patcher):
             looks.dress(record.players, faces)
         return dressed
 
+    @staticmethod
+    def _write_look(t: PlayerTables, index: int, player: PESPlayer, disc: bytes) -> None:
+        """The player's look onto record `index`: his old disc record's whole
+        look region when he is on the disc, else his measured colour."""
+        if player.look is None:
+            return
+        if player.look.disc_record is not None:
+            at = player.look.disc_record * PLAYER_RECORD_SIZE
+            RomWriter.copy_look(t, index, disc[at : at + PLAYER_RECORD_SIZE])
+        else:
+            RomWriter.set_look(t, index, player.look)
+
     def _fit_player_tables(
         self,
         writer: RomWriter,
         tables: dict[int, PlayerTables],
         rosters: MappedRosters,
         national_slots: list[int],
+        disc: bytes,
     ) -> tuple[int, dict[int, bytes]]:
         """Write the national squads and deflate both player entries into their
         room; returns national players written and the built entries.
@@ -576,7 +592,9 @@ class PES2013PS2Patcher(Patcher):
         while True:
             written = pool_used = 0
             if national_slots:
-                written, pool_used = self._write_nationals(tables, rosters, national_slots, limit)
+                written, pool_used = self._write_nationals(
+                    tables, rosters, national_slots, disc, limit
+                )
             blocks = {index: t.build() for index, t in tables.items()}
             over = max(len(b) - writer.room(TEXT_AFS, index) for index, b in blocks.items())
             if over > 0:
@@ -616,6 +634,7 @@ class PES2013PS2Patcher(Patcher):
         tables: dict[int, PlayerTables],
         rosters: MappedRosters,
         slots: list[int],
+        disc: bytes,
         pool_limit: int | None = None,
     ) -> tuple[int, int]:
         """Give each national row its new squad without touching a club.
@@ -657,8 +676,7 @@ class PES2013PS2Patcher(Patcher):
             for player, idx in zip(record.players, take, strict=False):
                 for t in tables.values():
                     RomWriter.set_player_names(t, idx, player.display_name, player.shirt_name)
-                    if player.look is not None:
-                        RomWriter.set_look(t, idx, player.look)
+                    self._write_look(t, idx, player, disc)
                     RomWriter.set_position(
                         t,
                         idx,

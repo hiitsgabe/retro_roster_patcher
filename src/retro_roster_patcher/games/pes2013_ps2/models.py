@@ -54,6 +54,20 @@ PRESET_BYTE = 101
 PRESET_MASK = 0x28
 EDITED_BYTE = 113
 EDITED_BIT = 0x40
+#: Nationality (the national-team row order, 0 Austria .. 59 New Zealand,
+#: then nations without a squad) and age (bits 1-5 of byte 113, plus 15), as
+#: the disc's national squads and known players showed them (2026-10-25).
+NATIONALITY_BYTE = 112
+AGE_BYTE = 113
+AGE_SHIFT = 1
+AGE_MASK = 0x1F
+AGE_BASE = 15
+#: The look region a patch copies from one record to another: hair, face
+#: and skin fields, flags included, and with them the nationality and age
+#: bytes, right for the same person; the names, position byte and abilities
+#: before it stay the target's own.
+LOOK_START = 92
+LOOK_END = 124
 
 CLUB_COUNT = 139
 CLUB_SQUAD_SIZE = 32
@@ -147,9 +161,12 @@ POSITION_GROUPS = {
 @dataclass
 class PESLook:
     """How the game draws a player: his skin colour (byte 115 bits 0-2, 0-5,
-    shown as 1-6 in the editor). `rom_writer.RomWriter.set_look` writes it."""
+    shown as 1-6 in the editor), written by `rom_writer.RomWriter.set_look`;
+    or, for a player who is already on the disc, the record whose whole look
+    region he keeps (`RomWriter.copy_look`), licensed face and all."""
 
     skin: int = 0
+    disc_record: int | None = None
 
 
 @dataclass

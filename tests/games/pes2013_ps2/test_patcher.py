@@ -17,7 +17,7 @@ import pytest
 from retro_roster_patcher import get_patcher
 from retro_roster_patcher.core.errors import MappingError, RomError
 from retro_roster_patcher.core.models import SlotMapping
-from retro_roster_patcher.games.pes2013_ps2 import afs
+from retro_roster_patcher.games.pes2013_ps2 import afs, looks
 from retro_roster_patcher.games.pes2013_ps2.models import (
     CLUB_COUNT,
     DATABASE_OVERLAY_ENGLISH,
@@ -1180,3 +1180,49 @@ def test_looks_off_downloads_nothing_and_writes_the_plain_default(iso, tmp_path)
     found = _written_looks(out)
     assert calls == []
     assert found["KAI HAVERTZ"] == [(0, 0, 0x40)] * 2
+
+
+# -- a player already on the disc keeps the disc's look ---------------------
+
+
+def test_copy_look_moves_only_the_look_bytes(iso, tmp_path):
+    reader = RomReader(str(iso))
+    reader.load()
+    t = reader.player_tables()
+    source = bytes(range(124))
+    before = t.record(7)
+    RomWriter.copy_look(t, 7, source)
+    after = t.record(7)
+    assert after[92:124] == source[92:124]
+    assert after[:92] == before[:92]  # names, position byte 53 and the abilities stay
+
+
+def _iso_with_looks(tmp_path, looks):
+    path = tmp_path / "pes_looks.iso"
+    fixture.write_iso(path, player_entry=fixture.build_player_entry(looks=looks))
+    return path
+
+
+def test_a_player_already_on_the_disc_gets_that_records_look(tmp_path, monkeypatch):
+    # Record 1 is club 0's keeper place, which Raya takes (and `set_look`
+    # marks) before Havertz is written: the look must come from the disc as
+    # it was, not from the record as rewritten.
+    iso = _iso_with_looks(tmp_path, {1: bytes([0xAB]) * 32})
+    monkeypatch.setattr(looks, "disc_players", lambda: {101: 1})  # Havertz (id 101) was record 1
+    patcher = PES2013PS2Patcher(tmp_path)
+    rosters = patcher.map_rosters(_league_with_photos(""), [SlotMapping(slot_index=0, team_id=10)])
+    out = tmp_path / "out.iso"
+    patcher.patch(
+        rom_path=iso, output_path=out, rosters=rosters, logos=False, kits=False, looks=False
+    )
+    reader = RomReader(str(out))
+    reader.load()
+    for entry in PLAYER_ENTRIES:
+        t = reader.player_tables(entry)
+        by_name = {
+            t.record(i)[:32].decode("utf-16-le").split("\0")[0]: t.record(i)
+            for i in range(t.player_count)
+        }
+        havertz, raya = by_name["KAI HAVERTZ"], by_name["DAVID RAYA"]
+        assert havertz[92:124] == bytes([0xAB]) * 32  # the disc's look, licensed flags and all
+        assert raya[113] & 0x40 and raya[101] & 0x28 == 0  # an unmapped player is dressed as usual

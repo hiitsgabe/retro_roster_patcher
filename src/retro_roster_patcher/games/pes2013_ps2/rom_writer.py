@@ -26,6 +26,8 @@ from .models import (
     EMBLEM_PAIRS,
     LEAGUE_NAME_ANCHOR,
     LEAGUE_NAME_ENTRIES,
+    LOOK_END,
+    LOOK_START,
     NATIONAL_SLOT_BASE,
     OVER_AFS,
     PART_CLUB_NUMBERS,
@@ -145,6 +147,17 @@ class RomWriter:
         players[at + SKIN_BYTE] = (players[at + SKIN_BYTE] & ~0x07) | (max(0, min(5, look.skin)))
         players[at + PRESET_BYTE] &= ~PRESET_MASK & 0xFF
         players[at + EDITED_BYTE] |= EDITED_BIT
+        tables.parts[PART_PLAYERS] = bytes(players)
+
+    @staticmethod
+    def copy_look(tables: PlayerTables, index: int, source: bytes) -> None:
+        """Give record `index` the look region (`LOOK_START`-`LOOK_END`) of
+        `source`, a 124-byte record as the disc held it: a player who is on
+        the disc already keeps his own face, hair and skin wherever he plays
+        now. Names, position and abilities stay the target's."""
+        players = bytearray(tables.players)
+        at = index * PLAYER_RECORD_SIZE
+        players[at + LOOK_START : at + LOOK_END] = source[LOOK_START:LOOK_END]
         tables.parts[PART_PLAYERS] = bytes(players)
 
     @staticmethod

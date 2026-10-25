@@ -26,3 +26,16 @@ def test_dress_gives_every_player_a_look():
     ]
     looks.dress(players, {1: Face(-40.0, None)})
     assert [p.look for p in players] == [PESLook(skin=3), PESLook(skin=1)]
+
+
+def test_the_disc_player_mapping_is_well_formed():
+    mapping = looks.disc_players()
+    assert mapping and all(isinstance(k, int) and isinstance(v, int) for k, v in mapping.items())
+    assert all(0 < v < 4941 for v in mapping.values())
+    assert len(set(mapping.values())) == len(mapping)  # one disc record per player
+
+
+def test_dress_names_the_disc_record_of_a_player_already_on_the_disc():
+    players = [PESPlayer("A", "A", player_id=1), PESPlayer("B", "B", player_id=2)]
+    looks.dress(players, {}, disc_players={2: 1206})
+    assert (players[0].look.disc_record, players[1].look.disc_record) == (None, 1206)
