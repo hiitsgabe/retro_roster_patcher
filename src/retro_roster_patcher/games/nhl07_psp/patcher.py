@@ -30,13 +30,14 @@ from __future__ import annotations
 import importlib.util
 import os
 from collections.abc import Mapping
+from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from ...core.concurrency import parallel_map
 from ...core.errors import ApiError, CapabilityError, RomError, as_rom_error
-from ...core.headshots import load_headshot
+from ...core.headshots import load_headshot, measure_faces
 from ...core.models import (
     MappedRosters,
     PartialFn,
@@ -54,6 +55,7 @@ from ...sports import _http
 from ...sports.espn import EspnClient
 from ...sports.models import League, LeagueData, TeamRoster
 from ...sports.nhl import NhlApiClient
+from . import looks
 from .models import (
     NHL07_TEAM_NAMES,
     SLOT_COUNT,
@@ -705,6 +707,8 @@ class NHL07PSPPatcher(Patcher):
             tables = _MasterTables.of(master_tdb)
             mirrors = _MirrorTables.of(bioatt_tdb, roster_tdb)
 
+            rosters = self._dress(rosters, bool(options.get("looks", True)))
+
             self.status("Writing rosters...")
             photos: dict[int, str] = {}
             teams_patched, players_patched = self._write_all_teams(
@@ -731,6 +735,22 @@ class NHL07PSPPatcher(Patcher):
             teams_patched=teams_patched,
             players_patched=players_patched,
         )
+
+    def _dress(self, rosters: MappedRosters, measure: bool) -> MappedRosters:
+        """A copy of `rosters` with every player's `skin` set (`looks.dress`):
+        from his head shot when `measure`, else from the no-photo pick alone,
+        with no download at all."""
+        urls = {
+            record.player_id: record.photo_url
+            for players in rosters.teams.values()
+            for record in players
+            if record.player_id and record.photo_url
+        }
+        faces = measure_faces(self.cache_dir, urls, self._transport, self.status) if measure else {}
+        dressed = deepcopy(rosters)
+        for players in dressed.teams.values():
+            looks.dress(players, faces)
+        return dressed
 
     def _parse_tdbs(
         self, writer: NHL07PSPRomWriter

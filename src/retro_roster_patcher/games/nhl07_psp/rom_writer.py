@@ -236,6 +236,8 @@ class NHL07PSPRomWriter:
             values["WEIG"] = max(0, player.weight - WEIGHT_BASE_POUNDS)
         if player.height > 0:
             values["HEIG"] = player.height
+        if player.skin is not None:
+            values["SKIN"] = player.skin
 
         spbt.write_record(record_idx, values)
 

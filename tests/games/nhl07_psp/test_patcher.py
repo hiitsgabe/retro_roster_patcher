@@ -14,6 +14,7 @@ import pytest
 from retro_roster_patcher.core.errors import ApiError, CapabilityError, MappingError, RomError
 from retro_roster_patcher.core.models import MappedRosters, PatchResult, RomSlot
 from retro_roster_patcher.core.registry import get_patcher
+from retro_roster_patcher.games.nhl07_psp import looks
 from retro_roster_patcher.games.nhl07_psp.models import (
     MODERN_NHL_TO_NHL07,
     NHL07_TEAM_NAMES,
@@ -1805,3 +1806,41 @@ def test_bad_options_are_refused_before_the_disc_is_copied(tmp_path, options, me
             rom_path=source, output_path=out, rosters=patcher.map_rosters(league()), **options
         )
     assert not out.exists()
+
+
+def _written(path):
+    """The SPBT records a patch wrote (the mapped names), by last name."""
+    return {r["LNME"]: r for r in spbt_of(path) if str(r["LNME"]).startswith("Family")}
+
+
+def test_patching_writes_each_players_skin_from_his_head_shot(tmp_path):
+    pytest.importorskip("PIL")
+    from tests.fixtures.synthetic_headshot import headshot
+
+    dark = headshot((95, 60, 40))
+    squads = {t.code: squad(1000 * (i + 1)) for i, t in enumerate(default_teams())}
+    squads["ANA"][5].photo_url = "https://example.test/5.png"
+    patcher = build(tmp_path, transport=lambda url, headers, timeout: dark)
+    rosters = patcher.map_rosters(league(squads=squads))
+    out = tmp_path / "out.iso"
+    patcher.patch(rom_path=iso(tmp_path), output_path=out, rosters=rosters, portraits=False)
+    written = _written(out)
+    assert written["Family1005"]["SKIN"] in (5, 6, 7)
+    assert all(r["SKIN"] in looks.SKIN_VALUES for r in written.values())
+
+
+def test_looks_off_downloads_nothing_and_still_writes_a_skin(tmp_path):
+    def transport(url, headers, timeout):
+        raise AssertionError("no head shot may be fetched with looks off")
+
+    squads = {t.code: squad(1000 * (i + 1)) for i, t in enumerate(default_teams())}
+    squads["ANA"][5].photo_url = "https://example.test/5.png"
+    patcher = build(tmp_path, transport=transport)
+    rosters = patcher.map_rosters(league(squads=squads))
+    out = tmp_path / "out.iso"
+    patcher.patch(
+        rom_path=iso(tmp_path), output_path=out, rosters=rosters, portraits=False, looks=False
+    )
+    written = _written(out)
+    assert len(written) == fixture.TEAM_COUNT * 22
+    assert all(r["SKIN"] in looks.SKIN_VALUES for r in written.values())

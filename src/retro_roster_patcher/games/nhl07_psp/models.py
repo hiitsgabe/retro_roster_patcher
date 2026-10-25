@@ -263,6 +263,9 @@ class NHL07PlayerRecord:
     player_id: int = 0
     is_goalie: bool = False
     photo_url: str = ""  # the provider's head shot, for the portrait
+    #: SPBT `SKIN`, the shade the game draws him in (`looks.SKIN_VALUES`);
+    #: None leaves the bio record's own, which `looks.dress` never does.
+    skin: int | None = None
     skater_attrs: NHL07SkaterAttributes | None = None
     goalie_attrs: NHL07GoalieAttributes | None = None
 

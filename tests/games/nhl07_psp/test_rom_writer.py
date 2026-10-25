@@ -1040,3 +1040,19 @@ def test_the_room_after_a_file_counts_files_in_other_directories():
     assert found is not None
     pad, next_lba = found
     assert next_lba > pad.extent.lba  # the PRELOAD directory, which USRDIR holds
+
+
+def test_a_bio_write_lands_the_skin_tone(tmp_path):
+    from dataclasses import replace
+
+    assert _write_and_read(tmp_path, 3, replace(SKATER, skin=6))["SKIN"] == 6
+
+
+def test_a_bio_without_a_skin_leaves_the_discs(tmp_path):
+    team, row = divmod(
+        (3 * fixture.SPBT_STRIDE + fixture.SPBT_SHIFT) % fixture.PLAYER_COUNT, fixture.ROWS_PER_TEAM
+    )
+    assert SKATER.skin is None
+    assert (
+        _write_and_read(tmp_path, 3, SKATER)["SKIN"] == fixture.disc_bio_values(team, row)["SKIN"]
+    )

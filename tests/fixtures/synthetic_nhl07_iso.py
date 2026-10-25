@@ -88,7 +88,7 @@ MEMBER_SLACK = 8192
 # several straddle a byte boundary. A layout of byte-aligned bytes would let a
 # writer that ignored `bit_width` pass every test here.
 
-# 46 bytes: two 20-byte names, then seven integers packed into the tail.
+# 47 bytes: two 20-byte names, then eight integers packed into the tail.
 #   bits   0..159  FNME  20 ASCII bytes
 #   bits 160..319  LNME  20 ASCII bytes
 #   bits 320..335  INDX  16 bits, byte-aligned
@@ -98,6 +98,7 @@ MEMBER_SLACK = 8192
 #   bits 350..352  POS_   3 bits, straddling bytes 43 and 44
 #   bits 353..360  WEIG   8 bits, straddling bytes 44 and 45
 #   bits 361..365  HEIG   5 bits
+#   bits 366..368  SKIN   3 bits, straddling bytes 45 and 46
 SPBT_FIELDS = [
     FieldSpec("FNME", TYPE_STRING, 0, 160),
     FieldSpec("LNME", TYPE_STRING, 160, 160),
@@ -108,8 +109,9 @@ SPBT_FIELDS = [
     FieldSpec("POS_", TYPE_UINT, 350, 3),
     FieldSpec("WEIG", TYPE_UINT, 353, 8),
     FieldSpec("HEIG", TYPE_UINT, 361, 5),
+    FieldSpec("SKIN", TYPE_UINT, 366, 3),
 ]
-SPBT_RECORD_SIZE = 46
+SPBT_RECORD_SIZE = 47
 
 # The 21 six-bit skater ratings, in the order the writer lists them. `FIGH` is
 # two bits and is appended after them, so no rating is at a multiple of eight
@@ -399,6 +401,7 @@ def disc_bio_values(team: int, row: int, height: int = DEFAULT_DISC_HEIGHT) -> d
         "POS_": 4 if is_goalie_row(row) else (row % 4),
         "WEIG": 120 + row,
         "HEIG": height,
+        "SKIN": 1 + row % 7,
     }
 
 
