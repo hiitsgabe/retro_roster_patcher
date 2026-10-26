@@ -34,6 +34,7 @@ from .sports.serde import league_data_from_dict, league_data_to_dict
 # Imported for the side effect of running @register. Keep last, and keep the
 # split marker: without it ruff's import sorter files `.games` between `.core`
 # and `.sports`.
+from .games import iss2000_n64 as _iss2000_n64  # noqa: E402,F401
 from .games import iss_snes as _iss_snes  # noqa: E402,F401
 from .games import kgj_mlb_snes as _kgj_mlb_snes  # noqa: E402,F401
 from .games import mvp_psp as _mvp_psp  # noqa: E402,F401
