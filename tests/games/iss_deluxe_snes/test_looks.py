@@ -13,7 +13,14 @@ from retro_roster_patcher.games.iss_deluxe_snes.patcher import (
     DeluxeTeam,
     write_team,
 )
-from retro_roster_patcher.games.iss_snes.looks import DARK, DARKEST, HAIR, LIGHT, SKIN_RAMPS
+from retro_roster_patcher.games.iss_snes.looks import (
+    DARK,
+    DARKEST,
+    EAST_ASIAN,
+    HAIR,
+    LIGHT,
+    SKIN_RAMPS,
+)
 from retro_roster_patcher.games.iss_snes.models import ISSLook
 from retro_roster_patcher.games.iss_snes.rom_writer import _exact_bgr555
 
@@ -108,6 +115,36 @@ def test_the_first_kit_colours_the_team_photo():
     assert got == (w[2], w[1], w[0], w[5], w[4], w[3], w[7], w[6])
 
 
+def test_a_striped_kit_gets_the_striped_photo_and_its_own_trim():
+    image = _image()
+    image[kits.LAYOUT + TEAM] = 0x70  # the slot's nation wears checks
+    spec = KitSpec((0, 0, 0), (255, 255, 255), "stripes", (0, 0, 0), (0, 0, 0))
+    first = kits.resolve(image, spec, 0)
+    kits.write(image, TEAM, (first, None))
+    assert image[kits.LAYOUT + TEAM] == kits.STRIPES_LAYOUT
+    at = struct.unpack_from("<H", image, kits.TRIM + 2 * TEAM)[0]
+    assert at == kits.TRIMS + 24 * TEAM
+    header, *trim = struct.unpack_from("<12H", image, _at(at))
+    assert header == 0x15 and trim[0] > trim[2]  # white stripes, light to dark
+    plain = kits.resolve(image, KitSpec((0, 0, 255), (0, 0, 255), "plain", (0, 0, 0), (0, 0, 0)), 0)
+    assert plain.layout == kits.PLAIN_LAYOUT
+
+
+def test_a_template_copies_its_photo_design_and_trim():
+    image = _image()
+    image[kits.LAYOUT + 2] = 0x60
+    _point(image, kits.TRIM, 2, 0x9600)
+    struct.pack_into("<3H", image, _at(0x9600) + 2, 1, 2, 3)
+    kit = kits.resolve(image, 2, 0)
+    assert kit.layout == 0x60 and kit.trim[:3] == (1, 2, 3)
+
+
+def test_the_trim_records_follow_the_look_records_in_the_free_run():
+    looks_end = max(a + 4 for a in looks.HAIR_RECORD.values())
+    assert looks_end <= kits.TRIMS
+    assert kits.TRIMS + 24 * len(R.TEAMS) <= looks.RECORDS + 1470
+
+
 def test_dress_puts_the_dark_faces_in_the_alternate_look():
     players = [DeluxePlayer(f"P{i}", "MF", player_id=i + 1, photo_url=f"u{i}") for i in range(20)]
     team = DeluxeTeam("Club", players)
@@ -117,6 +154,15 @@ def test_dress_puts_the_dark_faces_in_the_alternate_look():
     assert team.look is not None and team.look.skin == LIGHT
     assert team.look.alt_skin == DARKEST  # not a cartridge record: the patch adds one
     assert [p.player_id for p in players if p.alternate] == [3, 4]
+
+
+def test_a_mixed_light_and_tan_squad_is_never_drawn_east_asian():
+    players = [DeluxePlayer(f"P{i}", "MF", player_id=i + 1, photo_url=f"u{i}") for i in range(20)]
+    team = DeluxeTeam("Club", players)
+    faces = {i + 1: Face(45.0 if i % 2 else 22.0, "black") for i in range(20)}
+    looks.dress(team, faces)
+    assert team.look is not None
+    assert EAST_ASIAN not in (team.look.skin, team.look.alt_skin)
 
 
 def test_a_patched_player_drops_the_stars_hair_style():

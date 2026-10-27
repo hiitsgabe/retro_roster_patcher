@@ -82,6 +82,14 @@ def _person(nationality: str, face: Face | None) -> Person:
     return tone(nationality, face.ita), _HAIR_AS.get(hair, hair)
 
 
+def _skins(people: list[Person], skins: Sequence[int] = range(len(SKIN_RAMPS))) -> list[int]:
+    """The ramps a look may take: the East Asian one only for a squad with an
+    East Asian face. Its place halfway up the ladder would otherwise make it
+    every mixed light and tan squad's compromise."""
+    asian = any(p[0] == EAST_ASIAN for p in people)
+    return [s for s in skins if s != EAST_ASIAN or asian]
+
+
 def dress(
     team: ISSTeamRecord | Any,
     faces: Mapping[int, Face],
@@ -99,7 +107,7 @@ def dress(
     keeper, *outfield = team.players
     people = [_person(p.nationality, faces.get(p.player_id)) for p in outfield]
     own, alt = (
-        two_looks(people, range(len(SKIN_RAMPS)), HAIR, alt_skins, alt_hairs, _POSITION)
+        two_looks(people, _skins(people), HAIR, _skins(people, alt_skins), alt_hairs, _POSITION)
         if people
         else ((LIGHT, "black"), None)
     )
