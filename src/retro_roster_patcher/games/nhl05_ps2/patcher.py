@@ -34,12 +34,13 @@ from __future__ import annotations
 import importlib.util
 import os
 from collections import Counter
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from ...core.concurrency import parallel_map
-from ...core.errors import ApiError, RomError, as_rom_error
+from ...core.errors import ApiError, CapabilityError, RomError, as_rom_error
 from ...core.headshots import load_headshot
 from ...core.models import (
     MappedRosters,
@@ -59,7 +60,7 @@ from ...sports.espn import EspnClient
 from ...sports.models import League, LeagueData, TeamRoster
 from ...sports.nhl import NhlApiClient
 from ..nhl07_psp.rom_writer import iso_entry, write_in_place
-from . import portraits
+from . import portraits, screens
 from .models import (
     NAMED_SLOT_COUNT,
     NHL05_TEAM_NAMES,
@@ -235,6 +236,10 @@ class NHL05PS2Patcher(Patcher):
 
     Providers: `espn` for the current season, `nhl` for seasons back to 1993.
     """
+
+    #: Screen art `patch(images={name: png})` can replace; `export_images`
+    #: writes the disc's current art for each. See `screens.SLOTS`.
+    image_slots: tuple[str, ...] = screens.IMAGE_SLOT_NAMES
 
     def __init__(
         self,
@@ -453,6 +458,7 @@ class NHL05PS2Patcher(Patcher):
             MappingError: `rosters` was produced by a different patcher.
         """
         rosters.require_game(self.game_id)
+        pictures = self._decode_images(self._collect_images(options.get("images")))
 
         with as_rom_error(rom_path):
             self.status("Validating ROM...")
@@ -503,6 +509,8 @@ class NHL05PS2Patcher(Patcher):
             )
             if options.get("portraits", True):
                 self._write_portraits(writer, master_tdb)
+            if pictures:
+                self._write_images(writer, pictures)
 
         return PatchResult(
             output_path=str(output_path),
@@ -587,6 +595,91 @@ class NHL05PS2Patcher(Patcher):
                 lender = free.pop()
                 spbt.write_record(bio, {"ART_": art_of[lender]})
                 spbt.write_record(lender, {"ART_": portraits.SILHOUETTE_ART})
+
+    def export_images(self, rom_path: Path, out_dir: Path) -> list[Path]:
+        """Write each slot's current art as `<out_dir>/<slot>.png`, to edit and feed back."""
+        if not Path(rom_path).exists():
+            raise RomError(f"ROM not found: {rom_path}")
+        out = Path(out_dir)
+        written = []
+        with as_rom_error(rom_path), open(rom_path, "rb") as f:
+            archives = screens.read_archives(f, screens.slot_archives())
+            out.mkdir(parents=True, exist_ok=True)
+            for slot in screens.SLOTS:
+                picture = self._first_picture(archives, slot)
+                if picture is None:
+                    continue
+                target = out / f"{slot.name}.png"
+                picture.save(target)
+                written.append(target)
+        return written
+
+    @staticmethod
+    def _first_picture(archives: Mapping[str, bytes], slot: screens.Slot) -> Any:
+        for copy in slot.copies:
+            archive = archives.get(copy.archive)
+            if archive is None:
+                continue
+            for entry in bigf_parse(archive):
+                if entry.name.lower() == copy.member.lower():
+                    picture = screens.read_picture(
+                        archive[entry.offset : entry.offset + entry.size], copy
+                    )
+                    if picture is not None:
+                        return picture
+        return None
+
+    @staticmethod
+    def _collect_images(given: Any) -> dict[str, bytes]:
+        """Screen art to write: `patch(images=...)`, slot name to PNG path or bytes."""
+        images: dict[str, bytes] = {}
+        for name, png in dict(given or {}).items():
+            if name not in screens.SLOTS_BY_NAME:
+                raise CapabilityError(
+                    f"Unknown image slot {name!r}. Slots: {', '.join(screens.IMAGE_SLOT_NAMES)}"
+                )
+            images[name] = Path(png).read_bytes() if isinstance(png, str | Path) else bytes(png)
+        return images
+
+    def _decode_images(self, images: Mapping[str, bytes]) -> dict[str, Any]:
+        """Each slot's picture, decoded; {} without Pillow (with a status line).
+
+        Raises:
+            CapabilityError: a picture Pillow cannot read, named by its slot.
+        """
+        if not images:
+            return {}
+        if importlib.util.find_spec("PIL") is None:
+            self.status("Pillow is not installed; screen images skipped")
+            return {}
+        import io
+
+        from PIL import Image
+
+        pictures = {}
+        for name, png in images.items():
+            try:
+                picture = Image.open(io.BytesIO(png))
+                picture.load()
+            except Exception as e:  # noqa: BLE001 - Pillow's errors share no base class
+                raise CapabilityError(f"The {name!r} image is not a picture: {e}") from e
+            pictures[name] = picture
+        return pictures
+
+    def _write_images(self, writer: NHL05PS2RomWriter, pictures: Mapping[str, Any]) -> None:
+        """Draw each given slot into every copy of it, in place. See `screens`."""
+        with open(writer.output_path, "r+b") as f:
+            archives = screens.read_archives(f, screens.slot_archives(set(pictures)))
+            edited, written, skipped = screens.plan_writes(archives, pictures)
+            for path, data in edited.items():
+                found = iso_entry(f, path)
+                if found is not None:
+                    f.seek(found[0].extent.offset)
+                    f.write(data)
+        for name, count in written.items():
+            self.status(f"Screen image {name}: {count} copies")
+        for name in skipped:
+            self.status(f"Screen image {name} skipped: it does not fit every copy's slot")
 
     def _headshot(self, url: str) -> bytes | None:
         return load_headshot(self.cache_dir, url, self._transport)
