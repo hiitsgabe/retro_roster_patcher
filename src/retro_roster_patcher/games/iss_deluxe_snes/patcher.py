@@ -41,7 +41,7 @@ from ..iss_snes.models import Flag
 from ..iss_snes.patcher import ISSPatcher, _parse_hex_colour
 from ..iss_snes.rom_writer import two_band_flag
 from ..iss_snes.stat_mapper import ISSStatMapper
-from . import bignames, flags, kits, names, pages
+from . import bignames, flags, kits, names, pages, screens
 from . import rom as R
 
 _Q = tuple[int, int, int, int, int]
@@ -121,6 +121,9 @@ class ISSDeluxePatcher(Patcher):
     #: The order a caller should fill slots in (`rom.SLOT_ORDER`): the stadium
     #: select shows eight nations' names, so their slots go last.
     slot_order: tuple[int, ...] = R.SLOT_ORDER
+    #: Screen art `patch(images={name: png})` can replace; `export_images`
+    #: writes the cartridge's current art for each. See `screens.SLOTS`.
+    image_slots: tuple[str, ...] = screens.IMAGE_SLOT_NAMES
 
     fetch = ISSPatcher.fetch
 
@@ -282,6 +285,9 @@ class ISSDeluxePatcher(Patcher):
         **options: Any,
     ) -> PatchResult:
         rosters.require_game(self.game_id)
+        # Checked before the ROM is touched: an unknown slot or an unreadable
+        # picture never leaves a half-written output behind.
+        pictures = screens.load_images(options.get("images"), self.status)
         with as_rom_error(rom_path):
             image = bytearray(self._image(rom_path))
         teams: dict[int, DeluxeTeam] = {int(s): t for s, t in rosters.teams.items()}
@@ -324,11 +330,21 @@ class ISSDeluxePatcher(Patcher):
         for slot, note in flags.write(image, crests, fallbacks, pins, unused).items():
             name = teams[slot].name if slot in teams else R.TEAMS_ALL[slot]
             self.status(f"{name}: flag {note}")
+        if pictures:
+            if on_progress is not None:
+                on_progress(0.95, "Drawing screen art...")
+            for note in screens.write(image, pictures):
+                self.status(note)
         image = fix_checksum(image)
         Path(output_path).write_bytes(bytes(image))
         if on_progress is not None:
             on_progress(1.0, f"Done! Saved to {output_path}")
         return PatchResult(str(output_path), teams_patched=len(teams), players_patched=players)
+
+    def export_images(self, rom_path: Path, out_dir: Path) -> list[Path]:
+        """Write each slot's current art as `<out_dir>/<slot>.png`, to edit and feed back."""
+        with as_rom_error(rom_path):
+            return screens.export(self._image(rom_path), Path(out_dir))
 
     def _flags(
         self, teams: dict[int, DeluxeTeam], *, logos: bool
