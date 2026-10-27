@@ -243,17 +243,16 @@ def test_a_player_of_unknown_handedness_is_written_right_handed():
     assert MAPPER.map_player(player(handedness=""), "COL").handedness == 1
 
 
-def test_the_weight_is_the_providers_pounds():
-    assert MAPPER.map_player(player(weight=212), "COL").weight == 212
+def test_the_weight_is_the_providers_pounds_over_150():
+    assert MAPPER.map_player(player(weight=212), "COL").weight == 62
 
 
 def test_a_player_without_a_weight_gets_the_league_average():
-    assert MAPPER.map_player(player(weight=0), "COL").weight == 190
+    assert MAPPER.map_player(player(weight=0), "COL").weight == 40
 
 
 def test_every_mapped_player_gets_the_same_constant_height():
-    # Kept until NHL 05's `HEIG` encoding is checked on a disc: NHL 07's is
-    # inches above 54, not the 66 the upstream tool assumed for both games.
+    # Without a provider height, every player gets the 6'0" default.
     heights = [
         MAPPER.map_player(player(id=1, position="D"), "COL").height,
         MAPPER.map_player(player(id=2, position="G"), "BOS").height,
@@ -261,8 +260,8 @@ def test_every_mapped_player_gets_the_same_constant_height():
     assert heights == [DEFAULT_HEIGHT, DEFAULT_HEIGHT]
 
 
-def test_a_reported_height_still_writes_the_constant():
-    assert MAPPER.map_player(player(height=73.0), "COL").height == DEFAULT_HEIGHT
+def test_a_reported_height_is_inches_over_54():
+    assert MAPPER.map_player(player(height=73.0), "COL").height == 19
 
 
 def test_a_goalie_is_flagged_as_one():

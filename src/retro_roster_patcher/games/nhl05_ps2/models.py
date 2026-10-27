@@ -254,10 +254,8 @@ class NHL05PlayerRecord:
     `is_goalie`. Both default to `None` and must not default to a shared mutable
     instance.
 
-    Upstream behaviour, known wrong, preserved deliberately: `height` is the
-    encoded five-bit `HEIG` and nothing ever overrides this default, because
-    `stat_mapper.map_player` derives it from a `Player.height` no provider model
-    here has. Every patched player is written at 16, about 5'10".
+    `weight` and `height` are the encoded `WEIG` (pounds over 150) and `HEIG`
+    (inches over 54).
     """
 
     first_name: str = ""
@@ -265,8 +263,8 @@ class NHL05PlayerRecord:
     position: str = "C"
     jersey_number: int = 1
     handedness: int = 1  # 0 = left, 1 = right
-    weight: int = 190  # raw pounds
-    height: int = 16  # encoded five-bit HEIG, ~5'10"
+    weight: int = 40  # WEIG: pounds over 150
+    height: int = 18  # HEIG: inches over 54
     team_index: int = 0
     player_id: int = 0
     is_goalie: bool = False

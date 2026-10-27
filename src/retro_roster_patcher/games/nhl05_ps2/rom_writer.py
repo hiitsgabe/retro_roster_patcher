@@ -218,11 +218,7 @@ class NHL05PS2RomWriter:
         no weight leaves the disc's own value alone rather than flattening the
         player to zero pounds.
 
-        Upstream behaviour, known wrong, preserved deliberately: `HEIG` is
-        written and it is always 16, about 5'10", because
-        `stat_mapper.map_player` reads a `Player.height` that does not exist.
-        Every patched player overwrites the disc's per-player height with that
-        one value.
+        Both arrive encoded (`stat_mapper`): pounds over 150, inches over 54.
         """
         spbt = tdb.get_table("SPBT")
         if spbt is None or record_idx >= spbt.capacity:

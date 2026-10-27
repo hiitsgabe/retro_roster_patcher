@@ -214,13 +214,13 @@ GOALIE_DEFAULTS = NHL05GoalieAttributes(
     stick_low=35,
 )
 
-# Default weight in pounds, about the 2004 league average. Written to `WEIG` as
-# raw pounds.
-DEFAULT_WEIGHT = 190
-
-# The encoded `HEIG` every player gets, about 5'10" if NHL 05 encodes heights
-# as NHL 07 does. See `map_player`.
-DEFAULT_HEIGHT = 16
+# `WEIG` is pounds over 150 and `HEIG` inches over 54, as on NHL 07 (checked on
+# the retail disc: Chara 6'9", 260 lb is 27 and 110; Gionta 5'7", 175 lb is 13
+# and 25). The defaults, 190 lb and 6'0", stand in when the provider has none.
+WEIGHT_BASE = 150
+HEIGHT_BASE = 54
+DEFAULT_WEIGHT = 190 - WEIGHT_BASE
+DEFAULT_HEIGHT = 72 - HEIGHT_BASE
 
 # Default jersey number. 1 is a goalie's number and is handed to skaters too; the
 # disc's own number is overwritten either way.
@@ -305,13 +305,16 @@ class NHL05StatMapper:
         if player.handedness == "L":
             hand = HAND_LEFT
 
-        weight = int(player.weight) if player.weight > 0 else DEFAULT_WEIGHT
-
-        # Every player is written at `DEFAULT_HEIGHT`, even when the provider
-        # reports a height. NHL 07's retail disc encodes inches above 54, not the
-        # 66 this module assumes; NHL 05's encoding has not been checked on a
-        # disc, so it keeps the constant until it is.
-        height = DEFAULT_HEIGHT
+        weight = (
+            max(1, min(127, int(player.weight) - WEIGHT_BASE))
+            if player.weight > 0
+            else DEFAULT_WEIGHT
+        )
+        height = (
+            max(1, min(31, int(player.height) - HEIGHT_BASE))
+            if player.height > 0
+            else DEFAULT_HEIGHT
+        )
 
         record = NHL05PlayerRecord(
             first_name=first_name[:NAME_FIELD_CHARS],
