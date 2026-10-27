@@ -272,8 +272,9 @@ class ISSDeluxePatcher(Patcher):
             if "id" in e
         }
         squad = squad[: R.PLAYERS]
-        # `iss-snes`'s rule: the surname, told apart within the team.
-        shirt_names = ISSStatMapper()._distinct_names(squad)
+        # The initial and surname ("I.Gomes", as the cartridge's own J.Platt)
+        # when it fits, else the surname; told apart within the team.
+        shirt_names = ISSStatMapper()._distinct_names(squad, initials=True)
         players = []
         for k, (p, name) in enumerate(zip(squad, shirt_names, strict=True)):
             line = self.mapper._lines.get(p.id)

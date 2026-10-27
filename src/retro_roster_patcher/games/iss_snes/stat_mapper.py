@@ -377,12 +377,13 @@ class ISSStatMapper:
         subs = keepers + [p for p in rest if p not in keepers]
         return (eleven + subs)[:PLAYERS_PER_TEAM]
 
-    def _distinct_names(self, players: list[Player]) -> list[str]:
-        """Each player's ROM name, told apart within the team. Players the
+    def _distinct_names(self, players: list[Player], initials: bool = False) -> list[str]:
+        """Each player's ROM name, told apart within the team (`initials`: as
+        `_format_player_name` takes it). Players the
         surname alone would merge (Gabriel Silva, Lucas Silva) all become
         initial and surname ("G.Silva"), or, when that still merges them (Vitor
         Hugo, Victor Hugo), their first names; one-word names get a digit."""
-        names = [self._format_player_name(p) for p in players]
+        names = [self._format_player_name(p, initials) for p in players]
         shared: dict[str, list[int]] = {}
         for i, name in enumerate(names):
             shared.setdefault(name, []).append(i)
@@ -402,8 +403,10 @@ class ISSStatMapper:
                 names[i] = str(pick)
         return names
 
-    def _format_player_name(self, player: Player) -> str:
-        """Build a ROM-friendly name from a Player: surname, 8 characters max."""
+    def _format_player_name(self, player: Player, initials: bool = False) -> str:
+        """Build a ROM-friendly name from a Player: surname, 8 characters max;
+        with `initials`, the first name's initial and the surname ("I.Gomes")
+        when that fits."""
         display = _to_ascii(player.name) if player.name else ""
         if not display:
             last = _to_ascii(player.last_name) if player.last_name else ""
@@ -414,4 +417,6 @@ class ISSStatMapper:
             return display[:8]
 
         surname = words[-1]
+        if initials and len(surname) + 2 <= 8:
+            return f"{words[0][0]}.{surname}"
         return surname[:8]
