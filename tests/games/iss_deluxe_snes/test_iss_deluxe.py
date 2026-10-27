@@ -77,3 +77,17 @@ def test_a_kit_spec_borrows_a_design_and_a_clash_class():
 def test_clubs_fill_the_stadium_nations_last():
     assert sorted(R.SLOT_ORDER) == list(range(36))
     assert set(R.SLOT_ORDER[-8:]) == set(R.STADIUM_TEAMS)
+
+
+def test_names_take_the_initial_when_it_fits():
+    from retro_roster_patcher.games.iss_snes.stat_mapper import ISSStatMapper
+    from retro_roster_patcher.sports.models import Player
+
+    squad = [
+        Player(id=i, name=n)
+        for i, n in enumerate(
+            ["Igor Gomes", "Cássio", "Pedro Tocantins", "Gabriel Silva", "Gustavo Silva"]
+        )
+    ]
+    names = ISSStatMapper()._distinct_names(squad)
+    assert names == ["I.Gomes", "Cassio", "Tocantin", "Gabriel", "Gustavo"]

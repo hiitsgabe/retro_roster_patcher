@@ -403,7 +403,9 @@ class ISSStatMapper:
         return names
 
     def _format_player_name(self, player: Player) -> str:
-        """Build a ROM-friendly name from a Player: surname, 8 characters max."""
+        """Build a ROM-friendly name from a Player, 8 characters max: the first
+        name's initial and the surname ("I.Gomes") when that fits, else the
+        surname."""
         display = _to_ascii(player.name) if player.name else ""
         if not display:
             last = _to_ascii(player.last_name) if player.last_name else ""
@@ -414,4 +416,6 @@ class ISSStatMapper:
             return display[:8]
 
         surname = words[-1]
+        if len(surname) + 2 <= 8:
+            return f"{words[0][0]}.{surname}"
         return surname[:8]

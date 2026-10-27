@@ -16,6 +16,13 @@ Traced in Mesen 2 on the USA cartridge:
 * Shirt numbers: $82:8459 (`NUMBERS`), a byte per team and kit picking one
   of the eleven colours at $89:832A (`NUMBER_COLOURS`, by byte offset; 0
   keeps the flag palette's entry 12).
+* Team photo (team select): OBJ palette 6 from a record per team ($82:FA5F,
+  `PHOTO`): entries 1-3 the shirt, 4-6 the shorts, 7-8 the socks, light to
+  dark (the rest is the looks', `looks`). Its shirt design is a byte per
+  team ($82:F91B, `LAYOUT`: 0x00 Brazil's plain shirt, 0x60 Argentina's
+  stripes, 0x70 Croatia's checks...), its stripes or collar OBJ palette 3
+  entries 1-3 from a record ($82:F9B3, `TRIM`) several nations share; a
+  patched team gets its own (`TRIMS`, bank $89's free run after `looks`').
 * Clash: $82:842E (`CLASH`), a byte per team (0 white, 1 blue, 2 red,
   3 yellow, 4 green). When both teams' bytes are equal the away side wears its
   second kit ($98:FA53); nothing else is compared.
@@ -51,6 +58,15 @@ NUMBER_COLOURS = 0x4832A  # $89:832A
 CHEST = 0xCE8A  # $81:CE8A
 DESIGNS = 0xC45D4  # $98:C5D4
 BLANK = 0xF014  # $98:F014
+PHOTO = 0x17A5F  # $82:FA5F
+LAYOUT = 0x1791B  # $82:F91B
+TRIM = 0x179B3  # $82:F9B3
+TRIMS = 0xFB00  # $89:FB00, 24 bytes per team: header and 11 colours
+TRIM_WORDS = 11
+PLAIN_LAYOUT, STRIPES_LAYOUT = 0x00, 0x60
+#: The photo's shirt for a `KitSpec.pattern`; the rest wear the plain one.
+PATTERN_LAYOUTS = {"stripes": STRIPES_LAYOUT, "pinstripes": STRIPES_LAYOUT}
+_UNUSED = 0x03E0  # the cartridge's filler in a trim record (pure green)
 BANK_89, BANK_98 = 0x48000, 0xC0000
 KIT_WORDS = 8  # shirt 3, shorts 3, socks 2 (entries 7-14)
 TEMPLATES = len(TEAMS)
@@ -132,13 +148,17 @@ def _number_colours(image: bytes | bytearray) -> dict[int, RGB]:
 class Kit:
     """One kit as `write` writes it: `words` entries 7-14 (BGR555), `number`
     the shirt-number byte; `design`, `pins` (flag entry -> wanted colour and
-    weight) and `clash` belong to the team, so only the first kit's count."""
+    weight) and `clash` belong to the team, so only the first kit's count;
+    so do the team photo's shirt design (`layout`) and its trim record's
+    colours (`trim`, empty to keep the slot's)."""
 
     words: tuple[int, ...]
     number: int
     design: int
     pins: dict[int, tuple[RGB, int]]
     clash: int
+    layout: int = PLAIN_LAYOUT
+    trim: tuple[int, ...] = ()
 
     @property
     def shades(self) -> list[RGB]:
@@ -185,8 +205,11 @@ def resolve(image: bytes | bytearray, choice: KitSpec | int, kit: int) -> Kit:
             design=design,
             pins={e: (choice.secondary, n) for e, n in _design_entries(image, design).items()},
             clash=_rgb_to_predominant(*choice.shirt),
+            layout=PATTERN_LAYOUTS.get(choice.pattern, PLAIN_LAYOUT),
+            trim=(*_make_shades(*choice.secondary, 3)[::-1], *[_UNUSED] * (TRIM_WORDS - 3)),
         )
     n = choice
+    trim_at = BANK_89 + (struct.unpack_from("<H", image, TRIM + 2 * n)[0] & 0x7FFF) + 2
     design = chest(image, n)
     flag = F.colours(image, n)
     return Kit(
@@ -195,12 +218,14 @@ def resolve(image: bytes | bytearray, choice: KitSpec | int, kit: int) -> Kit:
         design=design,
         pins={e: (flag[e - 12], c) for e, c in _design_entries(image, design).items()},
         clash=image[CLASH + n],
+        layout=image[LAYOUT + n],
+        trim=tuple(_words(image, trim_at, TRIM_WORDS)),
     )
 
 
 def write(image: bytearray, team: int, kits: tuple[Kit | None, Kit | None]) -> None:
-    """Both kits' colours and numbers; the first kit's design and clash class.
-    The pins go to `flags.write`."""
+    """Both kits' colours and numbers; the first kit's design, clash class and
+    team photo (colours, shirt design, trim). The pins go to `flags.write`."""
     for kit, k in enumerate(kits):
         if k is None:
             continue
@@ -209,6 +234,17 @@ def write(image: bytearray, team: int, kits: tuple[Kit | None, Kit | None]) -> N
         if kit == 0:
             struct.pack_into("<H", image, CHEST + 2 * team, k.design)
             image[CLASH + team] = k.clash
+            w = k.words  # dark to light; the photo's are light to dark
+            photo = BANK_89 + (struct.unpack_from("<H", image, PHOTO + 2 * team)[0] & 0x7FFF)
+            struct.pack_into(
+                "<8H", image, photo + 2, w[2], w[1], w[0], w[5], w[4], w[3], w[7], w[6]
+            )
+            image[LAYOUT + team] = k.layout
+            if k.trim:
+                at = TRIMS + 24 * team
+                o = BANK_89 + at - 0x8000
+                struct.pack_into(f"<{1 + TRIM_WORDS}H", image, o, 2 * TRIM_WORDS - 1, *k.trim)
+                struct.pack_into("<H", image, TRIM + 2 * team, at)
 
 
 def preview_png(
