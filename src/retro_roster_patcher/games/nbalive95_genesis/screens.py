@@ -46,6 +46,13 @@ LINES = 3
 #: Colours of a line the picture leaves alone: "LIVE"'s, which flash.
 RESERVED = {1: (9, 10, 11, 12)}
 IMAGE_SLOT_NAMES = ("title",)
+#: What the game draws over the title picture, (label, (x, y, width, height))
+#: in its pixels, measured in genesis_plus_gx: keep these parts plain.
+GUIDES = (
+    ("NBA logo", (86, 56, 64, 136)),
+    ("NBA LIVE 95 letters", (148, 28, 164, 172)),
+    ("Credits", (0, 192, 312, 32)),
+)
 _LEVELS = (0, 52, 87, 116, 144, 172, 206, 255)
 
 
