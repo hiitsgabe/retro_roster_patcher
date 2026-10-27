@@ -9,7 +9,7 @@ soccer. Both are keyless and neither rate-limits.
 import json
 import os
 from collections.abc import Callable
-from datetime import date
+from datetime import date, timedelta
 from typing import Any
 
 from ..core.concurrency import emit_status, parallel_map
@@ -160,6 +160,8 @@ LINEUP_MATCHES = 5
 
 #: Completed MLB games a batting order is read from (`get_baseball_lineup`).
 LINEUP_GAMES = 10
+#: A hockey player in any of his club's last this many games is in its lineup.
+DRESSED_GAMES = 3
 
 _ID_TO_LEAGUE = {item["id"]: item for item in ESPN_LEAGUES}
 _CODE_TO_LEAGUE = {item["code"]: item for item in ESPN_LEAGUES}
@@ -475,11 +477,17 @@ class EspnClient:
         leaders = self._leaders(HOCKEY_CORE_URL, "hockey", team_id, season)
         squad = self.get_hockey_squad(team_id, season)
         lines = parallel_map(lambda p: self._season_line("hockey", p, season), squad)
-        return leaders | {
+        out = leaders | {
             str(p.id): {**leaders.get(str(p.id), {}), **line}
             for p, line in zip(squad, lines, strict=True)
             if line
         }
+        # How often each played lately (`core.hockey.deployment` reads it).
+        dressed = self.get_hockey_dressed(team_id, season)
+        if dressed:
+            for p in squad:
+                out.setdefault(str(p.id), {})["dressed"] = float(dressed.get(p.id, 0))
+        return out
 
     def get_mlb_teams(self) -> list[Team]:
         """Fetch all current MLB teams."""
@@ -599,14 +607,25 @@ class EspnClient:
         One request per season's game list, then one per game, cached per game
         since a played game does not change.
         """
-        last = today or date.today()
+        events = self._recent_events(BASKETBALL_CORE_URL, team_id, season, today or date.today())
+        games = parallel_map(lambda event: self._basketball_starters(team_id, event), events)
+        starts: dict[int, int] = {}
+        for game in games:
+            for pid in game:
+                starts[pid] = starts.get(pid, 0) + 1
+        return starts
+
+    def _recent_events(self, core_url: str, team_id: int, season: int, last: date) -> list[str]:
+        """The ids of a winter league club's last `LINEUP_GAMES` regular-season
+        games up to `last`, the previous season's last ones making up a season
+        with fewer than `LINEUP_GAMES / 2` so far."""
         events: list[str] = []
         for year in (season, season - 1):
             stop = min(last, date(year, 6, 30))
             if stop < date(year - 1, 10, 1):
                 continue
             url = (
-                f"{BASKETBALL_CORE_URL}/seasons/{year}/types/2/teams/{team_id}/events"
+                f"{core_url}/seasons/{year}/types/2/teams/{team_id}/events"
                 f"?limit=200&dates={year - 1}1001-{stop:%Y%m%d}"
             )
             try:
@@ -618,14 +637,43 @@ class EspnClient:
             events = ids + events
             if len(events) >= LINEUP_GAMES // 2:
                 break
-        games = parallel_map(
-            lambda event: self._basketball_starters(team_id, event), events[-LINEUP_GAMES:]
-        )
-        starts: dict[int, int] = {}
+        return events[-LINEUP_GAMES:]
+
+    def get_hockey_dressed(
+        self, team_id: int, season: int, today: date | None = None
+    ) -> dict[int, int]:
+        """How many of the club's last `DRESSED_GAMES` games each player dressed
+        for, `{player id: games}`: an injured, scratched or sent-down player on
+        the roster has none. Up to yesterday, as today's game may not be played yet. `{}`
+        when ESPN has none."""
+        last = (today or date.today()) - timedelta(days=1)
+        events = self._recent_events(HOCKEY_CORE_URL, team_id, season, last)[-DRESSED_GAMES:]
+        games = parallel_map(lambda event: self._hockey_dressed(team_id, event), events)
+        dressed: dict[int, int] = {}
         for game in games:
             for pid in game:
-                starts[pid] = starts.get(pid, 0) + 1
-        return starts
+                dressed[pid] = dressed.get(pid, 0) + 1
+        return dressed
+
+    def _hockey_dressed(self, team_id: int, event_id: str) -> list[int]:
+        """One game's dressed players for `team_id` (not scratched), `[]` for a
+        game not played. Cached once it has any."""
+        cache_key = f"espn_hockey_dressed_{team_id}_{event_id}"
+        cached = self._load_cache(cache_key)
+        if cached:
+            return [int(pid) for pid in cached["dressed"]]
+        url = (
+            f"{HOCKEY_CORE_URL}/events/{event_id}/competitions/{event_id}"
+            f"/competitors/{team_id}/roster"
+        )
+        try:
+            entries = _http.get_json(url, transport=self._transport).get("entries") or []
+        except Exception:
+            return []
+        dressed = [int(e.get("playerId") or 0) for e in entries if not e.get("scratched")]
+        if dressed:
+            self._save_cache(cache_key, {"dressed": dressed})
+        return dressed
 
     def _basketball_starters(self, team_id: int, event_id: str) -> list[int]:
         """One game's five starters for `team_id`, `[]` for a game not played.

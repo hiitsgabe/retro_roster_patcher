@@ -4,6 +4,7 @@ lacks one (ESPN's team leaders list only each category's top players)."""
 
 from dataclasses import dataclass, replace
 
+from ...core.hockey import deployment
 from ...core.text import to_ascii
 from ...sports.models import Player
 from .models import (
@@ -135,8 +136,11 @@ def _shrunk(value: float | None, prior: float, games: float) -> float:
 
 def goalie_rank(stats: dict) -> tuple[float, float]:
     """Higher starts first: the game always starts the first goalie, so the
-    starter is the one who played most, then the better (shrunk) save %."""
-    return _starts(stats), _shrunk(_stat(stats, "SV%"), SV_PRIOR, _weight(stats))
+    starter is the one who played most (his share of the team's starts when
+    ESPN gives it), then the better (shrunk) save %."""
+    espn = {"gameStarted", "dressed"} & stats.keys()
+    played = deployment(stats, goalie=True) if espn else _starts(stats)
+    return played, _shrunk(_stat(stats, "SV%"), SV_PRIOR, _weight(stats))
 
 
 def display_name(name: str) -> str:
@@ -262,8 +266,7 @@ class NHL94StatMapper:
         stats = stats or {}
 
         def sort_key(p: Player) -> float:
-            """Higher is better: PTS for skaters."""
-            return _stat(stats.get(str(p.id), {}), "PTS") or 0.0
+            return deployment(stats.get(str(p.id), {}), goalie=False)
 
         centers = sorted(
             [p for p in players if p.position == "C"],

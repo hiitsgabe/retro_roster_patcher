@@ -898,3 +898,15 @@ def test_birth_fields_take_the_games_place_codes(nationality, state, flag, place
         2,
         6,
     )
+
+
+def test_ice_time_not_a_mixed_season_points_total_orders_the_centres():
+    # Twelve games of this season against a full previous one: the star has
+    # fewer points but plays more a night, and centres the first line.
+    star = player(id=1, name="Connor McDavid", position="C")
+    depth = player(id=2, name="Ryan Nugent-Hopkins", position="C")
+    stats = {
+        "1": {"GP": 12, "PTS": 34, "timeOnIcePerGame": 1432.8},
+        "2": {"GP": 72, "PTS": 56, "timeOnIcePerGame": 1143.8},
+    }
+    assert [p.id for p in MAPPER.select_roster([depth, star], stats)] == [1, 2]

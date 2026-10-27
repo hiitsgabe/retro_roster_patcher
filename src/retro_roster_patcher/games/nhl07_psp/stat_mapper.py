@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 
+from ...core.hockey import deployment
 from ...sports.models import Player
 from .models import (
     MODERN_NHL_TO_NHL07,
@@ -467,14 +468,7 @@ class NHL07StatMapper:
         stats = stats or {}
 
         def sort_key(p: Player) -> float:
-            ps = stats.get(str(p.id), {})
-            if p.position == "G":
-                # Scaled by 1000 only so goalies sort on a number of the same
-                # magnitude as a points total; nothing reads the value itself.
-                # The bare `SV%` again: a roster file mixing the two conventions
-                # starts the worse goalie. See `_map_goalie_stats`.
-                return _stat(ps, "SV%") * 1000
-            return _stat(ps, "PTS")
+            return deployment(stats.get(str(p.id), {}), p.position == "G")
 
         def by_position(code: str) -> list[Player]:
             return sorted([p for p in players if p.position == code], key=sort_key, reverse=True)
@@ -505,9 +499,14 @@ class NHL07StatMapper:
         selected = goalies[:GOALIES_PER_TEAM] + forwards + defensemen[:DEFENCEMEN_PER_TEAM]
 
         # Anything left -- an unrecognised position, or a defenceman past the
-        # seven -- fills the remaining slots by production.
+        # seven -- fills the remaining slots, a third goalie first, then by ice
+        # time.
         all_used = {id(p) for p in selected}
-        leftover = sorted([p for p in players if id(p) not in all_used], key=sort_key, reverse=True)
+        leftover = sorted(
+            [p for p in players if id(p) not in all_used],
+            key=lambda p: (p.position == "G", sort_key(p)),
+            reverse=True,
+        )
         remaining = max_players - len(selected)
         if remaining > 0:
             selected.extend(leftover[:remaining])

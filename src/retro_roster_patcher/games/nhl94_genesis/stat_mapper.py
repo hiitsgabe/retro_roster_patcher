@@ -3,6 +3,7 @@ position defaults when a player has no stat line."""
 
 import dataclasses
 
+from ...core.hockey import deployment
 from ...sports.models import Player
 from .models import (
     MODERN_NHL_TO_NHL94_GEN,
@@ -205,11 +206,7 @@ class NHL94GenStatMapper:
         stats = stats or {}
 
         def sort_key(p: Player) -> float:
-            ps = stats.get(str(p.id), {})
-            if p.position == "G":
-                svp = float(ps.get("SV%", 0) or 0)
-                return svp * 1000
-            return float(ps.get("PTS", 0) or 0)
+            return deployment(stats.get(str(p.id), {}), p.position == "G")
 
         centers = sorted(
             [p for p in players if p.position == "C"],

@@ -417,8 +417,15 @@ class MVPPSPPatcher(Patcher):
         )
 
     def suggest_squad_order(self, team_roster):
+        """`select_roster`'s order with the nine starters in the batting order
+        `map_rosters` gives them (`_bat_in_lineup_order`), so an editor that
+        hands this list back with `order_as_given` bats them the same way."""
         leaders = team_roster.extra.get("leaders") or {}
         ordered = self.mapper.select_roster(team_roster.players, leaders)
+        spot = {int(e["id"]): float(e["order"]) for e in team_roster.extra.get("lineup") or []}
+        nine = [p for p in ordered if not self.mapper.is_pitcher(p)][: len(LINEUP_POSITIONS)]
+        batting = iter(sorted(nine, key=lambda p: (spot.get(p.id, 10.0), nine.index(p))))
+        ordered = [next(batting) if p in nine else p for p in ordered]
         return self._append_unused(ordered, team_roster.players)
 
     def map_rosters(

@@ -1248,3 +1248,21 @@ def test_without_order_as_given_the_input_order_is_ignored(tmp_path):
     (forward,) = patcher.map_rosters(_ranked_league(squad)).teams.values()
     (backward,) = patcher.map_rosters(_ranked_league(squad[::-1])).teams.values()
     assert [r.jersey_number for r in forward] == [r.jersey_number for r in backward]
+
+
+def test_the_editors_list_handed_back_lines_up_as_the_patch_alone_would(tmp_path):
+    # The app shows `suggest_squad_order` and patches it back `order_as_given`;
+    # the writer takes each position in list order, so that order must hold.
+    patcher = build(tmp_path)
+    data = league()
+    alone = next(iter(patcher.map_rosters(data).teams.values()))
+    data.teams[0].players = patcher.suggest_squad_order(data.teams[0])
+    edited = patcher.map_rosters(data, order_as_given=True).teams[0]
+
+    def by_position(records):
+        return {
+            pos: [r.player_id for r in records if r.position == pos]
+            for pos in "C LW RW D G".split()
+        }
+
+    assert by_position(edited) == by_position(alone)

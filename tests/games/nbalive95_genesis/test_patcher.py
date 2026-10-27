@@ -1022,3 +1022,11 @@ def test_without_order_as_given_the_input_order_is_ignored(patcher):
     forward = patcher.map_rosters(_ranked_league(squad)).teams[BOS_SLOT].players
     backward = patcher.map_rosters(_ranked_league(squad[::-1])).teams[BOS_SLOT].players
     assert [r.jersey for r in forward] == [r.jersey for r in backward]
+
+
+def test_the_editors_list_handed_back_writes_what_the_patch_alone_would(patcher):
+    # The app shows `suggest_squad_order` and patches it back `order_as_given`.
+    data = _ranked_league(_espn_squad(["G"] * 5 + ["F"] * 5 + ["C"] * 3))
+    alone = patcher.map_rosters(data).teams[BOS_SLOT].players
+    data.teams[0].players = patcher.suggest_squad_order(data.teams[0])
+    assert patcher.map_rosters(data, order_as_given=True).teams[BOS_SLOT].players == alone

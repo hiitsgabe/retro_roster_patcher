@@ -1698,3 +1698,30 @@ def test_the_nine_bat_in_the_order_the_club_has_used_them():
     _bat_in_lineup_order(nine + [bench], [{"id": 8, "order": 1.0}, {"id": 0, "order": 4.2}])
     assert [r.batting_order for r in nine][:1] == [2] and nine[8].batting_order == 1
     assert bench.batting_order == -1
+
+
+def test_the_editors_list_handed_back_bats_as_the_patch_alone_would(tmp_path):
+    # The app shows `suggest_squad_order` and patches it back `order_as_given`:
+    # the nine and their batting order must not change on the way.
+    patcher = make_patcher(tmp_path)
+    data = league(squads={default_teams()[0].id: full_squad(1000)})
+    roster = data.teams[0]
+    batters = [p for p in roster.players if not patcher.mapper.is_pitcher(p)]
+    roster.extra["lineup"] = [
+        {"id": batters[5].id, "order": 1.0},
+        {"id": batters[0].id, "order": 3.0},
+    ]
+    alone = patcher.map_rosters(data)
+    roster.players = patcher.suggest_squad_order(roster)
+    edited = patcher.map_rosters(data, order_as_given=True)
+
+    def nine(mapped):
+        return sorted(
+            (r.batting_order, r.player_id)
+            for records in mapped.teams.values()
+            for r in records
+            if 1 <= r.batting_order <= 9
+        )
+
+    assert nine(edited) == nine(alone)
+    assert nine(alone)[0][1] == batters[5].id

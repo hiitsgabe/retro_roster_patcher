@@ -479,6 +479,7 @@ NETWORK_CALLS = {
     # The game list is the first request; an empty one ends the lookup.
     "get_baseball_lineup": ((1, 2025), {}),
     "get_basketball_starters": ((1, 2025), {}),
+    "get_hockey_dressed": ((1, 2025), {}),
     "get_nba_teams": ((), {}),
     "get_basketball_squad": ((1,), {}),
     "get_basketball_team_leaders": ((1,), {}),
