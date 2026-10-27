@@ -30,6 +30,9 @@ LINEUP = ("C", "PF", "SF", "SG", "PG")
 #: either forward spot; `split_positions` picks which by list order.
 COMBO_SPOTS = {"G": ("PG", "SG"), "F": ("SF", "PF")}
 
+#: Where a starter of each ESPN label goes among the five: centres first.
+_LABEL_ORDER = {"C": 0, "F": 1, "P": 1, "S": 2, "G": 2}
+
 #: The cartridge starts pointer slots 0-4 (`LINEUP`).
 STARTERS = 5
 
@@ -215,6 +218,7 @@ class NBALive95StatMapper:
         self,
         players: list[Player],
         stats: dict | None = None,
+        starters: dict | None = None,
     ) -> list[Player]:
         """Pick 12 by minutes played: the busiest at each of PG, SG, SF, PF and C,
         then the next busiest at each, then the 2 best remaining. The first five
@@ -238,6 +242,9 @@ class NBALive95StatMapper:
         eligible = list(players)
 
         eligible.sort(key=minutes_sort, reverse=True)
+
+        if starters:
+            return self._from_starters(eligible, starters)
 
         selected = []
         used = set()
@@ -267,25 +274,24 @@ class NBALive95StatMapper:
 
         return selected[:12]
 
-    def split_positions(self, players: list[Player]) -> list[Player]:
-        """`players` with each G and F given one of its two spots.
+    def _from_starters(self, by_minutes: list[Player], starters: dict) -> list[Player]:
+        """The five who started most of the club's recent games (`starters`,
+        starts by player id as a string; minutes break a tie) in the slots
+        `LINEUP` names, centre to point guard: centres, then forwards, then
+        guards, each the tallest first; then the rest by minutes, to twelve."""
+        first = sorted(by_minutes, key=lambda p: -int(starters.get(str(p.id), 0)))[:STARTERS]
+        first = [p for p in first if starters.get(str(p.id))] or by_minutes[:STARTERS]
+        first.sort(key=lambda p: (_LABEL_ORDER.get(self._label(p), 1), -p.height))
+        rest = [p for p in by_minutes if p not in first]
+        return (first + rest)[:12]
 
-        A starter takes his slot's spot (`LINEUP`) when his label can play it and
-        no other starter has, else the first of his two not taken yet. On the
-        bench the first G becomes a PG, the next an SG, and so on alternating;
-        the first F an SF, the next a PF.
+    def split_positions(self, players: list[Player]) -> list[Player]:
+        """`players` with each starter given his slot's position (`LINEUP`:
+        the game plays and introduces him there) and each G and F on the bench
+        one of its two spots, the first G a PG, the next an SG and so on
+        alternating, the first F an SF, the next a PF.
         """
-        out = []
-        taken: set[str] = set()
-        for i, p in enumerate(players[:STARTERS]):
-            label = (p.position or "").upper().strip()
-            if label in COMBO_SPOTS:
-                spots = COMBO_SPOTS[label]
-                free = [s for s in spots if s not in taken] or list(spots)
-                spot = LINEUP[i] if LINEUP[i] in free else free[0]
-                taken.add(spot)
-                p = replace(p, position=spot)
-            out.append(p)
+        out = [replace(p, position=LINEUP[i]) for i, p in enumerate(players[:STARTERS])]
         seen: Counter[str] = Counter()
         for p in players[STARTERS:]:
             label = (p.position or "").upper().strip()
@@ -294,6 +300,11 @@ class NBALive95StatMapper:
                 seen[label] += 1
             out.append(p)
         return out
+
+    @staticmethod
+    def _label(p: Player) -> str:
+        """ESPN's C, F or G for the player, its first letter for a combo."""
+        return (p.position or "F").upper().strip()[:1]
 
     def _spots(self, position: str) -> tuple[str, ...]:
         """The game positions a label can fill."""

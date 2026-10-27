@@ -81,6 +81,9 @@ class FakeApi:
             for index in range(self._squad_size)
         ]
 
+    def get_basketball_starters(self, team_id, season=2026):
+        return {}
+
     def get_basketball_team_leaders(self, team_id, season=2026):
         self.leader_calls.append((team_id, season))
         return dict(self._leaders)
@@ -974,13 +977,13 @@ def _espn_squad(labels):
 
 
 def test_order_as_given_turns_espns_guards_and_forwards_into_the_five_positions(patcher):
-    """The edited order decides which G is the PG and which F the SF."""
+    """Each starter plays his slot's position; the bench's G and F alternate."""
     given = _espn_squad(["G", "F", "C", "G", "F", "F", "G", "G", "C", "F"])
 
     mapped = patcher.map_rosters(_ranked_league(given), order_as_given=True)
 
     found = [BYTE_TO_POSITION[r.position] for r in mapped.teams[BOS_SLOT].players]
-    assert found == ["PG", "PF", "C", "SG", "SF", "SF", "PG", "SG", "C", "PF"]
+    assert found == ["C", "PF", "SF", "SG", "PG", "SF", "PG", "SG", "C", "PF"]
 
 
 def test_swapping_two_forwards_in_the_first_five_changes_only_their_position_bytes(patcher):
@@ -997,8 +1000,8 @@ def test_swapping_two_forwards_in_the_first_five_changes_only_their_position_byt
     for jersey, record in before.items():
         moved = after[jersey]
         assert replace(moved, position=record.position) == record
-    assert [BYTE_TO_POSITION[before[j].position] for j in (3, 4)] == ["SF", "PF"]
-    assert [BYTE_TO_POSITION[after[j].position] for j in (3, 4)] == ["PF", "SF"]
+    assert [BYTE_TO_POSITION[before[j].position] for j in (3, 4)] == ["SF", "SG"]
+    assert [BYTE_TO_POSITION[after[j].position] for j in (3, 4)] == ["SG", "SF"]
 
 
 def test_the_suggested_order_starts_one_player_at_each_position(patcher):

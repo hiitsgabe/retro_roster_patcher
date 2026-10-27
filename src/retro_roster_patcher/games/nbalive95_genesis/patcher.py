@@ -227,11 +227,15 @@ class NBALive95Patcher(Patcher):
             # cache key; for the leaders it is a path segment.
             players = self.api.get_basketball_squad(team.id, season)
             leaders = self.api.get_basketball_team_leaders(team.id, season)
+            # Who started the club's recent games: JSON keys are strings.
+            starts = {
+                str(k): v for k, v in self.api.get_basketball_starters(team.id, season).items()
+            }
             rosters.append(
                 TeamRoster(
                     team=team,
                     players=players or [],
-                    extra={"leaders": leaders or {}},
+                    extra={"leaders": leaders or {}, "starters": starts},
                 )
             )
 
@@ -255,7 +259,9 @@ class NBALive95Patcher(Patcher):
 
     def suggest_squad_order(self, team_roster):
         leaders = team_roster.extra.get("leaders") or {}
-        ordered = self.mapper.select_roster(team_roster.players, leaders)
+        ordered = self.mapper.select_roster(
+            team_roster.players, leaders, team_roster.extra.get("starters")
+        )
         return self._append_unused(ordered, team_roster.players)
 
     def map_rosters(
@@ -281,7 +287,9 @@ class NBALive95Patcher(Patcher):
             selected = (
                 roster.players[:PLAYERS_PER_TEAM]
                 if order_as_given
-                else self.mapper.select_roster(roster.players, leaders)
+                else self.mapper.select_roster(
+                    roster.players, leaders, roster.extra.get("starters")
+                )
             )
             # Ratings, height and weight from the player's own label; only the
             # position byte follows his row, so reordering moves no attribute.

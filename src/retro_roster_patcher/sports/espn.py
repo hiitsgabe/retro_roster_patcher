@@ -580,6 +580,65 @@ class EspnClient:
         ]
         return sorted(lineup, key=lambda starter: starter["order"])
 
+    def get_basketball_starters(
+        self, team_id: int, season: int, today: date | None = None
+    ) -> dict[int, int]:
+        """How many of the club's last `LINEUP_GAMES` played regular-season
+        games each player started, `{player id: starts}`; the previous season's
+        last games make up a season with fewer than `LINEUP_GAMES / 2` so far.
+        `{}` when ESPN has none.
+
+        One request per season's game list, then one per game, cached per game
+        since a played game does not change.
+        """
+        last = today or date.today()
+        events: list[str] = []
+        for year in (season, season - 1):
+            stop = min(last, date(year, 6, 30))
+            if stop < date(year - 1, 10, 1):
+                continue
+            url = (
+                f"{BASKETBALL_CORE_URL}/seasons/{year}/types/2/teams/{team_id}/events"
+                f"?limit=200&dates={year - 1}1001-{stop:%Y%m%d}"
+            )
+            try:
+                items = _http.get_json(url, transport=self._transport).get("items") or []
+            except Exception:
+                items = []
+            refs = [str(item.get("$ref", "")) for item in items]
+            ids = [r.split("/events/")[1].split("?")[0] for r in refs if "/events/" in r]
+            events = ids + events
+            if len(events) >= LINEUP_GAMES // 2:
+                break
+        games = parallel_map(
+            lambda event: self._basketball_starters(team_id, event), events[-LINEUP_GAMES:]
+        )
+        starts: dict[int, int] = {}
+        for game in games:
+            for pid in game:
+                starts[pid] = starts.get(pid, 0) + 1
+        return starts
+
+    def _basketball_starters(self, team_id: int, event_id: str) -> list[int]:
+        """One game's five starters for `team_id`, `[]` for a game not played.
+        Cached once it has any."""
+        cache_key = f"espn_basketball_starters_{team_id}_{event_id}"
+        cached = self._load_cache(cache_key)
+        if cached:
+            return [int(pid) for pid in cached["starters"]]
+        url = (
+            f"{BASKETBALL_CORE_URL}/events/{event_id}/competitions/{event_id}"
+            f"/competitors/{team_id}/roster"
+        )
+        try:
+            entries = _http.get_json(url, transport=self._transport).get("entries") or []
+        except Exception:
+            return []
+        starters = [int(e.get("playerId") or 0) for e in entries if e.get("starter")]
+        if starters:
+            self._save_cache(cache_key, {"starters": starters})
+        return starters
+
     def _baseball_starters(self, team_id: int, event_id: str) -> list[tuple[int, int]]:
         """One game's starting batters for `team_id` as (player id, lineup spot),
         `[]` for a game not played. Cached once it has any."""

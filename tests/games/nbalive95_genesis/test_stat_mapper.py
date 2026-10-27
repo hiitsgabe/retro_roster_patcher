@@ -492,22 +492,22 @@ def test_a_squad_with_no_centre_still_starts_the_other_four_positions(mapper):
 def test_a_first_five_of_two_g_two_f_and_a_c_splits_into_the_five_positions(mapper):
     players, _ = _squad(["C", "F", "G", "F", "G"])
     found = [p.position for p in mapper.split_positions(players)]
-    assert found == ["C", "PF", "PG", "SF", "SG"]
+    assert found == ["C", "PF", "SF", "SG", "PG"]
 
 
 def test_the_bench_alternates_guards_and_forwards_afresh(mapper):
     """The bench counts from its own first G and F, not the starters' last."""
     players, _ = _squad(["G", "F", "F", "C", "C", "G", "G", "G", "F", "F"])
     found = [p.position for p in mapper.split_positions(players)]
-    assert found == ["PG", "PF", "SF", "C", "C", "PG", "SG", "PG", "SF", "PF"]
+    assert found == ["C", "PF", "SF", "SG", "PG", "PG", "SG", "PG", "SF", "PF"]
 
 
 def test_splitting_leaves_other_labels_and_the_callers_players_alone(mapper):
-    players, _ = _squad(["pg", "G-F", "F-C", "Goalkeeper", "g"])
+    players, _ = _squad(["C"] * 5 + ["pg", "G-F", "F-C", "Goalkeeper", "g"])
     found = mapper.split_positions(players)
-    assert [p.position for p in found] == ["pg", "G-F", "F-C", "Goalkeeper", "PG"]
-    assert found[0] is players[0]
-    assert players[4].position == "g"
+    assert [p.position for p in found[5:]] == ["pg", "G-F", "F-C", "Goalkeeper", "PG"]
+    assert found[5] is players[5]
+    assert players[9].position == "g"
 
 
 def test_within_a_position_the_busier_player_is_picked(mapper):
@@ -652,3 +652,12 @@ def test_a_team_that_did_not_exist_in_1994_takes_an_all_star_slot_or_none(mapper
 
 def test_an_unknown_code_has_no_slot(mapper):
     assert mapper.get_team_slot("ZZZ") is None
+
+
+def test_recent_starters_go_centre_forwards_guards_each_tallest_first(mapper):
+    players, stats = _squad(["G", "G", "F", "F", "C", "G", "F"])
+    for p, h in zip(players, (75, 77, 80, 85, 84, 76, 79), strict=True):
+        p.height = h
+    starters = {str(p.id): 9 for p in players[2:7]}
+    chosen = mapper.select_roster(players, stats, starters)
+    assert [p.id for p in chosen[:5]] == [players[i].id for i in (4, 3, 2, 6, 5)]
