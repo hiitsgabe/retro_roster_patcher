@@ -102,3 +102,34 @@ def test_a_kit_recolours_the_shading_ramps_and_keeps_the_skin():
     shirt = struct.unpack_from(">16H", record, K.SHIRT)
     assert all(K._split(c)[1] == 0 for c in shirt[:5])  # black, shaded
     assert K.KIT_INDEX[69] == 23 and len(set(K.KIT_INDEX)) == 100
+
+
+def test_team_select_opens_on_the_clubs_page():
+    import struct
+
+    from retro_roster_patcher.games.iss2000_n64 import writer as W
+
+    assert W.start_page([69, 70, 71]) == 6  # South America starts at 69
+    assert W.start_page([3, 4, 61]) == 5  # CONCACAF's first team is a club
+    assert W.start_page([40, 41]) == 3  # no page starts on a club: the lowest's page
+    image = bytearray(W.TEAM_SELECT_PAGE_LOAD + 4)
+    struct.pack_into(">I", image, W.TEAM_SELECT_PAGE_LOAD, 0x90840B4F)
+    assert W.write_start_page(image, [69])
+    assert struct.unpack_from(">I", image, W.TEAM_SELECT_PAGE_LOAD)[0] == 0x24040006
+    assert W.write_start_page(image, [0])  # a patched image patches again
+    assert not W.write_start_page(bytearray(W.TEAM_SELECT_PAGE_LOAD + 4), [0])
+
+
+def test_rewritten_assets_stay_inside_16_mib():
+    image = bytearray(R.ROM_SIZE)
+    # One asset at the table, the 0xFF padding after it.
+    image[R.ASSET_TABLE : R.ASSET_TABLE + 8] = (0x100000 | 0x80000000).to_bytes(4, "big") + (
+        0x100100
+    ).to_bytes(4, "big")
+    image[0x100100:] = b"\xff" * (R.ROM_SIZE - 0x100100)
+    space = R.AssetSpace(image)
+    asset = R.assets(image)[0]
+    space.put(asset, os.urandom(4096))  # too big for its 256 bytes
+    moved = R.assets(image)[0]
+    assert len(image) == R.ROM_SIZE and not space.grew
+    assert 0x100100 <= moved.start < R.ROM_SIZE

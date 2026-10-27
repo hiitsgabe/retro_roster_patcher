@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import struct
+
 from . import rom as R
 from .mapper import FORMATION_DONORS, N64Player, N64Team
 
@@ -94,3 +96,32 @@ def write_team_ratings(image: bytearray, slot: int) -> None:
         xi = [R.record_offset(slot, i) for i in range(11)]
         mean = sum(image[o + k] for o in xi for k in offsets) / (11 * len(offsets))
         image[table + slot] = max(30, min(99, round(a * mean + b)))
+
+
+#: Team select starts each side on the first team of the page it saved
+#: (`lbu a0, 0x0B4F(a0)` at $802A5264, ROM below: page 5, CONCACAF, so the
+#: U.S.A.). The patch turns the load into `addiu a0, zero, page` so it opens
+#: on the clubs' page. Pages (first team id each) as the game lists them.
+TEAM_SELECT_PAGE_LOAD = 0x4598A4
+_PAGE_LOAD = 0x90840B4F
+PAGE_FIRST = (0, 14, 24, 37, 51, 61, 69, 79, 86, 96)
+
+
+def start_page(slots: list[int]) -> int:
+    """The page whose first team is a club when one is, else the page of the
+    lowest club slot."""
+    pages = [k for k, first in enumerate(PAGE_FIRST) if first in slots]
+    if pages:
+        return pages[0]
+    low = min(slots)
+    return max(k for k, first in enumerate(PAGE_FIRST) if first <= low)
+
+
+def write_start_page(image: bytearray, slots: list[int]) -> bool:
+    """Open team select on the clubs' page; False when the code is not the
+    cartridge's (or an earlier patch's) and is left alone."""
+    word = struct.unpack_from(">I", image, TEAM_SELECT_PAGE_LOAD)[0]
+    if not slots or (word != _PAGE_LOAD and word >> 16 != 0x2404):
+        return False
+    struct.pack_into(">I", image, TEAM_SELECT_PAGE_LOAD, 0x24040000 | start_page(slots))
+    return True

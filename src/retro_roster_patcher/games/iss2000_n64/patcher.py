@@ -264,6 +264,7 @@ class ISS2000Patcher(Patcher):
         names.write(image, space, {slot: _menu_name(team) for slot, team in clubs.items()})
 
         names.write_regions(image, space, self._region_labels(teams))
+        W.write_start_page(image, sorted(clubs))
 
         if options.get("logos", True):
             self.status("Drawing crests...")
@@ -286,7 +287,10 @@ class ISS2000Patcher(Patcher):
         R.fix_crc(image)
         Path(output_path).write_bytes(bytes(image))
         if len(image) > R.ROM_SIZE:
-            self.status(f"ROM grown to {len(image) // 0x100000} MiB")
+            self.status(
+                f"ROM grown to {len(image) // 0x100000} MiB: some emulators and flash carts "
+                "read only 16 MiB"
+            )
         if on_progress is not None:
             on_progress(1.0, f"Done! Saved to {output_path}")
         return PatchResult(str(output_path), teams_patched=len(teams), players_patched=players)

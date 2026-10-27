@@ -188,69 +188,85 @@ def lz_decompress(buf: bytes | bytearray, at: int = 0) -> bytes:
 
 
 def lz_compress(data: bytes) -> bytes:
-    """A stream `lz_decompress` reads back as `data`.
+    """The smallest stream `lz_decompress` reads back as `data`.
 
-    Greedy: at each position the longest of a back copy (2-33 bytes, up to 1023
-    back), a run of zeros (up to 257) or a run of one byte (up to 33), literals
-    otherwise. Hash chains keep it linear enough for the 100 KB assets.
+    An optimal parse: the cheapest way to reach each position from back
+    copies (2-33 bytes, up to 1023 back, 2 bytes), zero runs (2-32 in 1 byte,
+    up to 257 in 2), byte runs (2-33, 2 bytes) and literal groups (1-31, one
+    byte more). It beats the cartridge's own streams, so a rewritten asset
+    fits back where it was more often.
     """
     n = len(data)
-    out = bytearray(4)
-    lit = bytearray()
+    # Longest back copy at each position, and from where.
+    match_len = [0] * n
+    match_dist = [0] * n
     heads: dict[bytes, list[int]] = {}
-
-    def flush() -> None:
-        for k in range(0, len(lit), 31):
-            chunk = lit[k : k + 31]
-            out.append(0x80 | len(chunk))
-            out.extend(chunk)
-        lit.clear()
-
-    def remember(p: int) -> None:
-        if p + 2 <= n:
-            heads.setdefault(data[p : p + 2], []).append(p)
-
-    i = 0
-    while i < n:
-        run = 1
-        while i + run < n and data[i + run] == data[i] and run < 257:
-            run += 1
-        best_len, best_dist = 0, 0
-        for p in reversed(heads.get(data[i : i + 2], ())):
-            dist = i - p
-            if dist > 1023:
-                break
-            m = 0
-            while m < 33 and i + m < n and data[p + m] == data[i + m]:
-                m += 1
-            if m > best_len:
-                best_len, best_dist = m, dist
-                if m == 33:
-                    break
-        if data[i] == 0 and run >= 2 and run >= best_len:
-            flush()
-            if run <= 32:
-                out.append(0xE0 + run - 2)
+    for i in range(n):
+        best, dist = 0, 0
+        if i + 2 <= n:
+            chain = heads.get(data[i : i + 2])
+            if chain:
+                for p in reversed(chain):
+                    d = i - p
+                    if d > 1023:
+                        break
+                    m = 2
+                    while m < 33 and i + m < n and data[p + m] == data[i + m]:
+                        m += 1
+                    if m > best:
+                        best, dist = m, d
+                        if m == 33:
+                            break
+            heads.setdefault(data[i : i + 2], []).append(i)
+        match_len[i], match_dist[i] = best, dist
+    # Run of equal bytes from each position.
+    run = [1] * n
+    for i in range(n - 2, -1, -1):
+        if data[i] == data[i + 1]:
+            run[i] = min(run[i + 1] + 1, 257)
+    inf = float("inf")
+    cost = [inf] * (n + 1)
+    step: list[tuple[int, int]] = [(0, 0)] * (n + 1)  # (kind, length) into position
+    cost[0] = 0
+    for i in range(n):
+        c = cost[i]
+        if c == inf:
+            continue
+        for k in range(1, min(31, n - i) + 1):  # literals
+            if c + k + 1 < cost[i + k]:
+                cost[i + k], step[i + k] = c + k + 1, (0, k)
+        for k in range(2, match_len[i] + 1):  # back copy
+            if c + 2 < cost[i + k]:
+                cost[i + k], step[i + k] = c + 2, (1, k)
+        r = run[i]
+        if r >= 2:
+            if data[i] == 0:
+                for k in range(2, r + 1):
+                    w = 1 if k <= 32 else 2
+                    if c + w < cost[i + k]:
+                        cost[i + k], step[i + k] = c + w, (2, k)
             else:
-                run = min(run, 257)
-                out += bytes([0xFF, run - 2])
-            step = run
-        elif run >= 3 and run >= best_len:
-            flush()
-            run = min(run, 33)
-            out += bytes([0xA0 + run - 2, data[i]])
-            step = run
-        elif best_len >= 2:
-            flush()
-            out += bytes([((best_len - 2) << 2) | (best_dist >> 8), best_dist & 0xFF])
-            step = best_len
+                for k in range(2, min(r, 33) + 1):
+                    if c + 2 < cost[i + k]:
+                        cost[i + k], step[i + k] = c + 2, (3, k)
+    ops = []
+    i = n
+    while i > 0:
+        kind, k = step[i]
+        ops.append((i - k, kind, k))
+        i -= k
+    out = bytearray(4)
+    for at, kind, k in reversed(ops):
+        if kind == 0:
+            out.append(0x80 | k)
+            out += data[at : at + k]
+        elif kind == 1:
+            d = match_dist[at]
+            out += bytes([((k - 2) << 2) | (d >> 8), d & 0xFF])
+        elif kind == 2:
+            out += bytes([0xE0 + k - 2]) if k <= 32 else bytes([0xFF, k - 2])
         else:
-            lit.append(data[i])
-            step = 1
-        for p in range(i, i + step):
-            remember(p)
-        i += step
-    flush()
+            out += bytes([0xA0 + k - 2, data[at]])
     struct.pack_into(">I", out, 0, len(out))
     return bytes(out)
 
@@ -294,27 +310,58 @@ def read_asset(image: bytes | bytearray, asset: Asset) -> bytes:
 
 
 class AssetSpace:
-    """Puts rewritten assets back: in place when they fit, else past 16 MiB.
+    """Puts rewritten assets back inside the 16 MiB cartridge.
 
-    Growing keeps the 0x100-byte header mirror at `MIRROR` so the game still
-    believes it runs from a cartridge, and pads to a multiple of 4 MiB.
+    In place when the new stream fits; else in room this patch freed (what a
+    shrunken asset left after it, an asset's old place once it moved) or the
+    0xFF padding after the last asset; only when none of that fits does the
+    image grow past 16 MiB, which some emulators and flash carts do not read
+    (the game then draws headless players and broken flags), so a patch
+    should never need it. Growing keeps the 0x100-byte header mirror at
+    `MIRROR` so the game still believes it runs from a cartridge.
     """
+
+    ALIGN = 8
 
     def __init__(self, image: bytearray) -> None:
         self.image = image
         self.top = max(GROWTH_START, len(image)) if len(image) > ROM_SIZE else GROWTH_START
+        last = max((a.end for a in assets(image) if a.end <= ROM_SIZE), default=ROM_SIZE)
+        self.free: list[tuple[int, int]] = [(self._up(last), ROM_SIZE)]
+        self.grew = False
+
+    @classmethod
+    def _up(cls, at: int) -> int:
+        return -(-at // cls.ALIGN) * cls.ALIGN
+
+    def _release(self, start: int, end: int) -> None:
+        start = self._up(start)
+        if end - start >= 64 and end <= ROM_SIZE:
+            self.free.append((start, end))
+
+    def _take(self, size: int) -> int | None:
+        for k, (lo, hi) in enumerate(self.free):
+            if hi - lo >= size:
+                self.free[k] = (self._up(lo + size), hi)
+                return lo
+        return None
 
     def put(self, asset: Asset, data: bytes, compress: bool = True) -> None:
         blob = lz_compress(data) if compress else data
         blob += bytes(-len(blob) % 4)
         start = asset.start
-        if len(blob) > asset.end - asset.start:
-            start = self._grow(len(blob))
+        if len(blob) <= asset.end - asset.start:
+            self._release(start + len(blob), asset.end)
+        else:
+            self._release(asset.start, asset.end)
+            taken = self._take(len(blob))
+            start = taken if taken is not None else self._grow(len(blob))
         self.image[start : start + len(blob)] = blob
         flag = 0x80000000 if compress else 0
         struct.pack_into(">II", self.image, asset.entry, start | flag, start + len(blob))
 
     def _grow(self, size: int) -> int:
+        self.grew = True
         start = self.top
         self.top += size
         need = -(-self.top // 0x400000) * 0x400000
