@@ -16,8 +16,13 @@ from dataclasses import replace
 
 from ...sports.models import Player
 from .models import (
+    BIRTH_YEAR_BASE,
+    CITY_CHARS,
+    COUNTRY_CODES,
+    GAME_YEAR,
     MODERN_NHL_TO_NHL05,
     NAME_FIELD_CHARS,
+    STATE_CODES,
     NHL05GoalieAttributes,
     NHL05PlayerRecord,
     NHL05SkaterAttributes,
@@ -264,6 +269,22 @@ def _stat(stats: dict, *names: str, default: float = 0.0) -> float:
     return default
 
 
+def _set_birth(record: NHL05PlayerRecord, player: Player) -> None:
+    """The record's birth fields: flag, place and a birthday that makes the
+    game, counting from `GAME_YEAR`, show the player's real age."""
+    country = COUNTRY_CODES.get(player.nationality.strip())
+    if country is not None:
+        record.country = country
+        # A province or state when the game has it, else the country itself.
+        record.state = STATE_CODES.get(player.birth_state.upper(), country)
+    record.city = player.birth_city[:CITY_CHARS]
+    if player.age > 0:
+        record.birth_year = max(0, min(63, GAME_YEAR - player.age - BIRTH_YEAR_BASE))
+    parts = player.birth_date.split("-")
+    if len(parts) == 3 and all(p.isdigit() for p in parts):
+        record.birth_month, record.birth_day = int(parts[1]), int(parts[2])
+
+
 def _defaults_for(position: str) -> NHL05SkaterAttributes:
     """A fresh copy of one position's defaults.
 
@@ -327,7 +348,9 @@ class NHL05StatMapper:
             team_index=MODERN_NHL_TO_NHL05.get(team_abbrev.upper(), 0),
             player_id=player.id if player.id else 0,
             is_goalie=is_goalie,
+            photo_url=player.photo_url,
         )
+        _set_birth(record, player)
 
         if is_goalie:
             record.goalie_attrs = (

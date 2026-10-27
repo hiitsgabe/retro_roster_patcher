@@ -1309,6 +1309,8 @@ class EspnClient:
                 photo = headshot.get("href", "") if isinstance(headshot, dict) else ""
                 hand_info = athlete.get("hand", {})
                 hand = hand_info.get("abbreviation", "") if isinstance(hand_info, dict) else ""
+                born = athlete.get("birthPlace")
+                born = born if isinstance(born, dict) else {}
 
                 players.append(
                     Player(
@@ -1321,6 +1323,9 @@ class EspnClient:
                         position=pos_abbrev,
                         number=number,
                         photo_url=photo,
+                        birth_date=str(athlete.get("dateOfBirth") or "")[:10],
+                        birth_city=str(born.get("city") or ""),
+                        birth_state=str(born.get("state") or ""),
                         weight=float(wt),
                         height=float(ht),
                         handedness=hand,

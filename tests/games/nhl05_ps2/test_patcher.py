@@ -901,31 +901,17 @@ def test_two_goalies_twelve_forwards_and_six_defencemen_are_dressed(tmp_path):
     assert dressed == [1] * 20 + [0, 0]
 
 
-def test_a_row_the_patch_leaves_unused_is_taken_off_every_line(tmp_path):
-    # Rows 22-24 ship with a flag set; a stale player must not hold a unit.
+def test_the_rows_a_short_roster_did_not_reach_leave_the_team(tmp_path):
+    # 22 players into 25 rows: the last three rows' 2004 occupants go to a team
+    # no screen lists, undressed and off every line, in both tables. The rows
+    # stay: a ROST with fewer rows than the disc shipped blanks the roster screens.
     _, out = patched(tmp_path)
-    rows = rost_of(out)
-    stale = [
-        f
-        for r in (22, 23, 24)
-        for f in fixture.LINE_FLAG_NAMES
-        if rows[fixture.rost_position(0, r)][f] == 1
-    ]
-    assert stale == []
-
-
-def test_the_rows_a_short_roster_did_not_reach_are_undressed(tmp_path):
-    # 22 players into 25 rows. The last three rows keep their 2004 occupants and must
-    # not take the ice beside a 2025 one.
-    _, out = patched(tmp_path)
-    rows = rost_of(out)
-    undressed = [rows[fixture.rost_position(0, r)]["DRES"] for r in (22, 23, 24)]
-    assert undressed == [0, 0, 0]
-
-
-def test_an_undressed_row_keeps_the_team_it_belonged_to(tmp_path):
-    _, out = patched(tmp_path)
-    assert rost_of(out)[fixture.rost_position(0, 24)]["TEAM"] == 0
+    for member in (TDB_MASTER, TDB_ROSTER):
+        rows = rost_of(out, member)
+        for r in (22, 23, 24):
+            row = rows[fixture.rost_position(0, r)]
+            assert (row["TEAM"], row["DRES"]) == (63, 0)  # TEAM is 6 bits here
+            assert not any(row[f] for f in fixture.LINE_FLAG_NAMES)
 
 
 def test_a_patched_row_keeps_its_own_index(tmp_path):
@@ -1006,11 +992,6 @@ def test_the_roster_mirror_receives_the_same_row(tmp_path):
     _, out = patched(tmp_path)
     position = fixture.rost_position(0, 3)
     assert rost_of(out, TDB_ROSTER)[position] == rost_of(out)[position]
-
-
-def test_the_roster_mirror_receives_the_undressed_rows_too(tmp_path):
-    _, out = patched(tmp_path)
-    assert rost_of(out, TDB_ROSTER)[fixture.rost_position(0, 24)]["DRES"] == 0
 
 
 def test_a_disc_without_the_roster_mirror_still_patches(tmp_path):

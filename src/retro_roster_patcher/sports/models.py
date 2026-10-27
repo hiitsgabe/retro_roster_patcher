@@ -29,6 +29,8 @@ class Player:
     number: int | None = None
     photo_url: str = ""
     birth_date: str = ""  # ISO "YYYY-MM-DD"; "" when the provider gives none
+    birth_city: str = ""
+    birth_state: str = ""  # the province or state's postal code, e.g. "ON", "MN"
     # Optional hockey fields
     weight: float = 0.0  # lbs
     handedness: str = ""  # "L" or "R" (throw hand)

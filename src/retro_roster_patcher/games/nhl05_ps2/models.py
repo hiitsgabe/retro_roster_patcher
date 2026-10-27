@@ -171,6 +171,37 @@ POSITION_MAP = {
 }
 POSITION_REVERSE = {v: k for k, v in POSITION_MAP.items()}
 
+# SPBT's `INTL` (the flag) and `STAT` (the birth province, state or country)
+# both index the game's one list of places: the countries, the provinces and the
+# states, alphabetical, with later additions at the end. Read from the disc's own
+# bios (a birth city per value); Montana, South Carolina and Wisconsin from the
+# create-player list's order, which the bios agree with around them. A player
+# born in the USSR or Czechoslovakia gets Russia or the Czech Republic.
+COUNTRY_CODES = {
+    "AUT": 2, "BLR": 3, "BRA": 4, "CZE": 7, "Czechoslovakia": 7, "CHN": 8,
+    "GBR": 16, "ENG": 16, "FIN": 18, "FRA": 20, "GER": 22, "DEU": 22, "HUN": 23,
+    "ITA": 27, "JPN": 28, "KAZ": 29, "LAT": 31, "LVA": 31, "LTU": 32, "NOR": 50,
+    "PHI": 58, "POL": 59, "RUS": 63, "USSR": 63, "SVK": 66, "RSA": 67, "KOR": 69,
+    "SWE": 70, "SUI": 71, "CHE": 71, "UKR": 74, "DEN": 80, "DNK": 80, "BEL": 82,
+    "CAN": 85, "USA": 86, "AUS": 87, "IND": 88, "CRO": 90, "SLO": 90, "SVN": 90,
+    "SRB": 90,
+}  # fmt: skip
+STATE_CODES = {
+    "AK": 0, "AB": 1, "BC": 5, "CA": 6, "CO": 9, "CT": 12, "DC": 14, "DE": 15,
+    "FL": 19, "GA": 21, "IL": 24, "IN": 25, "IA": 26, "ME": 33, "MB": 34, "MD": 35,
+    "MA": 36, "MI": 37, "MN": 38, "MO": 39, "MT": 40, "NB": 41, "NH": 42, "NJ": 43,
+    "NY": 44, "NF": 45, "NL": 45, "ND": 47, "NT": 49, "NS": 51, "OH": 54, "OK": 55,
+    "ON": 56, "PA": 57, "PE": 60, "QC": 61, "RI": 62, "SK": 64, "SC": 68, "TX": 73,
+    "UT": 75, "VT": 76, "VA": 77, "WA": 78, "WI": 79, "YT": 83, "NE": 89, "ID": 91,
+}  # fmt: skip
+#: SPBT `YEAR` is the birth year less this.
+BIRTH_YEAR_BASE = 1959
+#: The year the game counts ages from: a player shown his real age is born
+#: this many years before it.
+GAME_YEAR = 2004
+# SPBT `CITY` is a 20-byte string; one byte stays for the NUL.
+CITY_CHARS = 19
+
 # The two TDB members of `DB.VIV`. There is no `nhlbioatt.tdb` mirror on this
 # game, so SPBT/SPAI/SGAI are written once each. `nhl2005.tdb` is also this
 # game's signature, being year-specific; see `rom_reader.validate`.
@@ -268,6 +299,15 @@ class NHL05PlayerRecord:
     team_index: int = 0
     player_id: int = 0
     is_goalie: bool = False
+    photo_url: str = ""  # the provider's head shot, for the portrait; not a field
+    # Birth: `INTL` (flag), `STAT`, `CITY`, `YEAR`/`MONT`/`DAY_`, all encoded;
+    # -1 or "" leaves the disc's value.
+    country: int = -1
+    state: int = -1
+    city: str = ""
+    birth_year: int = -1
+    birth_month: int = -1
+    birth_day: int = -1
     skater_attrs: NHL05SkaterAttributes | None = None
     goalie_attrs: NHL05GoalieAttributes | None = None
 

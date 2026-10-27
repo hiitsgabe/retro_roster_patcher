@@ -874,3 +874,27 @@ def test_an_empty_team_produces_no_flag_dicts():
 def test_every_team_size_produces_one_dict_per_player(count):
     team = records({"C": count})
     assert len(MAPPER.generate_team_line_flags(team)) == count
+
+
+@pytest.mark.parametrize(
+    ("nationality", "state", "flag", "place"),
+    [("FIN", "", 18, 18), ("CAN", "ON", 85, 56), ("USA", "AZ", 86, 86), ("XYZ", "MN", -1, -1)],
+)
+def test_birth_fields_take_the_games_place_codes(nationality, state, flag, place):
+    # Arizona is not in the game's list, so the state falls back to the country;
+    # a country it lacks leaves the disc's own values.
+    p = player(
+        nationality=nationality,
+        birth_state=state,
+        birth_city="Helsinki",
+        age=30,
+        birth_date="1995-02-06",
+    )
+    record = MAPPER.map_player(p, "ANA", {})
+    assert (record.country, record.state) == (flag, place)
+    assert (record.city, record.birth_year, record.birth_month, record.birth_day) == (
+        "Helsinki",
+        15,  # 2004 - 30 - 1959: the game counts ages from 2004
+        2,
+        6,
+    )

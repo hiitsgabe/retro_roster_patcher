@@ -31,12 +31,16 @@ False.
 
 from __future__ import annotations
 
+import importlib.util
 import os
-from dataclasses import dataclass
+from collections import Counter
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from ...core.concurrency import parallel_map
 from ...core.errors import ApiError, RomError, as_rom_error
+from ...core.headshots import load_headshot
 from ...core.models import (
     MappedRosters,
     PartialFn,
@@ -54,6 +58,8 @@ from ...sports import _http
 from ...sports.espn import EspnClient
 from ...sports.models import League, LeagueData, TeamRoster
 from ...sports.nhl import NhlApiClient
+from ..nhl07_psp.rom_writer import iso_entry, write_in_place
+from . import portraits
 from .models import (
     NAMED_SLOT_COUNT,
     NHL05_TEAM_NAMES,
@@ -178,6 +184,8 @@ class _MasterTables:
     spbt_by_indx: dict[int, int]
     spai_by_indx: dict[int, int]
     sgai_by_indx: dict[int, int]
+    #: Bio records of the 2004 players whose rows were dropped.
+    dropped: list[int] = field(default_factory=list)
 
     @classmethod
     def of(cls, tdb: TDBFile) -> _MasterTables:
@@ -243,6 +251,7 @@ class NHL05PS2Patcher(Patcher):
             on_status=on_status,
             on_partial=on_partial,
         )
+        self._transport = transport
         self.mapper = NHL05StatMapper()
         # `Any`: `get_hockey_squad` takes a team id on ESPN and an abbreviation
         # on the NHL API, and `get_hockey_team_leaders` splits the same way, so
@@ -484,17 +493,103 @@ class NHL05PS2Patcher(Patcher):
                 writer, rosters, tables, mirror_rost, on_progress
             )
 
+            if options.get("portraits", True):
+                self._lend_portraits(writer, tables)
+
             self.status("Rebuilding DB.VIV...")
             writer.rebuild_and_write(
                 self._archive_spelling(writer, master_tdb, roster_tdb),
                 on_progress,
             )
+            if options.get("portraits", True):
+                self._write_portraits(writer, master_tdb)
 
         return PatchResult(
             output_path=str(output_path),
             teams_patched=teams_patched,
             players_patched=players_patched,
         )
+
+    def _write_portraits(self, writer: NHL05PS2RomWriter, master_tdb: TDBFile) -> int:
+        """Each written player's head shot in his portrait (`portraits`), the
+        silhouette without one, so no 2004 face stays on a new player. Needs
+        Pillow. Returns how many portraits went in."""
+        spbt = master_tdb.get_table("SPBT")
+        if spbt is None or not writer.photos:
+            return 0
+        art_of = {i: spbt.read_record(i).get("ART_") for i in _live_records(spbt)}
+        wanted = portraits.portrait_targets(art_of, writer.photos)
+        if not wanted:
+            return 0
+        if importlib.util.find_spec("PIL") is None:
+            self.status("Portraits skipped: Pillow is not installed")
+            return 0
+        with open(writer.output_path, "r+b") as f:
+            found = iso_entry(f, portraits.PORTAPT_PATH)
+            if found is None:
+                return 0
+            entry, next_lba = found
+            f.seek(entry.extent.offset)
+            archive = f.read(entry.extent.size)
+            self.status(f"Drawing {len(wanted)} portraits...")
+            silhouette = portraits.read(archive, portraits.SILHOUETTE_ART)
+            urls = sorted({url for url in wanted.values() if url})
+            heads = dict(zip(urls, parallel_map(self._headshot, urls), strict=True))
+            images = {}
+            for art, url in wanted.items():
+                image = None
+                png = heads.get(url)
+                if png is not None:
+                    try:
+                        image = portraits.crop(png)
+                    except Exception:  # noqa: BLE001 - a bad photo takes the silhouette
+                        image = None
+                image = image or silhouette
+                if image is not None:
+                    images[art] = image
+            new_archive, drawn = portraits.repack(archive, images)
+            if drawn:
+                write_in_place(f, entry, next_lba, new_archive)
+        self.status(f"Portraits drawn: {drawn}")
+        return drawn
+
+    @staticmethod
+    def _lend_portraits(writer: NHL05PS2RomWriter, tables: _MasterTables) -> None:
+        """Give each written player whose `ART_` has no portrait of his own (not
+        in `PORTAPT.VIV`, shared, or the silhouette) the one a dropped 2004
+        player leaves free; the dropped player takes the silhouette. The archive
+        has no room for new entries."""
+        spbt = tables.tdb.get_table("SPBT")
+        if spbt is None or not writer.photos:
+            return
+        with open(writer.output_path, "rb") as f:
+            found = iso_entry(f, portraits.PORTAPT_PATH)
+            if found is None:
+                return
+            f.seek(found[0].extent.offset)
+            names = {e.name for e in bigf_parse(f.read(found[0].extent.size))}
+        art_of = {i: spbt.read_record(i).get("ART_") for i in _live_records(spbt)}
+        uses = Counter(art_of.values())
+
+        def own(art: object) -> bool:
+            return (
+                isinstance(art, int)
+                and art != portraits.SILHOUETTE_ART
+                and uses[art] == 1
+                and portraits.entry_name(art) in names
+            )
+
+        free = [b for b in tables.dropped if b not in writer.photos and own(art_of.get(b))]
+        for bio in writer.photos:
+            if not free:
+                break
+            if not own(art_of.get(bio)):
+                lender = free.pop()
+                spbt.write_record(bio, {"ART_": art_of[lender]})
+                spbt.write_record(lender, {"ART_": portraits.SILHOUETTE_ART})
+
+    def _headshot(self, url: str) -> bytes | None:
+        return load_headshot(self.cache_dir, url, self._transport)
 
     def _parse_tdbs(self, writer: NHL05PS2RomWriter) -> tuple[TDBFile, TDBFile | None]:
         """The master TDB and its one optional mirror.
@@ -618,16 +713,26 @@ class NHL05PS2Patcher(Patcher):
             tables.rost.write_record(roster_slot.rost_index, values)
             self._mirror_rost(mirror_rost, roster_slot.rost_index, values)
 
-        # Every remaining row undressed and off every line, so a stale player
-        # can neither take the ice nor hold a unit. `team_rows` and not the
-        # classified lists: a row whose chain to a bio is broken is still one of
-        # this team's rows and the game would dress it.
-        cleared: dict[str, object] = {"DRES": 0, **dict.fromkeys(LINE_FLAGS, 0)}
+        # Every row left over holds a player the provider no longer lists: it
+        # moves to the highest `TEAM` the field holds (127; the disc's teams
+        # run to 96), which no screen lists, undressed and off every
+        # line. Not deleted: a ROST with fewer rows than the disc shipped
+        # leaves the roster screens blank. `team_rows` and not the classified
+        # lists: a row whose chain to a bio is broken is still one of this
+        # team's rows.
+        tables.dropped.extend(
+            s.bio_index for s in goalie_slots + skater_slots if s.rost_index not in used
+        )
+        width = next((f.bit_width for f in tables.rost.fields if f.name == "TEAM"), 7)
+        gone: dict[str, object] = {
+            "TEAM": (1 << width) - 1,
+            "DRES": 0,
+            **dict.fromkeys(LINE_FLAGS, 0),
+        }
         for rost_index in team_rows:
-            if rost_index in used:
-                continue
-            tables.rost.write_record(rost_index, cleared)
-            self._mirror_rost(mirror_rost, rost_index, cleared)
+            if rost_index not in used:
+                tables.rost.write_record(rost_index, gone)
+                self._mirror_rost(mirror_rost, rost_index, gone)
 
         return len(pairs)
 
@@ -701,6 +806,7 @@ class NHL05PS2Patcher(Patcher):
         return without writing.
         """
         writer.write_player_bio(tables.tdb, roster_slot.bio_index, player)
+        writer.photos[roster_slot.bio_index] = player.photo_url
 
         if player.is_goalie and player.goalie_attrs is not None:
             if roster_slot.sgai_index is not None:

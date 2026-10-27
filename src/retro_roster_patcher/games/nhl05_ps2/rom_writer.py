@@ -146,6 +146,8 @@ class NHL05PS2RomWriter:
     """
 
     def __init__(self, iso_path: str, output_path: str) -> None:
+        #: SPBT record index -> the head shot of the player written there.
+        self.photos: dict[int, str] = {}
         self.iso_path = iso_path
         self.output_path = output_path
         self.reader: NHL05PS2RomReader | None = None
@@ -232,6 +234,17 @@ class NHL05PS2RomWriter:
             "TEAM": player.team_index,
             "POS_": POSITION_REVERSE.get(player.position, 0),
         }
+        for name, value in (
+            ("INTL", player.country),
+            ("STAT", player.state),
+            ("YEAR", player.birth_year),
+            ("MONT", player.birth_month),
+            ("DAY_", player.birth_day),
+        ):
+            if value >= 0:
+                values[name] = value
+        if player.city:
+            values["CITY"] = player.city
         if player.weight > 0:
             values["WEIG"] = player.weight
         if player.height > 0:
