@@ -38,7 +38,7 @@ def test_wallpaper_texels_are_distinct_and_inside_the_asset():
 
 def test_registered_with_its_capabilities():
     cls = get_patcher("iss2000-n64")
-    assert cls.requires_slot_mapping and cls.supports_looks and cls.image_slots == ("menu",)
+    assert cls.requires_slot_mapping and cls.supports_looks and cls.image_slots == ("menu", "title")
 
 
 def test_a_given_squad_starts_one_keeper_in_goal():
@@ -133,3 +133,78 @@ def test_rewritten_assets_stay_inside_16_mib():
     moved = R.assets(image)[0]
     assert len(image) == R.ROM_SIZE and not space.grew
     assert 0x100100 <= moved.start < R.ROM_SIZE
+
+
+def test_title_texels_cover_the_asset_once():
+    seen = {screens.title_texel(x, y) for y in range(240) for x in range(320)}
+    assert seen == set(range(320 * 240))
+
+
+def _cartridge(title_room: int) -> bytearray:
+    """A blank image with the asset table filled up to the title, the title
+    last and only `title_room` bytes of padding after it."""
+    image = bytearray(R.ROM_SIZE)
+    blank = R.lz_compress(bytes(160000))
+    title = R.lz_compress(bytes(153600))
+    image[0x100000 : 0x100000 + len(blank)] = blank
+    at = R.ROM_SIZE - title_room - len(title)
+    image[at : at + len(title)] = title
+    for k in range(screens.TITLE_ASSET + 1):
+        start, end = (
+            (at, at + len(title)) if k == screens.TITLE_ASSET else (0x100000, 0x100000 + len(blank))
+        )
+        image[R.ASSET_TABLE + 8 * k : R.ASSET_TABLE + 8 * k + 8] = (start | 0x80000000).to_bytes(
+            4, "big"
+        ) + end.to_bytes(4, "big")
+    image[at + len(title) :] = b"\xff" * (R.ROM_SIZE - at - len(title))
+    return image
+
+
+def test_title_round_trips_through_the_cartridge(tmp_path):
+    from io import BytesIO
+
+    from PIL import Image, ImageDraw
+
+    pic = Image.new("RGB", (320, 240), (0, 96, 40))
+    draw = ImageDraw.Draw(pic)
+    draw.ellipse((110, 20, 210, 120), fill=(248, 216, 0))
+    draw.rectangle((0, 225, 319, 239), fill=(200, 0, 0))  # the bottom strip
+    png = BytesIO()
+    pic.save(png, "PNG")
+    image = _cartridge(200000)
+    space = R.AssetSpace(image)
+    screens.write(image, space, {"title": png.getvalue()})
+    assert len(image) == R.ROM_SIZE and not space.grew
+    out = Image.open(screens.export(image, tmp_path)[1])
+    assert list(out.getdata()) == [  # 5 bits a channel
+        tuple((c >> 3) * 255 // 31 for c in p) for p in pic.getdata()
+    ]
+
+
+def test_a_busy_title_drops_colours_rather_than_grow_the_image(tmp_path):
+    import math
+    from io import BytesIO
+
+    from PIL import Image
+
+    rng = random.Random(3)
+    pic = Image.new("RGB", (320, 240))
+    pic.putdata(
+        [
+            (
+                int(128 + 100 * math.sin(x / 17) * math.cos(y / 23)) + rng.randrange(-6, 7),
+                int(128 + 90 * math.sin((x + y) / 29)),
+                x * y % 256,
+            )
+            for y in range(240)
+            for x in range(320)
+        ]
+    )  # about 150 KB packed in full colour, 64 KB in 256 colours
+    png = BytesIO()
+    pic.save(png, "PNG")
+    image = _cartridge(70000)
+    space = R.AssetSpace(image)
+    screens.write(image, space, {"title": png.getvalue()})
+    assert len(image) == R.ROM_SIZE and not space.grew
+    out = Image.open(screens.export(image, tmp_path)[1])
+    assert len(set(out.getdata())) <= 256

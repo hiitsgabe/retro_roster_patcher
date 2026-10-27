@@ -346,8 +346,15 @@ class AssetSpace:
                 return lo
         return None
 
+    def room(self, asset: Asset) -> int:
+        """The most bytes `asset` can take without growing the image."""
+        return max([asset.end - asset.start] + [hi - lo for lo, hi in self.free])
+
     def put(self, asset: Asset, data: bytes, compress: bool = True) -> None:
-        blob = lz_compress(data) if compress else data
+        self.place(asset, lz_compress(data) if compress else data, compress)
+
+    def place(self, asset: Asset, blob: bytes, compressed: bool = True) -> None:
+        """`put` for a stream already compressed (or raw, `compressed=False`)."""
         blob += bytes(-len(blob) % 4)
         start = asset.start
         if len(blob) <= asset.end - asset.start:
@@ -357,7 +364,7 @@ class AssetSpace:
             taken = self._take(len(blob))
             start = taken if taken is not None else self._grow(len(blob))
         self.image[start : start + len(blob)] = blob
-        flag = 0x80000000 if compress else 0
+        flag = 0x80000000 if compressed else 0
         struct.pack_into(">II", self.image, asset.entry, start | flag, start + len(blob))
 
     def _grow(self, size: int) -> int:
