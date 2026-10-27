@@ -39,6 +39,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from ...core.assets import crest_png
 from ...core.concurrency import parallel_map
 from ...core.errors import ApiError, CapabilityError, RomError, as_rom_error
 from ...core.headshots import load_headshot
@@ -60,7 +61,7 @@ from ...sports.espn import EspnClient
 from ...sports.models import League, LeagueData, TeamRoster
 from ...sports.nhl import NhlApiClient
 from ..nhl07_psp.rom_writer import iso_entry, write_in_place
-from . import portraits, screens
+from . import logos, portraits, screens
 from .models import (
     NAMED_SLOT_COUNT,
     NHL05_TEAM_NAMES,
@@ -509,6 +510,8 @@ class NHL05PS2Patcher(Patcher):
             )
             if options.get("portraits", True):
                 self._write_portraits(writer, master_tdb)
+            if options.get("logos", True):
+                self._write_logos(writer, rosters)
             if pictures:
                 self._write_images(writer, pictures)
 
@@ -680,6 +683,33 @@ class NHL05PS2Patcher(Patcher):
             self.status(f"Screen image {name}: {count} copies")
         for name in skipped:
             self.status(f"Screen image {name} skipped: it does not fit every copy's slot")
+
+    def _write_logos(self, writer: NHL05PS2RomWriter, rosters: MappedRosters) -> None:
+        """Each patched club's current crest over its front-end logos (`logos`).
+        Nothing is fetched for a disc without the archive or a provider
+        without crests (the NHL API gives none)."""
+        with open(writer.output_path, "r+b") as f:
+            found = iso_entry(f, logos.ARCHIVE)
+            if found is None:
+                return
+            entry = found[0]
+            urls: dict[int, str] = {}
+            for team in self.api.get_nhl_teams():
+                slot = self.mapper.get_team_slot(team.code)
+                if slot is not None and slot in rosters.teams and team.logo_url:
+                    urls[slot] = team.logo_url
+            if not urls:
+                self.status("Team logos skipped: the provider has no crests")
+                return
+            pngs = parallel_map(
+                lambda url: crest_png(None, None, url, self._transport), list(urls.values())
+            )
+            crests = {slot: png for slot, png in zip(urls, pngs, strict=True) if png is not None}
+            f.seek(entry.extent.offset)
+            edited, drawn = logos.edits(f.read(entry.extent.size), crests)
+            f.seek(entry.extent.offset)
+            f.write(edited)
+        self.status(f"Team logos drawn: {len(drawn)} of {len(crests)} clubs")
 
     def _headshot(self, url: str) -> bytes | None:
         return load_headshot(self.cache_dir, url, self._transport)

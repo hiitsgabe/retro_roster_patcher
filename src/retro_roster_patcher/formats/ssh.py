@@ -91,6 +91,12 @@ def _table(colours: list[tuple[int, int, int, int]]) -> bytes:
     return bytes(table)
 
 
+def dimensions(data: bytes) -> tuple[int, int]:
+    """The shape's (width, height)."""
+    shape = _blocks(data)
+    return shape.width, shape.height
+
+
 def indices(data: bytes) -> tuple[bytes, int, int]:
     """The shape's pixels as one index per pixel, row by row, with its size."""
     shape = _blocks(data)
