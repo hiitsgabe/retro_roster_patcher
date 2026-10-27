@@ -29,8 +29,9 @@ from pathlib import Path
 from typing import Any
 
 from ...core.assets import crest_png
+from ...core.concurrency import parallel_map
 from ...core.errors import ApiError, RomError
-from ...core.headshots import measure_faces
+from ...core.headshots import load_headshot, measure_faces
 from ...core.models import (
     MappedRosters,
     PartialFn,
@@ -46,7 +47,7 @@ from ...core.registry import register
 from ...sports import _http
 from ...sports.espn import EspnClient
 from ...sports.models import League, LeagueData, TeamRoster
-from . import logos, looks
+from . import logos, looks, portraits
 from . import teams as team_blocks
 from .models import (
     BYTE_TO_POSITION,
@@ -311,6 +312,9 @@ class NBALive95Patcher(Patcher):
 
     # -- patch --------------------------------------------------------------
 
+    def _headshot(self, url: str) -> bytes | None:
+        return load_headshot(self.cache_dir, url, self._transport)
+
     def _draw_logos(
         self, image: bytearray | None, teams: dict[int, NBALive95TeamRecord], free: Space
     ) -> None:
@@ -415,6 +419,19 @@ class NBALive95Patcher(Patcher):
 
         if options.get("logos", True):
             self._draw_logos(writer.data, {slot: rosters.teams[slot] for slot in targets}, free)
+        urls = portraits.starters(
+            {
+                s: [r.photo_url for r in rosters.teams[s].players]
+                for s in targets
+                if s < portraits.TEAMS
+            }
+        )
+        if options.get("portraits", True) and urls and writer.data is not None:
+            shots = dict(zip(urls, parallel_map(self._headshot, list(urls.values())), strict=True))
+            drawn = portraits.write(
+                writer.data, {k: png for k, png in shots.items() if png is not None}, free
+            )
+            self.status(f"Portraits drawn from head shots: {len(drawn)} of {len(urls)} starters")
 
         self.status("Saving patched ROM...")
         if on_progress is not None:

@@ -47,6 +47,19 @@ def decompress(data: bytes) -> bytes:
     Raises:
         EaTdbError: not a `30 FB` stream, or one that does not decode.
     """
+    return _decode(data)[0]
+
+
+def stream_size(data: bytes) -> int:
+    """How many bytes the `30 FB` stream at the start of `data` takes up.
+
+    Raises:
+        EaTdbError: as `decompress`.
+    """
+    return _decode(data)[1]
+
+
+def _decode(data: bytes) -> tuple[bytes, int]:
     if len(data) < 6 or data[:2] != MAGIC:
         raise EaTdbError("Not EA Huffman data (missing 0x30 0xFB header)")
     size = int.from_bytes(data[2:5], "big")
@@ -104,4 +117,4 @@ def decompress(data: bytes) -> bytes:
         else:
             last = bits.get(8)
             out.append(last)
-    return bytes(out[:size])
+    return bytes(out[:size]), bits.at

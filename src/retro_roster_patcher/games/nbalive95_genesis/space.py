@@ -14,10 +14,17 @@ FREE = (
 
 
 class Space:
-    """Hands out word-aligned pieces of `FREE`, first fit."""
+    """Hands out word-aligned pieces of `FREE`, first fit, and of what
+    `release` gives back."""
 
     def __init__(self) -> None:
         self._holes = [list(hole) for hole in FREE]
+
+    def release(self, start: int, size: int) -> None:
+        """Make `size` bytes at `start`, no longer read by anything, free."""
+        begin = (start + 1) & ~1
+        if start + size - begin >= 2:
+            self._holes.append([begin, start + size])
 
     def alloc(self, size: int) -> int | None:
         """The start of `size` free bytes, or None when no run has them."""

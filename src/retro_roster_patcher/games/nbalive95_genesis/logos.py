@@ -88,10 +88,33 @@ def write(image: bytearray, logos: dict[int, bytes], free: Space) -> list[int]:
         start = free.alloc(len(blob))
         if start is None:
             break
+        old = frame_start(image, team)
         image[start : start + len(blob)] = blob
         struct.pack_into(">I", image, LOGO_TABLE + 4 * team, start - LOGO_BASE)
+        if old not in table_starts(image):
+            free.release(old, raw_size(image, old))
         done.append(team)
     return done
+
+
+def frame_start(image: bytes | bytearray, index: int) -> int:
+    """Where the asset table's frame `index` starts."""
+    return struct.unpack_from(">I", image, LOGO_TABLE + 4 * index)[0] + LOGO_BASE
+
+
+#: Entries in the asset table (logos, portraits and the rest the game draws).
+TABLE_SIZE = 700
+
+
+def table_starts(image: bytes | bytearray) -> set[int]:
+    """Every frame the asset table points at."""
+    return {frame_start(image, i) for i in range(TABLE_SIZE)}
+
+
+def raw_size(image: bytes | bytearray, start: int) -> int:
+    """The bytes an uncompressed frame (flags 0) takes up."""
+    count, tiles, _ = struct.unpack_from(">3h", image, start + 8)
+    return 14 + 8 * count + 32 * tiles
 
 
 def read(image: bytes | bytearray, team: int) -> list[list[int]]:
