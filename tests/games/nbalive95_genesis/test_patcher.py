@@ -1009,7 +1009,7 @@ def test_order_as_given_turns_espns_guards_and_forwards_into_the_five_positions(
     mapped = patcher.map_rosters(_ranked_league(given), order_as_given=True)
 
     found = [BYTE_TO_POSITION[r.position] for r in mapped.teams[BOS_SLOT].players]
-    assert found == ["PG", "SF", "C", "SG", "PF", "SF", "PG", "SG", "C", "PF"]
+    assert found == ["PG", "PF", "C", "SG", "SF", "SF", "PG", "SG", "C", "PF"]
 
 
 def test_swapping_two_forwards_in_the_first_five_changes_only_their_position_bytes(patcher):
@@ -1039,7 +1039,7 @@ def test_the_suggested_order_starts_one_player_at_each_position(patcher):
     mapped = patcher.map_rosters(data, order_as_given=True)
 
     starters = [BYTE_TO_POSITION[r.position] for r in mapped.teams[BOS_SLOT].players[:5]]
-    assert starters == ["PG", "SG", "SF", "PF", "C"]
+    assert starters == ["C", "PF", "SF", "SG", "PG"]
     assert len(suggested) == len(squad)
 
 

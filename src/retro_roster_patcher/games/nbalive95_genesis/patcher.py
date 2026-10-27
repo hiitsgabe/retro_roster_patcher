@@ -28,6 +28,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
+from ...core.assets import crest_png
 from ...core.errors import ApiError, RomError
 from ...core.models import (
     MappedRosters,
@@ -44,6 +45,7 @@ from ...core.registry import register
 from ...sports import _http
 from ...sports.espn import EspnClient
 from ...sports.models import League, LeagueData, TeamRoster
+from . import logos
 from .models import (
     BYTE_TO_POSITION,
     NAME_LENGTH,
@@ -132,6 +134,9 @@ class NBALive95Patcher(Patcher):
     West All-Stars and the Slammers, which no real NBA team maps to.
     """
 
+    #: `patch` draws each team's crest as its team-select logo unless `logos=False`.
+    supports_logos: bool = True
+
     def __init__(
         self,
         cache_dir: Path | str,
@@ -140,6 +145,7 @@ class NBALive95Patcher(Patcher):
         on_status: StatusFn | None = None,
         on_partial: PartialFn | None = None,
         transport: _http.Transport | None = None,
+        assets_dir: Path | str | None = None,
     ) -> None:
         super().__init__(
             cache_dir,
@@ -147,6 +153,10 @@ class NBALive95Patcher(Patcher):
             on_status=on_status,
             on_partial=on_partial,
         )
+        self._transport = transport
+        # User-supplied, read-only: `logos/<team_id>.png` drawn instead of the
+        # provider's crest.
+        self.assets_dir = Path(assets_dir) if assets_dir is not None else None
         self.mapper = NBALive95StatMapper()
         self.api = EspnClient(str(self.cache_dir), on_status, transport=transport)
 
@@ -288,10 +298,28 @@ class NBALive95Patcher(Patcher):
                 index=slot,
                 name=NBALIVE95_TEAM_ORDER[slot],
                 players=records,
+                team_id=roster.team.id,
+                logo_url=roster.team.logo_url,
             )
         return MappedRosters(game_id=self.game_id, teams=teams)
 
     # -- patch --------------------------------------------------------------
+
+    def _draw_logos(self, image: bytearray | None, teams: dict[int, NBALive95TeamRecord]) -> None:
+        """Each team's crest (`assets_dir/logos/<team_id>.png`, else the
+        provider's) as its team-select logo; a team with neither keeps the
+        cartridge's. Skipped whole, with a status line, without Pillow."""
+        if image is None:
+            return
+        crests = {}
+        for slot, team in teams.items():
+            png = crest_png(self.assets_dir, team.team_id, team.logo_url, self._transport)
+            if png is not None:
+                crests[slot] = png
+        try:
+            logos.write(image, crests)
+        except ImportError:
+            self.status("Logos skipped: Pillow is not installed")
 
     def patch(
         self,
@@ -348,6 +376,9 @@ class NBALive95Patcher(Patcher):
             # `written`, not `len(team.players)`: a slot whose pointer does not
             # resolve is skipped and the loop carries on.
             players_patched += written
+
+        if options.get("logos", True):
+            self._draw_logos(writer.data, {slot: rosters.teams[slot] for slot in targets})
 
         self.status("Saving patched ROM...")
         if on_progress is not None:

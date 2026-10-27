@@ -11,11 +11,12 @@ from __future__ import annotations
 import atexit
 import pathlib
 import tempfile
+from collections.abc import Callable
 from importlib import resources
 
 from .errors import RetroRosterError
 
-__all__ = ["MissingAssetError", "package_bytes", "package_path"]
+__all__ = ["MissingAssetError", "crest_png", "package_bytes", "package_path"]
 
 # One temporary copy per asset, keyed by `(package, name)`.
 _materialised: dict[tuple[str, str], str] = {}
@@ -76,3 +77,26 @@ def package_path(package: str, name: str) -> str:
 
     _materialised[key] = handle.name
     return handle.name
+
+
+def crest_png(
+    assets_dir: pathlib.Path | None,
+    team_id: int | None,
+    url: str,
+    transport: Callable[[str, dict, float], bytes] | None = None,
+) -> bytes | None:
+    """A team's crest image: the user's `assets_dir/logos/<team_id>.png` when
+    there is one, else `url` downloaded; None when neither can be had. A failed
+    download is None too, so one missing crest never fails a patch."""
+    if assets_dir is not None and team_id is not None:
+        own = pathlib.Path(assets_dir) / "logos" / f"{team_id}.png"
+        if own.is_file():
+            return own.read_bytes()
+    if not url:
+        return None
+    from ..sports import _http
+
+    try:
+        return (transport or _http.default_transport)(url, {}, 15.0)
+    except Exception:  # noqa: BLE001 - a missing crest must not fail the patch
+        return None

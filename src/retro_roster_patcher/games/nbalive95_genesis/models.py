@@ -274,6 +274,10 @@ class NBALive95TeamRecord:
     index: int
     name: str
     players: list[NBALive95PlayerRecord] = field(default_factory=list)
+    #: The provider's team id (`assets_dir/logos/<team_id>.png` overrides the
+    #: crest) and crest URL, for the team-select logo.
+    team_id: int | None = None
+    logo_url: str = ""
 
 
 @dataclass

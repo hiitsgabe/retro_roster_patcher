@@ -21,14 +21,17 @@ from .models import (
 )
 
 #: The game's five positions, in the order `select_roster` fills a lineup.
-LINEUP = ("PG", "SG", "SF", "PF", "C")
+#: The positions of pointer slots 0-4, the starting five, as the retail rosters
+#: order them (Ewing, Oakley, C. Smith, Starks, Harper). The pre-game intro
+#: names each starter by his slot, not by his position byte (checked in
+#: genesis_plus_gx, Oct 27 2026).
+LINEUP = ("C", "PF", "SF", "SG", "PG")
 
 #: ESPN labels an NBA player G, F or C. A G can play either guard spot and an F
 #: either forward spot; `split_positions` picks which by list order.
 COMBO_SPOTS = {"G": ("PG", "SG"), "F": ("SF", "PF")}
 
-#: The app's editor labels the first five rows the starting lineup. That the
-#: cartridge starts pointer slots 0-4 is not confirmed on a real cartridge.
+#: The cartridge starts pointer slots 0-4 (`LINEUP`).
 STARTERS = 5
 
 
@@ -264,21 +267,31 @@ class NBALive95StatMapper:
         return selected[:12]
 
     def split_positions(self, players: list[Player]) -> list[Player]:
-        """`players` with each G and F given one of its two spots, by list order.
+        """`players` with each G and F given one of its two spots.
 
-        In the first five, and again on the bench, the first G becomes a PG, the
-        next an SG, and so on alternating; the first F an SF, the next a PF. A
-        first five of two G, two F and a C so writes one of each of the game's five.
+        A starter takes his slot's spot (`LINEUP`) when his label can play it and
+        no other starter has, else the first of his two not taken yet. On the
+        bench the first G becomes a PG, the next an SG, and so on alternating;
+        the first F an SF, the next a PF.
         """
         out = []
-        for group in (players[:STARTERS], players[STARTERS:]):
-            seen: Counter[str] = Counter()
-            for p in group:
-                label = (p.position or "").upper().strip()
-                if label in COMBO_SPOTS:
-                    p = replace(p, position=COMBO_SPOTS[label][seen[label] % 2])
-                    seen[label] += 1
-                out.append(p)
+        taken: set[str] = set()
+        for i, p in enumerate(players[:STARTERS]):
+            label = (p.position or "").upper().strip()
+            if label in COMBO_SPOTS:
+                spots = COMBO_SPOTS[label]
+                free = [s for s in spots if s not in taken] or list(spots)
+                spot = LINEUP[i] if LINEUP[i] in free else free[0]
+                taken.add(spot)
+                p = replace(p, position=spot)
+            out.append(p)
+        seen: Counter[str] = Counter()
+        for p in players[STARTERS:]:
+            label = (p.position or "").upper().strip()
+            if label in COMBO_SPOTS:
+                p = replace(p, position=COMBO_SPOTS[label][seen[label] % 2])
+                seen[label] += 1
+            out.append(p)
         return out
 
     def _spots(self, position: str) -> tuple[str, ...]:

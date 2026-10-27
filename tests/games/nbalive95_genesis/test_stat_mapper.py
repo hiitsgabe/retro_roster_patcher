@@ -471,35 +471,35 @@ def test_the_first_ten_are_two_rounds_of_the_five_positions(mapper):
     """The first five hold one player per position, and so do the next five."""
     players, stats = _squad(["PG", "SG", "SF", "PF", "C"] * 5)
     chosen = mapper.select_roster(players, stats)
-    assert [p.position for p in chosen[:10]] == ["PG", "SG", "SF", "PF", "C"] * 2
+    assert [p.position for p in chosen[:10]] == ["C", "PF", "SF", "SG", "PG"] * 2
 
 
 def test_espn_guards_and_forwards_fill_both_spots_in_the_first_five(mapper):
     """ESPN's labels are G, F and C: two of each G and F start, with a C."""
     players, stats = _squad(["G"] * 4 + ["F"] * 4 + ["C"] * 2 + ["G", "F"])
     chosen = mapper.select_roster(players, stats)
-    assert [p.position for p in chosen[:5]] == ["G", "G", "F", "F", "C"]
+    assert [p.position for p in chosen[:5]] == ["C", "F", "F", "G", "G"]
     found = [p.position for p in mapper.split_positions(chosen)[:5]]
-    assert found == ["PG", "SG", "SF", "PF", "C"]
+    assert found == ["C", "PF", "SF", "SG", "PG"]
 
 
 def test_a_squad_with_no_centre_still_starts_the_other_four_positions(mapper):
     players, stats = _squad(["G"] * 4 + ["F"] * 4)
     chosen = mapper.select_roster(players, stats)
-    assert [p.position for p in chosen[:5]] == ["G", "G", "F", "F", "G"]
+    assert [p.position for p in chosen[:5]] == ["F", "F", "G", "G", "F"]
 
 
 def test_a_first_five_of_two_g_two_f_and_a_c_splits_into_the_five_positions(mapper):
     players, _ = _squad(["C", "F", "G", "F", "G"])
     found = [p.position for p in mapper.split_positions(players)]
-    assert found == ["C", "SF", "PG", "PF", "SG"]
+    assert found == ["C", "PF", "PG", "SF", "SG"]
 
 
 def test_the_bench_alternates_guards_and_forwards_afresh(mapper):
     """The bench counts from its own first G and F, not the starters' last."""
     players, _ = _squad(["G", "F", "F", "C", "C", "G", "G", "G", "F", "F"])
     found = [p.position for p in mapper.split_positions(players)]
-    assert found == ["PG", "SF", "PF", "C", "C", "PG", "SG", "PG", "SF", "PF"]
+    assert found == ["PG", "PF", "SF", "C", "C", "PG", "SG", "PG", "SF", "PF"]
 
 
 def test_splitting_leaves_other_labels_and_the_callers_players_alone(mapper):
@@ -536,7 +536,7 @@ def test_the_last_two_spots_go_to_the_busiest_players_left(mapper):
         minutes={0: 40, 1: 39, 10: 5, 11: 20},
     )
     chosen = mapper.select_roster(players, stats)
-    assert [chosen[0].id, chosen[5].id] == [0, 1]
+    assert [chosen[4].id, chosen[9].id] == [0, 1]  # PG is the fifth slot
     assert [p.id for p in chosen[10:]] == [11, 10]
 
 
