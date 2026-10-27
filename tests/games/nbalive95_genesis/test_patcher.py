@@ -590,10 +590,10 @@ def test_a_slot_mapping_is_refused(patcher):
         patcher.map_rosters(_league_data(("BOS", 14)), [SlotMapping(slot_index=0, team_id=1)])
 
 
-def test_the_three_expansion_teams_take_the_all_star_and_slammers_slots(patcher):
+def test_toronto_and_memphis_take_the_all_star_slots_and_new_orleans_has_none(patcher):
     codes = ("TOR", "MEM", "NO")
     mapped = patcher.map_rosters(_league_data(*[(code, 14) for code in codes]))
-    assert sorted(mapped.teams) == [27, 28, 29]
+    assert sorted(mapped.teams) == [27, 28]
 
 
 def test_a_populated_alias_takes_the_slot(patcher):

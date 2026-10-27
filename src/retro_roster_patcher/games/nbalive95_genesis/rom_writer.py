@@ -140,15 +140,6 @@ class NBALive95RomWriter:
                 max_name = gap - FIXED_SIZE
                 self._record_limits[(team_idx, slot)] = max(4, max_name)
 
-    def reserve(self, team_index: int, size: int) -> None:
-        """Measure `team_index`'s records afresh, each `size` bytes long (for
-        records just written to free space, whose names are empty). The
-        reader, which resolves the pointers, is given the edited image."""
-        if self.data is not None:
-            self.reader.data = self.data
-        for slot in range(PLAYERS_PER_TEAM):
-            self._record_limits[(team_index, slot)] = size - FIXED_SIZE
-
     def _original_record_size(self, ptr: int) -> int:
         """The record ends at the name's two-null terminator."""
         if not self.data:

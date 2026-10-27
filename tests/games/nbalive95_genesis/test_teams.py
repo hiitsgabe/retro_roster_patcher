@@ -1,11 +1,9 @@
 """NBA Live 95 team blocks: names, ranks, the Slammers' new records, the unlocks."""
 
 import struct
-from itertools import pairwise
 
 from retro_roster_patcher.games.nbalive95_genesis import teams
 from retro_roster_patcher.games.nbalive95_genesis.models import (
-    PLAYER_SIZE,
     TEAM_ROSTER_ADDRESSES,
     NBALive95PlayerRecord,
 )
@@ -44,15 +42,10 @@ def test_ranks_stay_within_what_team_select_shows():
     assert ranks[29] == [1] * 5 and max(r[0] for r in ranks.values()) == teams.MAX_RANK
 
 
-def test_the_slammers_get_twelve_records_and_the_unlocks():
+def test_the_all_star_slots_are_unlocked_as_clubs():
     image = _image()
-    west = TEAM_ROSTER_ADDRESSES[28]
-    struct.pack_into(">I", image, west, 0x100000)
-    for offset, retail, _ in teams.UNLOCK[29]:
-        image[offset : offset + 2] = bytes((0x70, retail))
-    assert teams.adopt(image, 29, Space())
-    pointers = struct.unpack_from(">12I", image, TEAM_ROSTER_ADDRESSES[29])
-    assert [b - a for a, b in pairwise(pointers)] == [PLAYER_SIZE] * 11
-    assert not teams.adopt(image, 29, Space())
-    teams.unlock(image, 29)
-    assert all(image[o + 1] == new for o, _, new in teams.UNLOCK[29])
+    for slot in (27, 28):
+        for offset, retail, _ in teams.UNLOCK[slot]:
+            image[offset : offset + 2] = bytes((0x70, retail))
+        teams.unlock(image, slot)
+        assert all(image[o + 1] == new for o, _, new in teams.UNLOCK[slot])

@@ -645,9 +645,9 @@ def test_a_relocated_franchise_maps_to_the_city_the_rom_knows(mapper):
     assert mapper.get_team_slot("BKN") == 16
 
 
-def test_a_team_that_did_not_exist_in_1994_takes_an_all_star_or_the_slammers_slot(mapper):
+def test_a_team_that_did_not_exist_in_1994_takes_an_all_star_slot_or_none(mapper):
     found = [mapper.get_team_slot(code) for code in ("TOR", "MEM", "NOP", "NO")]
-    assert found == [27, 28, 29, 29]
+    assert found == [27, 28, None, None]
 
 
 def test_an_unknown_code_has_no_slot(mapper):

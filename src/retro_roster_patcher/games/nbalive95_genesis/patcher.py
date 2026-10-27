@@ -55,7 +55,6 @@ from .models import (
     NBALIVE95_TEAM_ORDER,
     OFF_NAME,
     OFF_POSITION,
-    PLAYER_SIZE,
     PLAYERS_PER_TEAM,
     POSITION_SF,
     POSITION_TO_BYTE,
@@ -382,10 +381,6 @@ class NBALive95Patcher(Patcher):
         faces = measure_faces(self.cache_dir, urls, self._transport, self.status) if measure else {}
 
         free = Space()
-        if team_blocks.SLAMMERS in targets and writer.data is not None:
-            # The Slammers have no records; New Orleans gets twelve new ones.
-            if team_blocks.adopt(writer.data, team_blocks.SLAMMERS, free):
-                writer.reserve(team_blocks.SLAMMERS, PLAYER_SIZE)
         for slot in targets:
             if writer.data is not None:
                 team_blocks.unlock(writer.data, slot)

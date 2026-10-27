@@ -7,11 +7,9 @@ arena (0 for most) and the intro's "Live from" line ("Atlanta, GA") -- then a
 (scoring, rebounds, ball control, defense, overall; 1 is best). The strings sit
 packed after the block, so new ones go to free space and the pointers move.
 
-Slots 27-29 are the East and West All-Stars and the Slammers, which the patcher
-gives to Toronto, Memphis and New Orleans. The All-Stars own twelve records
-each; the Slammers have none (all twelve pointers are 0), so `adopt` writes
-twelve records in free space for them. The game treats those slots by number,
-so `unlock` changes the `moveq` limits that do (`UNLOCK`).
+Slots 27 and 28, the East and West All-Stars, own twelve records each and
+take Toronto and Memphis. The game treats them by number, so `unlock` changes
+the `moveq` limits that do (`UNLOCK`).
 """
 
 from __future__ import annotations
@@ -19,7 +17,7 @@ from __future__ import annotations
 import struct
 from collections.abc import Mapping, Sequence
 
-from .models import PLAYER_SIZE, TEAM_ROSTER_ADDRESSES, NBALive95PlayerRecord
+from .models import TEAM_ROSTER_ADDRESSES, NBALive95PlayerRecord
 from .space import Space
 
 #: ESPN code -> (city as the menus show it, "Live from" line, abbreviation).
@@ -60,10 +58,7 @@ ALIASES = {"GSW": "GS", "NYK": "NY", "SAS": "SA", "NOP": "NO", "UTAH": "UTA", "W
 _NAMES = 0x30  # nickname, city, arena, "Live from": four pointers
 _ABBR = 0x40
 _RANKS = 0x45
-SLAMMERS = 29
 MAX_RANK = 27
-#: A record whose unknown bytes (0x3B-0x44) the Slammers' new records copy.
-_TEMPLATE_SLOT = (28, 0)
 
 
 def nickname(full_name: str, short_name: str) -> str:
@@ -132,14 +127,10 @@ def write_ranks(image: bytearray, slot: int, five: Sequence[int]) -> None:
 #: `moveq #n,D0` (0x70 n) immediates the game tests a team number against, per
 #: slot: (offset, retail n, new n). The pre-game matchup names team 27 "Eastern"
 #: and 28 "Western" (four copies of the routine, each `beq`/`bne`, so 0x7F
-#: matches no team) and every team from 29 "Custom", and Player Setup sends a
-#: team from 29 to the custom-team editor; both limits move up one for 29.
-#: Checked in genesis_plus_gx, Oct 27 2026.
+#: matches no team). Checked in genesis_plus_gx, Oct 27 2026.
 UNLOCK = {
     27: [(a, 0x1B, 0x7F) for a in (0x277C8, 0x278E6, 0x27C04, 0x27D34)],
     28: [(a, 0x1C, 0x7F) for a in (0x277EE, 0x2790C, 0x27C2A, 0x27D5A)],
-    29: [(a, 0x1D, 0x1E) for a in (0x27814, 0x27932, 0x27C50, 0x27D80, 0x1DF0C)]
-    + [(a, 0x1C, 0x1D) for a in (0x1DD86, 0x1DE50, 0x1DF42, 0x1DF4A)],
 }
 
 
@@ -149,22 +140,3 @@ def unlock(image: bytearray, slot: int) -> None:
     for offset, retail, new in UNLOCK.get(slot, ()):
         if image[offset : offset + 2] == bytes((0x70, retail)):
             image[offset + 1] = new
-
-
-def adopt(image: bytearray, slot: int, free: Space) -> bool:
-    """Give an empty slot twelve records in free space, each a copy of
-    `_TEMPLATE_SLOT`'s fixed bytes with an empty name; False when the slot
-    already has players or there is no room."""
-    block = TEAM_ROSTER_ADDRESSES[slot]
-    if any(struct.unpack_from(">12I", image, block)):
-        return False
-    start = free.alloc(12 * PLAYER_SIZE)
-    if start is None:
-        return False
-    team, index = _TEMPLATE_SLOT
-    template = struct.unpack_from(">I", image, TEAM_ROSTER_ADDRESSES[team] + 4 * index)[0]
-    record = bytes(image[template : template + 0x45]) + bytes(PLAYER_SIZE - 0x45)
-    for i in range(12):
-        image[start + i * PLAYER_SIZE : start + (i + 1) * PLAYER_SIZE] = record
-        struct.pack_into(">I", image, block + 4 * i, start + i * PLAYER_SIZE)
-    return True

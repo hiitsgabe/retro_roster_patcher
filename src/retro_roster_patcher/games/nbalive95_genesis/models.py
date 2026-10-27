@@ -20,7 +20,7 @@ from ...sports.models import (  # noqa: F401
 PLAYER_SIZE = 93
 PLAYERS_PER_TEAM = 12
 TEAM_COUNT = 30  # 27 NBA + East AS + West AS + Slammers
-NBA_TEAM_COUNT = 27  # the 1994 NBA; slots 27-29 take Toronto, Memphis and New Orleans
+NBA_TEAM_COUNT = 27  # the 1994 NBA; slots 27 and 28 take Toronto and Memphis
 
 TEAM_METADATA_BASE = 0x00037ECE  # M_1 through M_29
 TEAM_ROSTER_BASE = 0x0003FEB4  # T_1 through T_29
@@ -181,7 +181,9 @@ NBALIVE95_TEAM_ORDER = [
 ]
 
 # Modern NBA team abbreviation -> ROM slot index: the 27 teams of 1994 keep their
-# slots, Toronto, Memphis and New Orleans take the All-Stars' and the Slammers'.
+# slots, Toronto and Memphis take the All-Stars'. New Orleans has none: the
+# Slammers' slot (29) is a custom team, whose lineup the game takes from the
+# custom-team editor's picks in SRAM however its records are written.
 #
 # GS/GSW, BKN/NJN, NYK/NY, SA/SAS, OKC/SEA, UTA/UTAH and WAS/WSH each name one
 # slot twice, so a provider returning both spellings hands `map_rosters` two teams
@@ -223,8 +225,6 @@ MODERN_NBA_TO_NBALIVE95 = {
     "WSH": 26,
     "TOR": 27,  # was the East All-Stars
     "MEM": 28,  # was the West All-Stars
-    "NO": 29,  # was the Slammers
-    "NOP": 29,
 }
 
 
