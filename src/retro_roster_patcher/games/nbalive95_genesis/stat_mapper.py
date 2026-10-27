@@ -10,7 +10,6 @@ from dataclasses import replace
 from ...sports.models import Player
 from .models import (
     MODERN_NBA_TO_NBALIVE95,
-    NO_SLOT_TEAMS,
     POSITION_C,
     POSITION_PF,
     POSITION_PG,
@@ -360,7 +359,4 @@ class NBALive95StatMapper:
         return defaults.get(pos, 220)
 
     def get_team_slot(self, team_abbrev: str) -> int | None:
-        code = team_abbrev.upper()
-        if code in NO_SLOT_TEAMS:
-            return None
-        return MODERN_NBA_TO_NBALIVE95.get(code)
+        return MODERN_NBA_TO_NBALIVE95.get(team_abbrev.upper())

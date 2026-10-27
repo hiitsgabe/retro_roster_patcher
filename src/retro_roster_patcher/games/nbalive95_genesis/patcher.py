@@ -47,13 +47,14 @@ from ...sports import _http
 from ...sports.espn import EspnClient
 from ...sports.models import League, LeagueData, TeamRoster
 from . import logos, looks
+from . import teams as team_blocks
 from .models import (
     BYTE_TO_POSITION,
     NAME_LENGTH,
-    NBA_TEAM_COUNT,
     NBALIVE95_TEAM_ORDER,
     OFF_NAME,
     OFF_POSITION,
+    PLAYER_SIZE,
     PLAYERS_PER_TEAM,
     POSITION_SF,
     POSITION_TO_BYTE,
@@ -64,6 +65,7 @@ from .models import (
 )
 from .rom_reader import NBALive95RomReader
 from .rom_writer import NBALive95RomWriter
+from .space import Space
 from .stat_mapper import NBALive95StatMapper
 
 #: File offset one past the last byte any team's pointer table occupies. Derived
@@ -206,8 +208,8 @@ class NBALive95Patcher(Patcher):
         if not teams:
             raise ApiError("The provider returned no NBA teams")
 
-        # Toronto, Memphis and New Orleans have no 1994 slot; fetching them costs
-        # two round trips each for a roster `map_rosters` discards.
+        # A team with no slot costs two round trips for a roster `map_rosters`
+        # discards.
         mapped = [t for t in teams if self.mapper.get_team_slot(t.code) is not None]
         if not mapped:
             raise ApiError("No fetched team matches an NBA Live 95 ROM slot")
@@ -268,9 +270,7 @@ class NBALive95Patcher(Patcher):
         teams: dict[int, NBALive95TeamRecord] = {}
         for roster in data.teams:
             slot = self.mapper.get_team_slot(roster.team.code)
-            # `NBA_TEAM_COUNT` and not `TEAM_COUNT`: slots 27-29 are the two All-Star
-            # teams and the Slammers.
-            if slot is None or not 0 <= slot < NBA_TEAM_COUNT:
+            if slot is None or not 0 <= slot < TEAM_COUNT:
                 continue
             leaders = roster.extra.get("leaders") or {}
             selected = (
@@ -304,12 +304,16 @@ class NBALive95Patcher(Patcher):
                 players=records,
                 team_id=roster.team.id,
                 logo_url=roster.team.logo_url,
+                code=roster.team.code,
+                nickname=team_blocks.nickname(roster.team.name, roster.team.short_name),
             )
         return MappedRosters(game_id=self.game_id, teams=teams)
 
     # -- patch --------------------------------------------------------------
 
-    def _draw_logos(self, image: bytearray | None, teams: dict[int, NBALive95TeamRecord]) -> None:
+    def _draw_logos(
+        self, image: bytearray | None, teams: dict[int, NBALive95TeamRecord], free: Space
+    ) -> None:
         """Each team's crest (`assets_dir/logos/<team_id>.png`, else the
         provider's) as its team-select logo; a team with neither keeps the
         cartridge's. Skipped whole, with a status line, without Pillow."""
@@ -321,7 +325,7 @@ class NBALive95Patcher(Patcher):
             if png is not None:
                 crests[slot] = png
         try:
-            logos.write(image, crests)
+            logos.write(image, crests, free)
         except ImportError:
             self.status("Logos skipped: Pillow is not installed")
 
@@ -361,9 +365,7 @@ class NBALive95Patcher(Patcher):
         # writer guards only `team_index >= TEAM_COUNT`: a negative key resolves to
         # offset 0 and reads the Genesis interrupt vectors as player pointers.
         targets = sorted(
-            slot
-            for slot, team in rosters.teams.items()
-            if 0 <= slot < NBA_TEAM_COUNT and team.players
+            slot for slot, team in rosters.teams.items() if 0 <= slot < TEAM_COUNT and team.players
         )
 
         urls = {
@@ -374,6 +376,15 @@ class NBALive95Patcher(Patcher):
         }
         measure = bool(options.get("looks", True))
         faces = measure_faces(self.cache_dir, urls, self._transport, self.status) if measure else {}
+
+        free = Space()
+        if team_blocks.SLAMMERS in targets and writer.data is not None:
+            # The Slammers have no records; New Orleans gets twelve new ones.
+            if team_blocks.adopt(writer.data, team_blocks.SLAMMERS, free):
+                writer.reserve(team_blocks.SLAMMERS, PLAYER_SIZE)
+        for slot in targets:
+            if writer.data is not None:
+                team_blocks.unlock(writer.data, slot)
 
         teams_patched = 0
         players_patched = 0
@@ -392,8 +403,18 @@ class NBALive95Patcher(Patcher):
             # resolve is skipped and the loop carries on.
             players_patched += written
 
+        if writer.data is not None:
+            for slot in targets:
+                team = rosters.teams[slot]
+                if team.code and team.nickname:
+                    team_blocks.write_names(writer.data, slot, team.code, team.nickname, free)
+            for slot, five in team_blocks.ranks(
+                {s: rosters.teams[s].players for s in targets}
+            ).items():
+                team_blocks.write_ranks(writer.data, slot, five)
+
         if options.get("logos", True):
-            self._draw_logos(writer.data, {slot: rosters.teams[slot] for slot in targets})
+            self._draw_logos(writer.data, {slot: rosters.teams[slot] for slot in targets}, free)
 
         self.status("Saving patched ROM...")
         if on_progress is not None:

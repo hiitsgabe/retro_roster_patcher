@@ -10,7 +10,7 @@ tiles, each sprite's tiles column by column as the VDP reads them.
 Every logo is drawn with CRAM line 2, the 16 colours at `PALETTE` (colour 0 is
 transparent), so a new logo is matched to those colours and not the reverse.
 A new frame is 48x40 (30 tiles, the most a retail logo uses) and goes in the
-cartridge's 0xFF filler (`FREE`); the team's old frame stays where it was.
+cartridge's free space (`space.Space`); the team's old frame stays where it was.
 """
 
 from __future__ import annotations
@@ -18,18 +18,11 @@ from __future__ import annotations
 import io
 import struct
 
+from .space import Space
+
 LOGO_TABLE = 0x504DA
 LOGO_BASE = 0x4F7CE
 PALETTE = 0xA4218
-#: 0xFF filler runs no code or data reads: (start, end).
-FREE = (
-    (0x1F92C0, 0x200000),
-    (0x1660C2, 0x168000),
-    (0x1967D4, 0x198000),
-    (0x1C6A02, 0x1C8000),
-    (0x1D6A16, 0x1D8000),
-    (0x15EE38, 0x160000),
-)
 WIDTH, HEIGHT = 48, 40
 #: (x, y, width in tiles, height in tiles) of the four sprites covering 48x40.
 _SPRITES = ((0, 0, 4, 4), (32, 0, 2, 4), (0, 32, 4, 1), (32, 32, 2, 1))
@@ -85,20 +78,18 @@ def frame(rows: list[list[int]]) -> bytes:
     return head + entries + tiles
 
 
-def write(image: bytearray, logos: dict[int, bytes]) -> list[int]:
+def write(image: bytearray, logos: dict[int, bytes], free: Space) -> list[int]:
     """Draw each `{team index: png}` logo into `image`; the teams written, in
     order. A logo that does not fit the free space left is skipped."""
     pal = palette(image)
-    holes = [list(h) for h in FREE]
     done = []
     for team, png in sorted(logos.items()):
         blob = frame(pixels(png, pal))
-        hole = next((h for h in holes if h[1] - h[0] >= len(blob)), None)
-        if hole is None:
+        start = free.alloc(len(blob))
+        if start is None:
             break
-        image[hole[0] : hole[0] + len(blob)] = blob
-        struct.pack_into(">I", image, LOGO_TABLE + 4 * team, hole[0] - LOGO_BASE)
-        hole[0] += (len(blob) + 1) & ~1
+        image[start : start + len(blob)] = blob
+        struct.pack_into(">I", image, LOGO_TABLE + 4 * team, start - LOGO_BASE)
         done.append(team)
     return done
 

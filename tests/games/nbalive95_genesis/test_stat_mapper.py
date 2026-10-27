@@ -645,18 +645,10 @@ def test_a_relocated_franchise_maps_to_the_city_the_rom_knows(mapper):
     assert mapper.get_team_slot("BKN") == 16
 
 
-def test_a_team_that_did_not_exist_in_1994_has_no_slot(mapper):
+def test_a_team_that_did_not_exist_in_1994_takes_an_all_star_or_the_slammers_slot(mapper):
     found = [mapper.get_team_slot(code) for code in ("TOR", "MEM", "NOP", "NO")]
-    assert found == [None, None, None, None]
+    assert found == [27, 28, 29, 29]
 
 
 def test_an_unknown_code_has_no_slot(mapper):
     assert mapper.get_team_slot("ZZZ") is None
-
-
-def test_no_team_maps_to_the_all_star_or_slammers_slots(mapper):
-    """Slots 27-29 exist and nothing reaches them, which is why `map_rosters`
-    caps at 27 rather than 30."""
-    from retro_roster_patcher.games.nbalive95_genesis.models import MODERN_NBA_TO_NBALIVE95
-
-    assert [slot for slot in MODERN_NBA_TO_NBALIVE95.values() if slot >= 27] == []

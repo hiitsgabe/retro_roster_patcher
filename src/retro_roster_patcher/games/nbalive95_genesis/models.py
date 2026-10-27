@@ -20,7 +20,7 @@ from ...sports.models import (  # noqa: F401
 PLAYER_SIZE = 93
 PLAYERS_PER_TEAM = 12
 TEAM_COUNT = 30  # 27 NBA + East AS + West AS + Slammers
-NBA_TEAM_COUNT = 27  # the All-Stars and Slammers are never patched
+NBA_TEAM_COUNT = 27  # the 1994 NBA; slots 27-29 take Toronto, Memphis and New Orleans
 
 TEAM_METADATA_BASE = 0x00037ECE  # M_1 through M_29
 TEAM_ROSTER_BASE = 0x0003FEB4  # T_1 through T_29
@@ -180,8 +180,8 @@ NBALIVE95_TEAM_ORDER = [
     "Slammers",  # 29
 ]
 
-# Modern NBA team abbreviation -> ROM slot index. The 30 current teams onto 27
-# slots; Toronto, Memphis and New Orleans have none.
+# Modern NBA team abbreviation -> ROM slot index: the 27 teams of 1994 keep their
+# slots, Toronto, Memphis and New Orleans take the All-Stars' and the Slammers'.
 #
 # GS/GSW, BKN/NJN, NYK/NY, SA/SAS, OKC/SEA, UTA/UTAH and WAS/WSH each name one
 # slot twice, so a provider returning both spellings hands `map_rosters` two teams
@@ -221,10 +221,12 @@ MODERN_NBA_TO_NBALIVE95 = {
     "UTAH": 25,
     "WAS": 26,  # was the Bullets
     "WSH": 26,
+    "TOR": 27,  # was the East All-Stars
+    "MEM": 28,  # was the West All-Stars
+    "NO": 29,  # was the Slammers
+    "NOP": 29,
 }
 
-# Expansion teams with no ROM slot
-NO_SLOT_TEAMS = {"TOR", "MEM", "NOP", "NO"}
 
 # Field offsets within an 80-byte team metadata entry
 TEAM_META_SIZE = 0x50
@@ -280,6 +282,10 @@ class NBALive95TeamRecord:
     #: crest) and crest URL, for the team-select logo.
     team_id: int | None = None
     logo_url: str = ""
+    #: The provider's code ("TOR") and nickname ("Raptors"), for the names
+    #: `teams.write_names` writes.
+    code: str = ""
+    nickname: str = ""
 
 
 @dataclass

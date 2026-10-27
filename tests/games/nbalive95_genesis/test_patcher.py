@@ -29,7 +29,6 @@ from retro_roster_patcher.core.models import MappedRosters, PatchResult, RomSlot
 from retro_roster_patcher.games.nbalive95_genesis import looks
 from retro_roster_patcher.games.nbalive95_genesis.models import (
     BYTE_TO_POSITION,
-    NBA_TEAM_COUNT,
     NBALIVE95_TEAM_ORDER,
     TEAM_COUNT,
     NBALive95PlayerRecord,
@@ -91,7 +90,7 @@ def _teams():
     return [
         Team(id=1, name="Boston Celtics", code="BOS"),
         Team(id=2, name="Chicago Bulls", code="CHI"),
-        Team(id=3, name="Toronto Raptors", code="TOR"),
+        Team(id=3, name="Seattle Expansion", code="XYZ"),
         Team(id=4, name="Not A Real Team", code="ZZZ"),
     ]
 
@@ -524,7 +523,7 @@ def test_a_provider_returning_no_teams_is_an_error(patcher):
 
 
 def test_a_provider_returning_only_teams_the_rom_lacks_is_an_error(patcher):
-    patcher.api = FakeApi([Team(id=9, name="Toronto Raptors", code="TOR")])
+    patcher.api = FakeApi([Team(id=9, name="Seattle Expansion", code="XYZ")])
     with pytest.raises(ApiError):
         patcher.fetch(season=2025)
 
@@ -579,7 +578,7 @@ def test_a_mapped_team_carries_the_name_from_the_games_own_order(patcher):
 
 
 def test_a_team_the_rom_has_no_slot_for_is_dropped(patcher):
-    assert patcher.map_rosters(_league_data(("TOR", 14))).teams == {}
+    assert patcher.map_rosters(_league_data(("XYZ", 14))).teams == {}
 
 
 def test_an_unknown_team_code_is_dropped(patcher):
@@ -591,26 +590,10 @@ def test_a_slot_mapping_is_refused(patcher):
         patcher.map_rosters(_league_data(("BOS", 14)), [SlotMapping(slot_index=0, team_id=1)])
 
 
-def test_the_two_all_star_slots_and_the_slammers_are_never_mapped(patcher):
-    """`map_rosters` caps at 27, not 30, exactly as upstream did."""
-    mapped = patcher.map_rosters(_league_data(*[(code, 14) for code in ("BOS", "CHI", "GS")]))
-    assert [slot for slot in mapped.teams if slot >= NBA_TEAM_COUNT] == []
-
-
-def test_a_team_mapped_to_an_all_star_slot_is_dropped(patcher, monkeypatch):
-    """The `NBA_TEAM_COUNT` cap itself, rather than the table's silence about it.
-
-    No entry in `MODERN_NBA_TO_NBALIVE95` reaches 27-29 today, so widening the
-    guard to `TEAM_COUNT` changes nothing observable -- which makes the guard
-    untested unless the table is made to reach there. Injecting one entry is
-    what turns it into a real branch: without the cap this slot is mapped, and
-    `patch` then writes a real squad over the East All-Stars.
-    """
-    from retro_roster_patcher.games.nbalive95_genesis import models
-
-    monkeypatch.setitem(models.MODERN_NBA_TO_NBALIVE95, "EAS", 27)
-    assert patcher.mapper.get_team_slot("EAS") == 27
-    assert patcher.map_rosters(_league_data(("EAS", 14))).teams == {}
+def test_the_three_expansion_teams_take_the_all_star_and_slammers_slots(patcher):
+    codes = ("TOR", "MEM", "NO")
+    mapped = patcher.map_rosters(_league_data(*[(code, 14) for code in codes]))
+    assert sorted(mapped.teams) == [27, 28, 29]
 
 
 def test_a_populated_alias_takes_the_slot(patcher):
@@ -882,19 +865,12 @@ def test_a_negative_slot_key_is_ignored_rather_than_read_as_an_offset(patcher, r
     assert out.read_bytes()[:0x100] == rom.read_bytes()[:0x100]
 
 
-def test_a_slot_past_the_nba_teams_is_ignored(patcher, rom, out):
+def test_an_all_star_slot_takes_a_new_team(patcher, rom, out):
     rosters = _mapped((BOS_SLOT, 3))
-    rosters.teams[27] = NBALive95TeamRecord(index=27, name="East", players=_records(3))
+    rosters.teams[27] = NBALive95TeamRecord(index=27, name="Toronto", players=_records(3))
     result = patcher.patch(rom_path=rom, output_path=out, rosters=rosters)
-    assert result.teams_patched == 1
-
-
-def test_a_slot_past_the_nba_teams_keeps_its_own_records(patcher, rom, out):
-    rosters = _mapped((BOS_SLOT, 3))
-    rosters.teams[27] = NBALive95TeamRecord(index=27, name="East", players=_records(3))
-    patcher.patch(rom_path=rom, output_path=out, rosters=rosters)
-    roster = _read_back(out, 27)
-    assert roster[0]["last_name"] == fixture.player_last_name(27, 0)
+    assert result.teams_patched == 2
+    assert _read_back(out, 27)[0]["last_name"] == "Written00"
 
 
 def test_patch_reports_progress_from_zero_to_one(patcher, rom, out):

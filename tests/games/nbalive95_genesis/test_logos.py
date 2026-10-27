@@ -6,6 +6,7 @@ import struct
 from PIL import Image
 
 from retro_roster_patcher.games.nbalive95_genesis import logos
+from retro_roster_patcher.games.nbalive95_genesis.space import FREE, Space
 from retro_roster_patcher.games.nbalive95_genesis.stat_mapper import (
     SEASON_TOTALS,
     NBALive95StatMapper,
@@ -17,7 +18,7 @@ def _image():
     image = bytearray(0x200000)
     # The shared palette: colour 1 red, 2 white, the rest black.
     struct.pack_into(">16H", image, logos.PALETTE, 0, 0x00E, 0xEEE, *([0] * 13))
-    for start, end in logos.FREE:
+    for start, end in FREE:
         image[start:end] = b"\xff" * (end - start)
     return image
 
@@ -28,9 +29,9 @@ def test_a_logo_is_drawn_in_the_shared_palette_and_read_back():
     buf = io.BytesIO()
     png.save(buf, "PNG")
     image = _image()
-    assert logos.write(image, {9: buf.getvalue()}) == [9]
+    assert logos.write(image, {9: buf.getvalue()}, Space()) == [9]
     start = struct.unpack_from(">I", image, logos.LOGO_TABLE + 36)[0] + logos.LOGO_BASE
-    assert logos.FREE[0][0] == start
+    assert FREE[0][0] == start
     rows = logos.read(image, 9)
     assert len(rows) == 40 and len(rows[0]) == 48
     assert rows[5][3] == 2 and rows[5][40] == 1
