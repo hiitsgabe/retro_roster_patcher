@@ -16,6 +16,9 @@ Traced in Mesen 2 on the USA cartridge:
 * Shirt numbers: $82:8459 (`NUMBERS`), a byte per team and kit picking one
   of the eleven colours at $89:832A (`NUMBER_COLOURS`, by byte offset; 0
   keeps the flag palette's entry 12).
+* Team photo (team select): OBJ palette 6 from a record per team ($82:FA5F,
+  `PHOTO`): entries 1-3 the shirt, 4-6 the shorts, 7-8 the socks, light to
+  dark (the rest is the looks', `looks`).
 * Clash: $82:842E (`CLASH`), a byte per team (0 white, 1 blue, 2 red,
   3 yellow, 4 green). When both teams' bytes are equal the away side wears its
   second kit ($98:FA53); nothing else is compared.
@@ -51,6 +54,7 @@ NUMBER_COLOURS = 0x4832A  # $89:832A
 CHEST = 0xCE8A  # $81:CE8A
 DESIGNS = 0xC45D4  # $98:C5D4
 BLANK = 0xF014  # $98:F014
+PHOTO = 0x17A5F  # $82:FA5F
 BANK_89, BANK_98 = 0x48000, 0xC0000
 KIT_WORDS = 8  # shirt 3, shorts 3, socks 2 (entries 7-14)
 TEMPLATES = len(TEAMS)
@@ -199,8 +203,8 @@ def resolve(image: bytes | bytearray, choice: KitSpec | int, kit: int) -> Kit:
 
 
 def write(image: bytearray, team: int, kits: tuple[Kit | None, Kit | None]) -> None:
-    """Both kits' colours and numbers; the first kit's design and clash class.
-    The pins go to `flags.write`."""
+    """Both kits' colours and numbers; the first kit's design, clash class and
+    team photo colours. The pins go to `flags.write`."""
     for kit, k in enumerate(kits):
         if k is None:
             continue
@@ -209,6 +213,11 @@ def write(image: bytearray, team: int, kits: tuple[Kit | None, Kit | None]) -> N
         if kit == 0:
             struct.pack_into("<H", image, CHEST + 2 * team, k.design)
             image[CLASH + team] = k.clash
+            w = k.words  # dark to light; the photo's are light to dark
+            photo = BANK_89 + (struct.unpack_from("<H", image, PHOTO + 2 * team)[0] & 0x7FFF)
+            struct.pack_into(
+                "<8H", image, photo + 2, w[2], w[1], w[0], w[5], w[4], w[3], w[7], w[6]
+            )
 
 
 def preview_png(

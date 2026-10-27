@@ -20,11 +20,12 @@ games use: the lightest skin, black hair.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
-from itertools import product
+from collections.abc import Mapping, Sequence
+from typing import Any
 
 from ...core.headshots import Face
 from ...core.looks import EAST_ASIAN as EAST_ASIAN_NATIONS
+from ...core.looks import Person, look_cost, two_looks
 from ...core.skin import tone as cut
 from .models import ISSLook, ISSTeamRecord
 
@@ -61,16 +62,8 @@ ALT_SKINS = (LIGHT, TAN, BROWN, DARK)
 ALT_HAIRS = ("black", "dark_brown", "brown", "blond", "red")
 #: A shaved head reads as short dark hair at this size.
 _HAIR_AS = {"bald": "black"}
-#: Skin outweighs hair: one step of the ladder costs three hair mismatches,
-#: and the cost grows with the square of the steps. A photo measures the
-#: ends of the ladder surely and its middle loosely (studio lighting evens
-#: out brown and pale faces), so a face two steps off is a worse miss than
-#: two faces one step off.
-_SKIN_WEIGHT = 3
 #: Where an East Asian face sits on the ladder, for the cost.
 _POSITION = {EAST_ASIAN: 0.5}
-
-Person = tuple[int, str]
 
 
 def tone(nationality: str, ita: float | None) -> int:
@@ -89,49 +82,27 @@ def _person(nationality: str, face: Face | None) -> Person:
     return tone(nationality, face.ita), _HAIR_AS.get(hair, hair)
 
 
-def _cost(person: Person, skin: int, hair: str) -> float:
-    a, b = _POSITION.get(person[0], person[0]), _POSITION.get(skin, skin)
-    return _SKIN_WEIGHT * (a - b) ** 2 + (person[1] != hair)
-
-
-def _choose(people: list[Person]) -> tuple[Person, Person | None]:
-    """The team's own look and its alternate (None: one look for all), the
-    pair with the lowest total cost; of equal ones, without an alternate, then
-    with fewer players in it. The alternate never takes more than half the
-    players: the coin toss before kick-off draws the captain in the team's
-    own palette whatever his bit 6 (seen in Mesen 2), so the own look is the
-    majority's, as on the cartridge's own teams."""
-    best: tuple[tuple[float, bool, int], Person, Person | None] | None = None
-    for own in product(range(len(SKIN_RAMPS)), HAIR):
-        base = [_cost(p, *own) for p in people]
-        alternates: list[Person | None] = [None]
-        alternates += [
-            alt for alt in product((*ALT_SKINS, own[0]), (*ALT_HAIRS, own[1])) if alt != own
-        ]
-        for alt in alternates:
-            if alt is None:
-                key = (sum(base), False, 0)
-            else:
-                other = [_cost(p, *alt) for p in people]
-                moved = sum(o < b for o, b in zip(other, base, strict=True))
-                if 2 * moved > len(people):
-                    continue
-                key = (sum(map(min, base, other)), True, moved)
-            if best is None or key < best[0]:
-                best = (key, own, alt)
-    assert best is not None
-    return best[1], best[2]
-
-
-def dress(team: ISSTeamRecord, faces: Mapping[int, Face]) -> None:
+def dress(
+    team: ISSTeamRecord | Any,
+    faces: Mapping[int, Face],
+    alt_skins: Sequence[int] = ALT_SKINS,
+    alt_hairs: Sequence[str] = ALT_HAIRS,
+) -> None:
     """Set `team.look` and each player's `alternate` from `faces` (player id
-    -> `Face`). Player 0 is the keeper, drawn in his own record."""
+    -> `Face`). Player 0 is the keeper, drawn in his own record. `team` is an
+    `ISSTeamRecord` or anything with its `players` (`player_id`,
+    `nationality`, `alternate`) and `look`; ISS Deluxe passes its own, with
+    the alternates its records allow."""
     if not team.players:
         team.look = ISSLook()
         return
     keeper, *outfield = team.players
     people = [_person(p.nationality, faces.get(p.player_id)) for p in outfield]
-    own, alt = _choose(people) if people else ((LIGHT, "black"), None)
+    own, alt = (
+        two_looks(people, range(len(SKIN_RAMPS)), HAIR, alt_skins, alt_hairs, _POSITION)
+        if people
+        else ((LIGHT, "black"), None)
+    )
     keeper_skin, keeper_hair = _person(keeper.nationality, faces.get(keeper.player_id))
     team.look = ISSLook(
         skin=own[0],
@@ -143,4 +114,6 @@ def dress(team: ISSTeamRecord, faces: Mapping[int, Face]) -> None:
     )
     keeper.alternate = False
     for player, person in zip(outfield, people, strict=True):
-        player.alternate = alt is not None and _cost(person, *alt) < _cost(person, *own)
+        player.alternate = alt is not None and look_cost(person, alt, _POSITION) < look_cost(
+            person, own, _POSITION
+        )

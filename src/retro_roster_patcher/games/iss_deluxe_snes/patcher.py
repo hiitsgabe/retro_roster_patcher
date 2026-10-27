@@ -5,18 +5,21 @@ The 36 national-team slots take clubs, so the slot mapping is explicit, as in
 `iss2000-n64` pick them, in the slot's own formation (the places the
 cartridge gives that team), each line's places filled from the club's
 lineup, then the bench; each player's name and nine skills, placed by league
-percentile onto the cartridge's own spread for his position. Main menu
-games start with the first two mapped clubs instead of Brazil v England.
+percentile onto the cartridge's own spread for his position; each team's
+looks from its players' head shots (`looks`). Main menu games start with the
+first two mapped clubs instead of Brazil v England.
 """
 
 from __future__ import annotations
 
 from collections import Counter
+from copy import deepcopy
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from ...core.errors import CapabilityError, MappingError, RomError, as_rom_error
+from ...core.headshots import measure_faces
 from ...core.kits import KitSpec, KitTemplate, default_kits
 from ...core.models import (
     MappedRosters,
@@ -37,11 +40,11 @@ from ...sports.espn import EspnClient
 from ...sports.models import LeagueData, Player, TeamRoster
 from ..iss2000_n64.mapper import N64StatMapper, _place, group_of
 from ..iss2000_n64.patcher import NATIONAL_ALIASES, NATIONAL_LEAGUE
-from ..iss_snes.models import Flag
+from ..iss_snes.models import Flag, ISSLook
 from ..iss_snes.patcher import ISSPatcher, _parse_hex_colour
 from ..iss_snes.rom_writer import two_band_flag
 from ..iss_snes.stat_mapper import ISSStatMapper
-from . import bignames, flags, kits, names, pages, screens
+from . import bignames, flags, kits, looks, names, pages, screens
 from . import rom as R
 
 _Q = tuple[int, int, int, int, int]
@@ -78,6 +81,12 @@ class DeluxePlayer:
     group: str
     skills: dict[str, int] = field(default_factory=dict)
     tag: str = ""  # his ESPN lineup position, when he started
+    #: The provider's id and head shot, and the nationality, for `looks`.
+    player_id: int = 0
+    photo_url: str = ""
+    nationality: str = ""
+    #: Byte 6 bit 4, the team's alternate look; None keeps the cartridge's.
+    alternate: bool | None = None
 
 
 @dataclass
@@ -93,6 +102,8 @@ class DeluxeTeam:
     full_name: str = ""
     league: str = ""
     national: bool = False  # a nation's own squad: it keeps its name, flag and kits
+    #: Set by `looks.dress`; None leaves the cartridge's looks alone.
+    look: ISSLook | None = None
 
 
 @register(
@@ -124,6 +135,11 @@ class ISSDeluxePatcher(Patcher):
     #: Screen art `patch(images={name: png})` can replace; `export_images`
     #: writes the cartridge's current art for each. See `screens.SLOTS`.
     image_slots: tuple[str, ...] = screens.IMAGE_SLOT_NAMES
+    #: `patch(looks=True)`, the default: each mapped team's two looks and its
+    #: keeper's from the players' head shots (`looks`), in the match, the
+    #: close-ups and the team photo. `looks=False` downloads nothing and keeps
+    #: the cartridge's looks and each slot's alternate bit.
+    supports_looks: bool = True
 
     fetch = ISSPatcher.fetch
 
@@ -265,7 +281,11 @@ class ISSDeluxePatcher(Patcher):
             q = RETAIL[group]
             got = pcts.get(p.id, {})
             skills = {s: _place(q[s], got.get(FEED[s], 50.0)) for s in R.SKILL_NAMES}
-            players.append(DeluxePlayer(name, group, skills, tags.get(p.id, "")))
+            players.append(
+                DeluxePlayer(
+                    name, group, skills, tags.get(p.id, ""), p.id, p.photo_url, p.nationality
+                )
+            )
         home, away = default_kits(roster.team)
         t = roster.team
         return DeluxeTeam(
@@ -297,11 +317,16 @@ class ISSDeluxePatcher(Patcher):
         given = options.get("kits", True)
         plans = {} if given is False else _kit_plans(image, clubs, given)
         crests, fallbacks = self._flags(clubs, logos=options.get("logos", True))
+        if options.get("looks", True):
+            teams = self._dress(teams)
+            looks.write_records(image)
         players = 0
         for i, (slot, team) in enumerate(sorted(teams.items())):
             if on_progress is not None:
                 on_progress(i / max(len(teams), 1), f"Patching {team.name}...")
             players += write_team(image, slot, team)
+            if team.look is not None:
+                looks.write(image, slot, team.look)
         write_default_teams(image, list(clubs) or list(teams))
         for slot, sides in plans.items():
             kits.write(image, slot, sides)
@@ -340,6 +365,21 @@ class ISSDeluxePatcher(Patcher):
         if on_progress is not None:
             on_progress(1.0, f"Done! Saved to {output_path}")
         return PatchResult(str(output_path), teams_patched=len(teams), players_patched=players)
+
+    def _dress(self, teams: dict[int, DeluxeTeam]) -> dict[int, DeluxeTeam]:
+        """Copies of `teams` dressed from their players' head shots
+        (`looks.dress`); the caller's records stay as mapped."""
+        urls = {
+            p.player_id: p.photo_url
+            for team in teams.values()
+            for p in team.players
+            if p.player_id and p.photo_url
+        }
+        faces = measure_faces(self.cache_dir, urls, self._transport, self.status)
+        dressed = deepcopy(teams)
+        for team in dressed.values():
+            looks.dress(team, faces)
+        return dressed
 
     def export_images(self, rom_path: Path, out_dir: Path) -> list[Path]:
         """Write each slot's current art as `<out_dir>/<slot>.png`, to edit and feed back."""
@@ -470,6 +510,10 @@ def write_team(image: bytearray, slot: int, team: DeluxeTeam) -> int:
         values = [max(0, min(15, p.skills[s])) for s in R.SKILL_NAMES] + [code]
         image[o : o + 5] = R.pack(values)
         image[o + 5] = k
+        # Byte 6: bit 4 the alternate look; the low nibble, a cartridge star's
+        # own hair style, is never kept.
+        alternate = image[o + 6] & looks.ALTERNATE if p.alternate is None else p.alternate
+        image[o + 6] = looks.ALTERNATE if alternate else 0
         image[R.name_at(slot, k) : R.name_at(slot, k) + R.NAME_LEN] = R.encode_name(p.name)
     return len(order)
 
