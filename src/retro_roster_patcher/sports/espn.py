@@ -764,8 +764,11 @@ class EspnClient:
                     nationality=athlete.get("citizenship", ""),
                     position=pos_abbrev,
                     number=number,
-                    photo_url="",
+                    photo_url=(athlete.get("headshot") or {}).get("href", "")
+                    if isinstance(athlete.get("headshot"), dict)
+                    else "",
                     weight=float(wt),
+                    height=float(athlete.get("height", 0) or 0),
                 )
             )
         return players

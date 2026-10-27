@@ -30,6 +30,7 @@ from typing import Any
 
 from ...core.assets import crest_png
 from ...core.errors import ApiError, RomError
+from ...core.headshots import measure_faces
 from ...core.models import (
     MappedRosters,
     PartialFn,
@@ -45,7 +46,7 @@ from ...core.registry import register
 from ...sports import _http
 from ...sports.espn import EspnClient
 from ...sports.models import League, LeagueData, TeamRoster
-from . import logos
+from . import logos, looks
 from .models import (
     BYTE_TO_POSITION,
     NAME_LENGTH,
@@ -136,6 +137,9 @@ class NBALive95Patcher(Patcher):
 
     #: `patch` draws each team's crest as its team-select logo unless `logos=False`.
     supports_logos: bool = True
+    #: `patch` sets each player's skin and head from his head shot unless
+    #: `looks=False` (then the plain default, with no download).
+    supports_looks: bool = True
 
     def __init__(
         self,
@@ -362,13 +366,24 @@ class NBALive95Patcher(Patcher):
             if 0 <= slot < NBA_TEAM_COUNT and team.players
         )
 
+        urls = {
+            r.player_id: r.photo_url
+            for slot in targets
+            for r in rosters.teams[slot].players
+            if r.player_id and r.photo_url
+        }
+        measure = bool(options.get("looks", True))
+        faces = measure_faces(self.cache_dir, urls, self._transport, self.status) if measure else {}
+
         teams_patched = 0
         players_patched = 0
         for index, slot in enumerate(targets):
             if on_progress is not None:
                 on_progress(index / len(targets), f"Writing {NBALIVE95_TEAM_ORDER[slot]}...")
             team: NBALive95TeamRecord = rosters.teams[slot]
-            written = writer.write_team_roster(slot, team.players)
+            players = [replace(r) for r in team.players]
+            looks.dress(players, [r.player_id for r in players], faces)
+            written = writer.write_team_roster(slot, players)
             if written <= 0:
                 # -1 is an error, 0 means not one of the 12 pointers resolved.
                 continue

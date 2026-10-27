@@ -115,6 +115,8 @@ class NBALive95StatMapper:
             experience=max(0, player.age - 21) if player.age > 0 else 0,
             ratings=ratings,
             season_stats=[min(0xFFFF, round((stats or {}).get(n, 0))) for n in SEASON_TOTALS],
+            player_id=player.id,
+            photo_url=player.photo_url,
         )
 
     def _map_stats_to_ratings(self, stats: dict, pos: int) -> list[int]:
@@ -344,7 +346,9 @@ class NBALive95StatMapper:
         return last, first
 
     def _estimate_height(self, pos: str, player: Player) -> int:
-        """Height in inches, guessed from position: ESPN publishes none."""
+        """Height in inches: the provider's, else a guess from the position."""
+        if player.height > 0:
+            return int(player.height)
         defaults = {"PG": 74, "SG": 77, "SF": 79, "PF": 81, "C": 83}
         return defaults.get(pos, 78)
 

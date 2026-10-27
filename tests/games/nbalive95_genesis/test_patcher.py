@@ -24,7 +24,9 @@ from dataclasses import replace
 import pytest
 
 from retro_roster_patcher.core.errors import ApiError, CapabilityError, MappingError, RomError
+from retro_roster_patcher.core.headshots import Face
 from retro_roster_patcher.core.models import MappedRosters, PatchResult, RomSlot, SlotMapping
+from retro_roster_patcher.games.nbalive95_genesis import looks
 from retro_roster_patcher.games.nbalive95_genesis.models import (
     BYTE_TO_POSITION,
     NBA_TEAM_COUNT,
@@ -713,27 +715,20 @@ def test_the_written_names_reach_the_records_the_pointers_address(patcher, rom, 
     assert found == [f"Written{index:02d}" for index in range(12)]
 
 
-def test_a_patched_team_loses_the_twelve_different_faces_the_cartridge_shipped_with(
-    patcher, rom, out
-):
-    """PINS UPSTREAM FIDELITY DELIBERATELY, end to end. Do not "fix" this back.
-
-    `map_player` sets neither `skin_color` nor `hair_style`, so every record
-    reaches the writer carrying 0 for both, and `write_player` writes both --
-    upstream's behaviour, restored. All twelve Bulls come out with one skin tone
-    and one hair style, over an image that shipped twelve distinct ones. The
-    argument for keeping it is in `rom_writer.write_player`.
-    """
+def test_a_player_without_a_head_shot_gets_the_plain_default_look(patcher, rom, out):
+    """No photo: pale skin and dark hair (`looks.DEFAULT_*`), not the old occupant's."""
     patcher.patch(rom_path=rom, output_path=out, rosters=_mapped((CHI_SLOT, 12)))
     roster = _read_back(out, CHI_SLOT)
-    assert [player["hair_style"] for player in roster] == [0] * 12
-    assert [player["skin_color"] for player in roster] == [0] * 12
-    # Not vacuous in either direction: the image's styles really do differ from
-    # each other, and these are the records the patch rewrote.
+    assert [player["hair_style"] for player in roster] == [looks.DEFAULT_HEAD] * 12
+    assert [player["skin_color"] for player in roster] == [looks.DEFAULT_SKIN] * 12
     assert fixture.player_hair(CHI_SLOT, 0) != fixture.player_hair(CHI_SLOT, 1)
-    assert [player["last_name"] for player in roster] == [
-        f"Written{index:02d}" for index in range(12)
-    ]
+
+
+def test_a_measured_face_picks_the_skin_and_the_head():
+    assert looks.look(Face(-30.0, "black", False)) == (1, 0x05)
+    assert looks.look(Face(10.0, "bald", True)) == (0, 0x03)
+    assert looks.look(Face(50.0, "blond", False)) == (3, 0x14)
+    assert looks.look(Face(35.0, "brown", False)) == (2, 0x18)
 
 
 def test_a_patched_team_loses_the_season_line_the_cartridge_shipped_with(patcher, rom, out):

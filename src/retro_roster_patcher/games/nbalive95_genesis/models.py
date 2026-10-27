@@ -246,10 +246,9 @@ META_OFF_TEXT_COLOR = 0x4D
 class NBALive95PlayerRecord:
     """A 93-byte player record.
 
-    `skin_color` and `hair_style` have no producer, so every mapped record carries
-    0 -- tone 0 of 4 and style 0 of 39, not a "not supplied" code -- and the writer
-    writes both bytes anyway. Upstream's behaviour, known wrong, preserved for byte
-    fidelity. `season_stats` is 17 zeros and those are written too.
+    `skin_color` and `hair_style` are the skin and head bytes `looks.dress` sets
+    from the player's head shot. `player_id` and `photo_url` are the provider's,
+    for that; neither is written.
     """
 
     name_last: str = "PLAYER"
@@ -265,8 +264,11 @@ class NBALive95PlayerRecord:
     # 0-99 scale
     ratings: list[int] = field(default_factory=lambda: [50] * RATING_COUNT)
 
-    # 17 x 2-byte values, zeroed for new rosters
+    # 17 x 2-byte values: the season's totals
     season_stats: list[int] = field(default_factory=lambda: [0] * STAT_COUNT)
+
+    player_id: int = 0
+    photo_url: str = ""
 
 
 @dataclass
