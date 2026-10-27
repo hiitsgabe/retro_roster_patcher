@@ -94,8 +94,12 @@ def _drive(build, calls, cache_dir):
 # publishes no bulk soccer endpoint, so it caches the team's leaders document and
 # then one statistics document per athlete named in it. The `OMNIBUS` body's
 # `categories` name a single athlete, so it writes two files rather than one.
-# It is the only method in either client whose cache is one-to-many.
-ESPN_EXTRA_FILES = 1
+#
+# The three team leaders methods are one-to-many too: each also caches the
+# team's squad and one season line per squad player, for the season asked and,
+# the fake line having no games, the season before (`MIN_GAMES`). Baseball's
+# line for the season asked is `get_baseball_athlete_stats`'s own file.
+ESPN_EXTRA_FILES = 1 + 3 + 3 + 2
 
 
 def _espn(cache_dir):

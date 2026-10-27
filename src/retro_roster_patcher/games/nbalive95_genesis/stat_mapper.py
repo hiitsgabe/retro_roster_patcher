@@ -56,17 +56,38 @@ POSITION_DEFAULTS = {
 }
 
 
+# ESPN stat names of the ROM's 17 season fields, in `STAT_GAMES`..`STAT_FOULS` order.
+SEASON_TOTALS = (
+    "gamesPlayed",
+    "minutes",
+    "fieldGoalsMade",
+    "fieldGoalsAttempted",
+    "threePointFieldGoalsMade",
+    "threePointFieldGoalsAttempted",
+    "freeThrowsMade",
+    "freeThrowsAttempted",
+    "offensiveRebounds",
+    "rebounds",
+    "assists",
+    "steals",
+    "turnovers",
+    "blocks",
+    "points",
+    "disqualifications",
+    "fouls",
+)
+
+
 class NBALive95StatMapper:
     def map_player(
         self,
         player: Player,
         stats: dict | None = None,
     ) -> NBALive95PlayerRecord:
-        """`season_stats` is left at its default of 17 zeros, which the writer then
-        writes over the cartridge's 1994 season line. The ROM's 17 fields are season
-        totals and ESPN publishes per-game averages with no games-played figure, so
-        no total can be recovered; zeros are the honest null season for a roster
-        that has just been replaced.
+        """`season_stats` are the player's season totals from the line's ESPN
+        stat names (`SEASON_TOTALS`, in the ROM's field order), zeros for a
+        player with no line: the writer puts them over the cartridge's 1994
+        season.
         """
         pos_str = self._normalize_position(player.position)
         pos_byte = POSITION_TO_BYTE.get(pos_str, POSITION_SF)
@@ -90,6 +111,7 @@ class NBALive95StatMapper:
             weight_lbs=weight,
             experience=max(0, player.age - 21) if player.age > 0 else 0,
             ratings=ratings,
+            season_stats=[min(0xFFFF, round((stats or {}).get(n, 0))) for n in SEASON_TOTALS],
         )
 
     def _map_stats_to_ratings(self, stats: dict, pos: int) -> list[int]:

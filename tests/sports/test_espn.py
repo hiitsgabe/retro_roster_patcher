@@ -616,9 +616,14 @@ def test_an_entry_with_no_value_is_recorded_as_zero(tmp_path):
     assert client.get_hockey_team_leaders(5) == {"1": {"G": 0}}
 
 
+def _leaders_calls(transport):
+    # The leaders methods also fetch the squad, for each player's own line.
+    return [url for url in transport.calls if url.endswith("/leaders")]
+
+
 def test_the_leaders_request_names_the_season_and_the_team(tmp_path):
     _, transport = _leaders(tmp_path, [("G", [({"id": 1}, 26)])])
-    assert transport.calls == [LEADERS_URL]
+    assert _leaders_calls(transport) == [LEADERS_URL]
 
 
 def test_a_second_call_is_served_from_the_parsed_stats_on_disk(tmp_path):
@@ -629,7 +634,7 @@ def test_a_second_call_is_served_from_the_parsed_stats_on_disk(tmp_path):
     client.get_hockey_team_leaders(5)
     second = client.get_hockey_team_leaders(5)
     assert second == {"1": {"G": 26}}
-    assert transport.calls == [LEADERS_URL]
+    assert _leaders_calls(transport) == [LEADERS_URL]
 
 
 def test_a_payload_that_parses_to_no_stats_is_asked_for_again(tmp_path):
@@ -637,7 +642,7 @@ def test_a_payload_that_parses_to_no_stats_is_asked_for_again(tmp_path):
     client = EspnClient(str(tmp_path), transport=transport)
     client.get_hockey_team_leaders(5)
     client.get_hockey_team_leaders(5)
-    assert transport.calls == [LEADERS_URL, LEADERS_URL]
+    assert _leaders_calls(transport) == [LEADERS_URL, LEADERS_URL]
 
 
 def test_a_payload_that_parses_to_no_stats_leaves_no_file_behind(tmp_path):
@@ -647,7 +652,7 @@ def test_a_payload_that_parses_to_no_stats_leaves_no_file_behind(tmp_path):
     body = _leaders_body([("G", [({}, 26)])])
     client = EspnClient(str(tmp_path), transport=_body_transport(body))
     client.get_hockey_team_leaders(5)
-    assert sorted(p.name for p in tmp_path.iterdir()) == []
+    assert [p.name for p in tmp_path.iterdir() if "leaders" in p.name] == []
 
 
 def test_an_athlete_sent_as_a_list_is_skipped_rather_than_crashing(tmp_path):

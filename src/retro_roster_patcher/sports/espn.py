@@ -193,6 +193,48 @@ BASKETBALL_BASE_URL = "https://site.api.espn.com/apis/site/v2/sports/basketball"
 BASKETBALL_CORE_URL = "https://sports.core.api.espn.com/v2/sports/basketball/leagues/nba"
 
 
+# A season with fewer games than this is too young to rate a player on; the
+# previous one stands in (see `EspnClient._season_line`).
+MIN_GAMES = 10
+
+# ESPN statistic `name` -> the abbreviation the game stat mappers read. Basketball
+# lines are per game, hockey lines are season totals, as the mappers scale them.
+# Hockey's `SOG` is shots on goal here: ESPN's own `SOG` abbreviation is shootout
+# goals.
+_MAPPER_KEYS = {
+    "basketball": {
+        "gamesPlayed": "GP",
+        "avgMinutes": "MPG",
+        "avgPoints": "PTS",
+        "avgRebounds": "REB",
+        "avgAssists": "AST",
+        "avgSteals": "STL",
+        "avgBlocks": "BLK",
+        "avgOffensiveRebounds": "ORPG",
+        "avgDefensiveRebounds": "DRPG",
+        "avgTurnovers": "TO",
+        "fieldGoalPct": "FG%",
+        "threePointFieldGoalPct": "3P%",
+        "freeThrowPct": "FT%",
+        "PER": "PER",
+    },
+    "hockey": {
+        "games": "GP",
+        "goals": "G",
+        "assists": "A",
+        "points": "PTS",
+        "plusMinus": "+/-",
+        "penaltyMinutes": "PIM",
+        "shotsTotal": "SOG",
+        "faceoffPercent": "FO%",
+        "savePct": "SV%",
+        "avgGoalsAgainst": "GAA",
+        "wins": "W",
+        "shutouts": "SO",
+    },
+}
+
+
 def _as_float(value: Any) -> float:
     """A statistic's numeric value, or `0.0` for anything that is not one.
 
@@ -416,39 +458,20 @@ class EspnClient:
         return self._parse_hockey_squad(data)
 
     def get_hockey_team_leaders(self, team_id: int, season: int = 2026) -> dict:
-        """Fetch per-player stats via the team leaders endpoint.
+        """Every squad player's season line, `{player id (str): {stat: value}}`.
 
-        Returns a dict mapping ESPN player ID (str) to a stat dict,
-        e.g. {"4024123": {"G": 26, "A": 22, "PTS": 48, ...}}.
+        Each line is the player's own statistics document (see
+        `_season_line`), laid over what the team leaders endpoint reported for
+        him; the leaders alone cover only the few players who top a category.
         """
-        cache_key = f"espn_hockey_leaders_{team_id}_{season}"
-        cached = self._load_cache(cache_key)
-        if cached:
-            return cached
-
-        url = f"{HOCKEY_CORE_URL}/seasons/{season}/types/2/teams/{team_id}/leaders"
-        try:
-            data = _http.get_json(url, transport=self._transport)
-        except Exception:
-            return {}
-
-        # Parse: categories[].leaders[] → {player_id: {stat: val}}
-        stats: dict[str, dict[str, Any]] = {}
-        for cat in data.get("categories", []):
-            abbrev = cat.get("abbreviation", "")
-            for entry in cat.get("leaders", []):
-                athlete = entry.get("athlete", {})
-                pid = self._extract_pid(athlete)
-                if not pid:
-                    continue
-                if pid not in stats:
-                    stats[pid] = {}
-                val = entry.get("value", 0)
-                stats[pid][abbrev] = val
-
-        if stats:
-            self._save_cache(cache_key, stats)
-        return stats
+        leaders = self._leaders(HOCKEY_CORE_URL, "hockey", team_id, season)
+        squad = self.get_hockey_squad(team_id, season)
+        lines = parallel_map(lambda p: self._season_line("hockey", p, season), squad)
+        return leaders | {
+            str(p.id): {**leaders.get(str(p.id), {}), **line}
+            for p, line in zip(squad, lines, strict=True)
+            if line
+        }
 
     def get_mlb_teams(self) -> list[Team]:
         """Fetch all current MLB teams."""
@@ -477,37 +500,20 @@ class EspnClient:
         return self._parse_baseball_squad(data)
 
     def get_baseball_team_leaders(self, team_id: int, season: int = 2025) -> dict:
-        """Fetch per-player stats via team leaders endpoint.
+        """Every squad player's season line, `{player id (str): {stat: value}}`.
 
-        Returns dict mapping ESPN player ID (str) to stat dict.
+        Each line is the player's own statistics document (see
+        `_season_line`), laid over what the team leaders endpoint reported for
+        him; the leaders alone cover only the few players who top a category.
         """
-        cache_key = f"espn_baseball_leaders_{team_id}_{season}"
-        cached = self._load_cache(cache_key)
-        if cached:
-            return cached
-
-        url = f"{BASEBALL_CORE_URL}/seasons/{season}/types/2/teams/{team_id}/leaders"
-        try:
-            data = _http.get_json(url, transport=self._transport)
-        except Exception:
-            return {}
-
-        stats: dict[str, dict[str, Any]] = {}
-        for cat in data.get("categories", []):
-            abbrev = cat.get("abbreviation", "")
-            for entry in cat.get("leaders", []):
-                athlete = entry.get("athlete", {})
-                pid = self._extract_pid(athlete)
-                if not pid:
-                    continue
-                if pid not in stats:
-                    stats[pid] = {}
-                val = entry.get("value", 0)
-                stats[pid][abbrev] = val
-
-        if stats:
-            self._save_cache(cache_key, stats)
-        return stats
+        leaders = self._leaders(BASEBALL_CORE_URL, "baseball", team_id, season)
+        squad = self.get_baseball_squad(team_id, season)
+        lines = parallel_map(lambda p: self._season_line("baseball", p, season), squad)
+        return leaders | {
+            str(p.id): {**leaders.get(str(p.id), {}), **line}
+            for p, line in zip(squad, lines, strict=True)
+            if line
+        }
 
     def get_baseball_athlete_stats(self, athlete_id: int, season: int) -> dict[str, dict]:
         """One MLB player's regular-season line by category, `{"batting": {"AVG":
@@ -699,38 +705,20 @@ class EspnClient:
         return self._parse_basketball_squad(data)
 
     def get_basketball_team_leaders(self, team_id: int, season: int = 2026) -> dict:
-        """Fetch per-player stats via team leaders endpoint.
+        """Every squad player's season line, `{player id (str): {stat: value}}`.
 
-        Returns dict mapping ESPN player ID (str) to stat dict,
-        e.g. {"4024123": {"PTS": 26.2, "REB": 8.1, "AST": 5.3, ...}}.
+        Each line is the player's own statistics document (see
+        `_season_line`), laid over what the team leaders endpoint reported for
+        him; the leaders alone cover only the few players who top a category.
         """
-        cache_key = f"espn_basketball_leaders_{team_id}_{season}"
-        cached = self._load_cache(cache_key)
-        if cached:
-            return cached
-
-        url = f"{BASKETBALL_CORE_URL}/seasons/{season}/types/2/teams/{team_id}/leaders"
-        try:
-            data = _http.get_json(url, transport=self._transport)
-        except Exception:
-            return {}
-
-        stats: dict[str, dict[str, Any]] = {}
-        for cat in data.get("categories", []):
-            abbrev = cat.get("abbreviation", "")
-            for entry in cat.get("leaders", []):
-                athlete = entry.get("athlete", {})
-                pid = self._extract_pid(athlete)
-                if not pid:
-                    continue
-                if pid not in stats:
-                    stats[pid] = {}
-                val = entry.get("value", 0)
-                stats[pid][abbrev] = val
-
-        if stats:
-            self._save_cache(cache_key, stats)
-        return stats
+        leaders = self._leaders(BASKETBALL_CORE_URL, "basketball", team_id, season)
+        squad = self.get_basketball_squad(team_id, season)
+        lines = parallel_map(lambda p: self._season_line("basketball", p, season), squad)
+        return leaders | {
+            str(p.id): {**leaders.get(str(p.id), {}), **line}
+            for p, line in zip(squad, lines, strict=True)
+            if line
+        }
 
     def _parse_basketball_squad(self, data: dict) -> list[Player]:
         """Parse NBA team roster.
@@ -781,6 +769,82 @@ class EspnClient:
                 )
             )
         return players
+
+    def _leaders(self, core_url: str, sport: str, team_id: int, season: int) -> dict:
+        """The team leaders endpoint as `{player id (str): {abbreviation: value}}`."""
+        cache_key = f"espn_{sport}_leaders_{team_id}_{season}"
+        cached = self._load_cache(cache_key)
+        if cached:
+            return cached
+        url = f"{core_url}/seasons/{season}/types/2/teams/{team_id}/leaders"
+        try:
+            data = _http.get_json(url, transport=self._transport)
+        except Exception:
+            return {}
+        stats: dict[str, dict[str, Any]] = {}
+        for cat in data.get("categories", []):
+            abbrev = cat.get("abbreviation", "")
+            for entry in cat.get("leaders", []):
+                pid = self._extract_pid(entry.get("athlete", {}))
+                if pid:
+                    stats.setdefault(pid, {})[abbrev] = entry.get("value", 0)
+        if stats:
+            self._save_cache(cache_key, stats)
+        return stats
+
+    def _season_line(self, sport: str, player: Player, season: int) -> dict[str, float]:
+        """One player's regular-season line for the game mappers: every ESPN stat
+        under its `name` (season totals, `avg...` per game) plus the
+        abbreviations the mappers read (`_MAPPER_KEYS`). For baseball, the
+        pitching line of a pitcher and the batting line of anyone else.
+
+        A season under `MIN_GAMES` games old is a handful of games, so the
+        previous season stands in when it has more. `{}` when ESPN has neither.
+        """
+
+        def line(year: int) -> dict[str, float]:
+            if sport == "baseball":
+                cats = self.get_baseball_athlete_stats(player.id, year)
+                kind = "pitching" if player.position in ("P", "SP", "RP") else "batting"
+                return dict(cats.get(kind, {}))
+            named = self._athlete_named_stats(sport, player.id, year)
+            keys = _MAPPER_KEYS[sport]
+            return {**named, **{keys[n]: v for n, v in named.items() if n in keys}}
+
+        def games(stats: dict[str, float]) -> float:
+            return stats.get("GP", 0.0)
+
+        now = line(season)
+        if games(now) < MIN_GAMES:
+            before = line(season - 1)
+            if games(before) > games(now):
+                return before
+        return now
+
+    def _athlete_named_stats(self, sport: str, athlete_id: int, season: int) -> dict[str, float]:
+        """An NBA or NHL player's statistics document as `{stat name: value}`.
+
+        Keyed by `name`, not abbreviation: the abbreviation repeats for a total,
+        a per-game average and a per-48 rate (`PTS` three times). Cached; an
+        empty answer is not, so a failed request is retried by the next fetch.
+        """
+        cache_key = f"espn_{sport}_named_{athlete_id}_{season}"
+        cached = self._load_cache(cache_key)
+        if cached:
+            return cached
+        core = {"basketball": BASKETBALL_CORE_URL, "hockey": HOCKEY_CORE_URL}[sport]
+        url = f"{core}/seasons/{season}/types/2/athletes/{athlete_id}/statistics"
+        try:
+            data = _http.get_json(url, transport=self._transport)
+        except Exception:
+            return {}
+        named: dict[str, float] = {}
+        for category in (data.get("splits") or {}).get("categories") or []:
+            for stat in category.get("stats") or []:
+                named.setdefault(str(stat.get("name", "")), _as_float(stat.get("value")))
+        if named:
+            self._save_cache(cache_key, named)
+        return named
 
     def _extract_pid(self, athlete) -> str | None:
         """Extract player ID from athlete obj or $ref link."""
