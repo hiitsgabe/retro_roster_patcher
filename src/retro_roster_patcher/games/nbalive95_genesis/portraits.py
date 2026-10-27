@@ -1,39 +1,45 @@
 """The intro's player portraits: a photo of each team's five starters.
 
-A portrait is two pictures the intro draws together: the head, frame
-`HEADS + team * 5 + slot` of the asset table at `logos.LOGO_TABLE` (one per
-starting slot, so it stays with the slot whoever is written there), and a
-shoulders-and-jersey frame the team shares. A frame is laid out as a logo is
-(`logos`) with flags 2: its tiles follow as an EA Huffman stream. The art
-loader takes RefPack as well, which is what `write` stores.
+The intro draws a portrait from two frames of the asset table at
+`logos.LOGO_TABLE`: a head, `HEADS + team * 5 + slot` (one per starting slot,
+so it stays with the slot whoever is written there), and behind it a
+shoulders-and-jersey body, one of `BODIES`. Both are laid out as a logo is
+(`logos`) with flags 2: the tiles follow as an EA Huffman stream. The art
+loader takes RefPack too, which is what `write` stores.
 
-Every head is drawn with CRAM line 0, one palette all portraits share: 2-7 a
-skin ramp, 11 black, 1, 13 and 15 greys, 14 white; 8-10 and 12 are the
-jersey's, which a head does not use (`COLOURS`).
+All portraits share CRAM line 0 (`PALETTE`): 2-7 a skin ramp, 11 black, 1, 13
+and 15 greys, 14 white. 8-10 and 12 are the home team's colours, loaded per
+team, so a photo is drawn without them (`COLOURS`).
 
-A new head is 32x48 (4x4 tiles over 4x2) in the old one's place when it fits,
-else in free space; a starter without a head shot keeps the old picture.
+A new portrait is the head shot's head and shoulders, 64x64 over the whole
+picture the two frames covered (80x68 anchored at its bottom centre), so every
+body frame is blanked (`blank_bodies`) and nothing of the old picture shows.
+Each is about 800 bytes; they go where the old heads and bodies were (the
+frames lie end to end, so freed neighbours join) and in free space. The image
+cannot grow past 2 MiB: the cartridge's save RAM is mapped from 0x200000. A
+starter without a head shot keeps his old head, without its body.
 """
 
 from __future__ import annotations
 
 import io
 import struct
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 
 from ...formats import ea_huff
 from ...formats.ea_tdb import EaTdbError, refpack_compress
-from .logos import LOGO_BASE, LOGO_TABLE, table_starts
+from .logos import LOGO_BASE, LOGO_TABLE, TABLE_SIZE
 from .space import Space
 
 HEADS = 76
+BODIES = range(55, 76)
 STARTERS = 5
-#: The teams with heads: the 1994 NBA's 27. The intro of Toronto, Memphis and
-#: New Orleans (slots 27-29) shows no head.
+#: The teams with heads: the 1994 NBA's 27. The All-Star slots' intro shows none.
 TEAMS = 27
-WIDTH, HEIGHT = 32, 48
-COLOURS = (1, 2, 3, 4, 5, 6, 7, 11, 13, 14, 15)
-_LEVELS = (0, 52, 87, 116, 144, 172, 206, 255)
+SIDE = 64
+#: The share of a head shot's height the square crop takes, from its top: head
+#: and shoulders, as ESPN frames every player alike.
+CROP = 0.85
 #: The portrait palette as the intro loads it (CRAM line 0), measured in
 #: genesis_plus_gx on Oct 27 2026.
 PALETTE = (
@@ -42,6 +48,11 @@ PALETTE = (
     (206, 116, 0), (0, 0, 116), (0, 0, 206), (0, 0, 0),
     (206, 116, 0), (206, 206, 206), (255, 255, 255), (116, 116, 116),
 )  # fmt: skip
+COLOURS = (1, 2, 3, 4, 5, 6, 7, 11, 13, 14, 15)
+#: A frame with one transparent tile, for the bodies.
+EMPTY = struct.pack(">7h", 8, 8, 0, 0, 1, 1, 0) + struct.pack(">hBBhh", 0, 0, 0, 0, 0) + bytes(32)
+#: Where each 4x4 sprite of a portrait sits from the anchor, in tile order.
+_QUARTERS = ((-32, -66), (0, -66), (-32, -34), (0, -34))
 
 
 def entry(team: int, slot: int) -> int:
@@ -53,22 +64,21 @@ def _start(image: bytes | bytearray, index: int) -> int:
     return struct.unpack_from(">I", image, LOGO_TABLE + 4 * index)[0] + LOGO_BASE
 
 
+def _point(image: bytearray, index: int, at: int) -> None:
+    struct.pack_into(">I", image, LOGO_TABLE + 4 * index, at - LOGO_BASE)
+
+
 def crop(png: bytes):  # -> PIL.Image.Image
-    """The head and neck of a head shot, 32x48 on a transparent ground: a 2:3
-    box centred on the head (the opaque columns of the subject's top third),
-    its top a little above the hair."""
+    """A head shot's head and shoulders, 64x64: the square `CROP` of its
+    height tall, centred, from its top."""
     from PIL import Image
 
     picture = Image.open(io.BytesIO(png)).convert("RGBA")
-    alpha = picture.getchannel("A")
-    left, top, right, bottom = alpha.getbbox() or (0, 0, *picture.size)
-    head = alpha.crop((left, top, right, top + max(1, (bottom - top) // 3))).getbbox()
-    hl, hr = (left + head[0], left + head[2]) if head else (left, right)
-    width = round((hr - hl) * 1.3)
-    x0 = (hl + hr) // 2 - width // 2
-    y0 = top - round(width * 0.05)
-    box = picture.crop((x0, y0, x0 + width, y0 + width * HEIGHT // WIDTH))
-    return box.resize((WIDTH, HEIGHT), Image.Resampling.LANCZOS)
+    width, height = picture.size
+    side = round(height * CROP)
+    x0 = (width - side) // 2
+    square = picture.crop((x0, 0, x0 + side, side))
+    return square.resize((SIDE, SIDE), Image.Resampling.LANCZOS)
 
 
 def _ycc(r: int, g: int, b: int) -> tuple[float, float, float]:
@@ -82,8 +92,9 @@ _PAL_YCC = [_ycc(*c) for c in PALETTE]
 
 
 def tiles(picture) -> bytes:
-    """`picture` (32x48 RGBA) as 24 tiles in sprite order (each sprite's tiles
-    column by column), every opaque pixel the nearest of `COLOURS`."""
+    """`picture` (64x64 RGBA) as 64 tiles in sprite order: the four 4x4
+    sprites of `_QUARTERS`, each one's tiles column by column; every opaque
+    pixel the nearest of `COLOURS`."""
     raw = picture.convert("RGBA").tobytes()
     cache: dict[bytes, int] = {}
 
@@ -102,27 +113,28 @@ def tiles(picture) -> bytes:
 
     px = [nearest(raw[i : i + 4]) for i in range(0, len(raw), 4)]
     out = bytearray()
-    for y0, h in ((0, 4), (32, 2)):
+    for qx, qy in _QUARTERS:
+        x0, y0 = qx + 32, qy + 66
         for tx in range(4):
-            for ty in range(h):
+            for ty in range(4):
                 for row in range(8):
-                    at = (y0 + ty * 8 + row) * WIDTH + tx * 8
+                    at = (y0 + ty * 8 + row) * SIDE + x0 + tx * 8
                     out += bytes(px[at + i] << 4 | px[at + i + 1] for i in range(0, 8, 2))
     return bytes(out)
 
 
-def frame(image: bytes | bytearray, index: int, data: bytes) -> bytes:
-    """A head frame for `data` (24 tiles) at the old head's hotspot."""
-    _, _, hx, hy = struct.unpack_from(">4h", image, _start(image, index))
-    head = struct.pack(">7h", WIDTH, HEIGHT, hx, hy, 2, 24, 2)
-    entries = struct.pack(">hBBhh", -hy, 0x0F, 0, 0, -hx) + struct.pack(
-        ">hBBhh", -hy + 32, 0x0D, 0, 16, -hx
+def frame(data: bytes) -> bytes:
+    """A 64x64 portrait frame for `data` (64 tiles), anchored at its bottom
+    centre as the old head and body are."""
+    head = struct.pack(">7h", SIDE, SIDE, SIDE // 2, SIDE + 2, len(_QUARTERS), 64, 2)
+    entries = b"".join(
+        struct.pack(">hBBhh", y, 0x0F, 0, 16 * k, x) for k, (x, y) in enumerate(_QUARTERS)
     )
     return head + entries + refpack_compress(data)
 
 
 def _room(image: bytes | bytearray, index: int) -> int:
-    """The bytes a head frame takes up: header, sprites and its Huffman
+    """The bytes a retail frame takes up: header, sprites and its Huffman
     stream; 0 for one that does not decode."""
     at = _start(image, index)
     count = struct.unpack_from(">h", image, at + 8)[0]
@@ -133,34 +145,59 @@ def _room(image: bytes | bytearray, index: int) -> int:
         return 0
 
 
+def _release(image: bytearray, index: int, free: Space) -> None:
+    """Give frame `index`'s bytes back when no other entry reads them."""
+    old = _start(image, index)
+    if sum(_start(image, i) == old for i in range(TABLE_SIZE)) == 1:
+        room = _room(image, index)
+        if room:
+            free.release(old, room)
+
+
+def blank_bodies(image: bytearray, free: Space) -> None:
+    """Point every body frame at one empty frame."""
+    at = free.alloc(len(EMPTY))
+    if at is None:
+        return
+    image[at : at + len(EMPTY)] = EMPTY
+    for index in BODIES:
+        _release(image, index, free)
+        _point(image, index, at)
+
+
 def write(
     image: bytearray, heads: Mapping[tuple[int, int], bytes], free: Space
 ) -> list[tuple[int, int]]:
     """Draw each `{(team, slot): head shot}` (slot 0-4) as that starter's
-    portrait; the ones written. A photo that will not crop, or with no room
-    left for it, keeps the old portrait."""
-    done = []
-    # Slot by slot, so a shortage of room costs every team its fifth starter
-    # before any team its first.
-    for (team, slot), png in sorted(heads.items(), key=lambda item: (item[0][1], item[0][0])):
-        index = entry(team, slot)
+    portrait; the ones written. A photo that will not decode, or with no room
+    left for it, keeps the old head."""
+    blobs = {}
+    for key, png in sorted(heads.items()):
         try:
-            blob = frame(image, index, tiles(crop(png)))
+            blobs[key] = frame(tiles(crop(png)))
         except Exception:  # noqa: BLE001 - Pillow's errors share no base
             continue
-        old, room = _start(image, index), _room(image, index)
-        at = old if len(blob) <= room else free.alloc(len(blob))
+    empty = free.alloc(len(EMPTY))
+    if empty is None:
+        return []
+    image[empty : empty + len(EMPTY)] = EMPTY
+    # Every old head first, so neighbours join before the first new one is
+    # placed; a head with no room left is then drawn empty, its old bytes gone.
+    for team, slot in blobs:
+        _release(image, entry(team, slot), free)
+    done = []
+    for (team, slot), blob in blobs.items():
+        at = free.alloc(len(blob))
         if at is None:
+            _point(image, entry(team, slot), empty)
             continue
         image[at : at + len(blob)] = blob
-        struct.pack_into(">I", image, LOGO_TABLE + 4 * index, at - LOGO_BASE)
-        if at != old and room and old not in table_starts(image):
-            free.release(old, room)
+        _point(image, entry(team, slot), at)
         done.append((team, slot))
     return done
 
 
-def starters(rosters: Mapping[int, Sequence[str]]) -> dict[tuple[int, int], str]:
+def starters(rosters: Mapping[int, list[str]]) -> dict[tuple[int, int], str]:
     """`{(team, slot): photo URL}` for the first five of each roster."""
     return {
         (team, slot): url

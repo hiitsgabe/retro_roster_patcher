@@ -399,7 +399,7 @@ def test_the_structural_check_accepts_the_synthetic_image(rom):
 
 
 def test_the_structural_check_rejects_a_single_zeroed_pointer(rom):
-    _corrupt(rom, fixture.TEAM_ROSTER_ADDRESSES[29] + 11 * 4, b"\x00\x00\x00\x00")
+    _corrupt(rom, fixture.TEAM_ROSTER_ADDRESSES[28] + 11 * 4, b"\x00\x00\x00\x00")
     reader = NBALive95RomReader(str(rom))
     reader.load()
     assert _looks_like_nbalive95(reader) is False
@@ -442,11 +442,11 @@ def test_the_structural_check_rejects_three_hundred_and_sixty_pointers_to_one_re
 
 
 def test_the_structural_check_reads_every_team_and_not_only_the_first(rom):
-    """The ported `validate` looks at team 0 alone; this walks all thirty."""
+    """The ported `validate` looks at team 0 alone; this walks all 29 rostered teams."""
     reader = NBALive95RomReader(str(rom))
     reader.load()
     assert reader.validate() is True
-    _corrupt(rom, fixture.player_offset(29, 11) + fixture.OFF_POSITION, bytes([9]))
+    _corrupt(rom, fixture.player_offset(28, 11) + fixture.OFF_POSITION, bytes([9]))
     later = NBALive95RomReader(str(rom))
     later.load()
     assert later.validate() is True
@@ -461,7 +461,7 @@ def test_the_structural_check_is_not_run_by_patch(rom, out, patcher):
     runs the structural check and `patch` does not, and a file this project
     cannot recognise is still patchable by name.
     """
-    _corrupt(rom, fixture.player_offset(29, 11) + fixture.OFF_POSITION, bytes([9]))
+    _corrupt(rom, fixture.player_offset(28, 11) + fixture.OFF_POSITION, bytes([9]))
     assert patcher.analyze_rom(rom).is_valid is False
     result = patcher.patch(rom_path=rom, output_path=out, rosters=_mapped((BOS_SLOT, 5)))
     assert result.teams_patched == 1

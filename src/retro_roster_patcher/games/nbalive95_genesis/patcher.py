@@ -87,10 +87,15 @@ def _pointer_tables_fit(reader: NBALive95RomReader) -> bool:
     return _LAST_POINTER_END <= len(reader.data)
 
 
+#: The slots with records: the 27 teams and the two All-Star teams. The Slammers
+#: (29) are a custom team, all twelve of whose pointers are 0 on the cartridge.
+ROSTERED_TEAMS = 29
+
+
 def _looks_like_nbalive95(reader: NBALive95RomReader) -> bool:
     """Does this image hold 360 player records in the shape this game's code reads?
 
-    All 30 pointer tables are dereferenced and each record they address must have
+    The 29 rostered pointer tables are dereferenced and each record they address must have
 
     - a non-zero pointer with the whole 93-byte record inside the file;
     - byte 1 a position this game defines, `BYTE_TO_POSITION`'s own domain;
@@ -109,7 +114,7 @@ def _looks_like_nbalive95(reader: NBALive95RomReader) -> bool:
         return False
 
     seen: set[int] = set()
-    for team_index in range(TEAM_COUNT):
+    for team_index in range(ROSTERED_TEAMS):
         for slot in range(PLAYERS_PER_TEAM):
             offset = reader._get_player_offset(team_index, slot)
             if offset == 0:
@@ -120,7 +125,7 @@ def _looks_like_nbalive95(reader: NBALive95RomReader) -> bool:
             if sum(1 for b in name if 0x20 <= b <= 0x7E) < MIN_NAME_ASCII:
                 return False
             seen.add(offset)
-    return len(seen) == TEAM_COUNT * PLAYERS_PER_TEAM
+    return len(seen) == ROSTERED_TEAMS * PLAYERS_PER_TEAM
 
 
 @register(
@@ -423,6 +428,7 @@ class NBALive95Patcher(Patcher):
         )
         if options.get("portraits", True) and urls and writer.data is not None:
             shots = dict(zip(urls, parallel_map(self._headshot, list(urls.values())), strict=True))
+            portraits.blank_bodies(writer.data, free)
             drawn = portraits.write(
                 writer.data, {k: png for k, png in shots.items() if png is not None}, free
             )
