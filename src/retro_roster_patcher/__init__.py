@@ -47,7 +47,7 @@ from .games import nhl94_snes as _nhl94_snes  # noqa: E402,F401
 from .games import pes2013_ps2 as _pes2013_ps2  # noqa: E402,F401
 from .games import we2002 as _we2002  # noqa: E402,F401
 
-__version__ = "0.7.1"
+__version__ = "0.8.0"
 
 __all__ = [
     "ApiError",
