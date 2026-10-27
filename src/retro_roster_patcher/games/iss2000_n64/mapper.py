@@ -309,7 +309,9 @@ class N64StatMapper:
             photo_url=player.photo_url,
         )
 
-    def select_22(self, roster: TeamRoster) -> tuple[list[Player], tuple[int, int, int] | None]:
+    def select_22(
+        self, roster: TeamRoster, formation: tuple[int, int, int] | None = None
+    ) -> tuple[list[Player], tuple[int, int, int] | None]:
         """The XI in formation order (keeper, defenders, midfielders, forwards,
         each line left to right), then the bench; and the formation.
 
@@ -328,7 +330,9 @@ class N64StatMapper:
         listed = lineup.get("starters") or []
         recent = {int(e["id"]): (i, e) for i, e in enumerate(listed) if "id" in e}
         shape = parse_formation(lineup.get("formation", "")) if recent else None
-        shape = nearest_formation(shape) if shape else (4, 4, 2)
+        # `formation` (defenders, midfielders, forwards) when a game fixes the
+        # formation of a slot (ISS Deluxe), else the cartridge's nearest.
+        shape = formation or (nearest_formation(shape) if shape else (4, 4, 2))
 
         def group(p: Player) -> str:
             if p.id in recent:

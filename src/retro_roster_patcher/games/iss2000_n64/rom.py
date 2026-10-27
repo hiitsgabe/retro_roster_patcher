@@ -381,32 +381,11 @@ _CODES.update({chr(97 + k): 0x25 + k for k in range(26)})
 _CHARS = {v: k for k, v in _CODES.items()}
 
 
-#: Letters Unicode does not decompose into a base letter and a mark.
-_TRANSLIT = str.maketrans(
-    {
-        "Ø": "O",
-        "ø": "o",
-        "Æ": "AE",
-        "æ": "ae",
-        "Œ": "OE",
-        "œ": "oe",
-        "ß": "ss",
-        "Ł": "L",
-        "ł": "l",
-        "Đ": "D",
-        "đ": "d",
-        "Þ": "Th",
-        "þ": "th",
-        "ı": "i",
-    }
-)
-
-
 def encode_name(text: str) -> bytes:
     """`text` in the game's 8-byte name code; characters it lacks are dropped."""
     from ...core.text import to_ascii
 
-    codes = [_CODES[c] for c in to_ascii(text.translate(_TRANSLIT)) if c in _CODES][:NAME_LEN]
+    codes = [_CODES[c] for c in to_ascii(text) if c in _CODES][:NAME_LEN]
     return bytes(codes).ljust(NAME_LEN, b"\0")
 
 

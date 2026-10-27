@@ -107,8 +107,8 @@ def test_to_ascii_strips_diacritics_rather_than_the_letter():
     assert _to_ascii("José Ramírez") == "Jose Ramirez"
 
 
-def test_to_ascii_drops_a_character_with_no_ascii_base():
-    assert _to_ascii("Łukasz") == "ukasz"
+def test_to_ascii_spells_out_a_letter_unicode_does_not_decompose():
+    assert _to_ascii("Łukasz") == "Lukasz"
 
 
 def test_encoding_pads_a_short_name_to_eight_bytes_with_space():
