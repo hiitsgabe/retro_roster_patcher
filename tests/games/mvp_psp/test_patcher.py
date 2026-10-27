@@ -110,6 +110,9 @@ class FakeApi:
         self.squad_calls.append((team_id, season))
         return list(self._squads.get(team_id, []))
 
+    def get_baseball_lineup(self, team_id, season=None):
+        return []
+
     def get_baseball_team_leaders(self, team_id, season=None):
         self.leader_calls.append((team_id, season))
         return dict(self._leaders.get(team_id, {}))
@@ -1684,3 +1687,14 @@ def test_a_rating_lands_on_its_columns_range():
     from retro_roster_patcher.games.mvp_psp.patcher import SKILL
 
     assert (_on(0, SPEED), _on(99, SPEED), _on(0, SKILL), _on(99, SKILL)) == ("39", "99", "0", "15")
+
+
+def test_the_nine_bat_in_the_order_the_club_has_used_them():
+    from retro_roster_patcher.games.mvp_psp.models import MVPPlayerRecord
+    from retro_roster_patcher.games.mvp_psp.patcher import _bat_in_lineup_order
+
+    nine = [MVPPlayerRecord(player_id=i, batting_order=i + 1) for i in range(9)]
+    bench = MVPPlayerRecord(player_id=99, batting_order=-1)
+    _bat_in_lineup_order(nine + [bench], [{"id": 8, "order": 1.0}, {"id": 0, "order": 4.2}])
+    assert [r.batting_order for r in nine][:1] == [2] and nine[8].batting_order == 1
+    assert bench.batting_order == -1

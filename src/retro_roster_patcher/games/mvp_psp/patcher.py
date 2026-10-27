@@ -174,6 +174,17 @@ _NEAR = {pos: _OUTFIELD for pos in ("OF", *_OUTFIELD)}
 _NEAR |= {pos: _INFIELD for pos in ("IF", *_INFIELD)}
 
 
+def _bat_in_lineup_order(records: list[MVPPlayerRecord], lineup: list[dict]) -> None:
+    """Renumber the nine starters' batting order by where each has batted in
+    the club's recent games (`lineup`: average spot by player id); a starter
+    with no starts bats after those with some, in his slot's order."""
+    spot = {int(entry["id"]): float(entry["order"]) for entry in lineup}
+    nine = [r for r in records if r.batting_order != NOT_IN_LINEUP]
+    ranked = sorted(nine, key=lambda r: (spot.get(r.player_id, 10.0), r.batting_order))
+    for order, record in enumerate(ranked, 1):
+        record.batting_order = order
+
+
 def _lineup_positions(own: list[str], wanted: tuple[str, ...]) -> list[str]:
     """`own`, the starters' positions in order, made to hold each of `wanted` once.
 
@@ -374,6 +385,8 @@ class MVPPSPPatcher(Patcher):
             # first season ever fetched for every later season.
             players = self.api.get_baseball_squad(team.id, season)
             leaders = self.api.get_baseball_team_leaders(team.id, season)
+            # Where the club's batters have batted lately, for the batting order.
+            lineup = self.api.get_baseball_lineup(team.id, season)
             rosters.append(
                 TeamRoster(
                     team=team,
@@ -381,7 +394,7 @@ class MVPPSPPatcher(Patcher):
                     # In `extra`, not on the instance: the statistics have to
                     # travel with the rosters through JSON, or a player that
                     # crosses a process boundary takes position defaults.
-                    extra={"leaders": leaders or {}},
+                    extra={"leaders": leaders or {}, "lineup": lineup or []},
                 )
             )
 
@@ -462,6 +475,8 @@ class MVPPSPPatcher(Patcher):
                 self._map_one(player, leaders.get(str(player.id), {}), slot)
                 for slot, player in zip(slots, batters + pitchers, strict=True)
             ]
+            if not order_as_given:
+                _bat_in_lineup_order(records, roster.extra.get("lineup") or [])
             if order_as_given:
                 # The caller's starters field their own positions.
                 own = [(p.position or "").upper() for p in batters[: len(LINEUP_POSITIONS)]]
