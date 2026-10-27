@@ -328,14 +328,14 @@ MVP_TEAM_ABBREVS: tuple[str, ...] = (
 
 # The clubs renamed or moved since 2005: slot abbreviation -> `team` columns 1-3
 # (location, nickname, abbreviation). The league and division columns stay:
-# the schedule and the DH rule follow the slot's league. Not the Angels (Los
-# Angeles) or the Athletics (Sacramento): with a new location, team select
-# drops their location and their rank (seen in PPSSPP, Oct 27 2026), while
-# Miami and the Rays' new nickname show.
+# the schedule and the DH rule follow the slot's league, and the abbreviation
+# stays the disc's.
 TEAM_RENAMES: dict[str, tuple[str, str, str]] = {
+    "ANA": ("Los Angeles", "Angels", "ANA"),
+    "OAK": ("Sacramento", "Athletics", "OAK"),
     "CLE": ("Cleveland", "Guardians", "CLE"),
     "TB": ("Tampa Bay", "Rays", "TB"),
-    "FLA": ("Miami", "Marlins", "MIA"),
+    "FLA": ("Miami", "Marlins", "FLA"),
 }
 
 # Slot index -> the club's 2005 name, for display only.

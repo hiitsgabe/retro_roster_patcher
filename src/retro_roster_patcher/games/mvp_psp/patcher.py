@@ -25,6 +25,7 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
+from ...core.assets import crest_png
 from ...core.concurrency import parallel_map
 from ...core.errors import ApiError, RomError, as_rom_error
 from ...core.headshots import Face, load_headshot, measure_faces
@@ -43,7 +44,7 @@ from ...core.registry import register
 from ...sports import _http
 from ...sports.espn import EspnClient
 from ...sports.models import League, LeagueData, Player, TeamRoster
-from . import looks, portraits
+from . import logos, looks, portraits
 from .models import (
     ATTRIB_AUDIO_ID,
     ATTRIB_BASERUNNING,
@@ -123,6 +124,8 @@ from .stat_mapper import MVPStatMapper
 # last, after every record is staged in memory, so it is only the tail.
 PROGRESS_RECORDS_END = 0.9
 
+
+TEAM_ARTID = 6  # `team` column: the club's logo is `logos` file l{artid - 1:03d}
 
 # The ranges the disc's own ratings take (min, max over its 851 players): the
 # mapper rates on 0-99 and `_on` puts a rating onto its column's range.
@@ -257,6 +260,9 @@ class MVPPSPPatcher(Patcher):
     for; there is nothing a user could usefully choose. One provider: ESPN is
     the only one in this library with MLB rosters.
     """
+
+    #: `patch` draws each club's current crest as its logo unless `logos=False`.
+    supports_logos: bool = True
 
     def __init__(
         self,
@@ -561,6 +567,8 @@ class MVPPSPPatcher(Patcher):
             teams_patched, players_patched = self._write_all_teams(writer, rosters, on_progress)
             if options.get("portraits", True):
                 self._portraits(writer, rosters, rom_path)
+            if options.get("logos", True):
+                self._logos(writer, rosters, rom_path)
 
             self.status("Saving patched ISO...")
             if on_progress is not None:
@@ -607,9 +615,15 @@ class MVPPSPPatcher(Patcher):
             for rec_id, fields in old_roster.items()
             if fields.get(ROSTER_TEAMID, "") not in patched_team_hashes
         }
-        # Count from `old_roster`, every row and not just the preserved ones: a
-        # dropped row's id is still an id the disc used, and reusing it would
-        # give the new row that row's history in any table keyed on it.
+        # A patched club's rows take its own old rows' ids, so they stay where
+        # its squad was in the table: the game reads a club's squad from its
+        # place there (team select lost the Angels' and the Athletics' location
+        # and rank when their rows, the table's first, moved to its end). A
+        # squad longer than the old one takes fresh ids, counted past every id
+        # the disc used.
+        old_ids: dict[str, list[str]] = {}
+        for rec_id, fields in old_roster.items():
+            old_ids.setdefault(fields.get(ROSTER_TEAMID, ""), []).append(rec_id)
         roster_counter = max((int(rid, 16) for rid in old_roster), default=0) + 1
 
         teams_patched = 0
@@ -622,6 +636,7 @@ class MVPPSPPatcher(Patcher):
                     f"Writing {MVP_TEAM_ORDER[slot]} ({len(players)} players)...",
                 )
             team_hash = TEAM_HASHES[MVP_TEAM_ABBREVS[slot]]
+            ids = list(old_ids.get(team_hash, []))
             dh_order = next((p.batting_order for p in players if p.roster_position == "DH"), None)
             for player_index, player in enumerate(players):
                 player.hash_id = pool.take(
@@ -630,10 +645,12 @@ class MVPPSPPatcher(Patcher):
                     player_index=player_index,
                 )
                 self._write_player(writer, player)
-                new_roster[f"{roster_counter:0{HASH_ID_CHARS}x}"] = self._build_roster_fields(
-                    team_hash, player, dh_order
-                )
-                roster_counter += 1
+                if ids:
+                    rec_id = ids.pop(0)
+                else:
+                    rec_id = f"{roster_counter:0{HASH_ID_CHARS}x}"
+                    roster_counter += 1
+                new_roster[rec_id] = self._build_roster_fields(team_hash, player, dh_order)
                 players_patched += 1
             teams_patched += 1
 
@@ -661,6 +678,31 @@ class MVPPSPPatcher(Patcher):
                 f"in this game will not be their own"
             )
         return teams_patched, players_patched
+
+    def _logos(self, writer: MVPPSPRomWriter, rosters: MappedRosters, rom_path: Path) -> None:
+        """Each patched club's current crest over its team-select logo (`logos`)."""
+        teams = writer.reader.records.get("team", {})
+        urls = {}
+        for team in self.api.get_mlb_teams():
+            slot = self.mapper.get_team_slot(team.code)
+            if slot is None or slot not in rosters.teams or not team.logo_url:
+                continue
+            artid = teams.get(TEAM_HASHES[MVP_TEAM_ABBREVS[slot]], {}).get(TEAM_ARTID, "")
+            if artid.strip().isdigit():
+                urls[int(artid)] = team.logo_url
+        crests = dict(
+            zip(
+                urls,
+                parallel_map(
+                    lambda u: crest_png(None, None, u, self._transport), list(urls.values())
+                ),
+                strict=True,
+            )
+        )
+        with open(rom_path, "rb") as f:
+            writer.edits += logos.edits(
+                f, {a: png for a, png in crests.items() if png is not None}, self.status
+            )
 
     def _portraits(self, writer: MVPPSPRomWriter, rosters: MappedRosters, rom_path: Path) -> None:
         """Each written player's head shot over his record's portrait, the

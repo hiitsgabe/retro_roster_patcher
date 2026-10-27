@@ -1080,20 +1080,19 @@ def test_the_highest_numbered_row_the_disc_had_still_names_its_own_player(tmp_pa
     assert row[ROSTER_PLAYERID] == fixture.player_id(last_team, last_slot)
 
 
-def test_the_new_rows_take_the_ids_that_follow_the_highest_the_disc_held(tmp_path):
-    # The ids themselves, consecutively, from `max(old_roster) + 1`. Nothing else in
-    # the file looks at a new row's id, so the counter could start one low unremarked.
+def test_a_clubs_new_rows_take_its_old_rows_ids_then_fresh_ones(tmp_path):
+    # The game reads a club's squad from its place in the table, so the new rows
+    # keep the old ones' ids (and places); a longer squad's extra rows take ids
+    # past the highest the disc held.
     _, out = patch_one(tmp_path, {1: full_squad(1000)})
+    old = [int(fixture.roster_row_id(0, i), 16) for i in range(DISC.players_per_team)]
     highest = int(fixture.roster_row_id(DISC.teams - 1, DISC.players_per_team - 1), 16)
-    assert sorted(int(rid, 16) for rid in roster_rows(out, 0)) == [
-        highest + 1 + i for i in range(len(FULL_SQUAD_POSITIONS))
-    ]
+    extra = len(FULL_SQUAD_POSITIONS) - len(old)
+    expected = old[: len(FULL_SQUAD_POSITIONS)] + [highest + 1 + i for i in range(max(0, extra))]
+    assert sorted(int(rid, 16) for rid in roster_rows(out, 0)) == sorted(expected)
 
 
-def test_the_counter_counts_the_rows_the_patch_drops_as_well(tmp_path):
-    # `max(...)` runs over `old_roster` -- every row the disc held -- and not over the
-    # rows this patch keeps, and patching the *last* club is what separates the two:
-    # its rows carry the highest ids on the disc and are exactly the ones dropped.
+def test_the_last_clubs_rows_keep_their_ids(tmp_path):
     patcher = make_patcher(tmp_path)
     mapped = patcher.map_rosters(league(squads={1: full_squad(1000)}))
     patcher.patch(
@@ -1101,9 +1100,9 @@ def test_the_counter_counts_the_rows_the_patch_drops_as_well(tmp_path):
         output_path=tmp_path / "out.iso",
         rosters=MappedRosters(game_id=mapped.game_id, teams={TEAM_COUNT - 1: mapped.teams[0]}),
     )
-    highest = int(fixture.roster_row_id(DISC.teams - 1, DISC.players_per_team - 1), 16)
+    first = int(fixture.roster_row_id(DISC.teams - 1, 0), 16)
     written = roster_rows(tmp_path / "out.iso", TEAM_COUNT - 1)
-    assert min(int(rid, 16) for rid in written) == highest + 1
+    assert min(int(rid, 16) for rid in written) == first
 
 
 def test_every_new_roster_row_id_is_a_nine_character_id(tmp_path):
