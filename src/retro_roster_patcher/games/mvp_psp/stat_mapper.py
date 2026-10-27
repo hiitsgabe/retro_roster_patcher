@@ -111,6 +111,22 @@ DEFAULT_RELIEVER_STAMINA = 35
 DEFAULT_PICKOFF = 50
 
 
+def _person(player: Player) -> dict[str, Any]:
+    """The record fields about the man, not his ratings: height and weight
+    (the provider's, else the record's defaults) and what his looks and
+    portrait are read from."""
+    out: dict[str, Any] = {
+        "player_id": player.id,
+        "photo_url": player.photo_url,
+        "nationality": player.nationality,
+    }
+    if player.height > 0:
+        out["height"] = int(player.height)
+    if player.weight > 0:
+        out["weight"] = int(player.weight)
+    return out
+
+
 def _clamp(val: int, lo: int = ATTR_MIN, hi: int = ATTR_MAX) -> int:
     return max(lo, min(hi, val))
 
@@ -158,11 +174,8 @@ class MVPStatMapper:
             bats=self.map_bat_hand(player.bats or player.handedness),
             throws=self.map_throw_hand(player.handedness),
             primary_position=pos,
-            # Upstream behaviour, known wrong, preserved deliberately: no weight
-            # is read, so `MVPPlayerRecord.weight` keeps its default and all 750
-            # patched players are written at 190 lb. `Player.weight` holds the
-            # real figure and is not read. See `patcher._build_attrib_fields`.
             is_pitcher=False,
+            **_person(player),
         )
 
         if stats:
@@ -266,7 +279,8 @@ class MVPStatMapper:
             bats=self.map_bat_hand(player.bats or player.handedness),
             throws=self.map_throw_hand(player.handedness),
             primary_position=STARTER_POSITION if is_starter else "RP",
-            is_pitcher=True,  # no weight is read here either; see `map_batter`
+            is_pitcher=True,
+            **_person(player),
         )
 
         if stats:

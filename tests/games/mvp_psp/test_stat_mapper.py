@@ -900,30 +900,14 @@ def test_a_generated_pitch_is_the_frozen_record_type():
     assert type(MAPPER.default_pitches(True)[0]) is MVPPitch
 
 
-def test_a_batter_does_not_carry_the_weight_the_provider_reported():
-    # PINS UPSTREAM FIDELITY DELIBERATELY, and this is half of bug 3:
-    # `Player.weight` is not read, so the record keeps its 190 lb default and
-    # every patched player is written at it. Do not add `weight=...` to the
-    # constructor -- it changes `attrib` column 10 on every player, and no disc
-    # has ever checked this port's output.
-    assert MAPPER.map_batter(player(weight=215.0)).weight == 190
+def test_a_batter_and_a_pitcher_carry_the_provider_weight_and_height():
+    assert MAPPER.map_batter(player(weight=215.0)).weight == 215
+    pitcher = MAPPER.map_pitcher(player(position="SP", weight=201.0))
+    assert pitcher.weight == 201
 
 
-def test_a_pitcher_does_not_carry_it_either():
-    assert MAPPER.map_pitcher(player(position="SP", weight=201.0)).weight == 190
-
-
-def test_two_players_of_different_weights_map_to_the_same_weight():
-    # The flattening itself. Both provider figures are real and neither survives.
-    heavy = MAPPER.map_batter(player(weight=250.0))
-    light = MAPPER.map_batter(player(weight=160.0))
-    assert (heavy.weight, light.weight) == (190, 190)
-
-
-def test_the_provider_really_did_report_those_two_weights():
-    # Pins the two tests above: `Player.weight` is populated, so "190" is the
-    # mapper dropping a value and not an input that was never there.
-    assert [player(weight=250.0).weight, player(weight=160.0).weight] == [250.0, 160.0]
+def test_without_a_provider_weight_the_record_default_stays():
+    assert MAPPER.map_batter(player(weight=0.0)).weight == 190
 
 
 def test_a_player_the_provider_has_no_weight_for_gets_the_same_default():

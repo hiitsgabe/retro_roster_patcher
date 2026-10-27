@@ -25,7 +25,9 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
+from ...core.concurrency import parallel_map
 from ...core.errors import ApiError, RomError, as_rom_error
+from ...core.headshots import Face, load_headshot, measure_faces
 from ...core.models import (
     MappedRosters,
     PartialFn,
@@ -41,7 +43,9 @@ from ...core.registry import register
 from ...sports import _http
 from ...sports.espn import EspnClient
 from ...sports.models import League, LeagueData, Player, TeamRoster
+from . import looks, portraits
 from .models import (
+    ATTRIB_AUDIO_ID,
     ATTRIB_BASERUNNING,
     ATTRIB_BATS,
     ATTRIB_BUNTING,
@@ -106,6 +110,7 @@ from .models import (
     STARTERS_PER_TEAM,
     TEAM_COUNT,
     TEAM_HASHES,
+    TEAM_RENAMES,
     MVPPlayerRecord,
     database_big_extent,
 )
@@ -117,6 +122,22 @@ from .stat_mapper import MVPStatMapper
 # is the slowest step -- a PSP UMD image is hundreds of megabytes -- but it runs
 # last, after every record is staged in memory, so it is only the tail.
 PROGRESS_RECORDS_END = 0.9
+
+
+# The ranges the disc's own ratings take (min, max over its 851 players): the
+# mapper rates on 0-99 and `_on` puts a rating onto its column's range.
+SKILL = (0, 15)  # plate discipline, bunting, steal, baserunning, durability, pickoff, movement
+DEFENCE = (4, 15)  # fielding, range, arm strength and accuracy
+SPEED = (39, 99)
+STARPOWER = (0, 4)
+HITTING = (20, 100)  # contact and power, each split
+STAMINA = (40, 99)
+
+
+def _on(rating: int, scale: tuple[int, int]) -> str:
+    """A 0-99 rating on the column's own range, as the CSV holds it."""
+    lo, hi = scale
+    return str(lo + round(max(0, min(99, rating)) * (hi - lo) / 99))
 
 
 def _database_big_extent_fits(rom_path: Path) -> bool:
@@ -252,6 +273,9 @@ class MVPPSPPatcher(Patcher):
             on_status=on_status,
             on_partial=on_partial,
         )
+        self._transport = transport
+        # Faces measured from head shots by `patch`, by provider player id.
+        self._faces: dict[int, Face] = {}
         self.mapper = MVPStatMapper()
         # The client creates its cache directory in its own constructor, so
         # constructing this patcher can raise `StorageError`.
@@ -523,8 +547,20 @@ class MVPPSPPatcher(Patcher):
             if not writer.load():
                 raise RomError(f"Not a valid MVP Baseball PSP ISO: {rom_path}")
 
+            measure = bool(options.get("looks", True))
+            urls = {
+                p.player_id: p.photo_url
+                for players in rosters.teams.values()
+                for p in players
+                if p.player_id and p.photo_url
+            }
+            self._faces = (
+                measure_faces(self.cache_dir, urls, self._transport, self.status) if measure else {}
+            )
             self.status("Writing rosters...")
             teams_patched, players_patched = self._write_all_teams(writer, rosters, on_progress)
+            if options.get("portraits", True):
+                self._portraits(writer, rosters, rom_path)
 
             self.status("Saving patched ISO...")
             if on_progress is not None:
@@ -602,6 +638,20 @@ class MVPPSPPatcher(Patcher):
             teams_patched += 1
 
         writer.update_records("roster", new_roster)
+        # A renamed club's location, nickname and abbreviation (`TEAM_RENAMES`).
+        teams = dict(writer.reader.records.get("team", {}))
+        renamed = [
+            MVP_TEAM_ABBREVS[slot]
+            for slot in targets
+            if MVP_TEAM_ABBREVS[slot] in TEAM_RENAMES
+            and TEAM_HASHES[MVP_TEAM_ABBREVS[slot]] in teams
+        ]
+        for abbrev in renamed:
+            row = dict(teams[TEAM_HASHES[abbrev]])
+            row.update(zip((1, 2, 3), TEAM_RENAMES[abbrev], strict=True))
+            teams[TEAM_HASHES[abbrev]] = row
+        if renamed:
+            writer.update_records("team", teams)
         if pool.crossed or pool.synthesised:
             # Report the degradation; do not fix it. Every alternative to it
             # drops a player. See `_HashPool`.
@@ -612,6 +662,25 @@ class MVPPSPPatcher(Patcher):
             )
         return teams_patched, players_patched
 
+    def _portraits(self, writer: MVPPSPRomWriter, rosters: MappedRosters, rom_path: Path) -> None:
+        """Each written player's head shot over his record's portrait, the
+        silhouette without one (`portraits`)."""
+        attrib = writer.reader.records.get("attrib", {})
+        players = [p for ps in rosters.teams.values() for p in ps if p.hash_id in attrib]
+        shots = parallel_map(
+            lambda p: (
+                load_headshot(self.cache_dir, p.photo_url, self._transport) if p.photo_url else None
+            ),
+            players,
+        )
+        pictures = {
+            attrib[p.hash_id].get(ATTRIB_AUDIO_ID, "0"): png
+            for p, png in zip(players, shots, strict=True)
+            if attrib[p.hash_id].get(ATTRIB_AUDIO_ID, "").strip().isdigit()
+        }
+        with open(rom_path, "rb") as f:
+            writer.edits += portraits.edits(f, pictures, self.status)
+
     def _write_player(self, writer: MVPPSPRomWriter, player: MVPPlayerRecord) -> None:
         """Stage one player's four table records.
 
@@ -620,7 +689,11 @@ class MVPPSPPatcher(Patcher):
         that pitcher's arsenal in the table. Inherited, and the mirror of the
         `_HashPool` cross-fall.
         """
-        writer.update_player_record("attrib", player.hash_id, self._build_attrib_fields(player))
+        fields = self._build_attrib_fields(player)
+        face = self._faces.get(player.player_id)
+        looked = looks.columns(face, player.nationality, str(player.player_id or player.hash_id))
+        fields.update({col: str(value) for col, value in looked.items()})
+        writer.update_player_record("attrib", player.hash_id, fields)
         writer.update_player_record(
             "lrattrib_rhp", player.hash_id, self._build_lr_attrib_fields(player, vs_rhp=True)
         )
@@ -635,13 +708,6 @@ class MVPPSPPatcher(Patcher):
     @staticmethod
     def _build_attrib_fields(player: MVPPlayerRecord) -> dict[int, str]:
         """The `attrib` columns this patcher sets. Everything else is merged through.
-
-        Upstream behaviour, known wrong, preserved deliberately: height (column
-        9) and weight (column 10) are written unconditionally from record fields
-        nothing ever sets, so every patched player is written at 6'0" and 190 lb
-        over whatever the disc knew. Do not drop the two columns: this port's
-        output has never been checked against a retail UMD, and a byte the
-        source did not write is the risk, not a stale number.
 
         The secondary position is written only when the mapper produced one,
         which it never does today. Keep the guard: writing an empty string would
@@ -659,17 +725,17 @@ class MVPPSPPatcher(Patcher):
             ),
             ATTRIB_HEIGHT: str(player.height),
             ATTRIB_WEIGHT: str(player.weight),
-            ATTRIB_PLATE_DISCIPLINE: str(player.plate_discipline),
-            ATTRIB_BUNTING: str(player.bunting),
-            ATTRIB_STEALING_AGGRESSIVE: str(player.stealing),
-            ATTRIB_BASERUNNING: str(player.baserunning),
-            ATTRIB_SPEED: str(player.speed),
-            ATTRIB_FIELDING: str(player.fielding),
-            ATTRIB_RANGE: str(player.arm_range),
-            ATTRIB_THROW_STRENGTH: str(player.throw_strength),
-            ATTRIB_THROW_ACCURACY: str(player.throw_accuracy),
-            ATTRIB_DURABILITY: str(player.durability),
-            ATTRIB_STARPOWER: str(player.starpower),
+            ATTRIB_PLATE_DISCIPLINE: _on(player.plate_discipline, SKILL),
+            ATTRIB_BUNTING: _on(player.bunting, SKILL),
+            ATTRIB_STEALING_AGGRESSIVE: _on(player.stealing, SKILL),
+            ATTRIB_BASERUNNING: _on(player.baserunning, SKILL),
+            ATTRIB_SPEED: _on(player.speed, SPEED),
+            ATTRIB_FIELDING: _on(player.fielding, DEFENCE),
+            ATTRIB_RANGE: _on(player.arm_range, DEFENCE),
+            ATTRIB_THROW_STRENGTH: _on(player.throw_strength, DEFENCE),
+            ATTRIB_THROW_ACCURACY: _on(player.throw_accuracy, DEFENCE),
+            ATTRIB_DURABILITY: _on(player.durability, SKILL),
+            ATTRIB_STARPOWER: _on(player.starpower, STARPOWER),
         }
         if player.secondary_position:
             fields[ATTRIB_SECONDARY_POS] = str(POS_STRING_TO_NUM.get(player.secondary_position, 0))
@@ -688,8 +754,8 @@ class MVPPSPPatcher(Patcher):
         return {
             LR_FIRST_NAME: player.first_name,
             LR_LAST_NAME: player.last_name,
-            LR_CONTACT: str(contact),
-            LR_POWER: str(power),
+            LR_CONTACT: _on(contact, HITTING),
+            LR_POWER: _on(power, HITTING),
         }
 
     @staticmethod
@@ -705,19 +771,19 @@ class MVPPSPPatcher(Patcher):
         fields: dict[int, str] = {
             PA_FIRST_NAME: player.first_name,
             PA_LAST_NAME: player.last_name,
-            PA_STAMINA: str(player.stamina),
-            PA_PICKOFF: str(player.pickoff),
+            PA_STAMINA: _on(player.stamina, STAMINA),
+            PA_PICKOFF: _on(player.pickoff, SKILL),
         }
         if player.pitches:
             first = player.pitches[0]
-            fields[PA_PITCH1_MOVEMENT] = str(first.movement)
+            fields[PA_PITCH1_MOVEMENT] = _on(first.movement, SKILL)
             fields[PA_PITCH1_CONTROL] = str(first.control)
             fields[PA_PITCH1_VELOCITY] = str(first.velocity)
 
         for i, pitch in enumerate(player.pitches[1 : 1 + MAX_EXTRA_PITCHES]):
             base = PA_PITCH2_TYPE + i * PA_PITCH_STRIDE
             fields[base + PA_PITCH_TYPE_OFFSET] = str(pitch.type)
-            fields[base + PA_PITCH_MOVEMENT_OFFSET] = str(pitch.movement)
+            fields[base + PA_PITCH_MOVEMENT_OFFSET] = _on(pitch.movement, SKILL)
             fields[base + PA_PITCH_CONTROL_OFFSET] = str(pitch.control)
             fields[base + PA_PITCH_VELOCITY_OFFSET] = str(pitch.velocity)
         return fields

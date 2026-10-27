@@ -121,6 +121,9 @@ class MVPPSPRomWriter:
         # table name -> the section's first line, without its `;\r\n`
         self.section_headers: dict[str, str] = {}
         self._modified_tables: set[str] = set()
+        #: (disc offset, bytes) written into the copy after `database.big`,
+        #: each the same size as what it replaces (portraits).
+        self.edits: list[tuple[int, bytes]] = []
 
     def load(self) -> bool:
         """Read and parse the source ISO's `database.big`.
@@ -302,6 +305,9 @@ class MVPPSPRomWriter:
         with open(self.output_path, "r+b") as f:
             f.seek(offset)
             f.write(new_db)
+            for at, data in self.edits:
+                f.seek(at)
+                f.write(data)
             f.flush()
             os.fsync(f.fileno())
 

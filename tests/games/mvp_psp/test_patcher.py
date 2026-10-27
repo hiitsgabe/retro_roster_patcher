@@ -67,10 +67,14 @@ from retro_roster_patcher.games.mvp_psp.models import (
     database_big_extent,
 )
 from retro_roster_patcher.games.mvp_psp.patcher import (
+    HITTING,
     PROGRESS_RECORDS_END,
+    SPEED,
+    STAMINA,
     MVPPSPPatcher,
     _database_big_extent_fits,
     _HashPool,
+    _on,
 )
 from retro_roster_patcher.games.mvp_psp.rom_writer import SectionTooLargeError
 from retro_roster_patcher.sports.espn import EspnClient
@@ -1155,7 +1159,7 @@ def test_a_patched_players_speed_reaches_the_disc(tmp_path):
     _, out = patch_one(tmp_path, {1: full_squad(1000)})
     table = patched_table(out, "attrib")
     written = [c for c in table.values() if c.get(ATTRIB_LAST_NAME) == "Family1000"]
-    assert written[0][ATTRIB_SPEED] == "35"
+    assert written[0][ATTRIB_SPEED] == _on(35, SPEED)
 
 
 def test_a_patched_batters_contact_reaches_the_split_table(tmp_path):
@@ -1164,7 +1168,7 @@ def test_a_patched_batters_contact_reaches_the_split_table(tmp_path):
     _, out = patch_one(tmp_path, {1: full_squad(1000)})
     table = patched_table(out, "lrattrib_rhp")
     written = [c for c in table.values() if c.get(LR_FIRST_NAME) == "Given1000"]
-    assert written[0][LR_CONTACT] == "55"
+    assert written[0][LR_CONTACT] == _on(55, HITTING)
 
 
 # A batter with no statistics takes his position's default for both splits, and a
@@ -1186,19 +1190,19 @@ def _lr_split(tmp_path, table_name):
 
 
 def test_the_right_handed_split_table_holds_the_right_handed_contact(tmp_path):
-    assert _lr_split(tmp_path, "lrattrib_rhp")[LR_CONTACT] == "99"
+    assert _lr_split(tmp_path, "lrattrib_rhp")[LR_CONTACT] == _on(99, HITTING)
 
 
 def test_the_left_handed_split_table_holds_the_left_handed_contact(tmp_path):
-    assert _lr_split(tmp_path, "lrattrib_lhp")[LR_CONTACT] == "94"
+    assert _lr_split(tmp_path, "lrattrib_lhp")[LR_CONTACT] == _on(94, HITTING)
 
 
 def test_the_right_handed_split_table_holds_the_right_handed_power(tmp_path):
-    assert _lr_split(tmp_path, "lrattrib_rhp")[LR_POWER] == "99"
+    assert _lr_split(tmp_path, "lrattrib_rhp")[LR_POWER] == _on(99, HITTING)
 
 
 def test_the_left_handed_split_table_holds_the_left_handed_power(tmp_path):
-    assert _lr_split(tmp_path, "lrattrib_lhp")[LR_POWER] == "94"
+    assert _lr_split(tmp_path, "lrattrib_lhp")[LR_POWER] == _on(94, HITTING)
 
 
 def test_a_patched_starters_stamina_reaches_the_pitching_table(tmp_path):
@@ -1207,7 +1211,7 @@ def test_a_patched_starters_stamina_reaches_the_pitching_table(tmp_path):
     _, out = patch_one(tmp_path, {1: squad})
     table = patched_table(out, "pitchattrib")
     written = [c for c in table.values() if c.get(ATTRIB_FIRST_NAME) == f"Given{squad[15].id}"]
-    assert written[0][PA_STAMINA] == "70"
+    assert written[0][PA_STAMINA] == _on(70, STAMINA)
 
 
 def test_a_patched_relievers_stamina_differs_from_a_starters(tmp_path):
@@ -1215,7 +1219,7 @@ def test_a_patched_relievers_stamina_differs_from_a_starters(tmp_path):
     _, out = patch_one(tmp_path, {1: squad})
     table = patched_table(out, "pitchattrib")
     written = [c for c in table.values() if c.get(ATTRIB_FIRST_NAME) == f"Given{squad[20].id}"]
-    assert written[0][PA_STAMINA] == "35"
+    assert written[0][PA_STAMINA] == _on(35, STAMINA)
 
 
 def test_a_mapped_pitchers_arsenal_is_the_frozen_pitch_type(tmp_path):
@@ -1343,22 +1347,11 @@ def test_the_disc_holds_more_than_one_height(tmp_path):
     assert len({cols[ATTRIB_HEIGHT] for cols in table.values()}) > 1
 
 
-def test_a_provider_weight_does_not_reach_the_disc(tmp_path):
-    # PINS UPSTREAM FIDELITY DELIBERATELY. The provider reports 217 lb and the
-    # disc gets `MVPPlayerRecord.weight`'s default, because nothing between the
-    # two reads the field. See the label on `_build_attrib_fields`.
-    _, out = patch_one(tmp_path, {1: full_squad(1000, weight=217.0)})
-    table = patched_table(out, "attrib")
-    written = [cols for cols in table.values() if cols.get(ATTRIB_LAST_NAME) == "Family1000"]
-    assert written[0][ATTRIB_WEIGHT] == "190"
-
-
-def test_every_patched_player_is_written_at_that_one_weight(tmp_path):
-    # The flattening, over the whole squad rather than one row.
+def test_the_provider_weight_reaches_the_disc(tmp_path):
     _, out = patch_one(tmp_path, {1: full_squad(1000, weight=217.0)})
     table = patched_table(out, "attrib")
     patched = [c for c in table.values() if c.get(ATTRIB_LAST_NAME) == "Family1000"]
-    assert {c[ATTRIB_WEIGHT] for c in patched} == {"190"}
+    assert {c[ATTRIB_WEIGHT] for c in patched} == {"217"}
 
 
 def test_the_weight_the_disc_shipped_is_overwritten(tmp_path):
@@ -1686,3 +1679,9 @@ def test_order_as_given_sends_spare_batters_to_the_bench(tmp_path):
     records = given(tmp_path, squad).teams[0]
     assert [(r.roster_position, r.batting_order) for r in records[15:17]] == [("B", -1)] * 2
     assert len(records) == 25
+
+
+def test_a_rating_lands_on_its_columns_range():
+    from retro_roster_patcher.games.mvp_psp.patcher import SKILL
+
+    assert (_on(0, SPEED), _on(99, SPEED), _on(0, SKILL), _on(99, SKILL)) == ("39", "99", "0", "15")

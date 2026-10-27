@@ -120,6 +120,7 @@ ATTRIB_BATS = 3  # 0=R, 1=L, 2=S
 ATTRIB_THROWS = 4  # 0=R, 1=L
 ATTRIB_PRIMARY_POS = 5
 ATTRIB_SECONDARY_POS = 6
+ATTRIB_AUDIO_ID = 7  # names the player's speech and portrait (`portraits`)
 ATTRIB_HEIGHT = 9  # inches
 ATTRIB_WEIGHT = 10  # pounds
 ATTRIB_PLATE_DISCIPLINE = 18
@@ -325,6 +326,18 @@ MVP_TEAM_ABBREVS: tuple[str, ...] = (
     "PHI",
 )
 
+# The clubs renamed or moved since 2005: slot abbreviation -> `team` columns 1-3
+# (location, nickname, abbreviation). The league and division columns stay:
+# the schedule and the DH rule follow the slot's league. Not the Angels (Los
+# Angeles) or the Athletics (Sacramento): with a new location, team select
+# drops their location and their rank (seen in PPSSPP, Oct 27 2026), while
+# Miami and the Rays' new nickname show.
+TEAM_RENAMES: dict[str, tuple[str, str, str]] = {
+    "CLE": ("Cleveland", "Guardians", "CLE"),
+    "TB": ("Tampa Bay", "Rays", "TB"),
+    "FLA": ("Miami", "Marlins", "MIA"),
+}
+
 # Slot index -> the club's 2005 name, for display only.
 MVP_TEAM_ORDER: tuple[str, ...] = (
     "Anaheim Angels",
@@ -476,10 +489,9 @@ class MVPPlayerRecord:
     `hash_id` is empty until `patch` assigns one out of the disc's own pool:
     which id a player gets depends on what the disc already holds.
 
-    Upstream behaviour, known wrong, preserved deliberately: neither `height`
-    nor `weight` has a producer, so every player written to a disc is 6'0" and
-    190 lb. Both are written unconditionally; see
-    `patcher._build_attrib_fields`.
+    `height` and `weight` are the provider's, else 6'0" and 190 lb.
+    `player_id`, `photo_url` and `nationality` are the provider's, for the
+    player's portrait and looks (`looks`, `portraits`); none is a column.
     """
 
     first_name: str = ""
@@ -489,8 +501,8 @@ class MVPPlayerRecord:
     throws: int = 0  # 0=R, 1=L
     primary_position: str = "CF"
     secondary_position: str = ""
-    height: int = 72  # inches; see the class docstring -- nothing sets this
-    weight: int = 190  # pounds; see the class docstring -- nothing sets this either
+    height: int = 72  # inches
+    weight: int = 190  # pounds
 
     speed: int = 50
     fielding: int = 50
@@ -519,6 +531,10 @@ class MVPPlayerRecord:
     roster_position: str = ""
     batting_order: int = NOT_IN_LINEUP
     hash_id: str = ""
+
+    player_id: int = 0
+    photo_url: str = ""
+    nationality: str = ""
 
 
 @dataclass

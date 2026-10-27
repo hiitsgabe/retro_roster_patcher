@@ -235,6 +235,14 @@ _MAPPER_KEYS = {
 }
 
 
+def _nationality(athlete: dict) -> str:
+    """ESPN's `citizenship`, else the country of `birthPlace` (the MLB rosters
+    give only that)."""
+    born = athlete.get("birthPlace")
+    country = born.get("country", "") if isinstance(born, dict) else ""
+    return str(athlete.get("citizenship") or country or "")
+
+
 def _as_float(value: Any) -> float:
     """A statistic's numeric value, or `0.0` for anything that is not one.
 
@@ -725,7 +733,7 @@ class EspnClient:
                         first_name=first_name,
                         last_name=last_name,
                         age=athlete.get("age", 25) or 25,
-                        nationality=athlete.get("citizenship", ""),
+                        nationality=_nationality(athlete),
                         position=pos_abbrev,
                         number=number,
                         photo_url=photo,
@@ -820,7 +828,7 @@ class EspnClient:
                     first_name=first_name,
                     last_name=last_name,
                     age=athlete.get("age", 25) or 25,
-                    nationality=athlete.get("citizenship", ""),
+                    nationality=_nationality(athlete),
                     position=pos_abbrev,
                     number=number,
                     photo_url=(athlete.get("headshot") or {}).get("href", "")
@@ -1224,7 +1232,7 @@ class EspnClient:
                     first_name=first_name,
                     last_name=last_name,
                     age=athlete.get("age", 25) or 25,
-                    nationality=athlete.get("citizenship", ""),
+                    nationality=_nationality(athlete),
                     position=position,
                     number=number,
                     photo_url=(
@@ -1309,7 +1317,7 @@ class EspnClient:
                         first_name=first_name,
                         last_name=last_name,
                         age=athlete.get("age", 25) or 25,
-                        nationality=athlete.get("citizenship", ""),
+                        nationality=_nationality(athlete),
                         position=pos_abbrev,
                         number=number,
                         photo_url=photo,
