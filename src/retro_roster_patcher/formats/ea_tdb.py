@@ -145,6 +145,15 @@ def _is_encodable(length: int, offset: int) -> bool:
     return False
 
 
+def _copy_cost(length: int, offset: int) -> int:
+    """How many bytes `_emit_copy` spends on the command itself for this match."""
+    if length <= 10 and offset <= 1024:
+        return 2
+    if 4 <= length <= 67 and offset <= 16384:
+        return 3
+    return 4
+
+
 def _emit_copy(out: bytearray, nl: int, lit_bytes: bytes, length: int, offset: int) -> None:
     """Append a copy command carrying `nl` (0-3) attached literals.
 
@@ -173,7 +182,21 @@ def _emit_copy(out: bytearray, nl: int, lit_bytes: bytes, length: int, offset: i
 
 
 def refpack_compress(data: bytes) -> bytes:
-    """Compress with RefPack/QFS: hash-chain LZ77 with lazy match evaluation."""
+    """Compress with RefPack/QFS: hash-chain LZ77 with lazy match evaluation.
+
+    Two parses are made and the shorter stream kept: one taking the longest
+    match at each position (the port of the original tool, which EA's own
+    files pin byte for byte in the tests), one taking the match whose copy
+    command saves the most bytes, which comes out a little smaller on large
+    text tables, where the longest-only parse ran about 1% over EA's.
+    """
+    longest = _refpack(data, by_saving=False)
+    cheapest = _refpack(data, by_saving=True)
+    return cheapest if len(cheapest) < len(longest) else longest
+
+
+def _refpack(data: bytes, by_saving: bool) -> bytes:
+    """One RefPack parse; see `refpack_compress`."""
     size = len(data)
     out = bytearray()
 
@@ -190,7 +213,7 @@ def refpack_compress(data: bytes) -> bytes:
 
     hash_bits = 16
     hash_mask = (1 << hash_bits) - 1
-    max_chain = 128
+    max_chain = 256 if by_saving else 128
     max_offset = 131072
     max_match = 1028
 
@@ -209,17 +232,19 @@ def refpack_compress(data: bytes) -> bytes:
         chain[p] = head[h]
         head[h] = p
 
-    def find_match(p: int) -> tuple[int, int]:
-        """Longest match for the three bytes at `p`, as (offset, length).
+    def find_match(p: int) -> tuple[int, int, int]:
+        """The match at `p` as (score, length, offset); (0, 0, 0) for none.
 
-        Returns (0, 0) when there is nothing at least three bytes long.
+        The score is the length (`by_saving` off: the longest match, which may
+        not be encodable) or the bytes its cheapest copy command saves over
+        literals, each candidate tried at the longest length each of
+        `_emit_copy`'s three commands takes.
         """
         if p + 2 >= size:
-            return 0, 0
+            return 0, 0, 0
         h = calc_hash(p)
         cand = head[h]
-        best_len = 2
-        best_off = 0
+        best = (0, 0, 0) if by_saving else (2, 2, 0)
         depth = 0
         d0, d1, d2 = data[p], data[p + 1], data[p + 2]
 
@@ -232,17 +257,21 @@ def refpack_compress(data: bytes) -> bytes:
                 limit = min(max_match, size - p, size - cand)
                 while ml < limit and data[cand + ml] == data[p + ml]:
                     ml += 1
-                if ml > best_len:
-                    best_len = ml
-                    best_off = off
-                    if ml >= max_match:
-                        break
+                if by_saving:
+                    for longest in (10, 67, max_match):
+                        length = min(ml, longest)
+                        if _is_encodable(length, off):
+                            saving = length - _copy_cost(length, off)
+                            if saving > best[0] or (saving == best[0] and length > best[1]):
+                                best = (saving, length, off)
+                elif ml > best[1]:
+                    best = (ml, ml, off)
+                if ml >= max_match:
+                    break
             cand = chain[cand]
             depth += 1
 
-        if best_len < 3:
-            return 0, 0
-        return best_off, best_len
+        return best if best[1] >= 3 else (0, 0, 0)
 
     def flush_literals(lit_start: int, end: int) -> int:
         """Emit literal-only commands until at most 3 literals are left pending.
@@ -265,17 +294,24 @@ def refpack_compress(data: bytes) -> bytes:
     lit_start = 0
 
     while pos < size:
-        offset, length = find_match(pos)
+        score, length, offset = find_match(pos)
 
-        if length < 3 or not _is_encodable(length, offset):
+        if length < 3 or (by_saving and score <= 0) or not _is_encodable(length, offset):
             insert(pos)
             pos += 1
             continue
 
         if length < max_match and pos + 1 < size - 2:
+            # Lazy step: a literal now is worth it when the next position's
+            # match is better.
             insert(pos)
-            next_offset, next_length = find_match(pos + 1)
-            if next_length > length + 1 and _is_encodable(next_length, next_offset):
+            next_score, next_length, next_offset = find_match(pos + 1)
+            better = (
+                next_score > score
+                if by_saving
+                else next_length > length + 1 and _is_encodable(next_length, next_offset)
+            )
+            if better:
                 pos += 1
                 continue
 

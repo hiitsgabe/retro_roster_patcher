@@ -61,7 +61,7 @@ from ...sports.espn import EspnClient
 from ...sports.models import League, LeagueData, TeamRoster
 from ...sports.nhl import NhlApiClient
 from ..nhl07_psp.rom_writer import iso_entry, write_in_place
-from . import logos, portraits, screens
+from . import logos, portraits, screens, teams, wordmarks
 from .models import (
     NAMED_SLOT_COUNT,
     NHL05_TEAM_NAMES,
@@ -503,6 +503,10 @@ class NHL05PS2Patcher(Patcher):
             if options.get("portraits", True):
                 self._lend_portraits(writer, tables)
 
+            renamed = teams.rename_tables(tables.tdb, rosters.teams)
+            for rename in renamed:
+                self.status(f"Club renamed: {rename.old.full} is now {rename.new.full}")
+
             self.status("Rebuilding DB.VIV...")
             writer.rebuild_and_write(
                 self._archive_spelling(writer, master_tdb, roster_tdb),
@@ -512,6 +516,8 @@ class NHL05PS2Patcher(Patcher):
                 self._write_portraits(writer, master_tdb)
             if options.get("logos", True):
                 self._write_logos(writer, rosters)
+            if renamed:
+                self._write_names(writer, renamed)
             if pictures:
                 self._write_images(writer, pictures)
 
@@ -710,6 +716,50 @@ class NHL05PS2Patcher(Patcher):
             f.seek(entry.extent.offset)
             f.write(edited)
         self.status(f"Team logos drawn: {len(drawn)} of {len(crests)} clubs")
+
+    def _write_names(self, writer: NHL05PS2RomWriter, renamed: list[teams.Rename]) -> None:
+        """The renamed clubs' names in the front end's strings and their
+        wordmarks, in place (`teams`, `wordmarks`)."""
+        with open(writer.output_path, "r+b") as f:
+            found = iso_entry(f, teams.LOCAL_ARCHIVE)
+            if found is not None:
+                f.seek(found[0].extent.offset)
+                edited, changed, skipped = teams.rename_strings(
+                    f.read(found[0].extent.size), renamed
+                )
+                f.seek(found[0].extent.offset)
+                f.write(edited)
+                self.status(f"Club names in the front end's text: {changed} strings")
+                for name in skipped:
+                    self.status(f"String table {name} skipped: it no longer fits its slot")
+            found = iso_entry(f, logos.ARCHIVE)
+            if found is None:
+                return
+            f.seek(found[0].extent.offset)
+            archive = f.read(found[0].extent.size)
+            marks = bytearray(archive)
+            atlas = wordmarks.letters(archive)
+            drawn = 0
+            for rename in renamed:
+                member = f"T_{logos.SLOT_FILES[rename.slot]}"
+                entry = next(
+                    (e for e in bigf_parse(archive) if e.name.lower() == f"{member}.big".lower()),
+                    None,
+                )
+                picture = wordmarks.render(rename.new.city, atlas)
+                if entry is None or picture is None:
+                    continue
+                copy = screens.Copy(logos.ARCHIVE, entry.name, f"{member}.ssh")
+                data = screens.fitted(
+                    archive[entry.offset : entry.offset + entry.size], copy, picture
+                )
+                if data is not None:
+                    marks[entry.offset : entry.offset + entry.size] = data.ljust(entry.size, b"\0")
+                    drawn += 1
+            if drawn:
+                f.seek(found[0].extent.offset)
+                f.write(marks)
+        self.status(f"Wordmarks redrawn: {drawn} of {len(renamed)}")
 
     def _headshot(self, url: str) -> bytes | None:
         return load_headshot(self.cache_dir, url, self._transport)
