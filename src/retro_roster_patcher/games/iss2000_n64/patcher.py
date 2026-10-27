@@ -109,8 +109,9 @@ class ISS2000Patcher(Patcher):
         ("Oceania", 96, 4),
     )
 
-    #: `patch(images={"menu": png})`: the wallpaper behind every menu
-    #: (`screens`); `export_images` writes the cartridge's.
+    #: `patch(images={slot: png})`: "menu", the wallpaper behind every menu, and
+    #: "title", the PRESS START screen (`screens`); `export_images` writes the
+    #: cartridge's.
     image_slots: tuple[str, ...] = screens.SLOTS
 
     fetch = ISSPatcher.fetch
