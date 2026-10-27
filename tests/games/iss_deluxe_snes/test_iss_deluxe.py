@@ -89,6 +89,5 @@ def test_names_take_the_initial_when_it_fits():
             ["Igor Gomes", "Cássio", "Pedro Tocantins", "Gabriel Silva", "Gustavo Silva"]
         )
     ]
-    names = ISSStatMapper()._distinct_names(squad, initials=True)
+    names = ISSStatMapper()._distinct_names(squad)
     assert names == ["I.Gomes", "Cassio", "Tocantin", "Gabriel", "Gustavo"]
-    assert ISSStatMapper()._distinct_names(squad[:1]) == ["Gomes"]  # ISS keeps the surname

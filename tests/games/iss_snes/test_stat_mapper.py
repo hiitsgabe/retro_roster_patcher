@@ -570,6 +570,11 @@ def test_a_two_word_name_reduces_to_the_surname(mapper):
     assert mapper._format_player_name(_player(1, name="Jurgen Klinsmann")) == "Klinsman"
 
 
+def test_a_short_surname_takes_the_initial(mapper):
+    assert mapper._format_player_name(_player(1, name="Igor Gomes")) == "I.Gomes"
+    assert mapper._format_player_name(_player(1, name="Gabriel Delfim")) == "G.Delfim"
+
+
 def test_a_single_word_name_is_used_whole(mapper):
     assert mapper._format_player_name(_player(1, name="Ronaldinho")) == "Ronaldin"
 
