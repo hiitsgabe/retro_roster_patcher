@@ -47,7 +47,7 @@ from ...core.registry import register
 from ...sports import _http
 from ...sports.espn import EspnClient
 from ...sports.models import League, LeagueData, TeamRoster
-from . import logos, looks, portraits
+from . import logos, looks, portraits, screens
 from . import teams as team_blocks
 from .models import (
     BYTE_TO_POSITION,
@@ -144,6 +144,9 @@ class NBALive95Patcher(Patcher):
 
     #: `patch` draws each team's crest as its team-select logo unless `logos=False`.
     supports_logos: bool = True
+    #: Screen art `patch(images={name: png})` can replace; `export_images`
+    #: writes the cartridge's current art for each. See `screens`.
+    image_slots: tuple[str, ...] = screens.IMAGE_SLOT_NAMES
     #: `patch` sets each player's skin and head from his head shot unless
     #: `looks=False` (then the plain default, with no download).
     supports_looks: bool = True
@@ -324,6 +327,10 @@ class NBALive95Patcher(Patcher):
 
     # -- patch --------------------------------------------------------------
 
+    def export_images(self, rom_path: Path, out_dir: Path) -> list[Path]:
+        """Write each slot's current art as `<out_dir>/<slot>.png`, to edit and feed back."""
+        return screens.export(Path(rom_path).read_bytes(), Path(out_dir))
+
     def _headshot(self, url: str) -> bytes | None:
         return load_headshot(self.cache_dir, url, self._transport)
 
@@ -441,6 +448,10 @@ class NBALive95Patcher(Patcher):
                 writer.data, {k: png for k, png in shots.items() if png is not None}, free
             )
             self.status(f"Portraits drawn from head shots: {len(drawn)} of {len(urls)} starters")
+
+        pictures = screens.load_images(options.get("images"), self.status)
+        if pictures and writer.data is not None:
+            screens.write(writer.data, pictures, free)
 
         self.status("Saving patched ROM...")
         if on_progress is not None:
