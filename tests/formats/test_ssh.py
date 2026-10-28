@@ -21,7 +21,7 @@ def shape(width: int, height: int) -> bytes:
     pixels += bytes(width * height)
     palette = bytearray(0x20)
     palette[0] = ssh.PALETTE
-    return head + bytes(pixels) + bytes(palette) + bytes(1024)
+    return bytes(head) + bytes(pixels) + bytes(palette) + bytes(1024)
 
 
 def test_a_picture_round_trips_through_encode_and_decode():
