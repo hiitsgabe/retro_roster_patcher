@@ -283,6 +283,16 @@ def test_the_repetitive_cases_actually_compress():
     assert len(refpack_compress(ROUND_TRIP_CORPUS["rand-1000"])) == 1015
 
 
+def test_the_tight_parse_is_never_longer_and_still_decompresses():
+    # A text table like LOCAL.VIV's: many near-repeats, where the match that
+    # saves the most bytes is not always the longest one.
+    words = [f"Team {n % 37} plays at the {n % 11} arena in city {n % 23}. " for n in range(1500)]
+    data = "".join(words).encode()
+    plain, tight = refpack_compress(data), refpack_compress(data, tight=True)
+    assert len(tight) <= len(plain)
+    assert refpack_decompress(tight) == data and refpack_decompress(plain) == data
+
+
 def test_an_overlapping_match_repeats_the_byte_it_points_at():
     # Offset 1 with a length of 40 means "copy the byte before you, 40 times",
     # and a decompressor that read its source buffer as a slice before the copy

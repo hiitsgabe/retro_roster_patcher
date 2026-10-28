@@ -93,7 +93,7 @@ def _entry(stored: bytes, image: Image.Image, colours: int) -> bytes | None:
     except (EaTdbError, ssh.SshError, IndexError, ValueError):
         return None
     out = bigf_replace(inner, shape.name, data)
-    return refpack_compress(out) if packed else out
+    return refpack_compress(out, tight=True) if packed else out
 
 
 def repack(archive: bytes, images: Mapping[int, Image.Image]) -> tuple[bytes, int]:

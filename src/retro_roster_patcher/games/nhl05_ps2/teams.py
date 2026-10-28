@@ -130,7 +130,7 @@ def rename_strings(archive: bytes, renames: Iterable[Rename]) -> tuple[bytes, in
                 edited += 1
         if not edited:
             continue
-        data = refpack_compress(build_table(entries))
+        data = refpack_compress(build_table(entries), tight=True)
         if len(data) > entry.size:
             skipped.append(entry.name)
             continue

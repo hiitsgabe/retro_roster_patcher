@@ -181,16 +181,19 @@ def _emit_copy(out: bytearray, nl: int, lit_bytes: bytes, length: int, offset: i
     out.extend(lit_bytes)
 
 
-def refpack_compress(data: bytes) -> bytes:
+def refpack_compress(data: bytes, tight: bool = False) -> bytes:
     """Compress with RefPack/QFS: hash-chain LZ77 with lazy match evaluation.
 
-    Two parses are made and the shorter stream kept: one taking the longest
-    match at each position (the port of the original tool, which EA's own
-    files pin byte for byte in the tests), one taking the match whose copy
-    command saves the most bytes, which comes out a little smaller on large
-    text tables, where the longest-only parse ran about 1% over EA's.
+    The parse takes the longest match at each position: the port of the
+    original tool, which EA's own files pin byte for byte in the tests. With
+    `tight`, a second parse taking the match whose copy command saves the most
+    bytes is made too and the shorter stream kept: about 1% smaller on large
+    text tables, where the longest-only parse ran over EA's, at four times the
+    time, so it is for a stream that must fit the slack it is written into.
     """
     longest = _refpack(data, by_saving=False)
+    if not tight:
+        return longest
     cheapest = _refpack(data, by_saving=True)
     return cheapest if len(cheapest) < len(longest) else longest
 

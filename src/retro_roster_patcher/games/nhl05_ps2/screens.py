@@ -171,11 +171,11 @@ def _encoded(member: bytes, copy: Copy, image: Image.Image, colours: int) -> byt
     if copy.shape is not None:
         inner = next(e for e in bigf_parse(raw) if e.name.lower() == copy.shape.lower())
         if raw[inner.offset : inner.offset + 2] == b"\x10\xfb":
-            data = refpack_compress(data)
+            data = refpack_compress(data, tight=True)
         raw = bigf_replace(raw, inner.name, data)
     else:
         raw = data
-    return refpack_compress(raw) if packed else raw
+    return refpack_compress(raw, tight=True) if packed else raw
 
 
 def fitted(member: bytes, copy: Copy, image: Image.Image) -> bytes | None:

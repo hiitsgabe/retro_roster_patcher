@@ -158,7 +158,9 @@ def repack(
         if key not in encoded:
             try:
                 tone = tones.get(skin, tones[min(tones)])
-                encoded[key] = refpack_compress(_member(template, toned_face(plain, tone), colours))
+                encoded[key] = refpack_compress(
+                    _member(template, toned_face(plain, tone), colours), tight=True
+                )
             except (EaTdbError, ssh.SshError, IndexError, ValueError):
                 encoded[key] = None
         return encoded[key]
