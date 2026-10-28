@@ -1266,3 +1266,35 @@ def test_the_editors_list_handed_back_lines_up_as_the_patch_alone_would(tmp_path
         }
 
     assert by_position(edited) == by_position(alone)
+
+
+def test_every_written_bio_reaches_the_face_step_in_its_shade(tmp_path, monkeypatch):
+    # The face texture is what the game draws (`faces`), so every written
+    # bio's shade reaches the face step, by bio record; a dark head shot
+    # gives one of the two dark shades.
+    pytest.importorskip("PIL")
+    from retro_roster_patcher.games.nhl05_ps2 import looks
+    from retro_roster_patcher.games.nhl05_ps2.patcher import NHL05PS2Patcher
+    from tests.fixtures.synthetic_headshot import headshot
+
+    seen = {}
+
+    def write_faces(self, writer, master_tdb):
+        seen.update(writer.skins)
+        return 0
+
+    monkeypatch.setattr(NHL05PS2Patcher, "_write_faces", write_faces)
+    dark = headshot((95, 60, 40))
+    squads = {t.code: squad(1000 * (i + 1)) for i, t in enumerate(default_teams())}
+    squads["ANA"][5].photo_url = "https://example.test/5.png"
+    patcher = build(tmp_path, FakeApi(squads=squads), transport=lambda url, headers, timeout: dark)
+    out = tmp_path / "out.iso"
+    patcher.patch(
+        rom_path=iso(tmp_path),
+        output_path=out,
+        rosters=patcher.map_rosters(league(squads=squads)),
+        portraits=False,
+    )
+    assert len(seen) == len(default_teams()) * 22
+    assert set(seen.values()) <= set(looks.SKIN_VALUES)
+    assert 5 in seen.values() or 6 in seen.values()

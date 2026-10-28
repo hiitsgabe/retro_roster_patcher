@@ -308,6 +308,10 @@ class NHL05PlayerRecord:
     birth_year: int = -1
     birth_month: int = -1
     birth_day: int = -1
+    #: The provider's nationality, for the look; not a field.
+    nationality: str = ""
+    #: `SKIN`, the shade of the face (`looks`); -1 leaves the disc's.
+    skin: int = -1
     skater_attrs: NHL05SkaterAttributes | None = None
     goalie_attrs: NHL05GoalieAttributes | None = None
 

@@ -350,6 +350,7 @@ class NHL05StatMapper:
             player_id=player.id if player.id else 0,
             is_goalie=is_goalie,
             photo_url=player.photo_url,
+            nationality=player.nationality,
         )
         _set_birth(record, player)
 

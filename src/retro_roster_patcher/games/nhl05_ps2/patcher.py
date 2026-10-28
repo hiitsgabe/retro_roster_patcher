@@ -35,6 +35,7 @@ import importlib.util
 import os
 from collections import Counter
 from collections.abc import Mapping
+from copy import deepcopy
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -42,7 +43,7 @@ from typing import Any
 from ...core.assets import crest_png
 from ...core.concurrency import parallel_map
 from ...core.errors import ApiError, CapabilityError, RomError, as_rom_error
-from ...core.headshots import load_headshot
+from ...core.headshots import load_headshot, measure_faces
 from ...core.models import (
     MappedRosters,
     PartialFn,
@@ -61,7 +62,7 @@ from ...sports.espn import EspnClient
 from ...sports.models import League, LeagueData, TeamRoster
 from ...sports.nhl import NhlApiClient
 from ..nhl07_psp.rom_writer import iso_entry, write_in_place
-from . import logos, portraits, screens, teams, wordmarks
+from . import faces, logos, looks, portraits, screens, teams, wordmarks
 from .models import (
     NAMED_SLOT_COUNT,
     NHL05_TEAM_NAMES,
@@ -460,6 +461,9 @@ class NHL05PS2Patcher(Patcher):
         """
         rosters.require_game(self.game_id)
         pictures = self._decode_images(self._collect_images(options.get("images")))
+        # Looks first, on a copy: the head shots are measured before the
+        # ISO is touched, so a download that fails leaves no half-written disc.
+        rosters = self._dress(rosters, bool(options.get("looks", True)))
 
         with as_rom_error(rom_path):
             self.status("Validating ROM...")
@@ -514,6 +518,8 @@ class NHL05PS2Patcher(Patcher):
             )
             if options.get("portraits", True):
                 self._write_portraits(writer, master_tdb)
+            if options.get("looks", True):
+                self._write_faces(writer, master_tdb)
             if options.get("logos", True):
                 self._write_logos(writer, rosters)
             if renamed:
@@ -526,6 +532,54 @@ class NHL05PS2Patcher(Patcher):
             teams_patched=teams_patched,
             players_patched=players_patched,
         )
+
+    def _dress(self, rosters: MappedRosters, measure: bool) -> MappedRosters:
+        """A copy of `rosters` with every player's `skin` set (`looks.dress`):
+        from his head shot when `measure`, else from the no-photo pick alone,
+        with no download at all."""
+        urls = {
+            record.player_id: record.photo_url
+            for players in rosters.teams.values()
+            for record in players
+            if record.player_id and record.photo_url
+        }
+        measured = (
+            measure_faces(self.cache_dir, urls, self._transport, self.status) if measure else {}
+        )
+        dressed = deepcopy(rosters)
+        for players in dressed.teams.values():
+            looks.dress(players, measured)
+        return dressed
+
+    def _write_faces(self, writer: NHL05PS2RomWriter, master_tdb: TDBFile) -> int:
+        """Give each written bio, by its `ART_` (`faces.face_targets`), the
+        generic face toned to its `SKIN` (`faces`): the game draws that, and
+        no 2004 face stays on a new player. A bio without a face of its own
+        keeps the generic one. Needs Pillow; skipped with a status line
+        without it. Returns how many faces went in."""
+        spbt = master_tdb.get_table("SPBT")
+        if spbt is None or not writer.skins:
+            return 0
+        art_of = {i: spbt.read_record(i).get("ART_") for i in _live_records(spbt)}
+        wanted = faces.face_targets(art_of, writer.skins)
+        if not wanted:
+            return 0
+        if importlib.util.find_spec("PIL") is None:
+            self.status("Faces skipped: Pillow is not installed")
+            return 0
+        with open(writer.output_path, "r+b") as f:
+            found = iso_entry(f, faces.FACES_PATH)
+            if found is None:
+                return 0
+            entry, next_lba = found
+            f.seek(entry.extent.offset)
+            archive = f.read(entry.extent.size)
+            self.status(f"Drawing {len(wanted)} faces...")
+            new_archive, drawn = faces.repack(archive, wanted)
+            if drawn:
+                write_in_place(f, entry, next_lba, new_archive)
+        self.status(f"Faces drawn: {drawn}")
+        return drawn
 
     def _write_portraits(self, writer: NHL05PS2RomWriter, master_tdb: TDBFile) -> int:
         """Each written player's head shot in his portrait (`portraits`), the
@@ -980,6 +1034,8 @@ class NHL05PS2Patcher(Patcher):
         """
         writer.write_player_bio(tables.tdb, roster_slot.bio_index, player)
         writer.photos[roster_slot.bio_index] = player.photo_url
+        if player.skin >= 0:
+            writer.skins[roster_slot.bio_index] = player.skin
 
         if player.is_goalie and player.goalie_attrs is not None:
             if roster_slot.sgai_index is not None:

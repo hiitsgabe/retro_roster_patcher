@@ -148,6 +148,8 @@ class NHL05PS2RomWriter:
     def __init__(self, iso_path: str, output_path: str) -> None:
         #: SPBT record index -> the head shot of the player written there.
         self.photos: dict[int, str] = {}
+        #: Bio record index -> `SKIN` of the player written there (`looks`).
+        self.skins: dict[int, int] = {}
         self.iso_path = iso_path
         self.output_path = output_path
         self.reader: NHL05PS2RomReader | None = None
@@ -245,6 +247,8 @@ class NHL05PS2RomWriter:
                 values[name] = value
         if player.city:
             values["CITY"] = player.city
+        if player.skin >= 0:
+            values["SKIN"] = player.skin
         if player.weight > 0:
             values["WEIG"] = player.weight
         if player.height > 0:

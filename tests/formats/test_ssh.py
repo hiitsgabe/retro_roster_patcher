@@ -39,14 +39,14 @@ def test_not_a_shape_is_refused():
         ssh.decode(b"nope" + bytes(64))
 
 
-def packed_shape(width: int, height: int) -> bytes:
-    """A one-shape packed `ShpS` (kind 8): the seven-bit image and the plane."""
+def packed_shape(width: int, height: int, kind: int = ssh.PACKED) -> bytes:
+    """A one-shape packed `ShpS`: the upper-bits image and the plane."""
     head = bytearray(0x20)
     head[:4] = ssh.MAGIC
     struct.pack_into(">I", head, 0x10, 0x20)
-    size = width * height * 5 // 8
+    size = width * height * (5 if kind == ssh.PACKED else 3) // 8
     pixels = bytearray(0x20)
-    pixels[0] = ssh.PACKED
+    pixels[0] = kind
     struct.pack_into("<I", pixels, 4, 0x20 + size)
     struct.pack_into("<I", pixels, 0xC, size)
     struct.pack_into("<II", pixels, 0x18, width, height)
@@ -88,3 +88,29 @@ def test_a_packed_picture_round_trips_in_pairs_of_shades():
 def test_a_short_packed_shape_is_refused():
     with pytest.raises(ssh.SshError):
         ssh.decode(packed_shape(64, 64)[:2000])
+
+
+def test_a_tightly_packed_picture_round_trips_in_runs_of_four_shades():
+    # The faces' kind: eight pixels share an index's upper six bits and each
+    # adds two of its own, so the palette is 64 runs of four shades.
+    picture = PIL.new("RGBA", (128, 128))
+    picture.putdata(
+        [
+            ((x * 2) % 256, (y * 2) % 256, 160 - (x + y) // 2, 255)
+            for y in range(128)
+            for x in range(128)
+        ]
+    )
+    data = ssh.encode(packed_shape(128, 128, ssh.PACKED_TIGHT), picture)
+    assert len(data) == len(packed_shape(128, 128, ssh.PACKED_TIGHT))
+    out = ssh.decode(data)
+    error = sum(
+        abs(a - b)
+        for y in range(128)
+        for x in range(128)
+        for a, b in zip(out.getpixel((x, y))[:3], picture.getpixel((x, y))[:3], strict=True)
+    ) / (128 * 128 * 3)
+    assert error < 8
+    indices, _, _ = ssh.indices(data)
+    for group in ssh._groups(128, 128, ssh.PACKINGS[ssh.PACKED_TIGHT]):
+        assert len(group) == 8 and len({indices[i] >> 2 for i in group}) == 1
