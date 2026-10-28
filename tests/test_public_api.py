@@ -132,10 +132,17 @@ def test_core_assets_declares_its_own_surface():
     # `package_bytes` has no caller in src/ outside `package_path` beside it, so
     # nothing but this says it is API rather than a leftover. It is the function
     # a consumer wants: both target platforms run from inside an archive, where
-    # reading an asset by path does not work.
+    # reading an asset by path does not work. `crest_png` is the one way every
+    # game package fetches a club's crest: the user's `assets_dir/logos/<id>.png`
+    # first, else the provider's URL, and None rather than a failed patch.
     from retro_roster_patcher.core import assets
 
-    assert set(assets.__all__) == {"MissingAssetError", "package_bytes", "package_path"}
+    assert set(assets.__all__) == {
+        "MissingAssetError",
+        "crest_png",
+        "package_bytes",
+        "package_path",
+    }
 
 
 def test_the_we2002_package_exports_exactly_these_names():

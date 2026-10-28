@@ -3,6 +3,8 @@
 import os
 import random
 
+import pytest
+
 from retro_roster_patcher.core.registry import get_patcher
 from retro_roster_patcher.games.iss2000_n64 import rom as R
 from retro_roster_patcher.games.iss2000_n64 import screens
@@ -163,6 +165,7 @@ def _cartridge(title_room: int) -> bytearray:
 def test_title_round_trips_through_the_cartridge(tmp_path):
     from io import BytesIO
 
+    pytest.importorskip("PIL")
     from PIL import Image, ImageDraw
 
     pic = Image.new("RGB", (320, 240), (0, 96, 40))
@@ -185,6 +188,7 @@ def test_a_busy_title_drops_colours_rather_than_grow_the_image(tmp_path):
     import math
     from io import BytesIO
 
+    pytest.importorskip("PIL")
     from PIL import Image
 
     rng = random.Random(3)

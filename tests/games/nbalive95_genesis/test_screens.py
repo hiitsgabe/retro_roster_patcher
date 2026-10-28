@@ -1,8 +1,11 @@
 """NBA Live 95 title art: the encoder, without a cartridge."""
 
-from PIL import Image, ImageDraw
+import pytest
 
 from retro_roster_patcher.games.nbalive95_genesis import screens
+
+Image = pytest.importorskip("PIL.Image")
+ImageDraw = pytest.importorskip("PIL.ImageDraw")
 
 
 def test_a_picture_becomes_tiles_a_full_map_and_three_lines_that_spare_live():

@@ -3,7 +3,7 @@
 import io
 import struct
 
-from PIL import Image
+import pytest
 
 from retro_roster_patcher.games.nbalive95_genesis import logos
 from retro_roster_patcher.games.nbalive95_genesis.space import FREE, Space
@@ -12,6 +12,8 @@ from retro_roster_patcher.games.nbalive95_genesis.stat_mapper import (
     NBALive95StatMapper,
 )
 from retro_roster_patcher.sports.models import Player
+
+Image = pytest.importorskip("PIL.Image")
 
 
 def _image():
