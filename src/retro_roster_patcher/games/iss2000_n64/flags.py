@@ -33,12 +33,19 @@ GENERIC = 0x49E
 W, H = 48, 32
 TEX_SIZE = W * H // 2
 
+#: Asset 674 is laid out for 16 textures plus 256 bytes, but the game uses the
+#: room of the last one (id 0x4F0, which no team on the cartridge uses) for
+#: something else: a crest written there draws with its top rows replaced by
+#: noise on team select, and in the match the players' heads go missing or
+#: turn to noise (checked in Mupen64Plus-Next, Oct 29 2026: every patch whose
+#: crest landed there broke, every other placement drew both right). So that
+#: slot is not a flag texture, and the bundle holds 15.
 _BUNDLES = (
     (670, 0x49E, 0x200, 16),
     (671, 0x4AE, 0, 17),
     (672, 0x4BF, 0, 17),
     (673, 0x4D0, 0, 17),
-    (674, 0x4E1, 0, 16),
+    (674, 0x4E1, 0, 15),
 )
 PALETTE_ASSET = 669
 PALETTE_BASE = 0x1300

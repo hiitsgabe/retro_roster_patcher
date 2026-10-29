@@ -979,10 +979,13 @@ class EspnClient:
 
         One request for the team schedule, then one per match summary (up to
         `LINEUP_MATCHES`), whose `rosters` carry each side's formation and who
-        started where. The eleven who started most often make the lineup, so a
-        side rested for one match does not become the team; ties go to the
-        more recent starter, and each keeps the position of his latest start.
-        The formation is the latest match's. Returned as plain data
+        started where. The formation and its eleven places are the latest
+        match's; each place goes to the player who started most often in that
+        position lately (then in that line of the pitch), ties to the more
+        recent starter, so a side rested for one match does not become the
+        team, yet the eleven always fit the formation: the eleven most frequent
+        starters on their own would mix matches played in different shapes and
+        put a fifth defender up front. Returned as plain data
         (`{"formation": "4-2-3-1", "event": id, "starters": [{"id",
         "position", "number", "place"}, ...]}`) so it rides along in
         `TeamRoster.extra` through the JSON boundary. Cached per match.
@@ -1007,18 +1010,31 @@ class EspnClient:
         latest = lineups[0]
         if len(lineups) == 1:
             return latest
-        starts: dict[int, int] = {}
+        at_code: dict[str, dict[int, int]] = {}
+        in_group: dict[str, dict[int, int]] = {}
         seen: dict[int, dict[str, Any]] = {}
         for lineup in lineups:  # newest first, so the first sighting is the latest
             for starter in lineup["starters"]:
-                starts[starter["id"]] = starts.get(starter["id"], 0) + 1
-                seen.setdefault(starter["id"], starter)
-        order = sorted(starts, key=lambda pid: (-starts[pid], list(seen).index(pid)))
-        return {
-            "formation": latest["formation"],
-            "event": latest["event"],
-            "starters": [seen[pid] for pid in order[:11]],
-        }
+                pid = starter["id"]
+                code = starter["position"]
+                at_code.setdefault(code, {})[pid] = at_code.get(code, {}).get(pid, 0) + 1
+                group = LINEUP_GROUPS.get(code, code)
+                in_group.setdefault(group, {})[pid] = in_group.get(group, {}).get(pid, 0) + 1
+                seen.setdefault(pid, starter)
+        recency = list(seen)  # first sighting first: the latest match's starters lead
+        used: set[int] = set()
+        starters = []
+        for place in latest["starters"]:
+            code = place["position"]
+            pool = at_code.get(code) or in_group.get(LINEUP_GROUPS.get(code, code), {})
+            ranked = sorted(pool, key=lambda pid: (-pool[pid], recency.index(pid)))
+            pid = next(
+                (p for p in [*ranked, place["id"], *recency] if p not in used),
+                place["id"],
+            )
+            used.add(pid)
+            starters.append({**seen[pid], "position": code, "place": place["place"]})
+        return {"formation": latest["formation"], "event": latest["event"], "starters": starters}
 
     def _match_lineup(self, code: str, team_id: int, event: dict) -> dict[str, Any] | None:
         """One match's formation and starters for `team_id`, cached per match."""

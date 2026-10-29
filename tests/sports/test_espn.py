@@ -1250,6 +1250,91 @@ def test_the_lineup_is_the_eleven_who_started_most_in_the_last_matches(tmp_path)
     assert lineup["starters"][0]["position"] == "G"
 
 
+def test_the_lineup_keeps_the_latest_formations_shape(tmp_path):
+    """Two older matches in a 5-3-2 (centre-back 12 started both, no right
+    midfielder) and the latest in a 4-4-2 with 9 on the right of midfield.
+    The eleven most frequent starters would be five defenders and no 9; the
+    lineup instead fills the 4-4-2's places: 12 is out, 9 plays RM, and the
+    rested regular keeps his place when he started it more often than the
+    stand-in (13 started CD-R once, 3 twice)."""
+
+    def event(ident, date):
+        return {
+            "id": ident,
+            "date": date,
+            "competitions": [{"status": {"type": {"completed": True}}}],
+        }
+
+    def summary(starters, formation):
+        return {
+            "rosters": [
+                {
+                    "team": {"id": "359"},
+                    "formation": formation,
+                    "roster": [
+                        {
+                            "starter": True,
+                            "athlete": {"id": str(pid)},
+                            "position": {"abbreviation": pos},
+                            "jersey": str(pid),
+                            "formationPlace": str(k + 1),
+                        }
+                        for k, (pid, pos) in enumerate(starters)
+                    ],
+                }
+            ]
+        }
+
+    back_five = [(1, "G"), (2, "RB"), (3, "CD-R"), (12, "CD"), (4, "CD-L"), (5, "LB")]
+    older = back_five + [(6, "CM"), (7, "CM"), (8, "CM"), (10, "CF-R"), (11, "CF-L")]
+    latest = [
+        (1, "G"),
+        (2, "RB"),
+        (13, "CD-R"),
+        (4, "CD-L"),
+        (5, "LB"),
+        (6, "CM-R"),
+        (7, "CM-L"),
+        (8, "LM"),
+        (9, "RM"),
+        (10, "CF-R"),
+        (11, "CF-L"),
+    ]
+    bodies = {
+        "schedule": {
+            "events": [
+                event("30", "2026-09-20"),
+                event("20", "2026-10-01"),
+                event("10", "2026-10-08"),
+            ]
+        },
+        "event=10": summary(latest, "4-4-2"),
+        "event=20": summary(older, "5-3-2"),
+        "event=30": summary(older, "5-3-2"),
+    }
+
+    def transport(url, headers, timeout):
+        key = next(k for k in bodies if k in url)
+        return json.dumps(bodies[key]).encode()
+
+    lineup = EspnClient(str(tmp_path), transport=transport).get_lineup(359, 2001)
+    assert lineup["formation"] == "4-4-2"
+    assert [(s["id"], s["position"]) for s in lineup["starters"]] == [
+        (1, "G"),
+        (2, "RB"),
+        (3, "CD-R"),
+        (4, "CD-L"),
+        (5, "LB"),
+        (6, "CM-R"),
+        (7, "CM-L"),
+        (8, "LM"),
+        (9, "RM"),
+        (10, "CF-R"),
+        (11, "CF-L"),
+    ]
+    assert [s["place"] for s in lineup["starters"]] == list(range(1, 12))
+
+
 def test_default_season_follows_each_leagues_calendar():
     from datetime import date
 
