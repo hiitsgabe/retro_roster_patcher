@@ -181,7 +181,7 @@ def _emit_copy(out: bytearray, nl: int, lit_bytes: bytes, length: int, offset: i
     out.extend(lit_bytes)
 
 
-def refpack_compress(data: bytes, tight: bool = False) -> bytes:
+def refpack_compress(data: bytes, tight: bool = False, room: int | None = None) -> bytes:
     """Compress with RefPack/QFS: hash-chain LZ77 with lazy match evaluation.
 
     The parse takes the longest match at each position: the port of the
@@ -190,8 +190,17 @@ def refpack_compress(data: bytes, tight: bool = False) -> bytes:
     bytes is made too and the shorter stream kept: about 1% smaller on large
     text tables, where the longest-only parse ran over EA's, at four times the
     time, so it is for a stream that must fit the slack it is written into.
+    `room`, that slack in bytes, is for a caller with a smaller next try (a
+    picture with fewer colours): the second parse then runs only when the
+    first stream misses the room by under 2%, so a stream that fits, or that
+    misses by far, costs one parse.
     """
     longest = _refpack(data, by_saving=False)
+    if room is not None:
+        # ponytail: the second parse saved 0.13-0.75% on NHL 2005's portraits
+        # (7% on repetitive text), so past 2% it would rarely bring a picture
+        # in; when it could, the picture takes the next, smaller, try.
+        tight = room < len(longest) <= room * 1.02
     if not tight:
         return longest
     cheapest = _refpack(data, by_saving=True)

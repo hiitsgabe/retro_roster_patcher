@@ -13,7 +13,7 @@ archive is normally rewritten in place; otherwise it is rebuilt.
 from __future__ import annotations
 
 import io
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING
 
 from ...formats import ssh
@@ -44,6 +44,9 @@ PORTAPT_PATH = "FE/PORTAPT.VIV"
 SIZE = (64, 128)
 #: How far down the disc's portraits start the hair, of the height.
 _HEADROOM = 0.10
+#: Portraits drawn between two status lines. Hundreds of them take minutes on
+#: a handheld, and the app ends a job that goes quiet for 15.
+STATUS_EVERY = 25
 
 
 def crop(png: bytes):  # -> Image.Image
@@ -93,16 +96,23 @@ def _entry(stored: bytes, image: Image.Image, colours: int) -> bytes | None:
     except (EaTdbError, ssh.SshError, IndexError, ValueError):
         return None
     out = bigf_replace(inner, shape.name, data)
-    return refpack_compress(out, tight=True) if packed else out
+    return refpack_compress(out, room=len(stored)) if packed else out
 
 
-def repack(archive: bytes, images: Mapping[int, Image.Image]) -> tuple[bytes, int]:
+def repack(
+    archive: bytes,
+    images: Mapping[int, Image.Image],
+    status: Callable[[str], None] | None = None,
+) -> tuple[bytes, int]:
     """`archive` with the portrait of each `ART_` in `images` replaced, and how
-    many went in: in place when each fits its slot, else rebuilt."""
+    many went in: in place when each fits its slot, else rebuilt. `status`
+    gets a line every `STATUS_EVERY` portraits."""
     entries = bigf_parse(archive)
     by_name = {e.name: e for e in entries}
     replaced: dict[str, bytes] = {}
-    for art, image in images.items():
+    for done, (art, image) in enumerate(images.items()):
+        if status is not None and done and done % STATUS_EVERY == 0:
+            status(f"Portraits {done}/{len(images)}...")
         entry = by_name.get(entry_name(art))
         if entry is None:
             continue

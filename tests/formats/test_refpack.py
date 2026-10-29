@@ -20,6 +20,7 @@ import random
 
 import pytest
 
+from retro_roster_patcher.formats import ea_tdb
 from retro_roster_patcher.formats.ea_tdb import (
     EaTdbError,
     _emit_copy,
@@ -291,6 +292,26 @@ def test_the_tight_parse_is_never_longer_and_still_decompresses():
     plain, tight = refpack_compress(data), refpack_compress(data, tight=True)
     assert len(tight) <= len(plain)
     assert refpack_decompress(tight) == data and refpack_decompress(plain) == data
+
+
+def test_with_a_room_the_second_parse_runs_only_for_a_near_miss(monkeypatch):
+    # It costs three times the first: a stream that fits its room, or that
+    # misses it by far, is the first parse alone. NHL 2005's portraits took 4
+    # minutes on a Mac without this, over 15 on a handheld.
+    words = [f"Team {n % 37} plays at the {n % 11} arena in city {n % 23}. " for n in range(1500)]
+    data = "".join(words).encode()
+    plain, tight = refpack_compress(data), refpack_compress(data, tight=True)
+    assert len(tight) < len(plain)
+    parses: list[bool] = []
+    real = ea_tdb._refpack
+    monkeypatch.setattr(
+        ea_tdb, "_refpack", lambda d, by_saving: parses.append(by_saving) or real(d, by_saving)
+    )
+    assert refpack_compress(data, room=len(plain)) == plain and parses == [False]
+    parses.clear()
+    assert refpack_compress(data, room=len(plain) // 2) == plain and parses == [False]
+    parses.clear()
+    assert refpack_compress(data, room=len(plain) - 1) == tight and parses == [False, True]
 
 
 def test_an_overlapping_match_repeats_the_byte_it_points_at():

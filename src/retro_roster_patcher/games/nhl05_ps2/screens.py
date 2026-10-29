@@ -175,7 +175,7 @@ def _encoded(member: bytes, copy: Copy, image: Image.Image, colours: int) -> byt
         raw = bigf_replace(raw, inner.name, data)
     else:
         raw = data
-    return refpack_compress(raw, tight=True) if packed else raw
+    return refpack_compress(raw, room=len(member)) if packed else raw
 
 
 def fitted(member: bytes, copy: Copy, image: Image.Image) -> bytes | None:

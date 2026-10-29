@@ -618,7 +618,7 @@ class NHL05PS2Patcher(Patcher):
                 image = image or silhouette
                 if image is not None:
                     images[art] = image
-            new_archive, drawn = portraits.repack(archive, images)
+            new_archive, drawn = portraits.repack(archive, images, self.status)
             if drawn:
                 write_in_place(f, entry, next_lba, new_archive)
         self.status(f"Portraits drawn: {drawn}")
