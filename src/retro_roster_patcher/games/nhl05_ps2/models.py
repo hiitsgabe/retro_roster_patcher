@@ -68,8 +68,7 @@ NHL05_TEAM_INDEX = {
 # six further codes are relocations reusing an ancestor's slot. Two fetched teams
 # can therefore name one slot, which `NHL05PS2Patcher.map_rosters` must guard.
 #
-# `SEA` and `VGK` name the All-Star slots and are dead entries: this game patches
-# slots 0-29 only. See `PATCHABLE_SLOT_COUNT`.
+# `SEA` and `VGK` take the East and West All-Star sides: see `ALL_STAR_SLOTS`.
 MODERN_NHL_TO_NHL05 = {
     "ANA": 0,
     "ATL": 1,
@@ -150,11 +149,15 @@ NHL05_TEAM_NAMES = [
     "West All-Star",  # 31
 ]
 
-# The NHL clubs alone, and also every slot this game patches: the two All-Star
-# slots are read and listed but never written. Do not raise this to 32; whether
-# NHL 2005's All-Star ROST rows have the structure the writer needs is unknown.
+# The NHL clubs alone.
 TEAM_COUNT = 30
-PATCHABLE_SLOT_COUNT = TEAM_COUNT
+#: The East and West All-Star sides, which Seattle and Vegas take: Play Now
+#: lists them right after Washington (North America and World follow). Their
+#: disc rows point at NHL players' bios, so the patch first gives them rows of
+#: their own (`patcher._give_own_rows`).
+ALL_STAR_SLOTS = (30, 31)
+#: Every slot this game patches: the clubs, then those two sides.
+PATCHABLE_SLOT_COUNT = TEAM_COUNT + len(ALL_STAR_SLOTS)
 
 # The slots the game has a name for, All-Star sides included. Display only, never
 # a bound on what to patch.

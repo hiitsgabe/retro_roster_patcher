@@ -6,6 +6,7 @@ import pytest
 
 from retro_roster_patcher.formats.ea_tdb import (
     BigfEntry,
+    TDBFile,
     bigf_build,
     bigf_parse,
     refpack_compress,
@@ -14,6 +15,14 @@ from retro_roster_patcher.formats.ea_tdb import (
 from retro_roster_patcher.games.nhl05_ps2 import teams, wordmarks
 from retro_roster_patcher.games.nhl05_ps2.rom_reader import NHL05PS2RomReader
 from retro_roster_patcher.games.nhl07_psp.strings import build_table, parse_table
+from tests.fixtures.synthetic_tdb import (
+    TYPE_STRING,
+    TYPE_UINT,
+    FieldSpec,
+    TableSpec,
+    build_tdb,
+    pack_bits,
+)
 from tests.games.nhl05_ps2.test_patcher import iso, patched
 
 PIL = pytest.importorskip("PIL.Image")
@@ -99,6 +108,91 @@ def test_a_table_that_no_longer_fits_its_member_is_left_alone():
     edited, changed, skipped = teams.rename_strings(archive, jets_and_mammoth())
     assert edited == archive and changed == 0
     assert skipped == ["frontEnglish.bin", "gameEnglish.bin"]
+
+
+def all_star_renames():
+    return [
+        teams.Rename(
+            30,
+            teams.Identity("Eastern All-Stars", "Eastern", "All-Stars", "EAS", "", ""),
+            teams.ALL_STARS[30],
+        ),
+        teams.Rename(
+            31,
+            teams.Identity("Western All-Stars", "Western", "All-Stars", "WES", "", ""),
+            teams.ALL_STARS[31],
+        ),
+    ]
+
+
+def test_the_all_star_sides_names_change_by_string_id_whatever_the_text():
+    # French splits "All Stars de l'Est" into "All Stars" + "de l'Est", and
+    # "All-Stars" is every side's nickname, so the ids decide and not the text.
+    ids = {**teams.ALL_STAR_STRINGS[30], **teams.ALL_STAR_STRINGS[31]}
+    entries = [(sid, f"{part} {sid:x}") for sid, part in ids.items()]
+    # North America's nickname, and an "Eastern" of no side.
+    entries += [(0x06E41673, "All-Stars"), (99, "Eastern")]
+    entries += [(100 + i, f"filler string number {i} with words") for i in range(60)]
+    archive = local_viv(entries, padding=256)
+    edited, changed, skipped = teams.rename_strings(archive, all_star_renames())
+    assert (changed, skipped) == (2 * len(ids), [])
+    member = next(m for m in bigf_parse(edited) if m.name == "frontEnglish.bin")
+    texts = dict(
+        parse_table(refpack_decompress(edited[member.offset : member.offset + member.size]))
+    )
+    for slot, strings in teams.ALL_STAR_STRINGS.items():
+        for sid, part in strings.items():
+            assert texts[sid] == getattr(teams.ALL_STARS[slot], part)
+    assert (texts[0x06E41673], texts[99]) == ("All-Stars", "Eastern")
+
+
+def _table(name, fields, size, rows):
+    data = b"".join(pack_bits(fields, row, size) for row in rows)
+    return TableSpec(name, fields, size, len(rows), len(rows), data)
+
+
+def test_seattle_and_vegas_take_the_all_star_sides_names_and_leave_the_arenas():
+    # All four All-Star sides play at the All-Star game's arena, SARE 30, and
+    # SARE 31 is Austria's: a side's slot is not its arena's.
+    stea = [
+        FieldSpec("INDX", TYPE_UINT, 0, 8),
+        FieldSpec("FNME", TYPE_STRING, 8, 248),
+        FieldSpec("SNME", TYPE_STRING, 256, 256),
+        FieldSpec("ABBR", TYPE_STRING, 512, 40),
+    ]
+    sare = [
+        FieldSpec("INDX", TYPE_UINT, 0, 8),
+        FieldSpec("NAME", TYPE_STRING, 8, 280),
+        FieldSpec("CITY", TYPE_STRING, 288, 256),
+    ]
+    arenas = [
+        {"INDX": 30, "NAME": "Philips Arena", "CITY": "Atlanta, GA"},
+        {"INDX": 31, "NAME": "EA SPORTS Arena", "CITY": "Austria"},
+    ]
+    tdb = TDBFile.parse(
+        build_tdb(
+            [
+                _table(
+                    "STEA",
+                    stea,
+                    69,
+                    [
+                        {"INDX": 30, "FNME": "Eastern All-Stars", "SNME": "Eastern", "ABBR": "EAS"},
+                        {"INDX": 31, "FNME": "Western All-Stars", "SNME": "Western", "ABBR": "WES"},
+                    ],
+                ),
+                _table("SARE", sare, 68, arenas),
+            ]
+        )
+    )
+    renames = teams.rename_tables(tdb, [30, 31])
+    assert renames == all_star_renames()
+    rows = [tdb.get_table("STEA").read_record(i) for i in range(2)]
+    assert [(r["FNME"], r["SNME"], r["ABBR"]) for r in rows] == [
+        ("Seattle Kraken", "Seattle", "EAS"),
+        ("Vegas Golden Knights", "Vegas", "WES"),
+    ]
+    assert [tdb.get_table("SARE").read_record(i) for i in range(2)] == arenas
 
 
 def wordmark_member(name: str, glyph_widths, joined_first=False) -> bytes:

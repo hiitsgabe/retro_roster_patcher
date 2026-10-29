@@ -64,6 +64,7 @@ from ...sports.nhl import NhlApiClient
 from ..nhl07_psp.rom_writer import iso_entry, write_in_place
 from . import faces, logos, looks, portraits, screens, teams, wordmarks
 from .models import (
+    ALL_STAR_SLOTS,
     NAMED_SLOT_COUNT,
     NHL05_TEAM_NAMES,
     PATCHABLE_SLOT_COUNT,
@@ -126,6 +127,14 @@ def _live_records(table: TDBTable) -> range:
     `find_records` iterate `num_records` unbounded and must not be used.
     """
     return range(min(table.num_records, table.capacity))
+
+
+def _gone(rost: TDBTable) -> dict[str, object]:
+    """What a ROST row leaving its team takes: the highest `TEAM` the field
+    holds (127; the disc's teams run to 96), which no screen lists, undressed
+    and off every line."""
+    width = next((f.bit_width for f in rost.fields if f.name == "TEAM"), 7)
+    return {"TEAM": (1 << width) - 1, "DRES": 0, **dict.fromkeys(LINE_FLAGS, 0)}
 
 
 def _index_map(table: TDBTable) -> dict[int, int]:
@@ -233,8 +242,9 @@ class _MasterTables:
 class NHL05PS2Patcher(Patcher):
     """Teams map to ROM slots by abbreviation, so no manual mapping step.
 
-    All 30 patchable slots are real NHL clubs with real abbreviations, and
-    `MODERN_NHL_TO_NHL05` carries both providers' spellings of each.
+    The 30 clubs keep their slots, Seattle and Vegas take the East and West
+    All-Star sides, and `MODERN_NHL_TO_NHL05` carries both providers' spellings
+    of each.
 
     Providers: `espn` for the current season, `nhl` for seasons back to 1993.
     """
@@ -408,10 +418,9 @@ class NHL05PS2Patcher(Patcher):
 
         Sparse: a key exists only for a slot some fetched team mapped to.
 
-        Bound slots by `PATCHABLE_SLOT_COUNT`, 30, not by 32 as
-        `games/nhl07_psp` does: the reader drops every STEA record past `INDX`
-        29, so `analyze` and `patch` agree on the same 30 slots. Seattle and
-        Vegas map to slots 30 and 31 and are dropped here.
+        Bound slots by `PATCHABLE_SLOT_COUNT`, 32: the 30 clubs, then Seattle
+        and Vegas on the East and West All-Star sides. `analyze` lists the
+        clubs alone, as the slots a user would pick from.
         """
         self.check_slot_mapping(slot_mapping)
         teams: dict[int, list[NHL05PlayerRecord]] = {}
@@ -870,6 +879,10 @@ class NHL05PS2Patcher(Patcher):
 
         Re-check the slot range here as well as in `map_rosters`: the keys come
         from a plain dict that may have crossed a JSON boundary since.
+
+        Clubs first, by sorting: an All-Star side takes rows the clubs left. A
+        side with too few is left as it was and dropped from `rosters` (`patch`'s
+        own copy), so it is neither renamed nor given a crest.
         """
         targets = sorted(
             slot
@@ -887,6 +900,12 @@ class NHL05PS2Patcher(Patcher):
                     PROGRESS_COPY_END + (i / len(targets)) * span,
                     f"Writing {NHL05_TEAM_NAMES[slot]} ({len(players)} players)...",
                 )
+            if slot in ALL_STAR_SLOTS and not self._give_own_rows(
+                slot, players, tables, mirror_rost
+            ):
+                self.status(f"{NHL05_TEAM_NAMES[slot]} left as it was: too few free roster rows")
+                del rosters.teams[slot]
+                continue
             written = self._write_team(writer, slot, players, tables, mirror_rost)
             players_patched += written
             # A slot that placed no player record did not get patched.
@@ -941,27 +960,79 @@ class NHL05PS2Patcher(Patcher):
             self._mirror_rost(mirror_rost, roster_slot.rost_index, values)
 
         # Every row left over holds a player the provider no longer lists: it
-        # moves to the highest `TEAM` the field holds (127; the disc's teams
-        # run to 96), which no screen lists, undressed and off every
-        # line. Not deleted: a ROST with fewer rows than the disc shipped
-        # leaves the roster screens blank. `team_rows` and not the classified
-        # lists: a row whose chain to a bio is broken is still one of this
-        # team's rows.
+        # leaves the team (`_gone`). Not deleted: a ROST with fewer rows than
+        # the disc shipped leaves the roster screens blank. `team_rows` and not
+        # the classified lists: a row whose chain to a bio is broken is still
+        # one of this team's rows.
         tables.dropped.extend(
             s.bio_index for s in goalie_slots + skater_slots if s.rost_index not in used
         )
-        width = next((f.bit_width for f in tables.rost.fields if f.name == "TEAM"), 7)
-        gone: dict[str, object] = {
-            "TEAM": (1 << width) - 1,
-            "DRES": 0,
-            **dict.fromkeys(LINE_FLAGS, 0),
-        }
+        gone = _gone(tables.rost)
         for rost_index in team_rows:
             if rost_index not in used:
                 tables.rost.write_record(rost_index, gone)
                 self._mirror_rost(mirror_rost, rost_index, gone)
 
         return len(pairs)
+
+    @staticmethod
+    def _give_own_rows(
+        slot: int,
+        players: list[NHL05PlayerRecord],
+        tables: _MasterTables,
+        mirror_rost: TDBTable | None,
+    ) -> bool:
+        """Move All-Star `slot` onto rows of its own, ahead of its players.
+
+        The disc's All-Star rows point at NHL players' bios, so writing them
+        would rewrite those players on their clubs. The side takes instead, in
+        ROST order, a hidden row (one a club left) for each of its goalies and
+        skaters, among those whose bio nothing else shows: no other row, no
+        free agent (`FREE`), no minor-leaguer (`MINI`). Its own rows go hidden,
+        and its captain's and alternates' letters move to the first skaters
+        taken. False, with nothing changed, when too few such rows are left.
+        """
+        rost = tables.rost
+        gone = _gone(rost)
+        records = {i: rost.read_record(i) for i in _live_records(rost)}
+
+        def player(indx: object) -> int | None:
+            return tables.play_id_by_indx.get(indx) if isinstance(indx, int) else None
+
+        shown = Counter(player(r.get("INDX")) for r in records.values())
+        for name in ("FREE", "MINI"):
+            table = tables.tdb.get_table(name)
+            if table is not None:
+                shown.update(player(table.read_record(i).get("INDX")) for i in _live_records(table))
+        free: dict[bool, list[int]] = {True: [], False: []}
+        for i, record in records.items():
+            pid = player(record.get("INDX"))
+            if record.get("TEAM") != gone["TEAM"] or pid is None or shown[pid] != 1:
+                continue
+            if pid in tables.spbt_by_indx and pid in tables.sgai_by_indx:
+                free[True].append(i)
+            elif pid in tables.spbt_by_indx and pid in tables.spai_by_indx:
+                free[False].append(i)
+        need = Counter(p.is_goalie for p in players)
+        if any(len(free[goalie]) < n for goalie, n in need.items()):
+            return False
+
+        letters = sorted(
+            capt
+            for r in records.values()
+            if r.get("TEAM") == slot and isinstance(capt := r.get("CAPT"), int) and capt
+        )
+        for i, record in records.items():
+            if record.get("TEAM") == slot:
+                rost.write_record(i, gone)
+                NHL05PS2Patcher._mirror_rost(mirror_rost, i, gone)
+        skaters = free[False][: need[False]]
+        captains = dict(zip(skaters, letters, strict=False))
+        for i in free[True][: need[True]] + skaters:
+            values: dict[str, object] = {"TEAM": slot, "CAPT": captains.get(i, 0)}
+            rost.write_record(i, values)
+            NHL05PS2Patcher._mirror_rost(mirror_rost, i, values)
+        return True
 
     @staticmethod
     def _mirror_rost(mirror_rost: TDBTable | None, index: int, values: dict[str, object]) -> None:

@@ -115,6 +115,7 @@ def test_a_logo_that_fits_at_no_palette_size_is_left_alone():
     assert drawn == {} and bytes(edited) == original
 
 
-def test_every_nhl_slot_names_a_file():
-    assert len(logos.SLOT_FILES) == 30 and len(set(logos.SLOT_FILES)) == 30
+def test_every_patched_slot_names_a_file():
+    assert len(logos.SLOT_FILES) == 32 and len(set(logos.SLOT_FILES)) == 32
+    assert logos.SLOT_FILES[30:] == ("EAS", "WES")
     assert ssh.dimensions(packed_shape(256, 128)) == (256, 128)

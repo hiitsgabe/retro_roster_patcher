@@ -1,5 +1,6 @@
 """Clubs the disc knows under an old identity: the Thrashers are the Winnipeg
-Jets now and the Coyotes the Utah Mammoth.
+Jets now and the Coyotes the Utah Mammoth, and the East and West All-Star sides
+become Seattle and Vegas.
 
 A club's name lives in three places. The master TDB's `STEA` row (full name
 and city; its abbreviation stays, since the disc names the club's arena, logo
@@ -10,6 +11,9 @@ and the game's text in five languages, where the lists of clubs hold the full
 name, the city and the nickname as entries of their own, found here by their
 text); and the wordmark of `FE/TLOGOAPT.VIV` (`wordmarks`). The slot keeps
 its number, its audio and its art ids.
+
+An All-Star side keeps the All-Star game's arena, and its strings are found
+by id (`ALL_STAR_STRINGS`), not by text.
 
 The tables are rewritten in place; a string table that compresses too large
 for its member is left as it was, with a status line.
@@ -54,19 +58,57 @@ RELOCATED: Mapping[int, Identity] = {
 }
 
 
+#: By slot: the All-Star sides Seattle and Vegas take. No arena: all four
+#: sides play at the All-Star game's (`AREN` sends them to `SARE` 30, and `SARE`
+#: 31 is Austria's).
+ALL_STARS: Mapping[int, Identity] = {
+    30: Identity("Seattle Kraken", "Seattle", "Kraken", "SEA", "", ""),
+    31: Identity("Vegas Golden Knights", "Vegas", "Golden Knights", "VGK", "", ""),
+}
+
+#: The All-Star sides' names in `front<language>.bin`, by string id and the part
+#: of the name each holds: the full name, the abbreviation, the city in three
+#: lists and the nickname in two (frontEnglish.bin entries 1095-1096,
+#: 1151-1152, 1207-1208, 4250-4253 and 4919-4922). The ids are the same in all
+#: five languages and the texts are not (French splits "All Stars de l'Est"
+#: into "All Stars" and "de l'Est"), and "All-Stars" is every side's nickname.
+ALL_STAR_STRINGS: Mapping[int, Mapping[int, str]] = {
+    30: {
+        0x3B9E15F1: "full",
+        0xC49CFB94: "abbr",
+        0xFA83B68D: "city",
+        0x2EAEFF68: "city",
+        0x2EAF0E28: "city",
+        0x2EC117E9: "nick",
+        0x2EC126A9: "nick",
+    },
+    31: {
+        0xB6A3CD83: "full",
+        0xC49D48AA: "abbr",
+        0xFA8403A3: "city",
+        0x2EAEFF7A: "city",
+        0x2EAF5B3E: "city",
+        0x2EC117FB: "nick",
+        0x2EC173BF: "nick",
+    },
+}
+
+
 def plain(text: object) -> str:
     """A disc string without its trademark marks or padding."""
     return "".join(c for c in str(text) if c not in MARKS).strip()
 
 
 def rename_tables(tdb: TDBFile, slots: Iterable[int]) -> list[Rename]:
-    """Give each relocated club among `slots` its new identity in STEA and
-    SARE, returning what changed, with the old names the strings still use."""
+    """Give each relocated club and All-Star side among `slots` its new
+    identity in STEA (and a club's in SARE), returning what changed, with the
+    old names the strings still use."""
     stea = tdb.get_table("STEA")
     if stea is None:
         return []
     renames = []
-    wanted = {slot: RELOCATED[slot] for slot in slots if slot in RELOCATED}
+    identities = {**RELOCATED, **ALL_STARS}
+    wanted = {slot: identities[slot] for slot in slots if slot in identities}
     for i in range(min(stea.num_records, stea.capacity)):
         row = stea.read_record(i)
         slot = row.get("INDX")
@@ -82,7 +124,7 @@ def rename_tables(tdb: TDBFile, slots: Iterable[int]) -> list[Rename]:
         renames.append(Rename(slot, old, new))
     sare = tdb.get_table("SARE")
     if sare is not None:
-        by_slot = {r.slot: r.new for r in renames}
+        by_slot = {r.slot: r.new for r in renames if r.new.arena}
         for i in range(min(sare.num_records, sare.capacity)):
             index = sare.read_record(i).get("INDX")
             new = by_slot.get(index) if isinstance(index, int) else None
@@ -108,9 +150,15 @@ def _replacements(renames: Iterable[Rename]) -> dict[str, str]:
 
 def rename_strings(archive: bytes, renames: Iterable[Rename]) -> tuple[bytes, int, list[str]]:
     """`FE/LOCAL.VIV` with every string table's entries that spell an old name
-    changed to the new, in place: (the archive, entries changed, tables that
-    could not take their rewrite)."""
-    wanted = _replacements(renames)
+    (or hold an All-Star side's) changed to the new, in place: (the archive,
+    entries changed, tables that could not take their rewrite)."""
+    renames = list(renames)
+    wanted = _replacements(r for r in renames if r.slot in RELOCATED)
+    by_id = {
+        string: getattr(r.new, part)
+        for r in renames
+        for string, part in ALL_STAR_STRINGS.get(r.slot, {}).items()
+    }
     out = bytearray(archive)
     changed = 0
     skipped = []
@@ -124,7 +172,7 @@ def rename_strings(archive: bytes, renames: Iterable[Rename]) -> tuple[bytes, in
             continue
         edited = 0
         for i, (h, text) in enumerate(entries):
-            new = wanted.get(plain(text))
+            new = by_id.get(h) or wanted.get(plain(text))
             if new is not None and new != text:
                 entries[i] = (h, new)
                 edited += 1

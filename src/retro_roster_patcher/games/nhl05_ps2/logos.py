@@ -26,11 +26,13 @@ if TYPE_CHECKING:
     from PIL import Image
 
 ARCHIVE = "FE/TLOGOAPT.VIV"
-#: The archive's abbreviation for each NHL slot, in STEA order.
+#: The archive's abbreviation for each slot this game patches, in STEA order:
+#: the clubs, then the East and West All-Star sides (which have no `LOGO_EML_`).
 SLOT_FILES = (
     "ANA", "ATL", "BOS", "BUF", "CAL", "CAR", "CHI", "COL", "CMB", "DAL",
     "DET", "EDM", "FLA", "LA", "MIN", "MTL", "NAS", "NJD", "NYI", "NYR",
     "OTT", "PHI", "PHO", "PIT", "SJ", "STL", "TB", "TOR", "VAN", "WSH",
+    "EAS", "WES",
 )  # fmt: skip
 #: (member prefix, how many times wider than it shows the picture is stored,
 #: whether it has a white ground rather than a transparent one).

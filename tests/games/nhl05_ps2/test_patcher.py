@@ -1,7 +1,7 @@
 """`NHL05PS2Patcher` against the unified interface.
 
-Thirty patchable slots, not NHL 07's thirty-two: `SEA` and `VGK` map to the two
-All-Star sides and are then dropped, so this game never writes them. And one ROST
+Thirty-two patchable slots, as on NHL 07: `SEA` and `VGK` take the East and
+West All-Star sides, on rows of their own (`test_all_stars`). And one ROST
 mirror, not two: there is no `nhlbioatt.tdb`, so every bio and attribute write
 happens once.
 
@@ -219,19 +219,9 @@ def test_construction_creates_the_cache_directory(tmp_path):
     assert (tmp_path / "cache").is_dir() is True
 
 
-def test_thirty_slots_are_patchable():
-    # NHL 07 patches 32. The source wrote `slot >= 30` here and `slot >= 32` there,
-    # and it agrees with the reader's `INDX > 29` filter.
-    assert PATCHABLE_SLOT_COUNT == 30
-
-
-def test_thirty_two_slots_have_names():
-    # The two All-Star sides have display names and are never written.
-    assert NAMED_SLOT_COUNT == 32
-
-
-def test_the_two_unpatchable_slots_are_the_all_star_sides():
-    assert NHL05_TEAM_NAMES[PATCHABLE_SLOT_COUNT:] == ["East All-Star", "West All-Star"]
+def test_the_clubs_and_two_all_star_sides_are_patchable():
+    assert PATCHABLE_SLOT_COUNT == NAMED_SLOT_COUNT == 32
+    assert NHL05_TEAM_NAMES[30:] == ["East All-Star", "West All-Star"]
 
 
 def test_every_display_name_is_distinct():
@@ -709,24 +699,14 @@ def test_mapping_drops_a_team_with_no_slot(tmp_path):
     assert sorted(mapped.teams) == DISC_SLOTS
 
 
-def test_seattle_maps_to_a_slot_and_is_then_dropped(tmp_path):
-    # `MODERN_NHL_TO_NHL05["SEA"]` is 30, an All-Star side, and this game does not
-    # patch those, so the team is fetched, mapped and discarded. NHL 07 patches it.
-    teams = [Team(id=9, name="Seattle Kraken", code="SEA", logo_url="")]
+def test_seattle_and_vegas_take_the_east_and_west_all_star_sides(tmp_path):
+    # Play Now lists the All-Star sides right after Washington.
+    teams = [
+        Team(id=9, name="Seattle Kraken", code="SEA", logo_url=""),
+        Team(id=10, name="Vegas Golden Knights", code="VGK", logo_url=""),
+    ]
     mapped = build(tmp_path).map_rosters(league(teams=teams))
-    assert mapped.teams == {}
-
-
-def test_seattle_does_have_a_slot_in_the_table(tmp_path):
-    # The other half of the previous claim, so it cannot be read as "SEA is unknown
-    # to this game".
-    assert build(tmp_path).mapper.get_team_slot("SEA") == 30
-
-
-def test_vegas_is_dropped_for_the_same_reason(tmp_path):
-    teams = [Team(id=9, name="Vegas Golden Knights", code="VGK", logo_url="")]
-    mapped = build(tmp_path).map_rosters(league(teams=teams))
-    assert mapped.teams == {}
+    assert sorted(mapped.teams) == [30, 31]
 
 
 def test_a_populated_alias_survives_an_empty_one_arriving_second(tmp_path):
@@ -1050,13 +1030,12 @@ def test_an_out_of_range_slot_arriving_through_json_is_ignored(tmp_path):
     assert result.teams_patched == 4
 
 
-def test_an_all_star_slot_arriving_through_json_is_ignored(tmp_path):
-    # 30 and 31 are inside `NHL05_TEAM_NAMES` and outside `PATCHABLE_SLOT_COUNT`,
-    # which is the pair of bounds a copied NHL 07 patcher would collapse.
+def test_an_unpatched_all_star_slot_arriving_through_json_is_ignored(tmp_path):
+    # North America (32) and World (33) are past `PATCHABLE_SLOT_COUNT`.
     source = iso(tmp_path)
     patcher = build(tmp_path, FakeApi())
     mapped = patcher.map_rosters(league())
-    mapped.teams[30] = [NHL05PlayerRecord(first_name="Ghost")]
+    mapped.teams[32] = [NHL05PlayerRecord(first_name="Ghost")]
     result = patcher.patch(rom_path=source, output_path=tmp_path / "o.iso", rosters=mapped)
     assert result.teams_patched == 4
 
@@ -1147,46 +1126,20 @@ def test_a_padded_image_still_patches_every_team(tmp_path):
     assert result.teams_patched == 4
 
 
-def test_an_all_star_slot_is_not_even_named_in_the_progress_messages(tmp_path):
-    # The `_write_all_teams` bound is `PATCHABLE_SLOT_COUNT`, not the 32 slots the
-    # game has names for, and the two are only distinguishable here: the fixture disc
-    # has no ROST rows for slot 30, so a patcher bounded by 32 would report the same
-    # `teams_patched` while announcing "Writing East All-Star" to the user.
+def test_an_all_star_side_with_no_free_rows_is_left_as_it_was(tmp_path):
+    # The fixture's four clubs dress both goalie rows they have, so none is left
+    # for the East side's goalie: it keeps its rows and its name, and says so.
     source = iso(tmp_path)
-    patcher = build(tmp_path, FakeApi())
+    lines: list[str] = []
+    patcher = build(tmp_path, FakeApi(), on_status=lines.append)
     mapped = patcher.map_rosters(league())
-    mapped.teams[30] = [NHL05PlayerRecord(first_name="Ghost")]
-    seen: list[str] = []
-    patcher.patch(
-        rom_path=source,
-        output_path=tmp_path / "o.iso",
-        rosters=mapped,
-        on_progress=lambda _f, m: seen.append(m),
-    )
-    assert [m for m in seen if "All-Star" in m] == []
-
-
-def test_the_four_real_teams_are_named_in_the_progress_messages(tmp_path):
-    # So the previous test cannot pass because no team was announced at all.
-    source = iso(tmp_path)
-    patcher = build(tmp_path, FakeApi())
-    mapped = patcher.map_rosters(league())
-    mapped.teams[30] = [NHL05PlayerRecord(first_name="Ghost")]
-    seen: list[str] = []
-    patcher.patch(
-        rom_path=source,
-        output_path=tmp_path / "o.iso",
-        rosters=mapped,
-        on_progress=lambda _f, m: seen.append(m),
-    )
-    named = [NHL05_TEAM_NAMES[s] for s in DISC_SLOTS if any(NHL05_TEAM_NAMES[s] in m for m in seen)]
-    assert named == [NHL05_TEAM_NAMES[s] for s in DISC_SLOTS]
-
-
-def test_the_all_star_slot_does_have_a_display_name(tmp_path):
-    # The other half of the bound: slot 30 is inside `NAMED_SLOT_COUNT`, so a patcher
-    # that used that bound would find a name to print rather than raising.
-    assert NHL05_TEAM_NAMES[30] == "East All-Star"
+    mapped.teams[30] = [NHL05PlayerRecord(first_name="Ghost", is_goalie=True)]
+    result = patcher.patch(rom_path=source, output_path=tmp_path / "o.iso", rosters=mapped)
+    assert result.teams_patched == 4
+    assert [line for line in lines if "East All-Star" in line] == [
+        "East All-Star left as it was: too few free roster rows"
+    ]
+    assert not [line for line in lines if "Seattle" in line]
 
 
 def _ranked_squad():
