@@ -1,5 +1,7 @@
 """`nhl05_ps2.teams` and `wordmarks`: relocated clubs get their new identity."""
 
+import random
+
 import pytest
 
 from retro_roster_patcher.formats.ea_tdb import (
@@ -32,8 +34,8 @@ def jets_and_mammoth():
     ]
 
 
-def local_viv(entries, padding=0):
-    table = refpack_compress(build_table(entries)) + bytes(padding)
+def local_viv(entries, padding=0, tight=False):
+    table = refpack_compress(build_table(entries), tight=tight) + bytes(padding)
     members = {"frontEnglish.bin": table, "gameEnglish.bin": table, "notes.txt": b"x"}
     return bigf_build([BigfEntry(n, 0, 0) for n in members], members)
 
@@ -88,11 +90,12 @@ def test_strings_that_spell_an_old_name_change_and_the_rest_stay():
 
 
 def test_a_table_that_no_longer_fits_its_member_is_left_alone():
-    # Nothing in this table repeats, so a longer name makes it longer.
-    import os
-
-    entries = [(1, "Atlanta")] + [(i, os.urandom(6).hex()) for i in range(2, 40)]
-    archive = local_viv(entries)
+    # Nothing in this table repeats, so a longer name makes it longer. The
+    # member is packed by the parse the rewrite uses: packed by the plainer
+    # one, it often left the rewrite the byte it needed to win back.
+    rng = random.Random(0)
+    entries = [(1, "Atlanta")] + [(i, rng.randbytes(6).hex()) for i in range(2, 40)]
+    archive = local_viv(entries, tight=True)
     edited, changed, skipped = teams.rename_strings(archive, jets_and_mammoth())
     assert edited == archive and changed == 0
     assert skipped == ["frontEnglish.bin", "gameEnglish.bin"]
