@@ -28,6 +28,9 @@ from typing import Any, NamedTuple
 SQUAD_WINDOW = 5
 #: How many of a team's matches count toward its shape.
 SHAPE_WINDOW = 5
+#: A role with at most this many seats has its players seated by trying every order. A code never
+#: seen reads as CM, so a role can have ten seats, and every order of ten is too many to try.
+EXACT_SEATS = 4
 
 #: A code's role when its formation does not read it differently.
 ROLE_BY_CODE = {
@@ -214,6 +217,30 @@ def _propose(
     return held
 
 
+def _sit(
+    idx: list[int], players: list[int], seats: list[_Seat], at_code: Counter[tuple[int, str]]
+) -> dict[int, int]:
+    """Seat index -> player, for the `players` one role holds (best first) in its seats `idx`.
+
+    The players sit where their starts at each seat's code (`at_code`) add up most, and a tie
+    keeps the first order tried. Every order is tried for up to `EXACT_SEATS` seats. A role with
+    more takes the seats one by one in place order, each taking the held player with the most
+    starts at its code, a tie going to the better ranked; the seats left over stay empty.
+    """
+    if len(idx) <= EXACT_SEATS:
+        order = max(
+            permutations(idx, len(players)),
+            key=lambda o: sum(at_code[p, seats[i].code] for p, i in zip(players, o, strict=True)),
+        )
+        return dict(zip(order, players, strict=True))
+    free, sat = list(players), {}
+    for i in idx:
+        if free:
+            sat[i] = max(free, key=lambda p: at_code[p, seats[i].code])
+            free.remove(sat[i])
+    return sat
+
+
 def pick_lineup(
     matches: list[dict[str, Any]],
     squad: dict[int, str] | None,
@@ -233,11 +260,12 @@ def pick_lineup(
 
     A player is in form by his starts among his own last `SQUAD_WINDOW` matchday squads, so a
     spell out of the squad (hurt, suspended, not yet signed) never counts against him. With
-    `positions`, players ask for the seats of their roles (`_propose`) and the players a role
-    holds sit on the sides they started on in the template's formation. Without, every seat
-    first goes to the best player who started at its code. A seat still empty takes the best
-    player who started on its line, else one of its squad group, else anyone, so there are
-    eleven unless the squad has fewer.
+    `positions`, players ask for the seats of their roles (`_propose`), FotMob's or, for a player
+    it has none for, the roles he started in; the players a role holds sit on the sides they
+    started on in the template's formation (`_sit`). Without, every seat first goes to the best
+    player who started at its code. A seat still empty takes the best player who started on its
+    line, else one of its squad group, else anyone, so there are eleven unless the squad has
+    fewer.
 
     Plain data for the JSON boundary: `{"formation", "shape", "event", "starters": [{"id",
     "position", "number", "place", "line", "role", "side"}, ...]}`, starters by place.
@@ -250,9 +278,12 @@ def pick_lineup(
     seats = _seats(template, shape)
 
     rows: dict[int, list[list[Any]]] = {}  # each player's roster rows, newest first, in any match
+    played: dict[int, list[str]] = {}  # the role of each place he started at, newest first
     for match in matches:
         for row in match["roster"]:
             rows.setdefault(row[0], []).append(row)
+            if row[1]:
+                played.setdefault(row[0], []).append(slot_role(_formation(match), row[2]))
     squad = squad or {}
     eligible = [p for p in rows if p in squad or not squad]
     recent = {p: sum(1 for r in rows[p][:SQUAD_WINDOW] if r[1]) for p in eligible}
@@ -266,7 +297,12 @@ def pick_lineup(
     placed: dict[int, int] = {}  # seat index -> player id
     if positions:
         cap = Counter(seat.role for seat in seats)
-        asks = {p: [r for r in positions.get(p, []) if r in cap] for p in eligible}
+        asks: dict[int, list[str]] = {}
+        for p in eligible:
+            # A player FotMob has no positions for asks for the roles he started in, the most
+            # often first (`most_common` keeps a tie in the order seen: the most recent first).
+            known = positions.get(p) or [r for r, _ in Counter(played.get(p, [])).most_common()]
+            asks[p] = [r for r in known if r in cap]
         at_code = Counter(  # starts of a player at a code, in the template's formation
             (row[0], row[2])
             for m in matches
@@ -276,14 +312,7 @@ def pick_lineup(
         )
         for role, players in _propose(cap, asks, recent, season).items():
             role_seats = [i for i, seat in enumerate(seats) if seat.role == role]
-            # A role has a few seats at most, so trying every order is cheap. A tie keeps the first.
-            order = max(
-                permutations(role_seats, len(players)),
-                key=lambda o: sum(
-                    at_code[p, seats[i].code] for p, i in zip(players, o, strict=True)
-                ),
-            )
-            placed.update(zip(order, players, strict=True))
+            placed.update(_sit(role_seats, players, seats, at_code))
 
     left = [p for p in eligible if p not in placed.values()]
 

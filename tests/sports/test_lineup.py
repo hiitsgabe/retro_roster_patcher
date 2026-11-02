@@ -131,10 +131,11 @@ FIXTURE = json.loads(
 )
 
 
-def _club(tid):
+def _club(tid, unmatched=()):
+    """The club's lineup from the snapshot, as if FotMob had no positions for `unmatched` names."""
     t = FIXTURE["teams"][tid]
     names = {int(k): v for k, v in t["names"].items()}
-    positions = {int(k): v for k, v in t["positions"].items()}
+    positions = {int(k): v for k, v in t["positions"].items() if names[int(k)] not in unmatched}
     return pick_lineup(t["matches"], dict.fromkeys(t["squad"], ""), positions), names
 
 
@@ -176,13 +177,21 @@ def test_the_united_plays_four_three_three_with_mbeumo_up_front():  # regression
     assert (role["Bryan Mbeumo"], role["Amad Diallo"], role["Matheus Cunha"]) == ("ST", "RW", "LW")
 
 
+def test_a_regular_fotmob_could_not_match_still_starts_in_his_role():
+    full, name = _club("7632")
+    lineup, _ = _club("7632", unmatched={"Natanael"})
+    role = {name[s["id"]]: s["role"] for s in lineup["starters"]}
+    assert role["Natanael"] == "RB"
+    assert role == {name[s["id"]]: s["role"] for s in full["starters"]}
+
+
 C442 = ["G", "RB", "CD-R", "CD-L", "LB", "RM", "CM-R", "CM-L", "LM", "CF-R", "CF-L"]
 NATURAL = ["GK", "RB", "CB", "CB", "LB", "RM", "CM", "CM", "LM", "ST", "ST"]  # their roles
 
 
-def _match(event, starters, bench=(), formation="4-4-2"):
+def _match(event, starters, bench=(), formation="4-4-2", codes=C442):
     rows = [
-        [p, True, c, k + 1, str(p)] for k, (p, c) in enumerate(zip(starters, C442, strict=False))
+        [p, True, c, k + 1, str(p)] for k, (p, c) in enumerate(zip(starters, codes, strict=False))
     ]
     return {
         "event": event,
@@ -343,3 +352,76 @@ def test_new_players_with_no_start_in_the_template_formation_take_the_seats_in_o
     positions = {p: [role] for p, role in enumerate(NATURAL, 1)} | {20: ["CB"], 21: ["CB"]}
     by_id = {s["id"]: s for s in pick_lineup([template, *other], None, positions)["starters"]}
     assert (by_id[20]["position"], by_id[21]["position"]) == ("CD-R", "CD-L")
+
+
+@pytest.mark.parametrize(
+    "codes, role",
+    [
+        (("RM", "CM-R", "CM-R", "CM-R"), "CM"),  # most often, though not lately
+        (("CM-R", "RM", "RM", "RM"), "RM"),
+        (("RM", "CM-R", "RM", "CM-R"), "RM"),  # level: the more recent one
+        (("CM-R", "RM", "CM-R", "RM"), "CM"),
+    ],
+)
+def test_without_fotmob_positions_a_player_asks_first_for_the_role_he_started_in_most(codes, role):
+    # Player 6 starts at `codes` in four matches, newest first, beside a partner at the other
+    # place: 7 in the newest match, 12 before. Only the keeper has FotMob positions.
+    def xi(i, code):
+        partner = 7 if i == 0 else 12
+        return [1, 2, 3, 4, 5, *([6, partner] if code == "RM" else [partner, 6]), 8, 9, 10, 11]
+
+    matches = [_match(f"e{i + 1}", xi(i, code)) for i, code in enumerate(codes)]
+    lineup = pick_lineup(matches, None, {1: ["GK"]})
+    assert {s["id"]: s["role"] for s in lineup["starters"]}[6] == role
+
+
+def test_ten_places_with_no_code_still_make_eleven_distinct_starters():
+    # ESPN can send no code, and a code never seen reads as CM: ten seats of one role.
+    match = _match("e1", list(range(1, 12)), codes=["G"] + [""] * 10)
+    positions = {1: ["GK"]} | {p: ["CM"] for p in range(2, 12)}
+    lineup = pick_lineup([match], None, positions)
+    assert [s["id"] for s in lineup["starters"]] == list(range(1, 12))
+
+
+def test_a_role_with_many_seats_gives_each_the_player_with_most_starts_at_its_code():
+    codes = ["G", "RB", "CD-R", "CD-L", "LB", "A", "B", "C", "D", "E", "CF"]  # A to E read as CM
+    newest = _match("e1", [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11], codes=codes)
+    older = [_match(f"e{i}", [1, 2, 3, 4, 5, 10, 7, 8, 9, 6, 11], codes=codes) for i in (2, 3)]
+    positions = {1: ["GK"], 2: ["RB"], 3: ["CB"], 4: ["CB"], 5: ["LB"], 11: ["ST"]}
+    positions |= {p: ["CM"] for p in range(6, 11)}
+    lineup = pick_lineup([newest, *older], None, positions)
+    assert [s["id"] for s in lineup["starters"][5:10]] == [10, 7, 8, 9, 6]  # 10 and 6 swapped
+
+
+def test_few_seats_of_a_role_are_filled_for_the_best_total_not_one_seat_at_a_time():
+    # 3 started at CD-R twice and CD-L three times, 4 at CD-R once. Seat by seat, 3 would take
+    # CD-R (2 starts to 1) and 4 would be left with CD-L (none); the best total is 4 at CD-R.
+    pairs = [(3, 20), (3, 20), (4, 3), (21, 3), (21, 3)]  # who is at CD-R and CD-L, newest first
+    matches = [
+        _match(f"e{i}", [1, 2, right, left, 5, 6, 7, 8, 9, 10, 11])
+        for i, (right, left) in enumerate(pairs, 1)
+    ]
+    positions = {p: [role] for p, role in enumerate(NATURAL, 1)} | {20: ["RB"], 21: ["RB"]}
+    lineup = pick_lineup(matches, None, positions)
+    assert {s["id"]: s["position"] for s in lineup["starters"]}[3] == "CD-L"
+
+
+def test_a_code_reads_in_the_formation_of_the_match_it_was_played_in():
+    # Player 6 started at LM in the newest match, a 4-4-2, and in three 4-1-2-1-2, where an LM
+    # is a central midfielder. Only the keeper has FotMob positions.
+    xi = [1, 2, 3, 4, 5, 9, 7, 8, 6, 10, 11]  # 6 at LM, 9 at RM
+    older = [_match(f"e{i}", xi, formation="4-1-2-1-2") for i in (2, 3, 4)]
+    lineup = pick_lineup([_match("e1", xi), *older], None, {1: ["GK"]})
+    assert {s["id"]: s["role"] for s in lineup["starters"]}[6] == "CM"
+
+
+def test_only_starts_count_toward_the_roles_a_player_asks_for():
+    # Player 2 (right back) started the newest match, then sat on the bench twice, and a bench row
+    # reads as CM. 12 plays right back in his place, and 14, whom FotMob knows as a CAM, plays the
+    # place of 8, who has left. Only the keeper and 14 have FotMob positions.
+    newest = _match("e1", [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11])
+    later = [_match(f"e{i}", [1, 12, 3, 4, 5, 6, 7, 14, 9, 10, 11], bench=[2]) for i in (2, 3)]
+    squad = dict.fromkeys([1, 2, 3, 4, 5, 6, 7, 9, 10, 11, 12, 14], "")
+    lineup = pick_lineup([newest, *later], squad, {1: ["GK"], 14: ["CAM"]})
+    ids = [s["id"] for s in lineup["starters"]]
+    assert 14 in ids and 2 not in ids
