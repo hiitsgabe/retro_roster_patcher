@@ -1,9 +1,9 @@
-"""Matching a player across providers, and filling photos from the second one."""
+"""Matching a player across providers; photos and positions taken from the second one."""
 
 import json
 
 from retro_roster_patcher.sports.fotmob import FotmobClient, photo_url
-from retro_roster_patcher.sports.headshots import fill_headshots, match_squad
+from retro_roster_patcher.sports.headshots import fill_headshots, fotmob_positions, match_squad
 from retro_roster_patcher.sports.models import League, LeagueData, Player, Team, TeamRoster
 from tests.sports.test_fotmob import SQUAD, TABLE, _transport
 
@@ -81,6 +81,43 @@ def test_fill_makes_no_request_when_every_player_has_a_photo(tmp_path):
     client = FotmobClient(str(tmp_path), transport=transport)
     assert fill_headshots(_league(_p(1, "Hulk", photo="x")), client) == 0
     assert transport.calls == []
+
+
+def test_fotmob_positions_are_keyed_by_espn_id(tmp_path):
+    squad = [_p(223953, "Éverson", "1990-07-22"), _p(55, "Hulk", "1986-07-25")]
+    team = Team(id=7632, name="Atlético-MG", short_name="Atletico-MG")
+    positions = fotmob_positions(team, 2006, squad, _client(tmp_path))
+    assert positions == {223953: ["GK"], 55: ["ST", "LW"]}
+
+
+def test_a_team_fotmob_does_not_list_has_no_positions(tmp_path):
+    squad = [_p(55, "Hulk", "1986-07-25")]
+    assert fotmob_positions(Team(id=1, name="Nowhere FC"), 2006, squad, _client(tmp_path)) == {}
+
+
+def test_a_player_without_a_match_or_positions_is_left_out(tmp_path):
+    members = [
+        {"id": 7, "name": "Hulk de Souza", "dateOfBirth": "1986-07-25", "positionIdsDesc": "ST"},
+        {"id": 8, "name": "Everson", "dateOfBirth": "1990-07-22"},
+    ]
+    squad_doc = {"squad": {"squad": [{"title": "attackers", "members": members}]}}
+    transport = _transport({"/leagues?id=268": TABLE, "/teams?id=10272": squad_doc})
+    squad = [
+        _p(1, "Hulk", "1986-07-25"),  # matched, has positions
+        _p(2, "Éverson", "1990-07-22"),  # matched, FotMob gives him none
+        _p(3, "Stranger", "1999-09-09"),  # not on FotMob's squad
+    ]
+    team = Team(id=7632, name="Atlético-MG")
+    client = FotmobClient(str(tmp_path), transport=transport)
+    assert fotmob_positions(team, 2006, squad, client) == {1: ["ST"]}
+
+
+def test_a_failed_squad_request_has_no_positions_and_is_not_repeated(tmp_path):
+    transport = _transport({"/leagues?id=268": TABLE})  # no squad route, so that request fails
+    client = FotmobClient(str(tmp_path), transport=transport)
+    team = Team(id=7632, name="Atlético-MG")
+    assert fotmob_positions(team, 2006, [_p(55, "Hulk", "1986-07-25")], client) == {}
+    assert sum("/teams?id=10272" in url for url in transport.calls) == 1
 
 
 def test_json_round_trip_keeps_birth_date():

@@ -52,13 +52,20 @@ SQUAD = {
                         "goals": 0,
                         "ycards": 2,
                         "rating": {"num": "6.9"},
+                        "positionIdsDesc": "GK",
                     }
                 ],
             },
             {
                 "title": "attackers",
                 "members": [
-                    {"id": 7, "name": "Hulk de Souza", "dateOfBirth": "1986-07-25", "goals": 9}
+                    {
+                        "id": 7,
+                        "name": "Hulk de Souza",
+                        "dateOfBirth": "1986-07-25",
+                        "goals": 9,
+                        "positionIdsDesc": "ST,LW",
+                    }
                 ],
             },
         ]
@@ -116,6 +123,32 @@ def test_player_stats_carry_counts_and_name_the_filler(tmp_path):
     assert (everson.cards_yellow, everson.rating, hulk.goals) == (2, 6.9, 9)
     assert hulk.rating is None
     assert "minutes" in everson.unsupplied and "goals" not in everson.unsupplied
+
+
+def test_get_positions_reads_each_players_positions_in_order(tmp_path):
+    client = FotmobClient(str(tmp_path), transport=_transport({"/teams?id=10272": SQUAD}))
+    assert client.get_positions(10272) == {268171: ["GK"], 7: ["ST", "LW"]}
+
+
+def test_get_positions_leaves_out_members_without_any(tmp_path):
+    members = [
+        {"id": 1, "name": "A", "positionIdsDesc": "CB, RB"},
+        {"id": 2, "name": "B"},
+        {"id": 3, "name": "C", "positionIdsDesc": ""},
+        {"id": 4, "name": "D", "positionIdsDesc": None},
+        {"name": "E", "positionIdsDesc": "ST"},
+    ]
+    squad = {"squad": {"squad": [{"title": "defenders", "members": members}]}}
+    client = FotmobClient(str(tmp_path), transport=_transport({"/teams?id=10272": squad}))
+    assert client.get_positions(10272) == {1: ["CB", "RB"]}
+
+
+def test_positions_come_with_the_squad_request(tmp_path):
+    transport = _transport({"/teams?id=10272": SQUAD})
+    client = FotmobClient(str(tmp_path), transport=transport)
+    client.get_squad(10272)
+    client.get_positions(10272)
+    assert len(transport.calls) == 1
 
 
 def test_search_teams_keeps_teams_and_dedupes(tmp_path):

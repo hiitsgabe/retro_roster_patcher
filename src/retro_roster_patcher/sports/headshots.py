@@ -12,6 +12,8 @@ publish: the birth date first, then the name.
 
 Nothing is overwritten: a player who already has a photo keeps it, and one with
 no match stays without, which every consumer must tolerate anyway.
+
+FotMob's positions are matched the same way (`fotmob_positions`), keyed by the ESPN player id.
 """
 
 from __future__ import annotations
@@ -140,3 +142,20 @@ def _fill_roster(
             player.photo_url = found[player.id].photo_url
             filled += 1
     return filled
+
+
+def fotmob_positions(
+    team: Team, league_id: int, squad: list[Player], client: FotmobClient
+) -> dict[int, list[str]]:
+    """`player.id -> his FotMob positions, most natural first`, for those of `squad` it has.
+
+    The team and its players are matched as for photos. A team FotMob does not list, a player
+    it cannot match or gives no positions, or a request that fails costs only those positions.
+    """
+    other = _find_team(team, client.get_teams(league_id))
+    if other is None:
+        return {}
+    found = match_squad(squad, client.get_squad(other.id))
+    # Nobody found (a failed squad request included): do not ask for the same document again.
+    positions = client.get_positions(other.id) if found else {}
+    return {p: positions[c.id] for p, c in found.items() if c.id in positions}

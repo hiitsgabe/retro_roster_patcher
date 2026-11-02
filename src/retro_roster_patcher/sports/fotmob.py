@@ -138,6 +138,21 @@ class FotmobClient:
         """The team's players, coaches left out, each with a photo URL."""
         return self._parse_squad(self._squad_document(team_id, season))
 
+    def get_positions(self, team_id: int, season: int | None = None) -> dict[int, list[str]]:
+        """`player id -> his positions, most natural first` (`["CDM", "LW", "CAM", "CM"]`).
+
+        Read from the squad document `get_squad` reads, so it adds no request. A player the
+        document gives no positions for is left out.
+        """
+        positions = {}
+        for member in self._members(self._squad_document(team_id, season)):
+            desc = member.get("positionIdsDesc")
+            codes = desc.split(",") if isinstance(desc, str) else []
+            codes = [c.strip() for c in codes if c.strip()]
+            if codes and (player_id := _as_int(member.get("id"))):
+                positions[player_id] = codes
+        return positions
+
     def get_player_stats(self, team_id: int, season: int | None = None) -> list[PlayerStats]:
         """What the squad document counts for each player this season.
 
