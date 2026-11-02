@@ -185,6 +185,15 @@ def test_a_regular_fotmob_could_not_match_still_starts_in_his_role():
     assert role == {name[s["id"]]: s["role"] for s in full["starters"]}
 
 
+def test_a_player_who_moved_lately_still_starts_in_his_latest_role():
+    # Cunha started at striker five times, then on the left wing in his last two starts.
+    full, name = _club("360")
+    lineup, _ = _club("360", unmatched={"Matheus Cunha"})
+    role = {name[s["id"]]: s["role"] for s in lineup["starters"]}
+    assert role["Matheus Cunha"] == "LW"
+    assert role == {name[s["id"]]: s["role"] for s in full["starters"]}
+
+
 C442 = ["G", "RB", "CD-R", "CD-L", "LB", "RM", "CM-R", "CM-L", "LM", "CF-R", "CF-L"]
 NATURAL = ["GK", "RB", "CB", "CB", "LB", "RM", "CM", "CM", "LM", "ST", "ST"]  # their roles
 
@@ -357,13 +366,11 @@ def test_new_players_with_no_start_in_the_template_formation_take_the_seats_in_o
 @pytest.mark.parametrize(
     "codes, role",
     [
-        (("RM", "CM-R", "CM-R", "CM-R"), "CM"),  # most often, though not lately
-        (("CM-R", "RM", "RM", "RM"), "RM"),
-        (("RM", "CM-R", "RM", "CM-R"), "RM"),  # level: the more recent one
-        (("CM-R", "RM", "CM-R", "RM"), "CM"),
+        (("RM", "CM-R", "CM-R", "CM-R"), "RM"),  # the latest, though he started more often at CM
+        (("CM-R", "RM", "RM", "RM"), "CM"),
     ],
 )
-def test_without_fotmob_positions_a_player_asks_first_for_the_role_he_started_in_most(codes, role):
+def test_without_fotmob_positions_a_player_asks_first_for_the_role_of_his_latest_start(codes, role):
     # Player 6 starts at `codes` in four matches, newest first, beside a partner at the other
     # place: 7 in the newest match, 12 before. Only the keeper has FotMob positions.
     def xi(i, code):
@@ -407,11 +414,13 @@ def test_few_seats_of_a_role_are_filled_for_the_best_total_not_one_seat_at_a_tim
 
 
 def test_a_code_reads_in_the_formation_of_the_match_it_was_played_in():
-    # Player 6 started at LM in the newest match, a 4-4-2, and in three 4-1-2-1-2, where an LM
-    # is a central midfielder. Only the keeper has FotMob positions.
+    # Player 6's latest start was at LM in a 4-1-2-1-2, where an LM is a central midfielder, but
+    # that match lists only ten starters, so it is no template. His other starts at LM are in the
+    # template's formation, a 4-4-2. Only the keeper has FotMob positions.
     xi = [1, 2, 3, 4, 5, 9, 7, 8, 6, 10, 11]  # 6 at LM, 9 at RM
-    older = [_match(f"e{i}", xi, formation="4-1-2-1-2") for i in (2, 3, 4)]
-    lineup = pick_lineup([_match("e1", xi), *older], None, {1: ["GK"]})
+    short = _match("e1", xi[:10], formation="4-1-2-1-2")
+    older = [_match(f"e{i}", xi) for i in (2, 3, 4)]
+    lineup = pick_lineup([short, *older], None, {1: ["GK"]})
     assert {s["id"]: s["role"] for s in lineup["starters"]}[6] == "CM"
 
 

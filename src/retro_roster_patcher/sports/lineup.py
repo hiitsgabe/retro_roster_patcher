@@ -261,11 +261,11 @@ def pick_lineup(
     A player is in form by his starts among his own last `SQUAD_WINDOW` matchday squads, so a
     spell out of the squad (hurt, suspended, not yet signed) never counts against him. With
     `positions`, players ask for the seats of their roles (`_propose`), FotMob's or, for a player
-    it has none for, the roles he started in; the players a role holds sit on the sides they
-    started on in the template's formation (`_sit`). Without, every seat first goes to the best
-    player who started at its code. A seat still empty takes the best player who started on its
-    line, else one of its squad group, else anyone, so there are eleven unless the squad has
-    fewer.
+    it has none for, the roles he started in, the one of his latest start first; the players a
+    role holds sit on the sides they started on in the template's formation (`_sit`). Without,
+    every seat first goes to the best player who started at its code. A seat still empty takes
+    the best player who started on its line, else one of its squad group, else anyone, so there
+    are eleven unless the squad has fewer.
 
     Plain data for the JSON boundary: `{"formation", "shape", "event", "starters": [{"id",
     "position", "number", "place", "line", "role", "side"}, ...]}`, starters by place.
@@ -299,9 +299,9 @@ def pick_lineup(
         cap = Counter(seat.role for seat in seats)
         asks: dict[int, list[str]] = {}
         for p in eligible:
-            # A player FotMob has no positions for asks for the roles he started in, the most
-            # often first (`most_common` keeps a tie in the order seen: the most recent first).
-            known = positions.get(p) or [r for r, _ in Counter(played.get(p, [])).most_common()]
+            # A player FotMob has no positions for asks for the roles he started in, the one of
+            # his latest start first and each role once (`played` is newest first).
+            known = positions.get(p) or list(dict.fromkeys(played.get(p, [])))
             asks[p] = [r for r in known if r in cap]
         at_code = Counter(  # starts of a player at a code, in the template's formation
             (row[0], row[2])
