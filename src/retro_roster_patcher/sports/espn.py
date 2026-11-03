@@ -15,6 +15,9 @@ from typing import Any
 from ..core.concurrency import emit_status, parallel_map
 from ..core.errors import ApiError, ensure_cache_dir
 from . import _http
+from .fotmob import FotmobClient
+from .headshots import fotmob_positions
+from .lineup import pick_lineup
 from .models import League, Player, PlayerStats, Team
 
 # Maps our internal league IDs to ESPN league codes. Never renumber these: they
@@ -155,9 +158,6 @@ NHL_TEAM_MAP = {
     "NHL.WEST": 27,  # All-Star West
 }
 
-#: Completed matches a lineup is read from: the eleven who started most often.
-LINEUP_MATCHES = 5
-
 #: Completed MLB games a batting order is read from (`get_baseball_lineup`).
 LINEUP_GAMES = 10
 #: A hockey player in any of his club's last this many games is in its lineup.
@@ -267,6 +267,7 @@ class EspnClient:
         self.cache_dir = cache_dir
         self.on_status = on_status
         self._transport = transport
+        self._fotmob_down: set[int] = set()  # leagues whose FotMob table came back empty
         ensure_cache_dir(cache_dir)
 
     def get_featured_leagues(self) -> list[League]:
@@ -974,21 +975,26 @@ class EspnClient:
                 return ref.split("/athletes/")[-1].split("?")[0]
         return None
 
-    def get_lineup(self, team_id: int, league_id: int) -> dict[str, Any] | None:
-        """The team's starting eleven from its last few completed matches, or None.
+    def get_lineup(
+        self,
+        team_id: int,
+        league_id: int,
+        squad: list[Player] | None = None,
+        team: Team | None = None,
+    ) -> dict[str, Any] | None:
+        """The team's starting eleven from the season's completed matches, or None.
 
-        One request for the team schedule, then one per match summary (up to
-        `LINEUP_MATCHES`), whose `rosters` carry each side's formation and who
-        started where. The formation and its eleven places are the latest
-        match's; each place goes to the player who started most often in that
-        position lately (then in that line of the pitch), ties to the more
-        recent starter, so a side rested for one match does not become the
-        team, yet the eleven always fit the formation: the eleven most frequent
-        starters on their own would mix matches played in different shapes and
-        put a fifth defender up front. Returned as plain data
-        (`{"formation": "4-2-3-1", "event": id, "starters": [{"id",
-        "position", "number", "place"}, ...]}`) so it rides along in
-        `TeamRoster.extra` through the JSON boundary. Cached per match.
+        One request for the team schedule, then one for the summary of each completed match,
+        whose `rosters` carry both sides' formation and whole matchday squad (`_matchday`: cached
+        once per match, for both clubs). `lineup.pick_lineup` chooses the eleven from them and
+        seats each in a place of the formation the club plays most; it documents the rules and
+        the plain data returned, which rides along in `TeamRoster.extra` through the JSON
+        boundary.
+
+        `squad`, the club's current ESPN players, limits the choice to them: a regular back from
+        injury keeps his place and a player who left never appears. With `team` as well, FotMob
+        is asked for the squad's positions and the eleven are placed by them; when it has none
+        they are placed by ESPN's position codes, and a status line says so.
         """
         item = _ID_TO_LEAGUE.get(league_id)
         if item is None:
@@ -1003,70 +1009,83 @@ class EspnClient:
             for e in schedule.get("events") or []
             if (e.get("competitions") or [{}])[0].get("status", {}).get("type", {}).get("completed")
         ]
-        recent = sorted(done, key=lambda e: str(e.get("date", "")), reverse=True)[:LINEUP_MATCHES]
-        lineups = [lu for e in recent if (lu := self._match_lineup(code, team_id, e)) is not None]
-        if not lineups:
+        done.sort(key=lambda e: str(e.get("date", "")), reverse=True)
+        days = parallel_map(lambda e: self._matchday(code, str(e["id"])), done)
+        matches = [
+            {"event": str(e["id"]), "formation": side["formation"], "roster": side["roster"]}
+            for e, day in zip(done, days, strict=True)
+            if (side := day.get(str(team_id)))
+        ]
+        if not matches:  # nothing to place, so nothing to ask FotMob either
             return None
-        latest = lineups[0]
-        if len(lineups) == 1:
-            return latest
-        at_code: dict[str, dict[int, int]] = {}
-        in_group: dict[str, dict[int, int]] = {}
-        seen: dict[int, dict[str, Any]] = {}
-        for lineup in lineups:  # newest first, so the first sighting is the latest
-            for starter in lineup["starters"]:
-                pid = starter["id"]
-                code = starter["position"]
-                at_code.setdefault(code, {})[pid] = at_code.get(code, {}).get(pid, 0) + 1
-                group = LINEUP_GROUPS.get(code, code)
-                in_group.setdefault(group, {})[pid] = in_group.get(group, {}).get(pid, 0) + 1
-                seen.setdefault(pid, starter)
-        recency = list(seen)  # first sighting first: the latest match's starters lead
-        used: set[int] = set()
-        starters = []
-        for place in latest["starters"]:
-            code = place["position"]
-            pool = at_code.get(code) or in_group.get(LINEUP_GROUPS.get(code, code), {})
-            ranked = sorted(pool, key=lambda pid: (-pool[pid], recency.index(pid)))
-            pid = next(
-                (p for p in [*ranked, place["id"], *recency] if p not in used),
-                place["id"],
-            )
-            used.add(pid)
-            starters.append({**seen[pid], "position": code, "place": place["place"]})
-        return {"formation": latest["formation"], "event": latest["event"], "starters": starters}
+        positions = {}
+        if team is not None and squad:
+            positions = self._fotmob_positions(team, league_id, squad)
+        groups = {p.id: p.position for p in squad} if squad else None
+        return pick_lineup(matches, groups, positions)
 
-    def _match_lineup(self, code: str, team_id: int, event: dict) -> dict[str, Any] | None:
-        """One match's formation and starters for `team_id`, cached per match."""
-        cache_key = f"espn_lineup_{code}_{team_id}_{event.get('id')}"
+    def _matchday(self, code: str, event_id: str) -> dict[str, dict[str, Any]]:
+        """Both sides of one match, by team id (a string), from its summary.
+
+        Each side is `{"formation": "4-2-3-1", "roster": [[athlete id, started, ESPN position
+        code, formation place, jersey], ...]}`: the whole matchday squad, the bench as code `SUB`
+        and place 0. One summary serves both clubs, so it is cached once per match and not once
+        per club; a played match never changes. `{}` when ESPN has none, which is not cached, so
+        a failed request or a summary with no squads is asked for again.
+        """
+        cache_key = f"espn_matchday_{code}_{event_id}"
         cached = self._load_cache(cache_key)
         if cached:
-            return dict(cached)
-        try:
-            summary = self._request(f"/{code}/summary?event={event['id']}", sport="soccer")
-        except ApiError:
-            return None
+            return cached
+        summary = self._request(f"/{code}/summary?event={event_id}", sport="soccer")
+        sides: dict[str, dict[str, Any]] = {}
         for side in summary.get("rosters") or []:
-            if str(side.get("team", {}).get("id")) != str(team_id):
-                continue
-            starters = [
-                {
-                    "id": int(p["athlete"]["id"]),
-                    "position": str(p.get("position", {}).get("abbreviation", "")),
-                    "number": int(p["jersey"]) if str(p.get("jersey", "")).isdigit() else None,
-                    "place": int(p.get("formationPlace") or 0),
-                }
+            team_id = str((side.get("team") or {}).get("id") or "")
+            roster = [
+                [
+                    int(p["athlete"]["id"]),
+                    bool(p.get("starter")),
+                    str((p.get("position") or {}).get("abbreviation", "")),
+                    int(p.get("formationPlace") or 0),
+                    str(p.get("jersey", "")),
+                ]
                 for p in side.get("roster") or []
-                if p.get("starter") and p.get("athlete", {}).get("id")
+                if (p.get("athlete") or {}).get("id")
             ]
-            lineup = {
-                "formation": str(side.get("formation", "")),
-                "event": event.get("id"),
-                "starters": starters,
-            }
-            self._save_cache(cache_key, lineup)
-            return lineup
-        return None
+            # A side with no players is not an answer, and caching it would freeze it.
+            if team_id and roster:
+                sides[team_id] = {"formation": str(side.get("formation") or ""), "roster": roster}
+        if sides:
+            self._save_cache(cache_key, sides)
+        return sides
+
+    def _fotmob_positions(
+        self, team: Team, league_id: int, squad: list[Player]
+    ) -> dict[int, list[str]]:
+        """FotMob's positions for `squad`, `{player id: [position, ...]}`; `{}` when it has none.
+
+        With none, a status line says so. The positions are optional, so this never raises: a
+        failed request, or a table the team is missing from or cannot be matched in, costs only
+        them. A table that comes back empty marks the league for this client's life and skips
+        FotMob for the league's other teams: with FotMob down, each team would wait out the
+        transport's timeout for the same table again, and a league has a score of them.
+        """
+        positions: dict[int, list[str]] = {}
+        if league_id not in self._fotmob_down:
+            try:
+                fotmob = FotmobClient(self.cache_dir, self.on_status, transport=self._transport)
+                # A table that arrives is cached, so `fotmob_positions` reads it back unasked.
+                if fotmob.get_teams(league_id):
+                    positions = fotmob_positions(team, league_id, squad, fotmob)
+                else:
+                    self._fotmob_down.add(league_id)
+            except Exception:
+                pass  # the lookup is optional: `positions` stays empty
+        if not positions:
+            emit_status(
+                self.on_status, f"{team.name}: no FotMob positions, placing by ESPN position codes"
+            )
+        return positions
 
     def get_league_logo(self, league_id: int) -> str:
         """The league's logo URL from its scoreboard, "" when ESPN has none.

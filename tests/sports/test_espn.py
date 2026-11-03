@@ -10,8 +10,9 @@ import pytest
 from retro_roster_patcher.games.we2002.stat_mapper import StatMapper
 from retro_roster_patcher.sports import espn
 from retro_roster_patcher.sports.espn import EspnClient
-from retro_roster_patcher.sports.models import PlayerStats
+from retro_roster_patcher.sports.models import Player, PlayerStats, Team
 from tests.sports.conftest import FIXTURES
+from tests.sports.test_fotmob import _transport as _routes
 
 NHL_TEAMS_URL = "https://site.api.espn.com/apis/site/v2/sports/hockey/nhl/teams"
 SOCCER_ROSTER_URL = "https://site.api.espn.com/apis/site/v2/sports/soccer/{code}/teams/83/roster"
@@ -1246,17 +1247,19 @@ def test_the_lineup_is_the_eleven_who_started_most_in_the_last_matches(tmp_path)
     client = EspnClient(str(tmp_path), transport=transport)
     lineup = client.get_lineup(359, 2001)
     assert lineup["formation"] == "4-4-2" and lineup["event"] == "10"
+    assert lineup["shape"] == "4-4-2"  # one match each in 4-4-2 and 4-3-3: the latest wins the tie
     assert [s["id"] for s in lineup["starters"]] == list(range(1, 12))
     assert lineup["starters"][0]["position"] == "G"
 
 
-def test_the_lineup_keeps_the_latest_formations_shape(tmp_path):
+def test_the_lineup_takes_the_shape_used_most_lately(tmp_path):
     """Two older matches in a 5-3-2 (centre-back 12 started both, no right
     midfielder) and the latest in a 4-4-2 with 9 on the right of midfield.
-    The eleven most frequent starters would be five defenders and no 9; the
-    lineup instead fills the 4-4-2's places: 12 is out, 9 plays RM, and the
-    rested regular keeps his place when he started it more often than the
-    stand-in (13 started CD-R once, 3 twice)."""
+    The club has played the 5-3-2 more often in its last matches, so the
+    lineup is the 5-3-2's: the newer of those two matches (event 20) gives the
+    places, and the eleven are the players who started them. 12 keeps the
+    third centre-back's place, and the rested regular 3 keeps CD-R over the
+    stand-in 13 (who started it once, against his twice)."""
 
     def event(ident, date):
         return {
@@ -1318,21 +1321,252 @@ def test_the_lineup_keeps_the_latest_formations_shape(tmp_path):
         return json.dumps(bodies[key]).encode()
 
     lineup = EspnClient(str(tmp_path), transport=transport).get_lineup(359, 2001)
-    assert lineup["formation"] == "4-4-2"
+    assert lineup["formation"] == "5-3-2" and lineup["event"] == "20"
     assert [(s["id"], s["position"]) for s in lineup["starters"]] == [
         (1, "G"),
         (2, "RB"),
         (3, "CD-R"),
+        (12, "CD"),
         (4, "CD-L"),
         (5, "LB"),
-        (6, "CM-R"),
-        (7, "CM-L"),
-        (8, "LM"),
-        (9, "RM"),
+        (6, "CM"),
+        (7, "CM"),
+        (8, "CM"),
         (10, "CF-R"),
         (11, "CF-L"),
     ]
     assert [s["place"] for s in lineup["starters"]] == list(range(1, 12))
+
+
+# A club's season as ESPN serves it: a team schedule with the one completed match "10" and that
+# match's summary, whose `rosters` hold each side's formation and matchday squad. ESPN labels the
+# places 1-11 of a 4-2-3-1 `G RB LB LM CD-R CD-L AM-R RM F AM AM-L`, so `LM` and `RM` are the two
+# holding midfielders there and `AM-L` the left winger.
+C4231 = ["G", "RB", "LB", "LM", "CD-R", "CD-L", "AM-R", "RM", "F", "AM", "AM-L"]
+SCHEDULE = {
+    "events": [
+        {
+            "id": "10",
+            "date": "2026-10-08",
+            "competitions": [{"status": {"type": {"completed": True}}}],
+        }
+    ]
+}
+
+
+def _side(team_id, ids, codes, formation, bench=()):
+    """One `rosters[]` entry of a match summary: `ids` start in place order on `codes`, and the
+    `bench` do not."""
+    starters = [
+        {
+            "starter": True,
+            "athlete": {"id": str(pid)},
+            "position": {"abbreviation": code},
+            "jersey": str(pid),
+            "formationPlace": str(place),
+        }
+        for place, (pid, code) in enumerate(zip(ids, codes, strict=True), start=1)
+    ]
+    subs = [
+        {
+            "starter": False,
+            "athlete": {"id": str(pid)},
+            "position": {"abbreviation": "SUB"},
+            "jersey": str(pid),
+        }
+        for pid in bench
+    ]
+    return {"team": {"id": str(team_id)}, "formation": formation, "roster": starters + subs}
+
+
+def _match_routes(*sides):
+    """`_routes` for a schedule with the match "10" and its summary of `sides`."""
+    return {"schedule": SCHEDULE, "summary?event=10": {"rosters": list(sides)}}
+
+
+def _roles(lineup):
+    return {s["id"]: s["role"] for s in lineup["starters"]}
+
+
+# Club 359 plays ids 1-11 in a 4-2-3-1. The ESPN squad holds the same eleven (birth dates match
+# FotMob's), and FotMob lists two of them: 4 as a left winger, 11 as a holding midfielder.
+CLUB = Team(id=359, name="Club")
+CLUB_SQUAD = [
+    Player(id=i, name=f"P{i}", birth_date=f"1990-01-{i:02d}", position="Midfielder")
+    for i in range(1, 12)
+]
+CLUB_MATCH = _match_routes(_side(359, range(1, 12), C4231, "4-2-3-1"))
+CLUB_ON_FOTMOB = {
+    "leagues?id=47": {
+        "table": [{"data": {"table": {"all": [{"id": 999, "name": "Club", "shortName": "Club"}]}}}]
+    },
+    "teams?id=999": {
+        "squad": {
+            "squad": [
+                {
+                    "title": "midfielders",
+                    "members": [
+                        {
+                            "id": 4004,
+                            "name": "P4",
+                            "dateOfBirth": "1990-01-04",
+                            "positionIdsDesc": "LW,LM",
+                        },
+                        {
+                            "id": 4011,
+                            "name": "P11",
+                            "dateOfBirth": "1990-01-11",
+                            "positionIdsDesc": "CDM,CM",
+                        },
+                    ],
+                }
+            ]
+        }
+    },
+}
+
+
+def test_both_clubs_of_one_match_share_one_summary_request(tmp_path):
+    sides = [
+        _side(359, range(1, 12), C4231, "4-2-3-1"),
+        _side(360, range(21, 32), C4231, "4-2-3-1"),
+    ]
+    transport = _routes(_match_routes(*sides))
+    client = EspnClient(str(tmp_path), transport=transport)
+    assert client.get_lineup(359, 2001)
+    assert client.get_lineup(360, 2001)
+    assert sum("summary" in url for url in transport.calls) == 1
+
+
+def test_the_lineup_places_starters_by_fotmob_positions(tmp_path):
+    transport = _routes({**CLUB_MATCH, **CLUB_ON_FOTMOB})
+    lineup = EspnClient(str(tmp_path), transport=transport).get_lineup(
+        359, 2001, squad=CLUB_SQUAD, team=CLUB
+    )
+    role = _roles(lineup)
+    assert len(lineup["starters"]) == 11
+    # 11 started on the left wing but FotMob lists him as a holding midfielder, 4 the reverse.
+    assert (role[11], role[4]) == ("CDM", "LW")
+    # One table request: the check before the lookup caches the table, and the lookup reads it.
+    assert sum("leagues?id=47" in url for url in transport.calls) == 1
+
+
+def test_without_fotmob_the_lineup_says_so_and_places_by_codes(tmp_path):
+    messages = []
+    client = EspnClient(str(tmp_path), on_status=messages.append, transport=_routes(CLUB_MATCH))
+    lineup = client.get_lineup(359, 2001, squad=CLUB_SQUAD, team=CLUB)
+    role = _roles(lineup)
+    assert (role[11], role[4]) == ("LW", "CDM")
+    assert any("no FotMob positions" in message for message in messages)
+
+
+def test_a_fotmob_table_that_breaks_the_match_costs_only_the_positions(tmp_path):
+    # `headshots._find_team` raises on a table row with neither a name nor a short name.
+    nameless = {"table": [{"data": {"table": {"all": [{"id": 5}]}}}]}
+    messages = []
+    transport = _routes({**CLUB_MATCH, "leagues?id=47": nameless})
+    client = EspnClient(str(tmp_path), on_status=messages.append, transport=transport)
+    lineup = client.get_lineup(359, 2001, squad=CLUB_SQUAD, team=CLUB)
+    role = _roles(lineup)
+    assert (role[11], role[4]) == ("LW", "CDM")
+    assert any("no FotMob positions" in message for message in messages)
+
+
+def test_the_network_guard_sentinel_escapes_the_fotmob_lookup(tmp_path):
+    from tests.conftest import TransportLeak
+
+    espn = _routes(CLUB_MATCH)
+
+    def transport(url, headers, timeout):
+        if "fotmob" in url:
+            raise TransportLeak(url)
+        return espn(url, headers, timeout)
+
+    client = EspnClient(str(tmp_path), transport=transport)
+    with pytest.raises(TransportLeak):
+        client.get_lineup(359, 2001, squad=CLUB_SQUAD, team=CLUB)
+
+
+def test_a_league_whose_fotmob_table_is_empty_is_asked_for_it_once(tmp_path):
+    # With FotMob down each failing request waits out the transport's timeout, and a league has
+    # a score of clubs.
+    rival = Team(id=360, name="Rival")
+    rival_squad = [Player(id=i, name=f"Q{i}", position="Midfielder") for i in range(21, 32)]
+    sides = [
+        _side(359, range(1, 12), C4231, "4-2-3-1"),
+        _side(360, range(21, 32), C4231, "4-2-3-1"),
+    ]
+    transport = _routes(_match_routes(*sides))
+    messages = []
+    client = EspnClient(str(tmp_path), on_status=messages.append, transport=transport)
+    assert client.get_lineup(359, 2001, squad=CLUB_SQUAD, team=CLUB)
+    assert client.get_lineup(360, 2001, squad=rival_squad, team=rival)
+    assert sum("leagues?id=" in url for url in transport.calls) == 1
+    assert [m for m in messages if "no FotMob positions" in m] == [
+        "Club: no FotMob positions, placing by ESPN position codes",
+        "Rival: no FotMob positions, placing by ESPN position codes",
+    ]
+
+
+def test_fotmob_is_asked_only_when_both_the_team_and_the_squad_are_given(tmp_path):
+    transport = _routes({**CLUB_MATCH, **CLUB_ON_FOTMOB})
+    client = EspnClient(str(tmp_path), transport=transport)
+    for squad, team in ((None, CLUB), ([], CLUB), (CLUB_SQUAD, None)):
+        assert client.get_lineup(359, 2001, squad=squad, team=team)
+    assert not any("fotmob" in url for url in transport.calls)
+
+
+def test_the_squad_keeps_a_departed_player_out_and_a_benched_keeper_in(tmp_path):
+    # 1, the keeper who started, has left the club; 12 sat on the bench and is a goalkeeper.
+    side = _side(359, range(1, 12), C4231, "4-2-3-1", bench=[12])
+    squad = [Player(id=i, name=f"P{i}", position="Midfielder") for i in range(2, 12)]
+    squad.append(Player(id=12, name="P12", position="Goalkeeper"))
+    client = EspnClient(str(tmp_path), transport=_routes(_match_routes(side)))
+    lineup = client.get_lineup(359, 2001, squad=squad)
+    assert sorted(s["id"] for s in lineup["starters"]) == list(range(2, 13))
+    assert lineup["starters"][0]["id"] == 12 and lineup["starters"][0]["role"] == "GK"
+
+
+def test_a_matchday_holds_both_sides_whole_and_is_cached_under_its_own_key(tmp_path):
+    sides = [
+        _side(359, range(1, 12), C4231, "4-2-3-1", bench=[12]),
+        _side(360, range(21, 32), C4231, None),
+    ]
+    client = EspnClient(str(tmp_path), transport=_routes(_match_routes(*sides)))
+    day = client._matchday("eng.1", "10")
+    assert sorted(day) == ["359", "360"]
+    assert day["359"]["formation"] == "4-2-3-1"
+    assert day["359"]["roster"][0] == [1, True, "G", 1, "1"]  # id, started, code, place, jersey
+    assert day["359"]["roster"][-1] == [12, False, "SUB", 0, "12"]
+    assert len(day["360"]["roster"]) == 11
+    assert day["360"]["formation"] == ""  # a null formation is stored as text
+    cached = json.loads((tmp_path / "espn_matchday_eng.1_10.json").read_text())
+    assert cached == day
+
+
+def test_a_matchday_without_squads_is_not_cached(tmp_path):
+    transport = _routes({"summary": {"rosters": []}})
+    client = EspnClient(str(tmp_path), transport=transport)
+    assert client._matchday("eng.1", "10") == {}
+    assert client._matchday("eng.1", "10") == {}
+    assert len(transport.calls) == 2
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_a_failed_schedule_has_no_lineup(tmp_path):
+    def transport(url, headers, timeout):
+        raise OSError("offline")
+
+    assert EspnClient(str(tmp_path), transport=transport).get_lineup(359, 2001) is None
+
+
+def test_a_club_with_no_match_played_has_no_lineup_and_asks_fotmob_nothing(tmp_path):
+    transport = _routes({"schedule": {"events": []}, **CLUB_ON_FOTMOB})
+    messages = []
+    client = EspnClient(str(tmp_path), on_status=messages.append, transport=transport)
+    assert client.get_lineup(359, 2001, squad=CLUB_SQUAD, team=CLUB) is None
+    assert not any("fotmob" in url for url in transport.calls)
+    assert not any("no FotMob positions" in message for message in messages)
 
 
 def test_default_season_follows_each_leagues_calendar():
