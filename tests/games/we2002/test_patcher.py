@@ -400,7 +400,7 @@ class LineupApi(FakeApi):
     """A `FakeApi` with `get_lineup`: team 100's keeper is a recent starter,
     team 101's lineup request fails."""
 
-    def get_lineup(self, team_id, league_id):
+    def get_lineup(self, team_id, league_id, squad=None, team=None):
         self.calls.append(("get_lineup", team_id, league_id))
         if team_id == 101:
             raise RuntimeError("summary endpoint down")

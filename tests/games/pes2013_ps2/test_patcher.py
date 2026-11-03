@@ -1088,7 +1088,7 @@ class _LineupApi:
     def get_squad(self, team_id, season):
         return [Player(id=team_id * 10, name="Keeper", position="Goalkeeper")]
 
-    def get_lineup(self, team_id, league_id):
+    def get_lineup(self, team_id, league_id, squad=None, team=None):
         if team_id == 2:
             raise KeyError("formationPlace")
         return {"formation": "", "event": 1, "starters": [{"id": 10, "position": "G"}]}

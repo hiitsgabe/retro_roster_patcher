@@ -246,13 +246,16 @@ class WE2002Patcher(Patcher):
                     self.status(
                         f"{team.name}: stats unavailable, ratings will use position defaults"
                     )
-                # The eleven who started most of the team's last few matches pick
+                # The club's starting XI from every match of the season (current
+                # squad only, positions from FotMob; README "Soccer lineups") picks
                 # the starting places (`_select_best_23`); the season's starts
                 # only fill what the lineup leaves open. Optional, and plain data
                 # for the JSON boundary.
                 if hasattr(self.api, "get_lineup"):
                     try:
-                        lineup = self.api.get_lineup(team.id, league_id)
+                        lineup = self.api.get_lineup(
+                            team.id, league_id, squad=roster.players, team=team
+                        )
                     except Exception:
                         lineup = None
                     if lineup:
