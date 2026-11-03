@@ -19,10 +19,10 @@ each percentile:
 
 A player without statistics gets his group's median.
 
-The XI is the club's last ESPN lineup when there is one, in a formation the
-cartridge has (the nearest in defenders, midfielders and forwards); each line
-is ordered by the side ESPN gives each player (L/R suffixes). The bench is the
-rest by starts and minutes, a second keeper first.
+The XI is the club's starting eleven when there is one, each starter on the
+line he is given, in the cartridge's formation nearest the lineup's folded
+shape; each line is ordered by the side ESPN gives each player (L/R suffixes).
+The bench is the rest by starts and minutes, a second keeper first.
 """
 
 from __future__ import annotations
@@ -33,6 +33,7 @@ from datetime import date
 
 from ...core.kits import KitSpec
 from ...sports.espn import LINEUP_GROUPS
+from ...sports.lineup import fold_formation
 from ...sports.models import Player, PlayerStats, TeamRoster
 from . import rom as R
 
@@ -317,26 +318,34 @@ class N64StatMapper:
 
         The same selection as `iss-snes` (`ISSStatMapper._select_best_15`),
         with the places of the club's formation (the nearest the cartridge has
-        to its last ESPN lineup's, else 4-4-2) instead of a fixed 4-4-2: every
-        recent starter plays, in the group his lineup position belongs to, a
-        group with more starters than places sending the rest to the nearest
-        group with room; open places go to the season's most frequent
-        starters, in their group, then a neighbouring one, and only then to a
-        player who never started. The bench is the backup keeper, then the
-        rest the same way.
+        to the lineup's folded shape, else 4-4-2) instead of a fixed 4-4-2:
+        every starter plays, on the line the lineup gives him (else the group
+        his position code belongs to), a group with more starters than places
+        sending the rest to the nearest group with room; open places go to the
+        season's most frequent starters, in their group, then a neighbouring
+        one, and only then to a player who never started. The bench is the
+        backup keeper, then the rest the same way.
         """
         stats = roster.player_stats
         lineup = (roster.extra or {}).get("lineup") or {}
         listed = lineup.get("starters") or []
         recent = {int(e["id"]): (i, e) for i, e in enumerate(listed) if "id" in e}
-        shape = parse_formation(lineup.get("formation", "")) if recent else None
+        # The lineup's folded shape; data fetched before `shape` existed folds its formation here.
+        shape = (
+            parse_formation(lineup.get("shape") or fold_formation(lineup.get("formation", "")))
+            if recent
+            else None
+        )
         # `formation` (defenders, midfielders, forwards) when a game fixes the
         # formation of a slot (ISS Deluxe), else the cartridge's nearest.
         shape = formation or (nearest_formation(shape) if shape else (4, 4, 2))
 
         def group(p: Player) -> str:
             if p.id in recent:
-                g = LINEUP_GROUPS.get(str(recent[p.id][1].get("position", "")).upper())
+                entry = recent[p.id][1]
+                if entry.get("line") in GROUPS:  # the line the lineup gives him, when it does
+                    return entry["line"]
+                g = LINEUP_GROUPS.get(str(entry.get("position", "")).upper())
                 if g in _GROUP_OF:
                     return _GROUP_OF[g]
             return group_of(p)

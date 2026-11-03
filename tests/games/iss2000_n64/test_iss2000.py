@@ -8,7 +8,22 @@ import pytest
 from retro_roster_patcher.core.registry import get_patcher
 from retro_roster_patcher.games.iss2000_n64 import rom as R
 from retro_roster_patcher.games.iss2000_n64 import screens
-from retro_roster_patcher.games.iss2000_n64.mapper import nearest_formation, parse_formation
+from retro_roster_patcher.games.iss2000_n64.mapper import (
+    N64StatMapper,
+    nearest_formation,
+    parse_formation,
+)
+from retro_roster_patcher.sports.models import Player, Team, TeamRoster
+
+# The eleven places of a 4-2-3-1 as ESPN codes them, the squad group of the player at each, and
+# the line each place is on once the formation is folded to 4-3-3 (the lone striker is joined by
+# the two wide attacking midfielders; the one behind him stays in midfield).
+C4231 = ["G", "RB", "LB", "LM", "CD-R", "CD-L", "AM-R", "RM", "F", "AM", "AM-L"]
+SQUAD_GROUPS = [
+    "Goalkeeper", "Defender", "Defender", "Midfielder", "Defender", "Defender",
+    "Midfielder", "Midfielder", "Attacker", "Midfielder", "Midfielder",
+]  # fmt: skip
+LINES = ["GK", "DF", "DF", "MF", "DF", "DF", "FW", "MF", "FW", "MF", "FW"]
 
 
 def test_lz_round_trips_runs_copies_and_literals():
@@ -30,6 +45,32 @@ def test_formations_fall_back_to_ones_the_cartridge_has():
     assert parse_formation("4-2-3-1") == (4, 5, 1)
     assert nearest_formation((4, 5, 1)) == (4, 5, 1)
     assert nearest_formation((5, 4, 1)) == (4, 4, 2)
+
+
+def _club_in_a_4231(starters, **lineup):
+    """A club of ids 1-11 whose last lineup was a 4-2-3-1, `starters` in place order; `lineup`
+    adds keys to it."""
+    players = [Player(id=i, name=f"P{i}", position=g) for i, g in enumerate(SQUAD_GROUPS, start=1)]
+    extra = {"lineup": {"formation": "4-2-3-1", "starters": starters, **lineup}}
+    return TeamRoster(team=Team(id=1, name="Club"), players=players, extra=extra)
+
+
+def test_a_four_two_three_one_lineup_plays_four_three_three():
+    starters = [
+        {"id": i, "position": code, "line": line}
+        for i, (code, line) in enumerate(zip(C4231, LINES, strict=True), start=1)
+    ]
+    m = N64StatMapper()
+    _, shape = m.select_22(_club_in_a_4231(starters, shape="4-3-3"))
+    assert shape == (4, 3, 3)
+    assert m._lines[7] == m._lines[11] == 3  # the wide attacking midfielders play up front
+    assert m._lines[10] == 2  # the one behind the striker stays in midfield
+
+
+def test_an_old_lineup_without_shape_still_folds():
+    starters = [{"id": i, "position": code} for i, code in enumerate(C4231, start=1)]
+    _, shape = N64StatMapper().select_22(_club_in_a_4231(starters))
+    assert shape == (4, 3, 3)
 
 
 def test_wallpaper_texels_are_distinct_and_inside_the_asset():
