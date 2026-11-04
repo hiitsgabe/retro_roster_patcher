@@ -131,6 +131,37 @@ def test_a_file_written_before_the_field_existed_reads_as_fully_measured():
     assert restored.teams[0].player_stats[18].unsupplied == ()
 
 
+def test_a_players_role_round_trips():
+    # `fetch` and `patch` are separate processes with this file between them, and the
+    # read side keeps only the keys `Player` declares (`_only_declared`): a `role`
+    # reaches the mapper only as a declared field.
+    original = LeagueData(
+        league=League(id=39, name="Premier League"),
+        teams=[
+            TeamRoster(
+                team=Team(id=33, name="Manchester United"),
+                players=[Player(id=1, name="A", position="Defender", role="RB")],
+            )
+        ],
+    )
+    assert round_trip(original).teams[0].players[0].role == "RB"
+
+
+def test_an_old_file_without_role_loads_with_an_empty_role():
+    # A rosters file written before `role` existed: its players carry a `position` and
+    # no `role` key. It still has to load, with the field at its default.
+    raw = {
+        "league": {"id": 39, "name": "Premier League"},
+        "teams": [
+            {
+                "team": {"id": 33, "name": "Manchester United"},
+                "players": [{"id": 1, "name": "A", "position": "Defender"}],
+            }
+        ],
+    }
+    assert league_data_from_dict(raw).teams[0].players[0].role == ""
+
+
 def test_the_extra_blob_passes_through_untouched():
     restored = round_trip(sample())
     assert restored.teams[0].extra == {"leaders": {"8471675": {"G": 42, "A": 54, "PTS": 96}}}

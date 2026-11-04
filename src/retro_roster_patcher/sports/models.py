@@ -26,6 +26,7 @@ class Player:
     age: int = 0
     nationality: str = ""
     position: str = ""  # Soccer: "Goalkeeper"/"Defender"/etc. Hockey: "C"/"LW"/"RW"/"D"/"G"
+    role: str = ""  # Soccer only, FotMob's roles: GK RB CB LB RWB LWB CDM CM CAM RM LM RW LW ST
     number: int | None = None
     photo_url: str = ""
     birth_date: str = ""  # ISO "YYYY-MM-DD"; "" when the provider gives none
