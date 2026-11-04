@@ -55,6 +55,9 @@ def test_text_that_is_not_ten_outfield_players_in_three_lines_or_more_is_unusabl
 def test_the_shape_is_the_most_used_of_the_last_five():
     newest_first = ["4-2-3-1", "4-3-3", "4-4-2", "4-4-2", "4-2-3-1", "4-4-2", "4-4-2"]
     assert choose_shape(newest_first) == "4-3-3"
+    # 4-4-2 five times in all, but only twice in the last five.
+    newest_first = ["4-4-2", "4-4-2", "4-3-3", "4-3-3", "4-3-3", "4-4-2", "4-4-2", "4-4-2"]
+    assert choose_shape(newest_first) == "4-3-3"
 
 
 def test_a_tied_shape_goes_to_the_latest_match():
@@ -170,11 +173,31 @@ def test_the_galo_is_the_users_eleven_in_their_roles():
     assert hulk not in [s["id"] for s in lineup["starters"]]
 
 
+def test_without_fotmob_the_galo_is_still_the_users_eleven():
+    t = FIXTURE["teams"]["7632"]
+    lineup = pick_lineup(t["matches"], dict.fromkeys(t["squad"], ""), {})
+    name = {int(k): v for k, v in t["names"].items()}
+    assert sorted(name[s["id"]] for s in lineup["starters"]) == sorted(FIXTURE["expected"]["7632"])
+
+
 def test_the_united_plays_four_three_three_with_mbeumo_up_front():  # regression, unconfirmed
     lineup, name = _club("360")
-    role = {name[s["id"]]: s["role"] for s in lineup["starters"]}
     assert lineup["shape"] == "4-3-3"
-    assert (role["Bryan Mbeumo"], role["Amad Diallo"], role["Matheus Cunha"]) == ("ST", "RW", "LW")
+    assert sorted((s["role"], name[s["id"]]) for s in lineup["starters"]) == sorted(
+        [
+            ("GK", "Senne Lammens"),
+            ("RB", "Diogo Dalot"),
+            ("LB", "Luke Shaw"),
+            ("CB", "Harry Maguire"),
+            ("CB", "Lisandro Martínez"),
+            ("CDM", "Kobbie Mainoo"),
+            ("CDM", "Youri Tielemans"),
+            ("RW", "Amad Diallo"),
+            ("CAM", "Bruno Fernandes"),
+            ("LW", "Matheus Cunha"),
+            ("ST", "Bryan Mbeumo"),
+        ]
+    )
 
 
 def test_a_regular_fotmob_could_not_match_still_starts_in_his_role():

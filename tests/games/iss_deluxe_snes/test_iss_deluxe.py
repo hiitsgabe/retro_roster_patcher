@@ -34,6 +34,32 @@ def test_the_xi_takes_the_slots_places_full_backs_on_the_flanks():
     assert [x.name for x in placed[:5]] == ["gk", "lb", "cb1", "cb2", "rb"]
 
 
+def test_a_four_two_three_one_lineup_sends_its_wide_attackers_forward(tmp_path):
+    # Folded to 4-3-3, the lineup puts AM-R (7) and AM-L (11) on the forwards' line, though ESPN
+    # groups both codes, and the squad both players, in midfield.
+    from retro_roster_patcher.core.models import SlotMapping
+    from retro_roster_patcher.sports.models import League, LeagueData, Player, Team, TeamRoster
+
+    codes = ["G", "RB", "LB", "LM", "CD-R", "CD-L", "AM-R", "RM", "F", "AM", "AM-L"]
+    lines = ["GK", "DF", "DF", "MF", "DF", "DF", "FW", "MF", "FW", "MF", "FW"]
+    groups = ["Goalkeeper", "Defender", "Defender", "Midfielder", "Defender", "Defender",
+              "Midfielder", "Midfielder", "Attacker", "Midfielder", "Midfielder"]  # fmt: skip
+    starters = [
+        {"id": i, "position": code, "line": line}
+        for i, (code, line) in enumerate(zip(codes, lines, strict=True), start=1)
+    ]
+    roster = TeamRoster(
+        team=Team(id=1, name="Club"),
+        players=[Player(id=i, name=f"P{i}", position=g) for i, g in enumerate(groups, start=1)],
+        extra={"lineup": {"formation": "4-2-3-1", "shape": "4-3-3", "starters": starters}},
+    )
+    data = LeagueData(league=League(id=2001, name="League"), teams=[roster])
+    patcher = get_patcher("iss-deluxe-snes")(tmp_path)
+    team = patcher.map_rosters(data, [SlotMapping(slot_index=0, team_id=1)]).teams[0]
+    group = {p.player_id: p.group for p in team.players[:11]}
+    assert (group[7], group[11], group[9], group[10]) == ("FW", "FW", "FW", "MF")
+
+
 def test_scoreboard_names_fit_32_pixels():
     assert names.fit("São Paulo", "São Paulo") == "SAO PAULO"
     assert names.fit("Atlético-MG", "Atlético-MG") == "ATLETICO"
