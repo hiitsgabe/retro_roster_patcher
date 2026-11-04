@@ -8,8 +8,11 @@ import pytest
 
 from retro_roster_patcher.sports.lineup import (
     DEPTH,
+    GROUP_ROLE,
     ROLE_BY_CODE,
     ROLE_OVERRIDES,
+    ROLES,
+    apply_lineup,
     choose_shape,
     code_line,
     fold_formation,
@@ -18,6 +21,7 @@ from retro_roster_patcher.sports.lineup import (
     slot_role,
     slot_side,
 )
+from retro_roster_patcher.sports.models import Player, Team, TeamRoster
 
 
 @pytest.mark.parametrize(
@@ -540,3 +544,106 @@ def test_a_squad_player_in_no_match_roster_gets_a_fotmob_role_but_never_a_seat()
     assert [s["id"] for s in lineup["starters"]] == list(range(1, 12))
     # With no squad given there is nobody to draw them from.
     assert "12" not in pick_lineup([match], None, positions)["roles"]
+
+
+# --- apply_lineup ------------------------------------------------------------------------
+
+
+def _roster(*players, **extra):
+    return TeamRoster(team=Team(id=1, name="Club"), players=list(players), extra=extra)
+
+
+def test_apply_lineup_sets_the_lineup_the_formation_and_each_role():
+    roster = _roster(
+        Player(id=1, name="A", position="Defender"),
+        Player(id=2, name="B", position="Midfielder"),
+        Player(id=3, name="C", position="Midfielder"),
+    )
+    lineup = {"shape": "4-3-3", "roles": {"1": "RB", "2": "ST"}, "starters": []}
+    apply_lineup(roster, lineup)
+    assert roster.extra["formation"] == "4-3-3"
+    assert roster.extra["lineup"] is lineup
+    assert [p.role for p in roster.players] == ["RB", "ST", "CM"]
+
+
+def test_a_player_in_no_matchday_squad_gets_his_groups_role():  # Review Focus 5
+    roster = _roster(
+        Player(id=1, name="A", position="Midfielder"),
+        Player(id=2, name="Keeper", position="Goalkeeper"),
+    )
+    apply_lineup(roster, {"shape": "4-3-3", "roles": {"1": "CDM"}, "starters": []})
+    assert [p.role for p in roster.players] == ["CDM", "GK"]
+
+
+def test_without_a_lineup_every_player_gets_his_groups_role():
+    roster = _roster(
+        Player(id=1, name="A", position="Defender"), Player(id=2, name="B", position="Attacker")
+    )
+    apply_lineup(roster, None)
+    assert "lineup" not in roster.extra and "formation" not in roster.extra
+    assert [p.role for p in roster.players] == ["CB", "ST"]
+
+
+def test_an_existing_formation_is_kept():
+    roster = _roster(Player(id=1, name="A", position="Defender"), formation="4-4-2")
+    apply_lineup(roster, {"shape": "4-3-3", "roles": {}, "starters": []})
+    assert roster.extra["formation"] == "4-4-2"
+
+
+@pytest.mark.parametrize(
+    "group, role",
+    [
+        ("Goalkeeper", "GK"),
+        ("Defender", "CB"),
+        ("Midfielder", "CM"),
+        ("Attacker", "ST"),
+        ("Forward", "ST"),
+        ("", "CM"),
+        ("Coach", "CM"),
+    ],
+)
+def test_a_group_gives_its_default_role_and_any_other_a_central_midfielder(group, role):
+    roster = _roster(Player(id=1, name="A", position=group))
+    apply_lineup(roster, None)
+    assert roster.players[0].role == role
+
+
+def test_a_role_comes_from_the_lineup_else_the_player_else_his_group():
+    roster = _roster(
+        Player(id=1, name="A", position="Attacker", role="LW"),
+        Player(id=2, name="B", position="Attacker", role="LW"),
+        Player(id=3, name="C", position="Attacker"),
+    )
+    apply_lineup(roster, {"shape": "4-3-3", "roles": {"1": "RW"}, "starters": []})
+    assert [p.role for p in roster.players] == ["RW", "LW", "ST"]
+    # Without a lineup nobody loses the role he has.
+    apply_lineup(roster, None)
+    assert [p.role for p in roster.players] == ["RW", "LW", "ST"]
+
+
+def test_a_role_outside_the_vocabulary_is_ignored():
+    # FotMob's labels are unofficial, and every game reads the role: a label that is not a role
+    # falls through to the role the player already has, else to his group's.
+    roster = _roster(
+        Player(id=1, name="A", position="Attacker"),
+        Player(id=2, name="B", position="Attacker", role="LW"),
+        Player(id=3, name="C", position="Defender", role="XYZ"),
+    )
+    apply_lineup(roster, {"shape": "4-3-3", "roles": {"1": "XYZ", "2": "XYZ", "3": "ABC"}})
+    assert [p.role for p in roster.players] == ["ST", "LW", "CB"]
+
+
+def test_a_lineup_without_roles_or_shape_still_gives_every_player_a_role():
+    # A lineup from before the roles: no `roles`, and no `shape` to make a formation from.
+    roster = _roster(Player(id=1, name="A", position="Goalkeeper"))
+    lineup = {"starters": []}
+    apply_lineup(roster, lineup)
+    assert roster.extra == {"lineup": lineup}
+    assert roster.players[0].role == "GK"
+
+
+def test_every_role_the_module_reads_or_defaults_to_is_in_the_vocabulary():
+    # `apply_lineup` drops a role outside `ROLES`, so a role the tables make must be in it.
+    overridden = {role for roles in ROLE_OVERRIDES.values() for role in roles.values()}
+    assert (set(ROLE_BY_CODE.values()) | overridden | set(GROUP_ROLE.values())) <= set(ROLES)
+    assert set(ROLES) == set(DEPTH)

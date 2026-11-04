@@ -12,7 +12,8 @@ a wide midfielder in a 4-4-2 and a wing-back in a 3-4-2-1.
   * `slot_lines` puts each place of a template on a line, so the lines add up to the folded
     shape; `code_line` gives a code's line when no formation is at hand;
   * `pick_lineup` chooses a club's eleven from its matchday squads, seats each one in a place of
-    its usual formation, and gives the rest of the squad a role too.
+    its usual formation, and gives the rest of the squad a role too;
+  * `apply_lineup` puts that lineup on a roster: its formation, and a role on every player.
 
 Pure rules and tables, with no I/O and no import of a client, so any client can use them.
 """
@@ -24,6 +25,8 @@ from collections import Counter
 from itertools import permutations
 from typing import Any, NamedTuple
 
+from .models import TeamRoster
+
 #: How many of a player's own matchday squads count toward his starts.
 SQUAD_WINDOW = 5
 #: How many of a team's matches count toward its shape.
@@ -32,6 +35,9 @@ SHAPE_WINDOW = 5
 #: seen reads as CM, so a role can have ten seats, and every order of ten is too many to try.
 EXACT_SEATS = 4
 
+#: FotMob's roles, the only ones a player's `role` can hold. Its labels are unofficial and every
+#: game reads the role, so `apply_lineup` ignores any other.
+ROLES = tuple("GK RB CB LB RWB LWB CDM CM CAM RM LM RW LW ST".split())
 #: A code's role when its formation does not read it differently.
 ROLE_BY_CODE = {
     "G": "GK", "CD": "CB", "CD-L": "CB", "CD-R": "CB", "SW": "CB", "LB": "LB", "RB": "RB",
@@ -57,6 +63,14 @@ DEPTH = {"GK": 0, "CB": 1, "RB": 1, "LB": 1, "RWB": 2, "LWB": 2, "CDM": 3, "CM":
          "LM": 4, "CAM": 5, "RW": 6, "LW": 6, "ST": 7}  # fmt: skip
 #: The squad group (ESPN's roster grouping) of the players who belong on each line.
 LINE_GROUP = {"GK": "Goalkeeper", "DF": "Defender", "MF": "Midfielder", "FW": "Attacker"}
+#: The role of a player nothing else gives one, by his squad group. Any other group reads as CM.
+GROUP_ROLE = {
+    "Goalkeeper": "GK",
+    "Defender": "CB",
+    "Midfielder": "CM",
+    "Attacker": "ST",
+    "Forward": "ST",
+}
 
 
 def _counts(text: str) -> list[int]:
@@ -382,3 +396,26 @@ def pick_lineup(
         ],
         "roles": roles,
     }
+
+
+def apply_lineup(roster: TeamRoster, lineup: dict[str, Any] | None) -> None:
+    """Put `pick_lineup`'s result (`None` when a club has none) on a roster.
+
+    With a lineup, `extra["lineup"]` is the lineup and `extra["formation"]` its shape, unless the
+    roster already has a formation: an edited one stays. A player's role is the one the lineup's
+    `roles` gives him (keyed by his id as text), else the one he already has, else the default of
+    his squad group (`GROUP_ROLE`), so a player in no matchday squad has one too. A label outside
+    `ROLES` counts as none, whether the lineup or the player holds it. Without a lineup only the
+    roles are set, and a player keeps the one he has.
+    """
+    roles: dict[str, str] = {}
+    if lineup:
+        roster.extra["lineup"] = lineup
+        if lineup.get("shape") and not roster.extra.get("formation"):
+            roster.extra["formation"] = lineup["shape"]
+        roles = lineup.get("roles") or {}  # a lineup older than the roles has none
+    for p in roster.players:
+        p.role = next(
+            (role for role in (roles.get(str(p.id)), p.role) if role in ROLES),
+            GROUP_ROLE.get(p.position, "CM"),
+        )
