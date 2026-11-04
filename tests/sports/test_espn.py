@@ -1567,6 +1567,36 @@ def test_a_matchday_without_squads_is_not_cached(tmp_path):
     assert list(tmp_path.iterdir()) == []
 
 
+def test_a_summary_espn_breaks_costs_that_match_only(tmp_path):
+    # The opponent's side of the newest match, 10, has an athlete id that is no number. The
+    # lineup comes from match 20, and 10 is not cached, so the next run asks for it again.
+    broken = _side(360, range(21, 32), C4231, "4-2-3-1")
+    broken["roster"][0]["athlete"]["id"] = "x"
+    older = {**SCHEDULE["events"][0], "id": "20", "date": "2026-10-01"}
+    routes = {
+        "schedule": {"events": [*SCHEDULE["events"], older]},
+        "summary?event=10": {"rosters": [_side(359, range(1, 12), C4231, "4-2-3-1"), broken]},
+        "summary?event=20": {"rosters": [_side(359, range(1, 12), C4231, "4-2-3-1")]},
+    }
+    lineup = EspnClient(str(tmp_path), transport=_routes(routes)).get_lineup(359, 2001)
+    assert lineup["event"] == "20"
+    assert not (tmp_path / "espn_matchday_eng.1_10.json").exists()
+
+
+def test_the_network_guard_sentinel_escapes_the_summary_guard(tmp_path):
+    from tests.conftest import TransportLeak
+
+    espn = _routes(CLUB_MATCH)
+
+    def transport(url, headers, timeout):
+        if "summary" in url:
+            raise TransportLeak(url)
+        return espn(url, headers, timeout)
+
+    with pytest.raises(TransportLeak):
+        EspnClient(str(tmp_path), transport=transport).get_lineup(359, 2001)
+
+
 def test_a_failed_schedule_has_no_lineup(tmp_path):
     def transport(url, headers, timeout):
         raise OSError("offline")

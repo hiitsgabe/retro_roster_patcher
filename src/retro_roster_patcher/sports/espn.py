@@ -987,10 +987,11 @@ class EspnClient:
 
         One request for the team schedule, then one for the summary of each completed match,
         whose `rosters` carry both sides' formation and whole matchday squad (`_matchday`: cached
-        once per match, for both clubs). `lineup.pick_lineup` chooses the eleven from them and
-        seats each in a place of the formation the club plays most; it documents the rules and
-        the plain data returned, which rides along in `TeamRoster.extra` through the JSON
-        boundary.
+        once per match, for both clubs). A summary that fails to parse costs that match only, and
+        is asked for again next time. `lineup.pick_lineup` chooses the eleven from them and seats
+        each in a place of the club's latest match in the shape it plays most; it documents the
+        rules and the plain data returned, which rides along in `TeamRoster.extra` through the
+        JSON boundary.
 
         `squad`, the club's current ESPN players, limits the choice to them: a regular back from
         injury keeps his place and a player who left never appears. With `team` as well, FotMob
@@ -1013,7 +1014,16 @@ class EspnClient:
             if (e.get("competitions") or [{}])[0].get("status", {}).get("type", {}).get("completed")
         ]
         done.sort(key=lambda e: str(e.get("date", "")), reverse=True)
-        days = parallel_map(lambda e: self._matchday(code, str(e["id"])), done)
+
+        def matchday(event: dict[str, Any]) -> dict[str, dict[str, Any]]:
+            # `parallel_map` passes the first exception on, so one bad summary would cost every
+            # match of the season, on every run. A `BaseException` still escapes.
+            try:
+                return self._matchday(code, str(event["id"]))
+            except Exception:
+                return {}  # not cached, so it is asked for again
+
+        days = parallel_map(matchday, done)
         matches = [
             {"event": str(e["id"]), "formation": side["formation"], "roster": side["roster"]}
             for e, day in zip(done, days, strict=True)
@@ -1055,7 +1065,7 @@ class EspnClient:
                 for p in side.get("roster") or []
                 if (p.get("athlete") or {}).get("id")
             ]
-            # A side with no players is not an answer, and caching it would freeze it.
+            # A side with no players is left out, and the summary is cached once any side has some.
             if team_id and roster:
                 sides[team_id] = {"formation": str(side.get("formation") or ""), "roster": roster}
         if sides:
