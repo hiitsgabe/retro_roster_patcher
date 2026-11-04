@@ -58,6 +58,10 @@ class Patcher(ABC):
     #: provider head shot (`core.headshots.measure_faces`); False skips the
     #: photos and gives every player one plain default look.
     supports_looks: bool = False
+    #: Whether `patch` writes each team's formation into the ROM.
+    writes_formation: bool = False
+    #: The formations (`"4-4-2"`, ...) the ROM can write, when `writes_formation`.
+    formations: tuple[str, ...] = ()
     #: (name, first slot, count) for games whose slots form named groups.
     slot_groups: tuple[tuple[str, int, int], ...] = ()
     #: How many leagues one patch takes, the k-th filling `slot_groups[k]`. 1

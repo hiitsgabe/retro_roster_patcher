@@ -262,3 +262,10 @@ def test_every_game_takes_no_more_leagues_than_it_has_slot_groups():
     assert get_patcher("we2002").max_leagues == 1
     # PES 2013 names five leagues; a league in "Other" would get no name.
     assert get_patcher("pes2013-ps2").max_leagues == 5
+
+
+def test_the_other_soccer_games_write_no_formation():
+    for game in ("iss-snes", "iss-deluxe-snes", "we2002", "pes2013-ps2"):
+        cls = get_patcher(game)
+        assert cls.writes_formation is False, game
+        assert cls.formations == (), game

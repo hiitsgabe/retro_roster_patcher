@@ -39,7 +39,7 @@ from ..iss_snes.patcher import ISSPatcher
 from . import flags, kits, looks, names, screens
 from . import rom as R
 from . import writer as W
-from .mapper import N64StatMapper, N64Team
+from .mapper import FORMATION_DONORS, N64StatMapper, N64Team
 
 #: Team-id order, as the menus spell the names.
 TEAM_NAMES = (
@@ -100,6 +100,10 @@ class ISS2000Patcher(Patcher):
     #: no club takes with today's national squads (`national_slot_map`).
     supports_nationals: bool = True
     national_slot_base: int | None = 0
+    #: Each team's formation row is copied from a cartridge team of its shape: one
+    #: donor per key of `mapper.FORMATION_DONORS`.
+    writes_formation: bool = True
+    formations: tuple[str, ...] = tuple(f"{d}-{m}-{f}" for d, m, f in FORMATION_DONORS)
     slot_groups = (
         ("Europe", 0, 51),
         ("Africa", 51, 10),

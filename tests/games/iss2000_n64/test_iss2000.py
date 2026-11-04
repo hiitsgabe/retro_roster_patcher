@@ -84,6 +84,12 @@ def test_registered_with_its_capabilities():
     assert cls.requires_slot_mapping and cls.supports_looks and cls.image_slots == ("menu", "title")
 
 
+def test_iss2000_writes_its_seven_formations():
+    cls = get_patcher("iss2000-n64")
+    assert cls.writes_formation is True
+    assert cls.formations == ("4-4-2", "4-5-1", "4-3-3", "3-5-2", "3-6-1", "3-4-3", "5-3-2")
+
+
 def test_a_given_squad_starts_one_keeper_in_goal():
     from retro_roster_patcher.games.iss2000_n64.mapper import N64StatMapper
     from retro_roster_patcher.sports.models import Player
