@@ -107,6 +107,98 @@ def test_a_given_squad_starts_one_keeper_in_goal():
     assert shape == (4, 5, 1)  # 5 DF and 5 MF made it: nearest shape
 
 
+def _squad_in_a_433(order=range(1, 23), **extra):
+    """A club of ids 1-22 whose natural order is a 4-3-3's keeper, 4 defenders, 3 midfielders and
+    3 forwards, then a bench of a second keeper, 3 defenders, 4 midfielders and 3 forwards; the
+    squad is given in `order`."""
+    groups = (
+        ["Goalkeeper"] + ["Defender"] * 4 + ["Midfielder"] * 3 + ["Attacker"] * 3
+        + ["Goalkeeper"] + ["Defender"] * 3 + ["Midfielder"] * 4 + ["Attacker"] * 3
+    )  # fmt: skip
+    by_id = {i: Player(id=i, name=f"P{i}", position=g) for i, g in enumerate(groups, start=1)}
+    return TeamRoster(team=Team(id=1, name="Club"), players=[by_id[i] for i in order], extra=extra)
+
+
+def test_an_edited_formation_reads_the_order_by_its_lines():
+    m = N64StatMapper()
+    team = m.map_team(_squad_in_a_433(formation="4-4-2"), {}, order_as_given=True)
+    assert team.formation == (4, 4, 2)
+    assert [p.player_id for p in team.players[:11]] == list(range(1, 12))  # the order, as given
+    assert m._lines[9] == 2  # a forward by position, ninth in the order: the fourth midfielder
+    assert team.players[8].position_bits & R.MF
+    assert m._lines[10] == m._lines[11] == 3
+
+
+def test_an_edited_formation_beats_the_suggested_xi_shortcut():
+    # The lineup says 4-3-3 and the squad comes in `suggest_squad_order`'s order, so the suggested
+    # XI is the given one; the formation picked since is the one to write.
+    lineup = {"formation": "4-3-3", "shape": "4-3-3", "starters": [{"id": i} for i in range(1, 12)]}
+    m = N64StatMapper()
+    roster = _squad_in_a_433(lineup=lineup, formation="4-4-2")
+    roster.players = m.select_22(roster)[0]
+    assert {p.id for p in roster.players[:11]} == set(range(1, 12))
+    assert m.map_team(roster, {}, order_as_given=True).formation == (4, 4, 2)
+
+
+def test_a_formation_the_cartridge_lacks_takes_its_nearest_for_lines_and_shape():
+    m = N64StatMapper()
+    team = m.map_team(_squad_in_a_433(formation="5-4-1"), {}, order_as_given=True)
+    nearest = nearest_formation((5, 4, 1))
+    assert team.formation == nearest
+    lines = list(m._lines.values())
+    assert tuple(lines.count(ln) for ln in (1, 2, 3)) == nearest
+
+
+def test_the_first_keeper_in_the_list_starts_whatever_slot_one_holds():
+    # A defender first and the only keeper third.
+    groups = ["Defender", "Midfielder", "Goalkeeper"] + ["Defender"] * 3 + ["Midfielder"] * 4
+    groups += ["Attacker"] * 2
+    squad = [Player(id=i, name=f"P{i}", position=g) for i, g in enumerate(groups, start=1)]
+    m = N64StatMapper()
+    xi, shape = m.given_22(squad, "4-4-2")
+    assert [x.id for x in xi] == [3, 1, 2, *range(4, 13)]  # the keeper in goal, the rest as given
+    assert shape == (4, 4, 2)
+    assert list(m._lines.values()).count(0) == 1
+    assert m._lines[3] == 0
+
+
+def test_the_goal_is_slot_one_even_without_a_keeper_among_the_first_eleven():
+    m = N64StatMapper()
+    # The only keeper below the eleventh place: he starts and the eleventh outfielder makes way.
+    groups = ["Defender"] * 4 + ["Midfielder"] * 4 + ["Attacker"] * 3 + ["Goalkeeper"]
+    squad = [Player(id=i, name=f"P{i}", position=g) for i, g in enumerate(groups, start=1)]
+    xi, _ = m.given_22(squad, "4-4-2")
+    assert [x.id for x in xi] == [12, *range(1, 12)]
+    assert m._lines[12] == 0 and len(m._lines) == 11
+    # No keeper at all: the first player stands in.
+    xi, _ = m.given_22(squad[:11], "4-4-2")
+    assert [x.id for x in xi] == list(range(1, 12))
+    assert m._lines[1] == 0 and len(m._lines) == 11
+
+
+def test_an_old_roster_without_formation_maps_as_before():
+    # The XI given in no order at all: grouped by position, its counts name the formation.
+    order = [1, 9, 10, 11, 6, 7, 8, 2, 3, 4, 5, *range(12, 23)]
+    team = N64StatMapper().map_team(_squad_in_a_433(order), {}, order_as_given=True)
+    assert [p.player_id for p in team.players] == list(range(1, 23))
+    assert team.formation == (4, 3, 3)
+
+
+def test_an_unreadable_formation_counts_as_none():
+    # The 4-2-3-1 club's suggested XI is the given one, so the shortcut keeps its lineup shape.
+    starters = [
+        {"id": i, "position": code, "line": line}
+        for i, (code, line) in enumerate(zip(C4231, LINES, strict=True), start=1)
+    ]
+    m = N64StatMapper()
+    roster = _club_in_a_4231(starters, shape="4-3-3")
+    roster.players = m.select_22(roster)[0]
+    plain = m.map_team(roster, {}, order_as_given=True)
+    roster.extra["formation"] = "x"
+    assert m.map_team(roster, {}, order_as_given=True) == plain
+    assert plain.formation == (4, 3, 3)
+
+
 def test_a_formation_comes_from_the_donor_as_shipped():
     from retro_roster_patcher.games.iss2000_n64 import writer as W
     from retro_roster_patcher.games.iss2000_n64.mapper import FORMATION_DONORS

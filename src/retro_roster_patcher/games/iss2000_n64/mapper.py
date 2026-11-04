@@ -403,10 +403,18 @@ class N64StatMapper:
         bench = keepers + [p for p in rest if p not in keepers]
         return (xi + bench)[: R.PLAYERS_PER_TEAM], shape
 
-    def given_22(self, players: list[Player]) -> tuple[list[Player], tuple[int, int, int]]:
+    def given_22(
+        self, players: list[Player], formation: str | None = None
+    ) -> tuple[list[Player], tuple[int, int, int]]:
         """The caller's squad as given, its first 11 the XI: grouped into the
         game's lines (keeper, defence, midfield, attack, the caller's order
-        kept inside each), in the formation those counts are nearest."""
+        kept inside each), in the formation those counts are nearest.
+
+        With a `formation` that `parse_formation` reads, the order is the team
+        sheet instead: the keeper, then the outfield as given, whatever each
+        player's position. The formation nearest it on the cartridge cuts the
+        outfield into lines by index: its defenders first, then its
+        midfielders, the rest up front."""
         # Exactly one keeper starts: the first in the list; a second keeper
         # in the first 11 makes way for the next outfielder.
         keepers = [p for p in players if group_of(p) == "GK"][:1]
@@ -414,12 +422,20 @@ class N64StatMapper:
         xi_ids = {p.id for p in players[:11] if group_of(p) != "GK"}
         xi_out = [p for p in outfield if p.id in xi_ids]
         xi_out += [p for p in outfield if p.id not in xi_ids][: 11 - len(keepers) - len(xi_out)]
-        xi = sorted(keepers + xi_out, key=lambda p: _LINE[group_of(p)])
+        wanted = parse_formation(formation or "")
+        if wanted is None:
+            xi = sorted(keepers + xi_out, key=lambda p: _LINE[group_of(p)])
+            lines = [_LINE[group_of(p)] for p in xi]
+            shape = nearest_formation((lines.count(1), lines.count(2), lines.count(3)))
+        else:
+            # Slot 1 is the goal: a keeper listed below the first 11 takes it from the eleventh
+            # outfielder; a squad without keepers puts its first player there.
+            shape = nearest_formation(wanted)
+            xi = (keepers + xi_out)[:11]
+            lines = ([0] + [1] * shape[0] + [2] * shape[1] + [3] * shape[2])[: len(xi)]
         chosen = {p.id for p in xi}
         players = xi + [p for p in players if p.id not in chosen]
-        lines = [_LINE[group_of(p)] for p in xi]
         self._lines = {p.id: ln for p, ln in zip(xi, lines, strict=True)}
-        shape = nearest_formation((lines.count(1), lines.count(2), lines.count(3)))
         return (xi + list(players[11:]))[: R.PLAYERS_PER_TEAM], shape
 
     def map_team(
@@ -429,7 +445,13 @@ class N64StatMapper:
         *,
         order_as_given: bool = False,
     ) -> N64Team:
-        if order_as_given:
+        formation: tuple[int, int, int] | None  # as `select_22` is annotated
+        picked = (roster.extra or {}).get("formation") or ""
+        if order_as_given and parse_formation(picked) is not None:
+            # The roster's formation (the lineup's, or the one picked since) reads the given
+            # order: the shortcut below would answer with the lineup's own shape and lines.
+            squad, formation = self.given_22(list(roster.players), picked)
+        elif order_as_given:
             auto, auto_shape = self.select_22(roster)
             given = list(roster.players)
             if {p.id for p in auto[:11]} == {p.id for p in given[:11]}:
