@@ -981,6 +981,7 @@ class EspnClient:
         league_id: int,
         squad: list[Player] | None = None,
         team: Team | None = None,
+        season: int | None = None,
     ) -> dict[str, Any] | None:
         """The team's starting eleven from the season's completed matches, or None.
 
@@ -994,7 +995,9 @@ class EspnClient:
         `squad`, the club's current ESPN players, limits the choice to them: a regular back from
         injury keeps his place and a player who left never appears. With `team` as well, FotMob
         is asked for the squad's positions and the eleven are placed by them; when it has none
-        they are placed by ESPN's position codes, and a status line says so.
+        they are placed by ESPN's position codes, and a status line says so. `season` reaches
+        FotMob's cache keys only, as `get_squad`'s reaches ESPN's: neither request takes one, so
+        without it every later season would replay the first one cached.
         """
         item = _ID_TO_LEAGUE.get(league_id)
         if item is None:
@@ -1020,7 +1023,7 @@ class EspnClient:
             return None
         positions = {}
         if team is not None and squad:
-            positions = self._fotmob_positions(team, league_id, squad)
+            positions = self._fotmob_positions(team, league_id, squad, season)
         groups = {p.id: p.position for p in squad} if squad else None
         return pick_lineup(matches, groups, positions)
 
@@ -1060,7 +1063,7 @@ class EspnClient:
         return sides
 
     def _fotmob_positions(
-        self, team: Team, league_id: int, squad: list[Player]
+        self, team: Team, league_id: int, squad: list[Player], season: int | None
     ) -> dict[int, list[str]]:
         """FotMob's positions for `squad`, `{player id: [position, ...]}`; `{}` when it has none.
 
@@ -1075,8 +1078,8 @@ class EspnClient:
             try:
                 fotmob = FotmobClient(self.cache_dir, self.on_status, transport=self._transport)
                 # A table that arrives is cached, so `fotmob_positions` reads it back unasked.
-                if fotmob.get_teams(league_id):
-                    positions = fotmob_positions(team, league_id, squad, fotmob)
+                if fotmob.get_teams(league_id, season):
+                    positions = fotmob_positions(team, league_id, squad, fotmob, season)
                 else:
                     self._fotmob_down.add(league_id)
             except Exception:

@@ -145,17 +145,23 @@ def _fill_roster(
 
 
 def fotmob_positions(
-    team: Team, league_id: int, squad: list[Player], client: FotmobClient
+    team: Team,
+    league_id: int,
+    squad: list[Player],
+    client: FotmobClient,
+    season: int | None = None,
 ) -> dict[int, list[str]]:
     """`player.id -> his FotMob positions, most natural first`, for those of `squad` it has.
 
     The team and its players are matched as for photos. A team FotMob does not list, a player
     it cannot match or gives no positions, or a request that fails costs only those positions.
+    `season` reaches the cache keys only: FotMob serves today's table and squad, and without it
+    every later season would replay the first one cached.
     """
-    other = _find_team(team, client.get_teams(league_id))
+    other = _find_team(team, client.get_teams(league_id, season))
     if other is None:
         return {}
-    found = match_squad(squad, client.get_squad(other.id))
+    found = match_squad(squad, client.get_squad(other.id, season))
     # Nobody found (a failed squad request included): do not ask for the same document again.
-    positions = client.get_positions(other.id) if found else {}
+    positions = client.get_positions(other.id, season) if found else {}
     return {p: positions[c.id] for p, c in found.items() if c.id in positions}

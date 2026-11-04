@@ -398,10 +398,15 @@ def test_a_stats_failure_costs_the_ratings_and_not_the_squad(tmp_path):
 
 class LineupApi(FakeApi):
     """A `FakeApi` with `get_lineup`: team 100's keeper is a recent starter,
-    team 101's lineup request fails."""
+    team 101's lineup request fails. `lineup_args` records what each was given."""
 
-    def get_lineup(self, team_id, league_id, squad=None, team=None):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.lineup_args = []
+
+    def get_lineup(self, team_id, league_id, squad=None, team=None, season=None):
         self.calls.append(("get_lineup", team_id, league_id))
+        self.lineup_args.append((squad, team, season))
         if team_id == 101:
             raise RuntimeError("summary endpoint down")
         return {"formation": "4-4-2", "event": 1, "starters": [{"id": 10000, "position": "G"}]}
@@ -419,6 +424,14 @@ def test_fetch_keeps_each_teams_recent_lineup_and_survives_a_failed_one(tmp_path
     assert "lineup" not in data.teams[1].extra
     assert [len(tr.players) for tr in data.teams] == [11, 11]
     assert [tr.error for tr in data.teams] == ["", ""]
+
+
+def test_fetch_hands_each_teams_squad_team_and_season_to_the_lineup(tmp_path):
+    # The client keeps only the current squad and asks FotMob about the team, cached per season.
+    p = _make_patcher(tmp_path)
+    p.api = LineupApi(team_count=2)
+    data = p.fetch(season=2024, league_id=39)
+    assert p.api.lineup_args == [(r.players, r.team, 2024) for r in data.teams]
 
 
 def test_fetch_keys_player_stats_by_player_id(tmp_path):

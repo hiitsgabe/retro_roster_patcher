@@ -233,7 +233,7 @@ class ISSPatcher(Patcher):
                 if hasattr(self.api, "get_lineup"):
                     try:
                         lineup = self.api.get_lineup(
-                            team.id, league_id, squad=roster.players, team=team
+                            team.id, league_id, squad=roster.players, team=team, season=season
                         )
                     except Exception:
                         lineup = None

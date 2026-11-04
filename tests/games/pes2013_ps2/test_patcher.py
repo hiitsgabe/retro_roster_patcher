@@ -1077,7 +1077,11 @@ def test_kits_none_or_empty_draw_the_defaults_and_false_keeps_the_disc(iso, tmp_
 
 
 class _LineupApi:
-    """Two clubs; club 2's lineup request fails with a non-`ApiError`."""
+    """Two clubs; club 2's lineup request fails with a non-`ApiError`. `lineup_args` records
+    what each lineup request was given."""
+
+    def __init__(self):
+        self.lineup_args = []
 
     def get_leagues(self, id, season):
         return [League(id=id, name="League", logo_url="http://x/l.png")]
@@ -1088,7 +1092,8 @@ class _LineupApi:
     def get_squad(self, team_id, season):
         return [Player(id=team_id * 10, name="Keeper", position="Goalkeeper")]
 
-    def get_lineup(self, team_id, league_id, squad=None, team=None):
+    def get_lineup(self, team_id, league_id, squad=None, team=None, season=None):
+        self.lineup_args.append((squad, team, season))
         if team_id == 2:
             raise KeyError("formationPlace")
         return {"formation": "", "event": 1, "starters": [{"id": 10, "position": "G"}]}
@@ -1102,6 +1107,14 @@ def test_fetch_survives_a_failed_lineup(tmp_path):
     assert [t.extra.get("lineup", {}).get("event") for t in data.teams] == [1, None]
     assert [len(t.players) for t in data.teams] == [1, 1]
     assert [t.error for t in data.teams] == ["", ""]
+
+
+def test_fetch_hands_each_teams_squad_team_and_season_to_the_lineup(tmp_path):
+    # The client keeps only the current squad and asks FotMob about the team, cached per season.
+    patcher = PES2013PS2Patcher(tmp_path)
+    patcher.api = _LineupApi()
+    data = patcher.fetch(season=2026, league_id=7)
+    assert patcher.api.lineup_args == [(t.players, t.team, 2026) for t in data.teams]
 
 
 # -- looks -----------------------------------------------------------------

@@ -54,9 +54,9 @@ class FakeApi:
         self.lineup_calls = []
         self.lineup_args = []
 
-    def get_lineup(self, team_id, league_id, squad=None, team=None):
+    def get_lineup(self, team_id, league_id, squad=None, team=None, season=None):
         self.lineup_calls.append((team_id, league_id))
-        self.lineup_args.append((squad, team))
+        self.lineup_args.append((squad, team, season))
         return {
             "formation": "4-4-2",
             "event": 1,
@@ -484,12 +484,10 @@ def test_fetch_keeps_each_teams_recent_lineup(patcher):
     assert data.teams[0].extra["lineup"]["starters"][0]["id"] == data.teams[0].team.id * 100 + 1
 
 
-def test_fetch_hands_each_teams_squad_and_team_to_the_lineup(patcher):
-    # The client keeps only the current squad and asks FotMob about the team.
+def test_fetch_hands_each_teams_squad_team_and_season_to_the_lineup(patcher):
+    # The client keeps only the current squad and asks FotMob about the team, cached per season.
     data = patcher.fetch(season=2025, league_id=2001)
-    assert [(len(s or []), t.id if t else None) for s, t in patcher.api.lineup_args] == [
-        (len(r.players), r.team.id) for r in data.teams
-    ]
+    assert patcher.api.lineup_args == [(r.players, r.team, 2025) for r in data.teams]
 
 
 def test_the_suggested_order_starts_the_recent_keeper(patcher):

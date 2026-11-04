@@ -1508,6 +1508,20 @@ def test_a_league_whose_fotmob_table_is_empty_is_asked_for_it_once(tmp_path):
     ]
 
 
+def test_fotmob_is_cached_per_season(tmp_path):
+    # Neither FotMob request takes a season, so it reaches the cache keys: a season cached once
+    # must not answer for the next one.
+    transport = _routes({**CLUB_MATCH, **CLUB_ON_FOTMOB})
+    for season in (2026, 2027):
+        client = EspnClient(str(tmp_path), transport=transport)
+        lineup = client.get_lineup(359, 2001, squad=CLUB_SQUAD, team=CLUB, season=season)
+        assert _roles(lineup)[11] == "CDM"
+    assert (tmp_path / "fotmob_teams_2001_2026.json").exists()
+    assert (tmp_path / "fotmob_squad_999_2026.json").exists()
+    assert sum("leagues?id=47" in url for url in transport.calls) == 2
+    assert sum("teams?id=999" in url for url in transport.calls) == 2
+
+
 def test_fotmob_is_asked_only_when_both_the_team_and_the_squad_are_given(tmp_path):
     transport = _routes({**CLUB_MATCH, **CLUB_ON_FOTMOB})
     client = EspnClient(str(tmp_path), transport=transport)
