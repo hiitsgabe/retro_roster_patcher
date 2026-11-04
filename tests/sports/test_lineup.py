@@ -217,6 +217,26 @@ def test_a_player_who_moved_lately_still_starts_in_his_latest_role():
     assert role == {name[s["id"]]: s["role"] for s in full["starters"]}
 
 
+def test_the_lineup_gives_every_starter_his_seats_role():
+    lineup, _ = _club("7632")
+    assert len(lineup["starters"]) == 11
+    assert all(lineup["roles"][str(s["id"])] == s["role"] for s in lineup["starters"])
+
+
+def test_the_bench_gets_a_role_from_fotmob_or_his_starts():
+    # Gabriel Delfim is a second keeper; FotMob lists Victor Hugo first as a CAM, a Galo seat.
+    lineup, name = _club("7632")
+    starters = {s["id"] for s in lineup["starters"]}
+    for who, role in (("Gabriel Delfim", "GK"), ("Victor Hugo", "CAM")):
+        i = next(i for i, n in name.items() if n == who)
+        assert i not in starters and lineup["roles"][str(i)] == role
+
+
+def test_roles_are_keyed_by_text():
+    lineup, _ = _club("7632")
+    assert lineup["roles"] and all(isinstance(key, str) for key in lineup["roles"])
+
+
 C442 = ["G", "RB", "CD-R", "CD-L", "LB", "RM", "CM-R", "CM-L", "LM", "CF-R", "CF-L"]
 NATURAL = ["GK", "RB", "CB", "CB", "LB", "RM", "CM", "CM", "LM", "ST", "ST"]  # their roles
 
@@ -481,3 +501,16 @@ def test_only_starts_count_toward_the_roles_a_player_asks_for():
     lineup = pick_lineup([newest, *later], squad, {1: ["GK"], 14: ["CAM"]})
     ids = [s["id"] for s in lineup["starters"]]
     assert 14 in ids and 2 not in ids
+
+
+def test_a_benched_player_takes_the_first_fotmob_role_a_seat_has_else_any_else_his_last_start():
+    # A 4-4-2 has no LWB and no CAM seat. 12 is listed LWB then RM, so he is an RM; 13 only CAM,
+    # so a CAM. 14 has no FotMob positions: his latest start was at AM-L (a LW), the one before at
+    # AM (a CAM), so he is a LW. 15 has neither and gets no role.
+    xi = list(range(1, 12))
+    newest = _match("e1", xi, bench=[12, 13, 14, 15])
+    starts = (("e2", "AM-L"), ("e3", "AM"))
+    older = [_match(event, [*xi[:10], 14], codes=[*C442[:10], code]) for event, code in starts]
+    positions = {p: [role] for p, role in enumerate(NATURAL, 1)} | {12: ["LWB", "RM"], 13: ["CAM"]}
+    roles = pick_lineup([newest, *older], None, positions)["roles"]
+    assert [roles.get(str(p)) for p in (12, 13, 14, 15)] == ["RM", "CAM", "LW", None]

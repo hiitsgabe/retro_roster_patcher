@@ -11,8 +11,8 @@ a wide midfielder in a 4-4-2 and a wing-back in a 3-4-2-1.
     RWB LWB CDM CM CAM RM LM RW LW ST), and `slot_side` gives its side across the pitch;
   * `slot_lines` puts each place of a template on a line, so the lines add up to the folded
     shape; `code_line` gives a code's line when no formation is at hand;
-  * `pick_lineup` chooses a club's eleven from its matchday squads and seats each one in a
-    place of its usual formation.
+  * `pick_lineup` chooses a club's eleven from its matchday squads, seats each one in a place of
+    its usual formation, and gives the rest of the squad a role too.
 
 Pure rules and tables, with no I/O and no import of a client, so any client can use them.
 """
@@ -275,7 +275,11 @@ def pick_lineup(
     are eleven unless the squad has fewer.
 
     Plain data for the JSON boundary: `{"formation", "shape", "event", "starters": [{"id",
-    "position", "number", "place", "line", "role", "side"}, ...]}`, starters by place.
+    "position", "number", "place", "line", "role", "side"}, ...], "roles": {id as text: role}}`,
+    starters by place. `roles` has a role for every player of the matchday squads who has one
+    (only those in `squad`, when it is known), the bench included: a starter has his seat's role;
+    anyone else the first of his FotMob positions that a seat asks for, else his first FotMob
+    position, else the role of his latest start; a player with none of these is left out.
     """
     usable = [m for m in matches if _usable(m)]
     shape = choose_shape([_formation(m) for m in usable])
@@ -306,8 +310,8 @@ def pick_lineup(
     eligible.sort(key=lambda p: (-recent[p], -season[p], latest[p], p))
 
     placed: dict[int, int] = {}  # seat index -> player id
+    cap = Counter(seat.role for seat in seats)  # the seats of each role
     if positions:
-        cap = Counter(seat.role for seat in seats)
         asks: dict[int, list[str]] = {}
         for p in eligible:
             # A player FotMob has no positions for, or none the formation has, asks for the roles
@@ -346,6 +350,15 @@ def pick_lineup(
             )
             give(i, next((pool for pool in pools if pool), []))
 
+    # A starter has his seat's role. Anyone else has the first of his FotMob positions that a seat
+    # asks for, else his first FotMob position, else the role of his latest start (`played` is
+    # newest first), and none when he has none of them.
+    roles = {str(placed[i]): seat.role for i, seat in enumerate(seats) if i in placed}
+    for p in eligible:
+        fotmob = positions.get(p, [])
+        if wanted := [r for r in fotmob if r in cap] + fotmob + played.get(p, []):
+            roles.setdefault(str(p), wanted[0])
+
     return {
         "formation": _formation(template),
         "shape": shape,
@@ -363,4 +376,5 @@ def pick_lineup(
             for i, seat in enumerate(seats)
             if i in placed
         ],
+        "roles": roles,
     }
