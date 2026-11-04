@@ -119,7 +119,7 @@ def fill_headshots(
 
     filled = 0
     for roster in needy:
-        filled += _fill_roster(roster, others, client, on_status)
+        filled += _fill_roster(roster, others, client, on_status, data.league.season)
     return filled
 
 
@@ -128,6 +128,7 @@ def _fill_roster(
     others: list[Team],
     client: FotmobClient,
     on_status: Callable[[str], None] | None,
+    season: int | None,
 ) -> int:
     other = _find_team(roster.team, others)
     if other is None:
@@ -135,7 +136,7 @@ def _fill_roster(
         return 0
     # Match the whole roster, not just who lacks a photo: a FotMob player who is
     # already someone else's must not be offered to a stranger.
-    found = match_squad(roster.players, client.get_squad(other.id))
+    found = match_squad(roster.players, client.get_squad(other.id, season))
     filled = 0
     for player in roster.players:
         if not player.photo_url and player.id in found:

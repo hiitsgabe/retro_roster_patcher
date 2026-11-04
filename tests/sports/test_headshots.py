@@ -83,6 +83,14 @@ def test_fill_makes_no_request_when_every_player_has_a_photo(tmp_path):
     assert transport.calls == []
 
 
+def test_fill_reads_the_squad_of_the_leagues_season(tmp_path):
+    # Keyed by season like the table: a squad cached for one season must not
+    # give the next season's newcomers no photo.
+    fill_headshots(_league(_p(2, "Everson", "1990-07-22")), _client(tmp_path))
+    assert (tmp_path / "fotmob_squad_10272_2026.json").exists()
+    assert not (tmp_path / "fotmob_squad_10272_any.json").exists()
+
+
 def test_fotmob_positions_are_keyed_by_espn_id(tmp_path):
     squad = [_p(223953, "Éverson", "1990-07-22"), _p(55, "Hulk", "1986-07-25")]
     team = Team(id=7632, name="Atlético-MG", short_name="Atletico-MG")
