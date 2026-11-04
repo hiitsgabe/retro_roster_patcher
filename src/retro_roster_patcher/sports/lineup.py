@@ -279,7 +279,9 @@ def pick_lineup(
     starters by place. `roles` has a role for every player of the matchday squads who has one
     (only those in `squad`, when it is known), the bench included: a starter has his seat's role;
     anyone else the first of his FotMob positions that a seat asks for, else his first FotMob
-    position, else the role of his latest start; a player with none of these is left out.
+    position, else the role of his latest start; a player with none of these is left out. A
+    player of `squad` in no matchday squad has a role too when `positions` lists him, by the same
+    rule, but never takes a seat; without a `squad` there are no such players.
     """
     usable = [m for m in matches if _usable(m)]
     shape = choose_shape([_formation(m) for m in usable])
@@ -352,9 +354,11 @@ def pick_lineup(
 
     # A starter has his seat's role. Anyone else has the first of his FotMob positions that a seat
     # asks for, else his first FotMob position, else the role of his latest start (`played` is
-    # newest first), and none when he has none of them.
+    # newest first), and none when he has none of them. A player of `squad` in no matchday squad
+    # has one too when FotMob lists him, though he is not eligible for a seat.
     roles = {str(placed[i]): seat.role for i, seat in enumerate(seats) if i in placed}
-    for p in eligible:
+    unseen = [p for p in positions if p in squad and p not in rows]
+    for p in [*eligible, *unseen]:
         fotmob = positions.get(p, [])
         if wanted := [r for r in fotmob if r in cap] + fotmob + played.get(p, []):
             roles.setdefault(str(p), wanted[0])

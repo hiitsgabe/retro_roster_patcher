@@ -237,6 +237,17 @@ def test_roles_are_keyed_by_text():
     assert lineup["roles"] and all(isinstance(key, str) for key in lineup["roles"])
 
 
+def test_a_united_player_in_no_matchday_squad_still_gets_his_fotmob_role():
+    # Four of the squad are in none of the nine matchday squads, but FotMob lists them: two
+    # keepers, Fletcher (CAM first) and Ugarte (CDM first), roles the eleven has seats for.
+    lineup, name = _club("360")
+    starters = {s["id"] for s in lineup["starters"]}
+    unseen = (("Tom Heaton", "GK"), ("Dermot Mee", "GK"), ("Jack Fletcher", "CAM"))
+    for who, role in (*unseen, ("Manuel Ugarte", "CDM")):
+        i = next(i for i, n in name.items() if n == who)
+        assert i not in starters and lineup["roles"][str(i)] == role
+
+
 C442 = ["G", "RB", "CD-R", "CD-L", "LB", "RM", "CM-R", "CM-L", "LM", "CF-R", "CF-L"]
 NATURAL = ["GK", "RB", "CB", "CB", "LB", "RM", "CM", "CM", "LM", "ST", "ST"]  # their roles
 
@@ -514,3 +525,18 @@ def test_a_benched_player_takes_the_first_fotmob_role_a_seat_has_else_any_else_h
     positions = {p: [role] for p, role in enumerate(NATURAL, 1)} | {12: ["LWB", "RM"], 13: ["CAM"]}
     roles = pick_lineup([newest, *older], None, positions)["roles"]
     assert [roles.get(str(p)) for p in (12, 13, 14, 15)] == ["RM", "CAM", "LW", None]
+
+
+def test_a_squad_player_in_no_match_roster_gets_a_fotmob_role_but_never_a_seat():
+    # A 4-2-3-1, so CDM is a seat and CM is not. 12 and 13 are in the squad but in no matchday
+    # squad: FotMob lists 12 as CDM then CM, 13 as CM only. 14 is listed too but has left.
+    codes = ["G", "RB", "LB", "LM", "CD-R", "CD-L", "AM-R", "RM", "F", "AM", "AM-L"]
+    natural = ["GK", "RB", "LB", "CDM", "CB", "CB", "RW", "CDM", "ST", "CAM", "LW"]
+    match = _match("e1", list(range(1, 12)), formation="4-2-3-1", codes=codes)
+    positions = {p: [role] for p, role in enumerate(natural, 1)}
+    positions |= {12: ["CDM", "CM"], 13: ["CM"], 14: ["CAM"]}
+    lineup = pick_lineup([match], dict.fromkeys(range(1, 14), ""), positions)
+    assert [lineup["roles"].get(str(p)) for p in (12, 13, 14)] == ["CDM", "CM", None]
+    assert [s["id"] for s in lineup["starters"]] == list(range(1, 12))
+    # With no squad given there is nobody to draw them from.
+    assert "12" not in pick_lineup([match], None, positions)["roles"]
