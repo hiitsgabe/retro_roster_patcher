@@ -187,19 +187,25 @@ def _seats(template: dict[str, Any], shape: str) -> list[_Seat]:
 
 
 def _propose(
-    cap: Counter[str], asks: dict[int, list[str]], recent: dict[int, int], season: dict[int, int]
+    cap: Counter[str],
+    asks: dict[int, list[str]],
+    recent: dict[int, int],
+    season: dict[int, int],
+    latest: dict[int, int],
 ) -> dict[str, list[int]]:
     """Deferred acceptance of players into roles: the players each role holds, best first.
 
-    `cap` is the seats of each role and `asks` the roles each player asks for, most natural
-    first. A player asks for his roles in turn, and a role keeps its best up to its seats: the
-    player in form (`recent` starts), then the one the role suits better (earlier in his list),
-    then the one with more `season` starts, then the lower id. A player turned away asks for the
-    next role on his list, and one turned away from all of them is held by none.
+    `cap` is the seats of each role and `asks` the roles each player asks for, best first (his
+    FotMob positions, most natural first, or the roles he started in, latest start first). A
+    player asks for his roles in turn, and a role keeps its best up to its seats: the player in
+    form (`recent` starts), then the one the role suits better (earlier in his list), then the
+    one with more `season` starts, then the one whose latest start is more recent (`latest`, its
+    index in the matches), then the lower id. A player turned away asks for the next role on his
+    list, and one turned away from all of them is held by none.
     """
 
-    def rank(p: int, role: str) -> tuple[int, int, int, int]:
-        return (-recent[p], asks[p].index(role), -season[p], p)
+    def rank(p: int, role: str) -> tuple[int, int, int, int, int]:
+        return (-recent[p], asks[p].index(role), -season[p], latest[p], p)
 
     held: dict[str, list[int]] = {role: [] for role in cap}
     nxt = dict.fromkeys(asks, 0)
@@ -259,9 +265,10 @@ def pick_lineup(
     match in that shape, and the template's eleven places are the seats.
 
     A player is in form by his starts among his own last `SQUAD_WINDOW` matchday squads, so a
-    spell out of the squad (hurt, suspended, not yet signed) never counts against him. With
-    `positions`, players ask for the seats of their roles (`_propose`), FotMob's or, for a player
-    it has none for, the roles he started in, the one of his latest start first; the players a
+    spell out of the squad (hurt, suspended, not yet signed) never counts against him; a tie goes
+    to his season's starts, then to the more recent start. With `positions`, players ask for the
+    seats of their roles (`_propose`), FotMob's or, for a player it has none for or none the
+    formation has, the roles he started in, the one of his latest start first; the players a
     role holds sit on the sides they started on in the template's formation (`_sit`). Without,
     every seat first goes to the best player who started at its code. A seat still empty takes
     the best player who started on its line, else one of its squad group, else anyone, so there
@@ -279,30 +286,35 @@ def pick_lineup(
 
     rows: dict[int, list[list[Any]]] = {}  # each player's roster rows, newest first, in any match
     played: dict[int, list[str]] = {}  # the role of each place he started at, newest first
-    for match in matches:
+    newest: dict[int, int] = {}  # the index in `matches` of his latest start
+    for k, match in enumerate(matches):
         for row in match["roster"]:
             rows.setdefault(row[0], []).append(row)
             if row[1]:
                 played.setdefault(row[0], []).append(slot_role(_formation(match), row[2]))
+                newest.setdefault(row[0], k)
     squad = squad or {}
     eligible = [p for p in rows if p in squad or not squad]
     recent = {p: sum(1 for r in rows[p][:SQUAD_WINDOW] if r[1]) for p in eligible}
     season = {p: sum(1 for r in rows[p] if r[1]) for p in eligible}
+    latest = {p: newest.get(p, len(matches)) for p in eligible}
     number = {
         p: next((int(r[4]) for r in rows[p] if str(r[4]).isdecimal()), None) for p in eligible
     }
     started = {p: {r[2] for r in rows[p] if r[1]} for p in eligible}  # the codes he started at
-    eligible.sort(key=lambda p: (-recent[p], -season[p], p))  # best first, so is every pool below
+    # Best first, so is every pool below.
+    eligible.sort(key=lambda p: (-recent[p], -season[p], latest[p], p))
 
     placed: dict[int, int] = {}  # seat index -> player id
     if positions:
         cap = Counter(seat.role for seat in seats)
         asks: dict[int, list[str]] = {}
         for p in eligible:
-            # A player FotMob has no positions for asks for the roles he started in, the one of
-            # his latest start first and each role once (`played` is newest first).
-            known = positions.get(p) or list(dict.fromkeys(played.get(p, [])))
-            asks[p] = [r for r in known if r in cap]
+            # A player FotMob has no positions for, or none the formation has, asks for the roles
+            # he started in, the one of his latest start first and each role once (`played` is
+            # newest first).
+            known = [r for r in positions.get(p, []) if r in cap]
+            asks[p] = known or [r for r in dict.fromkeys(played.get(p, [])) if r in cap]
         at_code = Counter(  # starts of a player at a code, in the template's formation
             (row[0], row[2])
             for m in matches
@@ -310,7 +322,7 @@ def pick_lineup(
             for row in m["roster"]
             if row[1]
         )
-        for role, players in _propose(cap, asks, recent, season).items():
+        for role, players in _propose(cap, asks, recent, season, latest).items():
             role_seats = [i for i, seat in enumerate(seats) if seat.role == role]
             placed.update(_sit(role_seats, players, seats, at_code))
 

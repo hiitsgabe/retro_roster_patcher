@@ -336,6 +336,16 @@ def test_a_seat_goes_to_the_player_in_form_then_to_the_one_with_more_starts(up_f
     assert 12 in ids and 11 not in ids
 
 
+@pytest.mark.parametrize(
+    "positions", [{}, {p: [role] for p, role in enumerate(NATURAL, 1)} | {99: ["ST"]}]
+)
+def test_a_tie_on_starts_goes_to_the_more_recent_start(positions):
+    # One start each at CF-L: 99 in the newest match, 11 in the one before.
+    matches = [_match("e1", [*range(1, 11), 99]), _match("e2", [*range(1, 11), 11])]
+    ids = [s["id"] for s in pick_lineup(matches, None, positions)["starters"]]
+    assert 99 in ids and 11 not in ids
+
+
 def test_a_role_prefers_the_player_in_form_over_the_one_it_suits_better():
     xi = [1, 2, 3, 4, 5, 6, 7, 8, 20, 10, 11]  # 20 plays left midfield, 21 is on the bench
     matches = [_match(f"e{i}", xi, bench=[21]) for i in (1, 2, 3)]
@@ -380,6 +390,20 @@ def test_without_fotmob_positions_a_player_asks_first_for_the_role_of_his_latest
     matches = [_match(f"e{i + 1}", xi(i, code)) for i, code in enumerate(codes)]
     lineup = pick_lineup(matches, None, {1: ["GK"]})
     assert {s["id"]: s["role"] for s in lineup["starters"]}[6] == role
+
+
+def test_a_player_whose_fotmob_positions_the_formation_lacks_asks_for_the_roles_he_started_in():
+    # A 4-2-3-1 has no CM. 8 started all five matches at RM, a holding midfielder there, and
+    # FotMob lists him only as a CM; the bench's 12 is listed CDM.
+    codes = ["G", "RB", "LB", "LM", "CD-R", "CD-L", "AM-R", "RM", "F", "AM", "AM-L"]
+    roles = ["GK", "RB", "LB", "CDM", "CB", "CB", "RW", "CDM", "ST", "CAM", "LW"]
+    matches = [
+        _match(f"e{i}", list(range(1, 12)), bench=[12], formation="4-2-3-1", codes=codes)
+        for i in range(1, 6)
+    ]
+    positions = {p: [role] for p, role in enumerate(roles, 1)} | {8: ["CM"], 12: ["CDM"]}
+    by_id = {s["id"]: s for s in pick_lineup(matches, None, positions)["starters"]}
+    assert 12 not in by_id and by_id[8]["role"] == "CDM"
 
 
 def test_ten_places_with_no_code_still_make_eleven_distinct_starters():
