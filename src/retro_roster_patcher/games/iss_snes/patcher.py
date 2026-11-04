@@ -41,6 +41,7 @@ from ...core.patcher import Patcher
 from ...core.registry import register
 from ...sports import _http
 from ...sports.espn import EspnClient
+from ...sports.lineup import apply_lineup
 from ...sports.models import LeagueData, Team, TeamRoster
 from . import kits, looks, screens
 from .models import (
@@ -237,8 +238,8 @@ class ISSPatcher(Patcher):
                         )
                     except Exception:
                         lineup = None
-                    if lineup:
-                        roster.extra["lineup"] = lineup
+                    # Without a lineup too: every player still gets his group's role.
+                    apply_lineup(roster, lineup)
             except Exception as exc:
                 # Deliberately broad, and `TransportLeak` is a `BaseException`
                 # precisely so the network guard still escapes this.

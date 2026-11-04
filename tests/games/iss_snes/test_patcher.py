@@ -59,8 +59,10 @@ class FakeApi:
         self.lineup_args.append((squad, team, season))
         return {
             "formation": "4-4-2",
+            "shape": "4-4-2",
             "event": 1,
             "starters": [{"id": team_id * 100 + 1, "position": "G"}],
+            "roles": {str(team_id * 100 + 1): "GK"},
         }
 
     def get_leagues(self, id=None, season=None):
@@ -488,6 +490,29 @@ def test_fetch_hands_each_teams_squad_team_and_season_to_the_lineup(patcher):
     # The client keeps only the current squad and asks FotMob about the team, cached per season.
     data = patcher.fetch(season=2025, league_id=2001)
     assert patcher.api.lineup_args == [(r.players, r.team, 2025) for r in data.teams]
+
+
+def test_fetch_puts_the_formation_and_roles_on_each_team(patcher):
+    data = patcher.fetch(season=2025, league_id=2001)
+    first = data.teams[0]
+    assert first.extra["formation"] == "4-4-2"
+    roles = {p.id: p.role for p in first.players}
+    # The lineup's role beats the group's: its keeper is a Defender by group.
+    assert roles[first.team.id * 100 + 1] == "GK"
+    # Outside the lineup's roles a player has his group's: the squad's first is a Goalkeeper.
+    assert first.players[0].role == "GK"
+    assert all(p.role for t in data.teams for p in t.players)
+
+
+def test_a_failed_lineup_still_gives_every_player_his_groups_role(patcher):
+    def failing(team_id, league_id, squad=None, team=None, season=None):
+        raise RuntimeError("summary endpoint down")
+
+    patcher.api.get_lineup = failing
+    data = patcher.fetch(season=2025, league_id=2001)
+    assert [t.error for t in data.teams] == [""] * 4
+    assert all("lineup" not in t.extra and "formation" not in t.extra for t in data.teams)
+    assert {p.role for t in data.teams for p in t.players} == {"GK", "CB", "CM", "ST"}
 
 
 def test_the_suggested_order_starts_the_recent_keeper(patcher):

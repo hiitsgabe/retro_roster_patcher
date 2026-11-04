@@ -1107,6 +1107,8 @@ def test_fetch_survives_a_failed_lineup(tmp_path):
     assert [t.extra.get("lineup", {}).get("event") for t in data.teams] == [1, None]
     assert [len(t.players) for t in data.teams] == [1, 1]
     assert [t.error for t in data.teams] == ["", ""]
+    # The failed lineup still leaves every player his group's role.
+    assert all(p.role for t in data.teams for p in t.players)
 
 
 def test_fetch_hands_each_teams_squad_team_and_season_to_the_lineup(tmp_path):

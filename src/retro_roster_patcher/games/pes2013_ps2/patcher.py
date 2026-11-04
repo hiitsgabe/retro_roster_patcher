@@ -36,6 +36,7 @@ from ...core.patcher import Patcher
 from ...core.registry import register
 from ...sports import _http
 from ...sports.espn import LINEUP_GROUPS, EspnClient
+from ...sports.lineup import apply_lineup
 from ...sports.models import LeagueData, Player, TeamRoster
 from . import kit_textures, looks
 from .kits import AWAY, HOME, apply_spec
@@ -409,8 +410,8 @@ class PES2013PS2Patcher(Patcher):
                         )
                     except Exception:
                         lineup = None
-                    if lineup:
-                        roster.extra["lineup"] = lineup
+                    # Without a lineup too: every player still gets his group's role.
+                    apply_lineup(roster, lineup)
             except ApiError as exc:
                 roster.error = str(exc)
             rosters.append(roster)
