@@ -264,11 +264,19 @@ def test_every_game_takes_no_more_leagues_than_it_has_slot_groups():
     assert get_patcher("pes2013-ps2").max_leagues == 5
 
 
-def test_the_other_soccer_games_write_no_formation():
-    for game in ("pes2013-ps2",):
+def test_every_soccer_game_writes_a_formation():
+    soccer = [info.game_id for info in list_patchers() if info.sport == "soccer"]
+    assert soccer == ["iss-deluxe-snes", "iss-snes", "iss2000-n64", "pes2013-ps2", "we2002"]
+    for game in soccer:
         cls = get_patcher(game)
-        assert cls.writes_formation is False, game
-        assert cls.formations == (), game
+        assert cls.writes_formation is True, game
+        assert cls.formations, game
+
+
+def test_pes2013_writes_the_six_shapes_its_twelve_presets_come_in():
+    cls = get_patcher("pes2013-ps2")
+    assert cls.writes_formation is True
+    assert cls.formations == ("4-4-2", "4-3-3", "4-5-1", "3-5-2", "3-4-3", "5-4-1")
 
 
 def test_we2002_writes_the_eight_shapes_its_sixteen_presets_come_in():

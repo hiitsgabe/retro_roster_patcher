@@ -15,6 +15,7 @@ from collections.abc import Callable
 from ...core.errors import RomError
 from .afs import Table, unwrap, wrap
 from .emblems import CLUB_TABLE, Atlas, copy_club_table, paint_logos
+from .formations import FormationTable
 from .kits import KIT_ENTRY, KitTable
 from .models import (
     BEARD_BYTE,
@@ -26,6 +27,7 @@ from .models import (
     EMBLEM_ENTRIES,
     EMBLEM_PAIRS,
     FACE_TYPE_BYTE,
+    FORMATION_ENTRY,
     HAIR_COLOUR_BYTE,
     HAIRSTYLE_BYTE,
     LEAGUE_NAME_ANCHOR,
@@ -36,6 +38,8 @@ from .models import (
     OVER_AFS,
     PART_CLUB_NUMBERS,
     PART_PLAYERS,
+    PLAYABLE_FLAG,
+    PLAYABLE_GK_BYTE,
     PLAYER_RECORD_SIZE,
     POSITION_BYTE,
     SHIRT_NAME_BYTES,
@@ -137,6 +141,16 @@ class RomWriter:
         players = bytearray(tables.players)
         at = index * PLAYER_RECORD_SIZE + POSITION_BYTE
         players[at] = (players[at] & 0x0F) | ((nibble & 0xF) << 4)
+        tables.parts[PART_PLAYERS] = bytes(players)
+
+    @staticmethod
+    def set_playable(tables: PlayerTables, index: int, nibble: int) -> None:
+        """Turn on the playable flag of the position `nibble` (bit 7 of byte 54 for a goalkeeper,
+        else of byte 53 + the nibble). The registered position's own flag is always on, on the
+        disc's players; the rest of the byte, an ability, and every other byte stay."""
+        players = bytearray(tables.players)
+        flag = PLAYABLE_GK_BYTE if nibble == 0 else POSITION_BYTE + nibble
+        players[index * PLAYER_RECORD_SIZE + flag] |= PLAYABLE_FLAG
         tables.parts[PART_PLAYERS] = bytes(players)
 
     @staticmethod
@@ -277,6 +291,10 @@ class RomWriter:
     def write_kits(self, kits: KitTable) -> None:
         """Put the rebuilt kit records back into `0_TEXT.AFS` entry 54."""
         self._write_entry(TEXT_AFS, KIT_ENTRY, kits.build())
+
+    def write_formations(self, formations: FormationTable) -> None:
+        """Put the rebuilt formation records back into `0_TEXT.AFS` entry 53."""
+        self._write_entry(TEXT_AFS, FORMATION_ENTRY, formations.build())
 
     def write_league_names(self, names: dict[int, str]) -> int:
         """Rename leagues in every language's string tables; returns tables written.

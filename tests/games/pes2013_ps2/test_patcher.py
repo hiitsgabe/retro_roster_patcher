@@ -530,7 +530,7 @@ def test_every_listed_starter_gets_a_lineup_role():
     }
     lineup = {"starters": [{"id": p.id, "position": code} for code, p in players.items()]}
     roles = {code: lineup_role(p, lineup) for code, p in players.items()}
-    assert roles == {"LF": 11, "RF": 11, "RCF": 12, "XYZ": 3}
+    assert roles == {"LF": 10, "RF": 10, "RCF": 12, "XYZ": 3}
     assert lineup_role(Player(id=99, name="Bench", position="Goalkeeper"), lineup) is None
 
 
@@ -697,7 +697,7 @@ def test_blanking_free_records_leaves_every_squad_member_alone(iso):
 
 
 def test_starters_take_the_formation_places_holding_their_position(iso):
-    """Club 0's eleven is laid out GK, CB, CB, SB, DMF, CMF, CMF, SMF, WF, CF, CF
+    """Club 0's eleven is laid out GK, CB, CB, SB, DMF, CMF, CMF, SMF, SS, CF, CF
     (the fixture's SLOT_POSITIONS): a right back listed before the centre
     backs still lands on the side-back place, and a starter whose position
     the formation lacks takes a place of his group inside the eleven."""
@@ -795,10 +795,10 @@ def test_a_lineup_without_a_keeper_does_not_put_a_forward_in_goal():
     """Eleven outfield starters (the keeper missing from the roster) against a
     4-4-2 with two forward places: the third forward has no outfield place
     left and the goal goes to the bench keeper."""
-    players = OUTFIELD_TEN + [_p("WF", "Attacker", 11), _p("SUB GK", "Goalkeeper")]
+    players = OUTFIELD_TEN + [_p("SS", "Attacker", 11), _p("SUB GK", "Goalkeeper")]
     placed = _placed(players)
     assert placed["SUB GK"] == 0
-    assert placed["WF"] >= 11
+    assert placed["SS"] >= 11
     assert {placed[p.display_name] for p in OUTFIELD_TEN} == OUTFIELD_PLACES
 
 

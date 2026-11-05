@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, BinaryIO
 from ...core.errors import RomError
 from ...formats import iso9660
 from .afs import AfsEntry, Table, read_afs_entries, read_entry, unwrap, wrap
+from .formations import FormationTable
 from .kits import KIT_ENTRY, KitTable
 from .models import (
     BOOT_FILE,
@@ -23,6 +24,7 @@ from .models import (
     CLUB_SQUAD_SIZE,
     DATABASE_OVERLAY_ENGLISH,
     FIRST_CLUB_ENTRY,
+    FORMATION_ENTRY,
     LIBERTADORES_ENTRY,
     NATIONAL_NAMED,
     NATIONAL_SQUAD_SIZE,
@@ -336,6 +338,10 @@ class RomReader:
     def kits(self) -> KitTable:
         """The team kit records (`kits.py`): four kits per club and national team."""
         return KitTable.parse(self.read(TEXT_AFS, KIT_ENTRY))
+
+    def formations(self) -> FormationTable:
+        """The team formation records (`formations.py`): one per national team and club."""
+        return FormationTable.parse(self.read(TEXT_AFS, FORMATION_ENTRY))
 
     def texture_png(self, name: str) -> bytes:
         """The first texture of that name in the primary language archive, as PNG."""

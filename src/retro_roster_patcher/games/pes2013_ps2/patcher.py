@@ -7,6 +7,13 @@ already points at. Each incoming player takes over a record of the same
 position group (goalkeeper, defender, midfielder, attacker), so the game keeps
 a plausible lineup; the record's abilities are left as they were. Slots the
 squad does not fill keep their original players.
+
+A team with a readable formation (`extra["formation"]`) is also written the
+preset of `formations.PRESETS` nearest it, and its eleven stand on that
+preset's places: the keeper, then the ten outfielders cut into its lines by
+index and each line seated by role, side and depth. A player with a role gets
+that role's registered position and playable flag (`ROLE_NIBBLE`). A team with
+neither (a rosters file from before the roles) is patched as it always was.
 """
 
 from __future__ import annotations
@@ -36,15 +43,18 @@ from ...core.patcher import Patcher
 from ...core.registry import register
 from ...sports import _http
 from ...sports.espn import LINEUP_GROUPS, EspnClient
-from ...sports.lineup import apply_lineup
+from ...sports.lineup import DEPTH, GROUP_ROLE, apply_lineup, parse_shape
 from ...sports.models import LeagueData, Player, TeamRoster
 from . import kit_textures, looks
+from .formations import FORMATIONS, PRESETS, pick_preset, seats
 from .kits import AWAY, HOME, apply_spec
 from .models import (
     CLUB_COUNT,
     CLUB_SQUAD_SIZE,
     DATABASE_OVERLAYS,
     DISPLAY_NAME_CHARS,
+    FIRST_CLUB_FORMATION,
+    FORMATION_TEAMS,
     GROUP_POSITIONS,
     IMAGE_SLOT_NAMES,
     IMAGE_SLOTS,
@@ -149,9 +159,11 @@ def shirt_name(player: Player) -> str:
 
 
 #: ESPN lineup position codes as the game's registered-position nibble
-#: (byte 53 >> 4): GK 0, CB 3, SB 4, DMF 5, CMF 7, SMF 8, AMF 9, SS 10, WF 11,
+#: (byte 53 >> 4): GK 0, CB 3, SB 4, DMF 5, CMF 7, SMF 8, AMF 9, WF 10, SS 11,
 #: CF 12. The wide attacking midfielders of a 4-2-3-1 are side midfielders;
-#: the wide forwards of a front three (LF/RF) are wing forwards.
+#: the wide forwards of a front three (LF/RF) are wing forwards. WF is 10 and SS
+#: is 11: on the disc nibble 10 comes with the WF flag (byte 63) in 178 of 178
+#: records and nibble 11 with the SS flag (byte 64) in 274 of 274.
 LINEUP_ROLES = {
     "G": 0,
     "CD": 3,
@@ -167,17 +179,43 @@ LINEUP_ROLES = {
     "AM": 9,
     "AM-L": 8,
     "AM-R": 8,
-    "SS": 10,
-    "LW": 11,
-    "RW": 11,
-    "LF": 11,
-    "RF": 11,
+    "SS": 11,
+    "LW": 10,
+    "RW": 10,
+    "LF": 10,
+    "RF": 10,
     "F": 12,
     "CF": 12,
     "ST": 12,
     "LCF": 12,
     "RCF": 12,
 }
+
+
+#: The registered position (byte 53 >> 4) of each of FotMob's 14 roles (`Player.role`): GK 0,
+#: CB 3, side back 4, wing back 6, DMF 5, CMF 7, side midfielder 8, AMF 9, wing forward 10, CF 12.
+ROLE_NIBBLE = {
+    "GK": 0,
+    "CB": 3,
+    "RB": 4,
+    "LB": 4,
+    "RWB": 6,
+    "LWB": 6,
+    "CDM": 5,
+    "CM": 7,
+    "RM": 8,
+    "LM": 8,
+    "CAM": 9,
+    "RW": 10,
+    "LW": 10,
+    "ST": 12,
+}
+
+
+def role_or_group(role: str, group: str) -> str:
+    """The role when it is one of FotMob's 14, else the default of the squad group
+    (`GROUP_ROLE`; a central midfielder for any other)."""
+    return role if role in DEPTH else GROUP_ROLE.get(group, "CM")
 
 
 def lineup_role(player: Player, lineup: dict[str, Any] | None) -> int | None:
@@ -194,7 +232,9 @@ def lineup_role(player: Player, lineup: dict[str, Any] | None) -> int | None:
     return None
 
 
-def squad_order(players: list[Player], lineup: dict[str, Any] | None = None) -> list[Player]:
+def squad_order(
+    players: list[Player], lineup: dict[str, Any] | None = None, formation: str = ""
+) -> list[Player]:
     """The eleven first, each group in formation order, then the bench by group.
 
     The eleven is one keeper and ten outfielders: the lineup's starters (a
@@ -205,6 +245,13 @@ def squad_order(players: list[Player], lineup: dict[str, Any] | None = None) -> 
     `EspnClient.get_lineup` returns (or `TeamRoster.extra["lineup"]`). Within
     a group the starters keep their formation order and the rest the
     provider's order.
+
+    With a `formation` that `parse_shape` reads, the ten outfield players of the
+    eleven then go back to front by the depth of their roles (`DEPTH`; a player
+    with none reads as his group's), a stable sort that keeps the order above
+    among equals, so cutting the ten by index into the formation's lines (as
+    `map_rosters` and the game do) puts each in the line he plays. The players
+    picked are the same.
     """
     entries = (lineup or {}).get("starters") or []
     # Ties (every keeper has place 1) go by the lineup's own order: most starts first.
@@ -232,6 +279,12 @@ def squad_order(players: list[Player], lineup: dict[str, Any] | None = None) -> 
     eleven.sort(
         key=lambda i: (rank.get(groups[i], 2), place.get(players[i].id, (LINEUP_SIZE + 1, 0)))
     )
+    if parse_shape(formation) is not None:
+        eleven.sort(
+            key=lambda i: (
+                0 if groups[i] == "Goalkeeper" else DEPTH[role_or_group(players[i].role, groups[i])]
+            )
+        )
     bench = sorted(
         (i for i in range(len(players)) if i not in eleven), key=lambda i: rank.get(groups[i], 2)
     )
@@ -250,6 +303,66 @@ def lineup_group(player: Player, lineup: dict[str, Any] | None) -> str:
         if int(s["id"]) == player.id:
             return LINEUP_GROUPS.get(str(s.get("position", "")).upper(), player_group(player))
     return player_group(player)
+
+
+def eleven_first(players: list[Player], lineup: dict[str, Any] | None) -> tuple[list[Player], int]:
+    """`players` with the starting eleven first, for a team whose formation cuts its outfield
+    into lines by index: the first goalkeeper listed in goal, then the first ten who are not
+    goalkeepers in the order given, then everyone else in the order given (a second keeper
+    among them). Also the size of the eleven: 10 for a squad with no goalkeeper."""
+    keeper = [lineup_group(p, lineup) == "Goalkeeper" for p in players]
+    goal = [i for i, k in enumerate(keeper) if k][:1]
+    outfield = [i for i, k in enumerate(keeper) if not k][: LINEUP_SIZE - 1]
+    eleven = goal + outfield
+    order = eleven + [i for i in range(len(players)) if i not in eleven]
+    return [players[i] for i in order], len(eleven)
+
+
+def starters_of(players: list[PESPlayer]) -> list[PESPlayer]:
+    """The players that start: those with a position nibble, at most the first eleven."""
+    return [p for p in players if p.role is not None][:LINEUP_SIZE]
+
+
+def seat_role(player: PESPlayer) -> str:
+    """The role he is seated and the preset picked by: his own, else his group's."""
+    return role_or_group(player.role_name, player.position)
+
+
+def team_preset(record: PESTeamRecord) -> bytes | None:
+    """The preset the patch writes for the team (`PRESETS`): the one `pick_preset` picks for its
+    formation and the roles of its ten outfield starters; None for a team with no formation or
+    no starters to stand on it."""
+    starters = starters_of(record.players)
+    if not record.formation or not starters:
+        return None
+    roles = [seat_role(p) for p in starters if p.position != "Goalkeeper"]
+    return PRESETS[pick_preset(record.formation, roles)]
+
+
+def seat_eleven(starters: list[PESPlayer], preset: bytes) -> list[PESPlayer | None]:
+    """The starters on places 0-10 of `preset`: the first goalkeeper in goal (place 0), the first
+    ten others on places 1-10 as `formations.seats` seats them, cut into the preset's lines by
+    index in the order given. A place nobody stands on is None, a starter past them is left out."""
+    goal = next((p for p in starters if p.position == "Goalkeeper"), None)
+    ten = [p for p in starters if p is not goal][: LINEUP_SIZE - 1]
+    placed: list[PESPlayer | None] = [goal] + [None] * (LINEUP_SIZE - 1)
+    for player, place in zip(ten, seats([seat_role(p) for p in ten], preset), strict=True):
+        placed[1 + place] = player
+    return placed
+
+
+def seat_squad(players: list[PESPlayer], preset: bytes) -> list[PESPlayer]:
+    """`players` with the starters in the order of the preset's places (the national squads'
+    rows are their places), then everyone else as they were."""
+    on = [p for p in seat_eleven(starters_of(players), preset) if p is not None]
+    return on + [p for p in players if not any(p is q for q in on)]
+
+
+def formation_team(slot: int) -> int:
+    """The formation record of a slot: a national team's row, or 67 + the club."""
+    if slot >= NATIONAL_SLOT_BASE:
+        return slot - NATIONAL_SLOT_BASE
+    return FIRST_CLUB_FORMATION + slot
 
 
 @dataclass(frozen=True)
@@ -297,6 +410,11 @@ class PES2013PS2Patcher(Patcher):
     #: Screen art `patch(images={name: png})` can replace; `export_images`
     #: writes the current art of each as a PNG to edit.
     image_slots: tuple[str, ...] = IMAGE_SLOT_NAMES
+    #: `patch` writes each club's and national team's formation: the preset of `formations.PRESETS`
+    #: nearest the team's (`formations.pick_preset`) into its record of `0_TEXT.AFS` entry 53, with
+    #: its eleven seated on the preset's places and each player's position set from his role.
+    writes_formation: bool = True
+    formations: tuple[str, ...] = FORMATIONS
 
     def __init__(
         self,
@@ -420,7 +538,11 @@ class PES2013PS2Patcher(Patcher):
         return LeagueData(league=league, teams=rosters)
 
     def suggest_squad_order(self, team_roster: TeamRoster) -> list[Player]:
-        return squad_order(team_roster.players, team_roster.extra.get("lineup"))
+        return squad_order(
+            team_roster.players,
+            team_roster.extra.get("lineup"),
+            str(team_roster.extra.get("formation") or ""),
+        )
 
     # -- map -----------------------------------------------------------------
 
@@ -452,7 +574,17 @@ class PES2013PS2Patcher(Patcher):
                     f"which is not in the fetched league data"
                 )
             lineup = roster.extra.get("lineup")
-            players = roster.players if order_as_given else squad_order(roster.players, lineup)
+            formation = str(roster.extra.get("formation") or "")
+            if parse_shape(formation) is None:
+                formation = ""
+            players = (
+                roster.players if order_as_given else squad_order(roster.players, lineup, formation)
+            )
+            starting = LINEUP_SIZE
+            if formation:
+                # The keeper first, then ten outfielders: the formation cuts them into its lines
+                # by index, in the order given (the editor's, or the depth order of the suggestion).
+                players, starting = eleven_first(players, lineup)
             home_kit, away_kit = default_kits(roster.team)
             teams[entry.slot_index] = PESTeamRecord(
                 # The game's own names are upper case throughout.
@@ -466,7 +598,8 @@ class PES2013PS2Patcher(Patcher):
                         position=lineup_group(p, lineup),
                         # The list's first eleven start (the editor's, with
                         # order_as_given); `_assign` keeps one keeper among them.
-                        role=starting_role(p, lineup) if i < LINEUP_SIZE else None,
+                        role=starting_role(p, lineup) if i < starting else None,
+                        role_name=p.role if p.role in ROLE_NIBBLE else "",
                         player_id=p.id or 0,
                         photo_url=p.photo_url or "",
                         nationality=p.nationality or "",
@@ -482,6 +615,7 @@ class PES2013PS2Patcher(Patcher):
                 national=national,
                 kit_home=home_kit,
                 kit_away=away_kit,
+                formation=formation,
             )
         return MappedRosters(game_id=self.game_id, teams=teams)
 
@@ -521,6 +655,7 @@ class PES2013PS2Patcher(Patcher):
                 for slot in rosters.teams
                 if NATIONAL_SLOT_BASE <= slot < NATIONAL_SLOT_BASE + NATIONAL_NAMED
             )
+            presets = self._presets(rosters, slots + national_slots)
             names: dict[int, tuple[str, str]] = {}
             players_patched = 0
             for i, slot in enumerate(slots):
@@ -528,11 +663,12 @@ class PES2013PS2Patcher(Patcher):
                 if on_progress is not None:
                     on_progress(0.4 + 0.4 * (i / max(len(slots), 1)), f"Writing {record.name}...")
                 names[slot] = (record.name, record.code)
-                assignments = self._assign(primary, slot, record.players)
+                assignments = self._assign(primary, slot, record.players, presets.get(slot))
                 for squad_slot, index, player in assignments:
                     for t in tables.values():
                         RomWriter.set_player_names(t, index, player.display_name, player.shirt_name)
                         self._write_look(t, index, player, disc)
+                        self._write_position(t, index, player)
                         if player.number:
                             RomWriter.set_club_number(t, slot, squad_slot, player.number)
                 players_patched += len(assignments)
@@ -542,6 +678,8 @@ class PES2013PS2Patcher(Patcher):
             players_patched += written
             for index, t in tables.items():
                 writer.write_player_tables(index, t, blocks[index])
+            if presets:
+                self._write_formations(writer, presets)
             blank_unused = bool(options.get("blank_unused", False))
             if blank_unused:
                 # Before the logos: a blanked crest frees its palette entries.
@@ -585,6 +723,48 @@ class PES2013PS2Patcher(Patcher):
         for record in dressed.teams.values():
             looks.dress(record.players, faces)
         return dressed
+
+    def _presets(self, rosters: MappedRosters, slots: list[int]) -> dict[int, bytes]:
+        """The preset to write for each slot whose team has a formation (`team_preset`). A club
+        past the last formation record (slots 130 and up, as with kits) keeps its formation, with
+        a status line, and its players are placed as without one."""
+        presets: dict[int, bytes] = {}
+        for slot in slots:
+            preset = team_preset(rosters.teams[slot])
+            if preset is None:
+                continue
+            if formation_team(slot) >= FORMATION_TEAMS:
+                name = rosters.teams[slot].name
+                self.status(f"{name}: slot {slot} has no formation record, formation kept")
+                continue
+            presets[slot] = preset
+        return presets
+
+    def _write_formations(self, writer: RomWriter, presets: dict[int, bytes]) -> None:
+        """Write each slot's preset over its team's record, all in one rebuild of entry 53."""
+        table = writer.reader.formations()
+        for slot, preset in presets.items():
+            table.set(formation_team(slot), preset)
+        writer.write_formations(table)
+        self.status(f"Formations written: {len(presets)}")
+
+    @staticmethod
+    def _write_position(
+        t: PlayerTables, index: int, player: PESPlayer, national: bool = False
+    ) -> None:
+        """Record `index`'s registered position and playable flag from the player's role
+        (`ROLE_NIBBLE`). A player with no role leaves a club record's position as it is, and a
+        national team's record takes his lineup position or his group's, as before."""
+        nibble = ROLE_NIBBLE.get(player.role_name)
+        if nibble is not None:
+            RomWriter.set_position(t, index, nibble)
+            RomWriter.set_playable(t, index, nibble)
+        elif national:
+            RomWriter.set_position(
+                t,
+                index,
+                player.role if player.role is not None else GROUP_POSITIONS.get(player.position, 7),
+            )
 
     @staticmethod
     def _write_look(t: PlayerTables, index: int, player: PESPlayer, disc: _Disc) -> None:
@@ -672,8 +852,9 @@ class PES2013PS2Patcher(Patcher):
         exclusive ones first, then named records no squad uses at all (a pool
         the rows share, at most `pool_limit` of them, spread over the rows).
         Records it must keep stay at the end of the row with their old names.
-        Each record taken over gets the player's position. Returns players
-        written and pool records used.
+        Each record taken over gets the player's position. A team with a
+        formation lists its eleven in the order of the preset's places (the
+        row is the places). Returns players written and pool records used.
         """
         primary = tables[PLAYER_ENTRIES[0]]
         club_used = primary.club_referenced()
@@ -688,11 +869,13 @@ class PES2013PS2Patcher(Patcher):
         written = pool_used = 0
         for slot in slots:
             record = rosters.teams[slot]
+            preset = team_preset(record)
+            squad = seat_squad(record.players, preset) if preset else record.players
             row = slot - NATIONAL_SLOT_BASE
             current = [idx for idx in primary.national_squad(row) if 0 < idx < primary.player_count]
             exclusive = [idx for idx in current if idx not in club_used]
             kept = [idx for idx in current if idx in club_used]
-            wanted = len(record.players)
+            wanted = len(squad)
             take = exclusive[:wanted]
             share = per_row
             while len(take) < wanted and pool and share:
@@ -700,17 +883,11 @@ class PES2013PS2Patcher(Patcher):
                 share -= 1
                 pool_used += 1
             new_row: list[int] = []
-            for player, idx in zip(record.players, take, strict=False):
+            for player, idx in zip(squad, take, strict=False):
                 for t in tables.values():
                     RomWriter.set_player_names(t, idx, player.display_name, player.shirt_name)
                     self._write_look(t, idx, player, disc)
-                    RomWriter.set_position(
-                        t,
-                        idx,
-                        player.role
-                        if player.role is not None
-                        else GROUP_POSITIONS.get(player.position, 7),
-                    )
+                    self._write_position(t, idx, player, national=True)
                 new_row.append(idx)
                 written += 1
             leftovers = [idx for idx in exclusive if idx not in take] + kept
@@ -972,12 +1149,16 @@ class PES2013PS2Patcher(Patcher):
 
     @staticmethod
     def _assign(
-        tables: PlayerTables, club: int, players: list[PESPlayer]
+        tables: PlayerTables, club: int, players: list[PESPlayer], preset: bytes | None = None
     ) -> list[tuple[int, int, PESPlayer]]:
         """Pair each incoming player with a record of the club's squad.
 
         The first eleven squad places are the club's lineup, and each record
-        there holds the position its place plays in the club's formation. A
+        there holds the position its place plays in the club's formation. A club
+        written a `preset` (`team_preset`) has its starters stand on the
+        preset's places (`seat_eleven`), place k on squad place k, and one who
+        cannot play his place (a keeper outside the goal record, an outfielder
+        in it) joins the bench. Without a preset a
         starter (a player with a `role`) takes the place whose record has his
         position, else one of his group, else any place still free in the
         eleven that he can play, else he joins the bench. In the eleven a
@@ -1019,18 +1200,32 @@ class PES2013PS2Patcher(Patcher):
             keeper = player.position == "Goalkeeper"
             return s not in eleven or (role_of(s) == 0) == keeper
 
-        starters = [p for p in players if p.role is not None][:LINEUP_SIZE]
+        starters = starters_of(players)
         bench = [p for p in players if p not in starters]
-        for player in starters:
-            same_role = [s for s in eleven if s in free and role_of(s) == player.role]
-            same_group = [
-                s
-                for s in eleven
-                if s in free and position_group(tables.record(free[s])) == player.position
-            ]
-            anywhere = [s for s in eleven if s in free and can_play(s, player)]
-            if not take(player, same_role + same_group + anywhere):
-                bench.append(player)
+        if preset is not None:
+            seated = seat_eleven(starters, preset)
+            for place, player in enumerate(seated):
+                if player is None:
+                    continue
+                at = (
+                    [eleven[place]]
+                    if place < len(eleven) and can_play(eleven[place], player)
+                    else []
+                )
+                if not take(player, at):
+                    bench.append(player)
+            bench += [p for p in starters if not any(p is q for q in seated)]
+        else:
+            for player in starters:
+                same_role = [s for s in eleven if s in free and role_of(s) == player.role]
+                same_group = [
+                    s
+                    for s in eleven
+                    if s in free and position_group(tables.record(free[s])) == player.position
+                ]
+                anywhere = [s for s in eleven if s in free and can_play(s, player)]
+                if not take(player, same_role + same_group + anywhere):
+                    bench.append(player)
         for by_group in (True, False):
             for s in [s for s in eleven if s in free]:
                 group = position_group(tables.record(free[s]))

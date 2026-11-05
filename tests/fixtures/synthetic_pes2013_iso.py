@@ -2,6 +2,7 @@
 
     ISO 9660 -> /SLUS_219.55, /0_TEXT.AFS, /OVER.AFS
     0_TEXT.AFS entries 46 and 47 -> block -> part table -> players, squads
+    0_TEXT.AFS entry 53          -> block -> part table -> part 1: formation records
     OVER.AFS entries 5..19       -> "MWo3" overlays with a team-name table
 
 Nothing here comes from a real disc. Counts are tiny: `PLAYER_COUNT` players,
@@ -153,6 +154,39 @@ def build_kit_entry() -> bytes:
     )
 
 
+#: Entry 53, the formations, restated here independently of `formations.py`: ten parts, of which
+#: part 1 is one 52-byte record per team (197 of them), national row r as record r and club c as
+#: record 67 + c. The other parts hold the jobs and the tactics; here they are filler.
+FORMATION_PART_SIZES = (1236, 10244, 2080, 832, 104, 104, 1976, 7416, 1440, 576)
+FORMATION_TEAMS = 197
+FIRST_CLUB_FORMATION = 67
+#: The record the real disc has for West Midlands Village (club 1, record 68), a 4-4-2: the role
+#: codes, x and y of places 1-10, then the attack arrows and the defence of places 0-10. The
+#: fixture's club 0 holds it.
+CLUB_0_FORMATION = bytes.fromhex(
+    "07 01 09 08 0c 13 17 16 21 26  0a 0a 0b 0b 17 17 1d 1d 23 27  3f 29 54 14 3f 2a 53 15 3d 2b"
+    "  00 00 00 11 01 01 11 11 30 28 10  01 01 00 01 00 00 00 01 01 01 02"
+)
+
+
+def formation_record(team: int) -> bytes:
+    """The record of a team the fixture does not model: its number, 52 times, so a record that
+    moved or changed shows."""
+    return CLUB_0_FORMATION if team == FIRST_CLUB_FORMATION else bytes([team]) * 52
+
+
+def build_formation_entry() -> bytes:
+    """Entry 53: a raw block holding a ten-part table of zlib blocks."""
+    parts = []
+    for k, size in enumerate(FORMATION_PART_SIZES):
+        if k == 1:
+            leaf = b"".join(formation_record(t) for t in range(FORMATION_TEAMS))
+        else:
+            leaf = bytes([0xA0 + k]) * size
+        parts.append(block(leaf, compress=True))
+    return block(table(parts), compress=False)
+
+
 def build_overlay(
     lang: str, names: list[str] | None = None, codes: list[str] | None = None
 ) -> bytes:
@@ -239,6 +273,7 @@ def build_iso(
         entries[48] = entries[49] = libertadores_entry
     for index, side in ((600, 32), (602, 32), (604, 64), (606, 64)):
         entries[index] = block(build_atlas(side), compress=False) + b"\0" * 1024
+    entries[53] = build_formation_entry() + b"\0" * 2048
     entries[54] = build_kit_entry() + b"\0" * 2048
     text_afs = build_afs(entries, 610)
     over_afs = build_afs(overlays, 20)

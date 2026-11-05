@@ -10,8 +10,12 @@ Players: `0_TEXT.AFS` entry 47 part 0 (Latin names) and entry 46 part 0
 
 Squads, in both entries: part 2 = clubs, 139 rows x 32 u16 player index (row =
 club index); part 4 = shirt number - 1 per slot; part 1 = nationals, 75 rows x
-23 u16; part 3 = national lineup order. The game shows the club table in RAM in
-the same order, so a club slot here is the club's row.
+23 u16; part 3 = the national shirt numbers (number - 1, 23 per row). The game
+shows the club table in RAM in the same order, so a club slot here is the
+club's row.
+
+Formations: `0_TEXT.AFS` entry 53 part 1 holds one 52-byte record per team (see
+`formations.py`), national row r as record r and club c as record 67 + c.
 
 Team names: `OVER.AFS` entries 5-19 are `database_<lang>.ovl` overlays, one per
 language, each with a table of `{name ptr, code ptr, u32, u32 id}` entries
@@ -43,6 +47,7 @@ LIBERTADORES_BASE = 10000
 PART_PLAYERS = 0
 PART_NATIONAL_SQUADS = 1
 PART_CLUB_SQUADS = 2
+#: The national shirt numbers, number - 1, 23 per national row (not a lineup order).
 PART_NATIONAL_ORDER = 3
 PART_CLUB_NUMBERS = 4
 
@@ -52,6 +57,11 @@ DISPLAY_NAME_CHARS = DISPLAY_NAME_BYTES // 2 - 1
 SHIRT_NAME_BYTES = 16
 SHIRT_NAME_CHARS = SHIRT_NAME_BYTES - 1
 POSITION_BYTE = 53
+#: The playable-position flags are bit 7 of bytes 54-65 (bits 0-6 are abilities): the goalkeeper's
+#: is byte 54, any other position's is byte 53 + its nibble (CB 3 is byte 56, WF 10 is byte 63).
+#: The registered position's own flag is always set on the disc (4940 of 4940 records).
+PLAYABLE_GK_BYTE = 54
+PLAYABLE_FLAG = 0x80
 #: The look fields `RomWriter.set_look` writes, the layout PES 6's (the
 #: COFPES option-file editor's attribute files), checked one by one in
 #: PCSX2's Edit Player on 2026-10-25:
@@ -100,6 +110,15 @@ NATIONAL_SLOT_BASE = 1000
 NATIONAL_NAMED = 67
 #: Position nibble written into a record that changes hands between groups.
 GROUP_POSITIONS = {"Goalkeeper": 0, "Defender": 3, "Midfielder": 7, "Attacker": 12}
+
+#: `0_TEXT.AFS` entry 53 holds the formations: part 1 is one 52-byte record per team, 197 of
+#: them. Team `t` is national row `t` (0-66, the seven Classic teams last), or club `c` as record
+#: `FIRST_CLUB_FORMATION + c` (clubs 0-129; the clubs past them have no record, as with kits).
+FORMATION_ENTRY = 53
+FORMATION_PART = 1
+FORMATION_RECORD = 52
+FORMATION_TEAMS = 197
+FIRST_CLUB_FORMATION = 67
 
 #: `0_TEXT.AFS` entries holding the emblem atlases: all teams at 64x64 and 32x32,
 #: then the club-only copies the game also reads.
@@ -162,13 +181,15 @@ FIRST_CLUB_ENTRY = 67
 TEAM_CODE_BYTES = 8
 
 #: Registered-position nibble values (byte 53 >> 4) grouped the way ESPN
-#: describes positions. Unknown values count as midfielders.
+#: describes positions (2 SW, 3 CB, 4 SB, 6 WB defend; 5 DMF, 7 CMF, 8 SMF, 9 AMF
+#: midfield; 10 WF, 11 SS, 12 CF attack). Unknown values count as midfielders.
 POSITION_GROUPS = {
     0: "Goalkeeper",
     2: "Defender",
     3: "Defender",
     4: "Defender",
     5: "Midfielder",
+    6: "Defender",
     7: "Midfielder",
     8: "Midfielder",
     9: "Midfielder",
@@ -204,9 +225,14 @@ class PESPlayer:
     position: str = ""  # ESPN group: Goalkeeper / Defender / Midfielder / Attacker
     #: A starter's (one of the first eleven) registered-position nibble: where
     #: the lineup had him, else his group's position; None for a bench player.
-    #: Starters take the squad places whose records hold that position, which
-    #: is how the club's formation is laid out.
+    #: Without a formation, starters take the squad places whose records hold
+    #: that position, which is how the club's formation is laid out; with one
+    #: (`PESTeamRecord.formation`) they stand on the preset's places instead.
     role: int | None = None
+    #: His role (`sports.models.Player.role`: GK RB CB LB RWB LWB CDM CM CAM RM LM RW LW ST), ""
+    #: when he has none: it sets his registered position and its playable flag
+    #: (`patcher.ROLE_NIBBLE`) and seats him inside his line. `position` stays his squad group.
+    role_name: str = ""
     #: The provider's player, for his look (`looks.dress`): id and photo for
     #: the head shot, nationality for the East Asian colour.
     player_id: int = 0
@@ -233,6 +259,10 @@ class PESTeamRecord:
     #: Home and away kits to draw from colours (`core.kits.KitSpec`); None keeps the disc's.
     kit_home: KitSpec | None = None
     kit_away: KitSpec | None = None
+    #: The team's formation as the roster gives it (`extra["formation"]`, when
+    #: `sports.lineup.parse_shape` reads it), "" otherwise: the patch then writes the preset
+    #: nearest to it (`formations.pick_preset`) and seats the eleven on its places.
+    formation: str = ""
 
 
 @dataclass
