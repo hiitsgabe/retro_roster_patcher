@@ -65,6 +65,9 @@ class WEPlayerRecord:
     height_cm: int = 0
     age: int = 0
     look: WELook = field(default_factory=WELook)
+    # His role (`sports.models.Player.role`: GK RB CB LB RWB LWB CDM CM CAM RM LM RW LW ST), ""
+    # when he has none: it sets his position byte. `position` stays his squad group.
+    role: str = ""
 
 
 @dataclass
@@ -94,6 +97,10 @@ class WETeamRecord:
     team_id: int | None = None
     logo_url: str = ""
     logo_png: bytes | None = None
+    # The team's formation record, 30 bytes: the role byte, then the x, then the y of places 2-11
+    # (the keeper, place 1, has none), as the disc keeps it (`stat_mapper.FORMATION_PRESETS`).
+    # None leaves the slot's own.
+    formation: bytes | None = None
 
 
 @dataclass

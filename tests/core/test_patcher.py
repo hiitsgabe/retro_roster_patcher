@@ -265,10 +265,25 @@ def test_every_game_takes_no_more_leagues_than_it_has_slot_groups():
 
 
 def test_the_other_soccer_games_write_no_formation():
-    for game in ("we2002", "pes2013-ps2"):
+    for game in ("pes2013-ps2",):
         cls = get_patcher(game)
         assert cls.writes_formation is False, game
         assert cls.formations == (), game
+
+
+def test_we2002_writes_the_eight_shapes_its_sixteen_presets_come_in():
+    cls = get_patcher("we2002")
+    assert cls.writes_formation is True
+    assert cls.formations == (
+        "4-5-1",
+        "4-4-2",
+        "4-3-3",
+        "3-6-1",
+        "3-5-2",
+        "3-4-3",
+        "5-4-1",
+        "5-3-2",
+    )
 
 
 def test_iss_writes_the_seven_formations_the_cartridge_has():

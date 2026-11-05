@@ -64,7 +64,7 @@ from .rom_writer import (
     read_tex_files,
 )
 from .screen_art import SLOT_NAMES, SLOTS, apply_images, export_slot
-from .stat_mapper import StatMapper
+from .stat_mapper import FORMATIONS, StatMapper
 from .translations.we2002 import LANGUAGE_CODES, LANGUAGES, ensure_ppf
 
 # The ROM has two team tables: 32 Master League slots and 63 national slots.
@@ -139,6 +139,12 @@ class WE2002Patcher(Patcher):
     #: Screen art `patch(images={name: png})` can replace; `export_images`
     #: writes the current art of each as a PNG to edit.
     image_slots: tuple[str, ...] = SLOT_NAMES
+    #: `patch` writes each national slot's formation: the disc's preset nearest the
+    #: team's (`stat_mapper.FORMATION_PRESETS`, variant B for two holding
+    #: midfielders) into the team's record, with its eleven seated on the preset's
+    #: places. A Master League slot keeps the disc's own record.
+    writes_formation: bool = True
+    formations: tuple[str, ...] = FORMATIONS
 
     def __init__(
         self,
@@ -275,7 +281,10 @@ class WE2002Patcher(Patcher):
 
     def suggest_squad_order(self, team_roster):
         ordered = self.mapper._select_best_23(
-            team_roster.players, team_roster.player_stats, team_roster.extra.get("lineup")
+            team_roster.players,
+            team_roster.player_stats,
+            team_roster.extra.get("lineup"),
+            str(team_roster.extra.get("formation") or ""),
         )
         return self._append_unused(ordered, team_roster.players)
 

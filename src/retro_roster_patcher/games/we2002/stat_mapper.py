@@ -4,6 +4,8 @@ from collections import Counter
 from itertools import zip_longest
 
 from ...sports.espn import LINEUP_GROUPS
+from ...sports.lineup import DEPTH as ROLE_DEPTH
+from ...sports.lineup import GROUP_ROLE, nearest_shape, parse_shape, seat_line
 from .models import (
     Player,
     PlayerStats,
@@ -13,6 +15,116 @@ from .models import (
     WETeamRecord,
 )
 from .rom_writer import _PLAYERS_PER_NAT
+
+#: The shapes the disc has presets for, in its order (a tie in `nearest_shape` goes to the first).
+FORMATIONS = ("4-5-1", "4-4-2", "4-3-3", "3-6-1", "3-5-2", "3-4-3", "5-4-1", "5-3-2")
+
+
+def _preset(roles: str, x: str, y: str) -> bytes:
+    """A preset's 30 bytes, from the hex of its role bytes, its x and its y."""
+    return bytes.fromhex(f"{roles} {x} {y}")
+
+
+#: The disc's 16 formation presets in its order, by name: a shape and a variant, A with one holding
+#: midfielder (DH) and B with two. Each is the 30 bytes of a team's formation record: the role byte
+#: of places 2-11 (place 1 is the keeper and has none), then their x, then their y. A role byte is
+#: a family and a side (2-6 CB, 7-8 SB, 9-11 DH, 12-13 SH, 14-16 OH, 17-19 CF, 20-21 WG); x is
+#: the depth, 0 at the team's own goal and 48 the most advanced; y is the width, 0-112, small on
+#: the team's left and 52 in the middle. Every preset lists its back line, then its midfield, then
+#: its attack. Constants, not read from the image: a test holds them to the disc's tables.
+FORMATION_PRESETS: dict[str, bytes] = {
+    "4-5-1A": _preset(
+        "02 06 07 08 0a 0c 0d 0e 10 12",
+        "09 09 0b 0b 12 1a 1a 22 22 2b",
+        "29 3f 13 55 34 1d 4b 28 40 34",
+    ),
+    "4-5-1B": _preset(
+        "02 06 07 08 09 0b 0c 0d 0f 12",
+        "09 09 0b 0b 12 12 1a 1a 22 2b",
+        "29 3f 13 55 2b 3d 1d 4b 34 34",
+    ),
+    "4-4-2A": _preset(
+        "02 06 07 08 0a 0c 0d 0f 11 13",
+        "09 09 0b 0b 12 1a 1a 22 2b 2b",
+        "29 3f 13 55 34 1d 4b 34 26 42",
+    ),
+    "4-4-2B": _preset(
+        "02 06 07 08 09 0b 0e 10 11 13",
+        "09 09 0b 0b 12 12 1e 1e 2b 2b",
+        "29 3f 13 55 2b 3d 22 46 26 42",
+    ),
+    "4-3-3A": _preset(
+        "02 06 07 08 0a 0e 10 12 14 15",
+        "09 09 0b 0b 12 1e 1e 2b 2b 2b",
+        "29 3f 13 55 34 28 40 34 20 48",
+    ),
+    "4-3-3B": _preset(
+        "02 06 07 08 09 0b 0f 12 14 15",
+        "09 09 0b 0b 12 12 1e 2b 2b 2b",
+        "29 3f 13 55 2b 3d 34 34 20 48",
+    ),
+    "3-6-1A": _preset(
+        "02 03 06 0a 0c 0d 0f 0e 10 12",
+        "09 09 09 12 1a 1a 1a 22 22 2b",
+        "20 34 48 34 1b 4d 34 28 40 34",
+    ),
+    "3-6-1B": _preset(
+        "02 03 06 09 0b 0c 0d 0e 10 12",
+        "09 09 09 12 12 1a 1a 22 22 2b",
+        "20 34 48 2b 3d 1b 4d 28 40 34",
+    ),
+    "3-5-2A": _preset(
+        "02 03 06 0a 0c 0d 0e 10 11 13",
+        "09 09 09 12 1a 1a 22 22 2b 2b",
+        "20 34 48 34 1b 4d 28 40 26 42",
+    ),
+    "3-5-2B": _preset(
+        "02 03 06 09 0b 0c 0d 0f 11 13",
+        "09 09 09 12 12 1a 1a 22 2b 2b",
+        "20 34 48 2b 3d 1b 4d 34 26 42",
+    ),
+    "3-4-3A": _preset(
+        "02 03 06 0a 0c 0d 0f 12 14 15",
+        "09 09 09 12 1a 1a 22 2b 2b 2b",
+        "20 34 48 34 1b 4d 34 34 20 48",
+    ),
+    "3-4-3B": _preset(
+        "02 03 06 09 0b 0e 10 12 14 15",
+        "09 09 09 12 12 1e 1e 2b 2b 2b",
+        "20 34 48 2b 3d 22 46 34 20 48",
+    ),
+    "5-4-1A": _preset(
+        "02 03 06 07 08 0a 0c 0d 0f 12",
+        "09 09 09 0c 0c 12 1a 1a 22 2b",
+        "20 34 48 11 57 34 1d 4b 34 34",
+    ),
+    "5-4-1B": _preset(
+        "02 03 06 07 08 09 0b 0e 10 12",
+        "09 09 09 0c 0c 12 12 1e 1e 2b",
+        "20 34 48 11 57 2b 3d 22 46 34",
+    ),
+    "5-3-2A": _preset(
+        "02 03 06 07 08 0a 0e 10 11 13",
+        "09 09 09 0c 0c 12 22 22 2b 2b",
+        "20 34 48 11 57 34 28 40 26 42",
+    ),
+    "5-3-2B": _preset(
+        "02 03 06 07 08 09 0b 0f 11 13",
+        "09 09 09 0c 0c 12 12 22 2b 2b",
+        "20 34 48 11 57 2b 3d 34 26 42",
+    ),
+}
+
+#: A place of a preset is on the team's left below this y, on its right above `_RIGHT_ABOVE` and
+#: central between (the retail records put a wide place at y 7-37 or 71-101 and a central one at
+#: 31-77).
+_LEFT_BELOW = 45
+_RIGHT_ABOVE = 59
+
+
+def _side(y: int) -> str:
+    """`"L"`, `"C"` or `"R"`: the side of the pitch a place at width `y` is on."""
+    return "L" if y < _LEFT_BELOW else "R" if y > _RIGHT_ABOVE else "C"
 
 
 class StatMapper:
@@ -120,6 +232,15 @@ class StatMapper:
 
         `order_as_given`: the squad is the caller's list as it stands (first 23,
         a national squad's places) instead of the stat-ranked best 23.
+
+        A team whose `extra["formation"]` `parse_shape` reads is written the disc's
+        preset nearest it (`FORMATIONS`, variant B when the eleven hold two or more
+        CDMs, else A) and its eleven are ordered for it: the keeper, then the ten
+        outfield players cut into the preset's lines by index and each line seated on
+        the preset's places by role (`_seated`). The ten are the suggested eleven's
+        (`_select_best_23`) or, with `order_as_given`, the caller's in the order given
+        (`_given`), so an edited order or formation keeps its lines by index. Without
+        a readable formation the order is the 4-4-2's and the record has no formation.
         """
         all_stats = {}
         for roster in all_rosters:
@@ -128,13 +249,27 @@ class StatMapper:
 
         percentiles = self._compute_percentiles(all_stats)
 
-        squad = (
-            team_roster.players[:_PLAYERS_PER_NAT]
-            if order_as_given
-            else self._select_best_23(
-                team_roster.players, team_roster.player_stats, team_roster.extra.get("lineup")
+        formation = str(team_roster.extra.get("formation") or "")
+        lined = parse_shape(formation) is not None
+        if order_as_given:
+            squad = (
+                self._given(team_roster.players)
+                if lined
+                else team_roster.players[:_PLAYERS_PER_NAT]
             )
-        )
+        else:
+            squad = self._select_best_23(
+                team_roster.players,
+                team_roster.player_stats,
+                team_roster.extra.get("lineup"),
+                formation,
+            )
+        preset = None
+        if lined:
+            preset = nearest_shape(formation, FORMATIONS) + (
+                "B" if sum(p.role == "CDM" for p in squad[:11]) >= 2 else "A"
+            )
+            squad = self._seated(squad, preset)
 
         we_players = []
         for player in squad:
@@ -153,6 +288,7 @@ class StatMapper:
                     nationality=player.nationality or "",
                     height_cm=round(player.height * 2.54) if player.height > 0 else 0,
                     age=player.age or 0,
+                    role=player.role,
                 )
             )
 
@@ -166,6 +302,7 @@ class StatMapper:
                 else team_roster.team.name[:3].upper()
             ),
             players=we_players,
+            formation=FORMATION_PRESETS[preset] if preset else None,
         )
 
     def map_player(
@@ -377,6 +514,7 @@ class StatMapper:
         players: list[Player],
         player_stats: dict[int, PlayerStats] | None = None,
         lineup: dict | None = None,
+        formation: str | None = None,
     ) -> list[Player]:
         """The 23 (a national squad's places; a Master League slot keeps the
         first 14 or 15): the starting eleven, then the bench.
@@ -390,8 +528,14 @@ class StatMapper:
         3 defenders, 2 midfielders and 4 forwards (`BENCH_PLACES`), recent
         starters and regulars first, one of each line in turn so the few subs
         a Master League slot keeps cover every line; the best of the rest fill
-        what is left. A player moved to another line keeps his own position
-        (the byte the game shows): the patcher writes no formation.
+        what is left.
+
+        With a `formation` that `parse_shape` reads, the eleven's outfielders
+        go back to front by the depth of their roles (`ROLE_DEPTH`; a player
+        with none reads as his group's) and then by lineup position, so
+        cutting them by index over the formation's lines puts each in the line
+        he plays. The players picked are the same. The order is also the one
+        `map_team_with_league_context` writes.
         """
         stats = player_stats or {}
         recent = {int(s["id"]): (i, s) for i, s in enumerate((lineup or {}).get("starters") or [])}
@@ -427,13 +571,57 @@ class StatMapper:
                 short[group(p)] -= 1
         spare = [p for p in pool if group(p) != "Goalkeeper" and p not in outfield]
         outfield += spare[: 10 - len(outfield)]
-        eleven = keeper + sorted(outfield, key=depth)
+        lined = parse_shape(str(formation or "")) is not None
+
+        def line_key(p: Player) -> tuple[int, int]:
+            return (ROLE_DEPTH[self._role(p)] if lined else 0, depth(p))
+
+        eleven = keeper + sorted(outfield, key=line_key)
 
         rest = [p for p in pool if p not in eleven]
         subs = [[p for p in rest if group(p) == g][:n] for g, n in self.BENCH_PLACES]
         bench = [p for row in zip_longest(*subs) for p in row if p is not None]
         bench += [p for p in rest if p not in bench]
         return (eleven + bench)[:_PLAYERS_PER_NAT]
+
+    def _role(self, player: Player) -> str:
+        """His role, else the one his squad group gives (`GROUP_ROLE`)."""
+        return player.role if player.role in ROLE_DEPTH else GROUP_ROLE.get(player.position, "CM")
+
+    def _given(self, players: list[Player]) -> list[Player]:
+        """The caller's list as the squad, for a team with a readable formation: the first
+        goalkeeper listed in goal, then the first ten outfield players in the order given (the
+        formation cuts them into lines by index, whatever their positions), then everyone else
+        in the order given, a second keeper among them, cut at 23. A list with no goalkeeper
+        keeps its first player in goal."""
+        at = range(len(players))
+        goal = next((i for i in at if players[i].position == "Goalkeeper"), 0)
+        outfield = [i for i in at if i != goal and players[i].position != "Goalkeeper"]
+        eleven = ([goal] if players else []) + outfield[:10]
+        order = eleven + [i for i in at if i not in eleven]
+        return [players[i] for i in order][:_PLAYERS_PER_NAT]
+
+    def _seated(self, squad: list[Player], preset: str) -> list[Player]:
+        """`squad` (the keeper, ten outfield players in line order, then the rest) with each line
+        of the ten on the places of the disc's `preset`, which is place k + 2 for the k-th.
+
+        The ten are cut into the preset's lines by index and each line takes that line's places by
+        role (`seat_line`): first by side, a place being on the left below y 45, on the right
+        above 59 and central between, and then a deeper role on a deeper place, the place's x. A
+        player with no role reads as his group's. A squad of fewer than eleven seats the places
+        it has players for."""
+        record = FORMATION_PRESETS[preset]
+        xs, ys = record[10:20], record[20:]
+        defenders, midfielders, _ = map(int, preset[:-1].split("-"))
+        out = list(squad)
+        edges = (0, defenders, defenders + midfielders, 10)
+        for first, end in zip(edges, edges[1:], strict=False):
+            at = list(range(first, min(end, len(squad) - 1)))
+            places = [(_side(ys[k]), xs[k]) for k in at]
+            seats = seat_line([self._role(squad[1 + k]) for k in at], places)
+            for k, seat in zip(at, seats, strict=True):
+                out[1 + at[seat]] = squad[1 + k]
+        return out
 
     def _format_player_name(self, player: Player) -> tuple:
         """Build ROM-friendly (last_name, first_name) from a Player.

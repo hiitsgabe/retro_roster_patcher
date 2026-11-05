@@ -120,6 +120,15 @@ _NAT_MAGLIE_SPLIT = 31
 _OFS_NOMI_SQK = 2_002_316  # Kanji names start (ML reverse, then nationals reverse)
 _OFS_NOMI_SQK1 = 2_003_928  # Sector boundary continuation (national i=58 split)
 
+# Team formation table: 96 records of 30 bytes (the role byte, the x and the y of places 2-11; the
+# keeper, place 1, has none). Records 0-62 are the national teams (the patcher's national slots),
+# 63-94 the Master League slots in order, and 95 the default Master League team, which the patcher
+# never writes. Record 32 straddles the end of sector 979's user data (20 bytes, then 10 at the
+# start of sector 980's, `_OFS_FORMATIONS_A`); the table goes on 10 bytes into sector 980.
+_OFS_FORMATIONS = 2_303_700
+_OFS_FORMATIONS_A = 2_304_984
+_FORMATION_SIZE = 30
+
 # Sector boundary crossing points (from C++ switch-case indices).
 
 _NOME_LAST_GML = 203
@@ -162,7 +171,15 @@ _PLAYERS_PER_NAT = 23
 _NOME_SIZE = 10
 _CARAT_SIZE = 12
 
+# A player's position byte (bits 0-2 of his characteristics' first byte: 0 GK, 1 CB, 2 SB, 3 DH,
+# 4 SH, 5 OH, 6 CF, 7 WG) by squad group (0 GK, 1 DF, 2 MF, 3 FW), for a player with no role.
 _POS_MAP = {0: 0, 1: 1, 2: 3, 3: 6}
+# And by role (`sports.models.Player.role`), from the community's FIFA-to-WE rule file. The one
+# judgement call is CM, a DH there; an attacking CM could as well be an OH.
+_POSITION_BY_ROLE = {
+    "GK": 0, "CB": 1, "RB": 2, "LB": 2, "RWB": 2, "LWB": 2, "CDM": 3, "CM": 3, "RM": 4, "LM": 4,
+    "CAM": 5, "ST": 6, "RW": 7, "LW": 7,
+}  # fmt: skip
 
 _TEX_BASE_LBA = 8400  # LBA of TEX_00.BIN on CD
 _TEX_LBA_STRIDE = 20  # Each TEX allocated 20 sectors
@@ -1113,7 +1130,7 @@ def _encode_player_carat(player: WEPlayerRecord) -> bytes:
     """
     a = player.attributes
 
-    posizione = _POS_MAP.get(player.position, 1)
+    posizione = _POSITION_BY_ROLE.get(player.role, _POS_MAP.get(player.position, 1))
     look = player.look
     stile_capelli = _clamp(look.hair_style, 0, 31)
     col_capelli = _clamp(look.hair_colour, 0, 7)
@@ -1528,6 +1545,19 @@ def _slot_player_range(slot_index: int) -> tuple[int, int]:
         rom_pos = 31 - slot_index
         first = 14 * 15 + (rom_pos - 14) * 14
         return first, 14
+
+
+def _formation_chunks(table_index: int) -> list[tuple[int, int]]:
+    """The (offset, size) pieces of record `table_index` of the formation table: 0-62 a national
+    slot, 63-94 a Master League slot (63 plus the slot). Anything else raises `ValueError`; 95 is
+    the default Master League team, which the patcher never writes."""
+    if not 0 <= table_index <= 94:
+        raise ValueError(f"formation record {table_index} is not one the patcher writes (0-94)")
+    if table_index < 32:
+        return [(_OFS_FORMATIONS + _FORMATION_SIZE * table_index, _FORMATION_SIZE)]
+    if table_index == 32:
+        return [(_OFS_FORMATIONS + _FORMATION_SIZE * 32, 20), (_OFS_FORMATIONS_A, 10)]
+    return [(_OFS_FORMATIONS_A + 10 + _FORMATION_SIZE * (table_index - 33), _FORMATION_SIZE)]
 
 
 def _write_chunks(f, data: bytes, chunks: list[tuple[int, int]]) -> None:
@@ -2421,7 +2451,11 @@ class RomWriter:
         players: list[WEPlayerRecord] | None = None,
         include_flag: bool = True,
     ) -> int:
-        """Write national team names, abbreviations, force bars, players, and flag.
+        """Write national team names, abbreviations, force bars, players, formation, and flag.
+
+        The formation is `team.formation` (30 bytes, `ValueError` otherwise) when the team has
+        one, else the slot keeps its own. Master League slots (`write_team`) write none: such a
+        club fields its retail links, not its national slot's players.
 
         Returns how many of `players` were written: at most the 23 places of a
         national squad, 0 when nothing was written.
@@ -2430,6 +2464,10 @@ class RomWriter:
             return 0
         if nat_index < 0 or nat_index >= _SQUADRE_NAZ:
             return 0
+        if team.formation is not None and len(team.formation) != _FORMATION_SIZE:
+            raise ValueError(
+                f"a formation record is {_FORMATION_SIZE} bytes, not {len(team.formation)}"
+            )
 
         with open(self.output_path, "r+b") as f:
             self._write_nat_team_names(f, nat_index, team)
@@ -2440,6 +2478,9 @@ class RomWriter:
 
             if players is not None:
                 self._write_nat_players_impl(f, nat_index, players)
+
+            if team.formation is not None:
+                _write_chunks(f, team.formation, _formation_chunks(nat_index))
 
             if include_flag:
                 self._write_nat_flag_impl(f, nat_index, team)
