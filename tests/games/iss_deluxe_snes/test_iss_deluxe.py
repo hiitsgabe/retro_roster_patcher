@@ -4,7 +4,6 @@ from retro_roster_patcher.core.kits import KitSpec
 from retro_roster_patcher.core.registry import get_patcher
 from retro_roster_patcher.games.iss_deluxe_snes import bignames, flags, kits, names, pages
 from retro_roster_patcher.games.iss_deluxe_snes import rom as R
-from retro_roster_patcher.games.iss_deluxe_snes.patcher import DeluxePlayer, DeluxeTeam, _places
 from retro_roster_patcher.games.iss_snes.konami import decompress
 from retro_roster_patcher.games.iss_snes.models import Flag
 
@@ -20,18 +19,6 @@ def test_names_and_skills_use_the_cartridge_codes():
     assert R.decode_name(R.encode_name("V.Hugo")) == "V.Hugo"
     values = [3, 4, 5, 6, 7, 8, 9, 10, 11, R.FB]
     assert R.nibbles(R.pack(values)) == values
-
-
-def test_the_xi_takes_the_slots_places_full_backs_on_the_flanks():
-    def p(name, group, tag=""):
-        return DeluxePlayer(name, group, {}, tag)
-
-    xi = [p("gk", "GK"), p("lb", "DF", "LB"), p("cb1", "DF", "CB"), p("cb2", "DF", "CB"),
-          p("rb", "DF", "RB")] + [p(f"m{i}", "MF") for i in range(4)] + [p("f1", "FW"),
-                                                                       p("f2", "FW")]  # fmt: skip
-    codes = [R.GK, R.FB, R.CB, R.CB, R.FB, R.MF, R.MF, R.MF, R.MF, R.FW, R.FW]
-    placed = _places(codes, DeluxeTeam("x", xi))
-    assert [x.name for x in placed[:5]] == ["gk", "lb", "cb1", "cb2", "rb"]
 
 
 def test_a_four_two_three_one_lineup_sends_its_wide_attackers_forward(tmp_path):

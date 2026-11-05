@@ -16,7 +16,9 @@ from retro_roster_patcher.sports.lineup import (
     choose_shape,
     code_line,
     fold_formation,
+    nearest_shape,
     pick_lineup,
+    seat_line,
     slot_lines,
     slot_role,
     slot_side,
@@ -121,6 +123,79 @@ def test_a_formation_without_overrides_still_cuts_to_its_fold():  # Review Focus
 def test_a_code_alone_has_a_line():
     codes = ("G", "CD-L", "LM", "AM-L", "F", "SUB")
     assert [code_line(c) for c in codes] == ["GK", "DF", "MF", "FW", "FW", None]
+
+
+# The shapes ISS Deluxe offers, in its order.
+DELUXE_SHAPES = ("4-4-2", "4-3-3", "4-5-1", "3-5-2", "3-4-3", "5-3-2", "5-4-1", "4-2-4")
+
+
+def test_an_offered_shape_is_its_own_nearest():
+    for shape in DELUXE_SHAPES:
+        assert nearest_shape(shape, DELUXE_SHAPES) == shape
+
+
+def test_a_folded_four_line_formation_is_nearest_the_three_lines_it_folds_to():
+    assert fold_formation("4-2-3-1") == "4-3-3"
+    assert nearest_shape(fold_formation("4-2-3-1"), DELUXE_SHAPES) == "4-3-3"
+    # A formation of more lines is folded first, so the same answer without the caller's fold.
+    assert nearest_shape("4-2-3-1", DELUXE_SHAPES) == "4-3-3"
+    assert nearest_shape("4-4-1-1", DELUXE_SHAPES) == "4-4-2"
+
+
+def test_a_shape_nobody_offers_takes_the_smallest_sum_of_line_differences():
+    # 3-6-1 is 2 from 4-5-1 and 2 from 3-5-2, and 4 or more from the rest.
+    assert nearest_shape("3-6-1", DELUXE_SHAPES) == "4-5-1"
+    assert nearest_shape("6-3-1", DELUXE_SHAPES) == "5-3-2"
+    assert nearest_shape("2-4-4", DELUXE_SHAPES) == "3-4-3"
+
+
+def test_a_tie_goes_to_the_shape_offered_first():
+    assert nearest_shape("3-6-1", DELUXE_SHAPES) == "4-5-1"
+    assert nearest_shape("3-6-1", ("3-5-2", "4-5-1")) == "3-5-2"
+
+
+@pytest.mark.parametrize("text", ["", "4-4-x", "442", "4-6", "4-4-3", "4-2-3-2"])
+def test_a_shape_that_cannot_be_read_is_the_first_offered(text):
+    assert nearest_shape(text, DELUXE_SHAPES) == "4-4-2"
+    assert nearest_shape(text, ("5-3-2", "4-4-2")) == "5-3-2"
+
+
+def test_a_back_four_lands_on_its_sides_whatever_order_the_slots_come_in():
+    slots = [("R", 4), ("C", 0), ("L", 4), ("C", 0)]
+    assert seat_line(["LB", "CB", "CB", "RB"], slots) == [2, 1, 3, 0]
+    # The same players given in another order take the same places.
+    assert seat_line(["RB", "CB", "LB", "CB"], slots) == [0, 1, 2, 3]
+
+
+def test_the_deeper_role_takes_the_deeper_of_two_central_places():
+    slots = [("C", 8), ("C", -8)]
+    assert seat_line(["CDM", "CAM"], slots) == [1, 0]
+    assert seat_line(["CAM", "CDM"], slots) == [0, 1]
+
+
+def test_equal_costs_keep_the_given_order():
+    assert seat_line(["ST", "ST"], [("L", 0), ("R", 0)]) == [0, 1]
+    assert seat_line(["ST", "ST"], [("R", 0), ("L", 0)]) == [0, 1]
+    assert seat_line(["CM", "CM", "CM"], [("C", 0)] * 3) == [0, 1, 2]
+
+
+def test_the_side_outranks_the_depth():
+    # Swapping would seat the CAM in front of the LM, but then both would be a side off.
+    assert seat_line(["CAM", "LM"], [("C", -8), ("L", 8)]) == [0, 1]
+
+
+def test_a_role_with_no_side_or_depth_reads_as_a_central_midfielder():
+    slots = [("L", 0), ("C", 0), ("R", 0)]
+    assert seat_line(["", "LB", "XYZ"], slots) == [1, 0, 2]
+    assert seat_line([], []) == []
+
+
+def test_a_line_too_long_to_try_every_order_keeps_the_given_order():
+    # Seven places would be seated LB on the left and RB on the right, if every order were tried.
+    roles = ["LB", "RB", *["CB"] * 5]
+    slots = [("R", 0), ("L", 0), *[("C", 0)] * 5]
+    assert seat_line(roles[:6], slots[:6]) == [1, 0, 2, 3, 4, 5]
+    assert seat_line(roles, slots) == list(range(7))
 
 
 def test_every_role_a_code_can_read_as_has_a_depth():

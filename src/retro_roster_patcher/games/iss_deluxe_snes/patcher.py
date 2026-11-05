@@ -2,12 +2,20 @@
 
 The 36 national-team slots take clubs, so the slot mapping is explicit, as in
 `iss-snes`. A mapped slot gets the club's 20: the eleven as `iss-snes` and
-`iss2000-n64` pick them, in the slot's own formation (the places the
-cartridge gives that team), each line's places filled from the club's
-lineup, then the bench; each player's name and nine skills, placed by league
-percentile onto the cartridge's own spread for his position; each team's
-looks from its players' head shots (`looks`). Main menu games start with the
-first two mapped clubs instead of Brazil v England.
+`iss2000-n64` pick them, then the bench; each player's name and nine skills,
+placed by league percentile onto the cartridge's own spread for his position;
+his position code from his role; each team's looks from its players' head
+shots (`looks`). Main menu games start with the first two mapped clubs instead
+of Brazil v England.
+
+A club with a formation (`extra["formation"]`, a shape such as "4-3-3") is
+written the cartridge's formation nearest it (`formations`): the team's record
+becomes that formation's default and the ten outfielders, in the order the
+mapper gave them, are cut into its lines by index. Without one the slot keeps
+its own record and the players go to the lines of their groups. Either way a
+place is the record's index and its line comes from the record's flags (never
+the skill record's byte 5, the shirt number), and each line seats its players
+on its places by role: the sides across the pitch, the deeper role deeper.
 """
 
 from __future__ import annotations
@@ -37,8 +45,9 @@ from ...core.text import to_ascii
 from ...formats.snes import fix_checksum
 from ...sports import _http
 from ...sports.espn import EspnClient
+from ...sports.lineup import nearest_shape, seat_line
 from ...sports.models import LeagueData, Player, TeamRoster
-from ..iss2000_n64.mapper import N64StatMapper, _place, group_of
+from ..iss2000_n64.mapper import GROUPS, N64StatMapper, _place, group_of, parse_formation
 from ..iss2000_n64.patcher import NATIONAL_ALIASES, NATIONAL_LEAGUE
 from ..iss_snes.models import Flag, ISSLook
 from ..iss_snes.patcher import ISSPatcher, _parse_hex_colour
@@ -70,9 +79,17 @@ FEED = dict(
     balance="defence", jump="jump", dribble="keep", stamina="stamina",
 )  # fmt: skip
 _CODE = {"GK": R.GK, "DF": R.CB, "MF": R.MF, "FW": R.FW}
-_LINE_CODES = {"GK": (R.GK,), "DF": (R.CB, R.FB), "MF": (R.MF, R.AM), "FW": (R.FW,)}
-_FLANK = {"LB", "RB", "LWB", "RWB"}
-_ATTACKING = {"AM", "AM-L", "AM-R"}
+#: A role's position code (`rom` says what each plays): the back line's players play defence, the
+#: wing backs and the holding midfielder defence or midfield, the attacking midfielder and the
+#: wingers midfield or attack.
+ROLE_CODE = {
+    "GK": R.GK, "CB": R.CB, "RB": R.CB, "LB": R.CB, "RWB": R.FB, "LWB": R.FB, "CDM": R.FB,
+    "CM": R.MF, "RM": R.MF, "LM": R.MF, "CAM": R.AM, "RW": R.AM, "LW": R.AM, "ST": R.FW,
+}  # fmt: skip
+#: The code that plays only the line (0 keeper, 1 defence, 2 midfield, 3 attack).
+_OWN_CODE = (R.GK, R.CB, R.MF, R.FW)
+#: A place whose lateral offset is this far from the centre is on a side.
+_WIDE = 16
 
 
 @dataclass
@@ -87,6 +104,8 @@ class DeluxePlayer:
     nationality: str = ""
     #: Byte 6 bit 4, the team's alternate look; None keeps the cartridge's.
     alternate: bool | None = None
+    #: His `Player.role`; "" takes the position code of his group.
+    role: str = ""
 
 
 @dataclass
@@ -104,6 +123,8 @@ class DeluxeTeam:
     national: bool = False  # a nation's own squad: it keeps its name, flag and kits
     #: Set by `looks.dress`; None leaves the cartridge's looks alone.
     look: ISSLook | None = None
+    #: The club's formation (`extra["formation"]`, "4-3-3"); "" keeps the slot's own.
+    formation: str = ""
 
 
 @register(
@@ -140,6 +161,12 @@ class ISSDeluxePatcher(Patcher):
     #: close-ups and the team photo. `looks=False` downloads nothing and keeps
     #: the cartridge's looks and each slot's alternate bit.
     supports_looks: bool = True
+    #: `patch` writes each club's formation: the team's record becomes the default of the nearest
+    #: of these the cartridge has (it has 16; these are the shapes real clubs play).
+    writes_formation: bool = True
+    formations: tuple[str, ...] = (
+        "4-4-2", "4-3-3", "4-5-1", "3-5-2", "3-4-3", "5-3-2", "5-4-1", "4-2-4",
+    )  # fmt: skip
 
     fetch = ISSPatcher.fetch
 
@@ -285,7 +312,14 @@ class ISSDeluxePatcher(Patcher):
             skills = {s: _place(q[s], got.get(FEED[s], 50.0)) for s in R.SKILL_NAMES}
             players.append(
                 DeluxePlayer(
-                    name, group, skills, tags.get(p.id, ""), p.id, p.photo_url, p.nationality
+                    name,
+                    group,
+                    skills,
+                    tags.get(p.id, ""),
+                    p.id,
+                    p.photo_url,
+                    p.nationality,
+                    role=p.role,
                 )
             )
         home, away = default_kits(roster.team)
@@ -293,6 +327,7 @@ class ISSDeluxePatcher(Patcher):
         return DeluxeTeam(
             t.short_name or t.name, players, home, away, t.id, t.logo_url,
             (t.color, t.alternate_color), names.fit(t.name, t.short_name), t.name,
+            formation=str((roster.extra or {}).get("formation") or ""),
         )  # fmt: skip
 
     # --- patch -----------------------------------------------------------------
@@ -476,40 +511,78 @@ def _kit_plans(
     return plans
 
 
-def _places(codes: list[int], team: DeluxeTeam) -> list[DeluxePlayer]:
-    """The XI arranged into the slot's eleven places: each line's places take
-    that line's starters, a flank player (an ESPN full or wing back) the
-    full-back places first and an attacking midfielder the attacking places
-    first; a place a line cannot fill takes whoever is left."""
+def _spot(depth: int, lateral: int) -> tuple[str, int]:
+    """A place's side and depth, as `seat_line` takes them: the team's left is negative."""
+    return ("L" if lateral <= -_WIDE else "R" if lateral >= _WIDE else "C", depth)
+
+
+def _places(
+    image: bytes | bytearray, slot: int, team: DeluxeTeam, by_formation: bool
+) -> list[DeluxePlayer]:
+    """The XI in place order: place k is the slot's record k, on the line its flags give.
+
+    Each line seats its players on its places by role (`seat_line`). With `by_formation` the
+    lines are the formation's: the keeper (the first of the group GK, else the first player)
+    takes place 0 and the others, as ordered, are cut by index over the record's lines: the
+    defenders first, then the midfielders, the rest up front. Without, each starter plays the
+    line of his group, and a line short of players takes those left over from the lines with more
+    players than places, in the order given.
+    """
+    lines, offsets = R.slot_lines(image, slot), R.slot_offsets(image, slot)
+    places = [[k for k in range(11) if lines[k] == line] for line in range(4)]
     xi = team.players[:11]
+    if by_formation:
+        goal = next((i for i, p in enumerate(xi) if p.group == "GK"), 0)
+        defence, midfield = len(places[1]), len(places[2])
+        want = [0] * len(xi)
+        for k, i in enumerate(j for j in range(len(xi)) if j != goal):
+            want[i] = 1 + (k >= defence) + (k >= defence + midfield)
+    else:
+        want = [GROUPS.index(p.group) for p in xi]
+    mine = [[i for i, w in enumerate(want) if w == line][: len(places[line])] for line in range(4)]
+    left = [i for i in range(len(xi)) if not any(i in line for line in mine)]
     out: list[DeluxePlayer | None] = [None] * 11
-    left = list(xi)
-    for line, line_codes in _LINE_CODES.items():
-        mine = [p for p in left if p.group == line]
-        for code, prefer in ((line_codes[-1], True), (line_codes[0], False)):
-            for k, c in enumerate(codes):
-                if c != code or out[k] is not None or not mine:
-                    continue
-                pick = next(
-                    (p for p in mine if (p.tag in _FLANK or p.tag in _ATTACKING) == prefer), mine[0]
-                ) if len(line_codes) > 1 else mine[0]  # fmt: skip
-                out[k] = pick
-                mine.remove(pick)
-                left.remove(pick)
-    for k in range(11):
-        if out[k] is None and left:
-            out[k] = left.pop(0)
+    for line, players in enumerate(mine):
+        while len(players) < len(places[line]) and left:
+            players.append(left.pop(0))
+        roles = [xi[i].role for i in players] + [""] * (len(places[line]) - len(players))
+        spots = [_spot(*offsets[k]) for k in places[line]]
+        for i, seat in zip(players, seat_line(roles, spots), strict=False):
+            out[places[line][seat]] = xi[i]
     return [p for p in out if p is not None]
 
 
+def _code(player: DeluxePlayer, line: int | None) -> int:
+    """`player`'s position code: his role's, else his group's.
+
+    On a place of `line` the game wants a code that plays it (`R.ALLOWED_LINES`), else it marks
+    him out of position. The code that plays both his code's lines and that one is taken, else
+    the one that plays only that line. `line` None (the bench) leaves the code as it is.
+    """
+    code = ROLE_CODE.get(player.role) or _CODE[player.group]
+    if line is None or line in R.ALLOWED_LINES[code]:
+        return code
+    both = R.ALLOWED_LINES[code] | {line}
+    return next((c for c, lines in R.ALLOWED_LINES.items() if both <= lines), _OWN_CODE[line])
+
+
 def write_team(image: bytearray, slot: int, team: DeluxeTeam) -> int:
-    """Write `team` over `slot`: record k is place k; returns players written."""
-    codes = R.formation_codes(image, slot)
-    order = _places(codes, team) + team.players[11 : R.PLAYERS]
+    """Write `team` over `slot`: record k is place k; returns players written.
+
+    A readable `team.formation` first replaces the slot's formation record with the default of the
+    nearest formation the patcher offers. The places' lines then come from the slot's record.
+    """
+    by_formation = parse_formation(team.formation) is not None
+    if by_formation:
+        shape = nearest_shape(team.formation, ISSDeluxePatcher.formations)
+        at = R.formation_at(image, slot)
+        image[at : at + R.FORMATION_RECORD] = R.default_record(image, R.FORMATIONS.index(shape))
+    lines = R.slot_lines(image, slot)
+    order = _places(image, slot, team, by_formation) + team.players[11 : R.PLAYERS]
     for k, p in enumerate(order):
         o = R.record_at(slot, k)
-        code = codes[k] if k < 11 else _CODE[p.group]
-        values = [max(0, min(15, p.skills[s])) for s in R.SKILL_NAMES] + [code]
+        values = [max(0, min(15, p.skills[s])) for s in R.SKILL_NAMES]
+        values.append(_code(p, lines[k] if k < 11 else None))
         image[o : o + 5] = R.pack(values)
         image[o + 5] = k
         # Byte 6: bit 4 the alternate look; the low nibble, a cartridge star's

@@ -11,6 +11,8 @@ a wide midfielder in a 4-4-2 and a wing-back in a 3-4-2-1.
     RWB LWB CDM CM CAM RM LM RW LW ST), and `slot_side` gives its side across the pitch;
   * `slot_lines` puts each place of a template on a line, so the lines add up to the folded
     shape; `code_line` gives a code's line when no formation is at hand;
+  * `nearest_shape` picks the shape a game offers that is nearest a team's, and `seat_line` seats
+    one line's players on that line's places by their roles;
   * `pick_lineup` chooses a club's eleven from its matchday squads, seats each one in a place of
     its usual formation, and gives the rest of the squad a role too;
   * `apply_lineup` puts that lineup on a roster: its formation, and a role on every player.
@@ -22,6 +24,7 @@ from __future__ import annotations
 
 import re
 from collections import Counter
+from collections.abc import Sequence
 from itertools import permutations
 from typing import Any, NamedTuple
 
@@ -34,6 +37,9 @@ SHAPE_WINDOW = 5
 #: A role with at most this many seats has its players seated by trying every order. A code never
 #: seen reads as CM, so a role can have ten seats, and every order of ten is too many to try.
 EXACT_SEATS = 4
+#: A line with more places than this keeps its given order in `seat_line`, which tries every order:
+#: seven places are 5040 orders and ten 3.6 million, and no formation has a line of more than six.
+SEAT_LIMIT = 6
 
 #: FotMob's roles, the only ones a player's `role` can hold. Its labels are unofficial and every
 #: game reads the role, so `apply_lineup` ignores any other.
@@ -114,6 +120,24 @@ def fold_formation(text: str) -> str:
     return f"{back}-{sum(middle)}-{front}"
 
 
+def nearest_shape(shape: str, offered: Sequence[str]) -> str:
+    """The shape of `offered` with the smallest sum of differences in the players per line.
+
+    `shape` is folded to three lines first (`fold_formation`), as is each offered shape. A tie goes
+    to the shape offered first, and a `shape` that is not three lines of ten outfield players to
+    `offered[0]`.
+    """
+    want = _counts(fold_formation(shape))
+    if len(want) != 3:
+        return offered[0]
+
+    def distance(candidate: str) -> int:
+        have = _counts(fold_formation(candidate))
+        return sum(abs(a - b) for a, b in zip(want, have, strict=True)) if len(have) == 3 else 99
+
+    return min(offered, key=distance)
+
+
 def choose_shape(formations: list[str]) -> str | None:
     """The shape a team plays most, from its formations, newest first.
 
@@ -141,6 +165,43 @@ def slot_side(code: str) -> str:
     if code.startswith("R") or code.endswith("-R"):
         return "R"
     return "C"
+
+
+_SIDE_RANK = {"L": 0, "C": 1, "R": 2}
+
+
+def seat_line(roles: Sequence[str], slots: Sequence[tuple[str, float]]) -> list[int]:
+    """The place of one line each of its players takes: `seats[i]` is the index in `slots` of the
+    place player i sits on.
+
+    `roles` are the line's players' roles, in the order given. `slots` are its places, each a
+    side (`"L"`, `"C"` or `"R"`) and a depth (larger is further forward), as many as players. A
+    role outside `ROLES`, such as none, reads as a central midfielder: side `"C"`, depth of `CM`.
+
+    Of every order the players could sit in, the one chosen has, in turn, the smallest sum of
+    distances between a player's side (`slot_side` of his role) and his place's, left to right,
+    and then the fewest pairs where a deeper role (`DEPTH`) sits further forward than a more
+    advanced one. A tie goes to the first order tried, so the given order wins it. A line of more
+    than `SEAT_LIMIT` places keeps the given order.
+    """
+    n = len(roles)
+    if n > SEAT_LIMIT:
+        return list(range(n))
+    known = [role if role in DEPTH else "CM" for role in roles]
+    sides = [_SIDE_RANK[slot_side(role)] for role in known]
+    depth = [DEPTH[role] for role in known]
+
+    def cost(seats: tuple[int, ...]) -> tuple[int, int]:
+        apart = sum(abs(sides[i] - _SIDE_RANK[slots[s][0]]) for i, s in enumerate(seats))
+        inverted = sum(
+            depth[i] < depth[j] and slots[seats[i]][1] > slots[seats[j]][1]
+            for i in range(n)
+            for j in range(n)
+        )
+        return apart, inverted
+
+    best = min(permutations(range(n)), key=cost)
+    return list(best)
 
 
 def slot_lines(shape: str, roles: list[str]) -> list[str]:

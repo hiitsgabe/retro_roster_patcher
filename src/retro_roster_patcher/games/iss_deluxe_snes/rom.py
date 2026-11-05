@@ -12,16 +12,32 @@ Disassembly) and the name layout of rofldark's ISS Deluxe Editor.
   player order. Bytes 0-4 hold ten nibbles, low nibble first: speed, dash,
   curl, shot power, intelligence, balance, jump, dribble, stamina (each the
   bar count the Edit Player Skills screen shows, less one) and the position
-  (1 keeper, 2 centre back, 3 full back, 4 midfielder, 5 attacking
-  midfielder, 6 forward). Byte 5 is the player's place in the formation
-  (0-10 the eleven, 11-19 the bench; a permutation in every team), byte 6
-  flags this patch keeps.
+  code (1 keeper, 2 defender, 3 defender or midfielder, 4 midfielder, 5
+  midfielder or forward, 6 forward: the squad screens colour the name by it,
+  and `ALLOWED_LINES` says which lines a code may play). Byte 5 is the shirt
+  number less one, a permutation of 0-19 that in nine nations is not the
+  record order. The record's index is the player's place (0-10 the eleven,
+  11-19 the bench), so the place and its line come from the formation record
+  below. Byte 6 flags this patch keeps.
+* Team formations $8B:EF48 (ROM 0x5EF48, `FORMATION_PTRS`): one word per team
+  (the 36 nations in `TEAMS` order, the six star teams, one extra), the
+  address in bank $8B of the team's 31-byte record: the formation id
+  (`FORMATIONS`), the ten outfield places' (depth, lateral) offsets as signed
+  bytes (depth is further forward within the place's line, a negative lateral
+  the team's left) and the ten places' flags (bits 0-1 the line, 1 defence, 2
+  midfield, 3 attack; bit 2 the attack arrow). Place 0 is the keeper. Each id
+  has a default record, its positions at $82:8134 and its flags at $82:8074
+  (`default_record`). Team select prints the id, and the match plays the
+  record. The routine that labels a place's line on the squad screens reads
+  the id's default flags, so a record keeps the default lines of its id.
 * Team ids are the order of `TEAMS`; the game stores them doubled.
 * The main menu's default teams (Brazil v England) are immediates at
   `DEFAULT_P1` and `DEFAULT_P2` (`LDA #team` before `STA $0DA0/$1F8C`).
 """
 
 from __future__ import annotations
+
+import struct
 
 from ...core.text import to_ascii
 
@@ -69,8 +85,32 @@ DEFAULT_P2 = 0x2A3EF
 SKILL_NAMES = (
     "speed", "dash", "curl", "shot", "intelligence", "balance", "jump", "dribble", "stamina",
 )  # fmt: skip
+#: The position codes. FB plays defence or midfield, AM midfield or attack.
 GK, CB, FB, MF, AM, FW = 1, 2, 3, 4, 5, 6
 GROUP_OF_CODE = {GK: "GK", CB: "DF", FB: "DF", MF: "MF", AM: "MF", FW: "FW"}
+#: The lines (0 keeper, 1 defence, 2 midfield, 3 attack) a code may play: the game's
+#: DATA_81AE81 ($81:AE81). A player in a place of another line is out of position.
+ALLOWED_LINES = {
+    GK: frozenset({0}),
+    CB: frozenset({1}),
+    FB: frozenset({1, 2}),
+    MF: frozenset({2}),
+    AM: frozenset({2, 3}),
+    FW: frozenset({3}),
+}
+
+BANK_8B = 0x58000
+FORMATION_PTRS = 0x5EF48
+FORMATION_RECORD = 31
+DEFAULT_POSITIONS = 0x10134
+DEFAULT_FLAGS = 0x10074
+#: The 16 formations by id, as team select prints them.
+FORMATIONS = tuple(
+    (
+        "4-5-1 4-4-2 4-3-3 4-2-4 3-5-2 3-4-3 3-3-4 3-2-5 "
+        "2-5-3 2-4-4 2-3-5 5-4-1 5-3-2 5-2-3 1-5-4 1-4-5"
+    ).split()
+)
 
 _FONT = {" ": 0x00, "!": 0x52, ".": 0x54, "-": 0x57, "'": 0x5A, ":": 0x5C}
 _FONT.update({str(d): 0x5E + d for d in range(10)})
@@ -108,11 +148,28 @@ def pack(values: list[int]) -> bytes:
     return bytes((values[i] & 15) | (values[i + 1] & 15) << 4 for i in range(0, 10, 2))
 
 
-def formation_codes(image: bytes | bytearray, team: int) -> list[int]:
-    """Position code of each of the eleven places, in place order."""
-    codes = [0] * 11
-    for i in range(PLAYERS):
-        r = image[record_at(team, i) :][:RECORD]
-        if r[5] < 11:
-            codes[r[5]] = nibbles(r)[9]
-    return codes
+def formation_at(image: bytes | bytearray, team: int) -> int:
+    """ROM offset of `team`'s 31-byte formation record."""
+    return BANK_8B + (struct.unpack_from("<H", image, FORMATION_PTRS + 2 * team)[0] & 0x7FFF)
+
+
+def slot_lines(image: bytes | bytearray, team: int) -> list[int]:
+    """The line of each of the eleven places, in place order: the keeper 0, then the line (1
+    defence, 2 midfield, 3 attack) in each outfield place's flags."""
+    at = formation_at(image, team)
+    return [0] + [flags & 3 for flags in image[at + 21 : at + 31]]
+
+
+def slot_offsets(image: bytes | bytearray, team: int) -> list[tuple[int, int]]:
+    """The (depth, lateral) offset of each of the eleven places, in place order; the keeper's is
+    (0, 0). Both are signed: further forward and the team's right are positive."""
+    raw = struct.unpack_from("20b", image, formation_at(image, team) + 1)
+    return [(0, 0), *zip(raw[0::2], raw[1::2], strict=True)]
+
+
+def default_record(image: bytes | bytearray, fid: int) -> bytes:
+    """The formation record of id `fid` as the game starts it: the id, the id's 20 default
+    position bytes and its 10 default flags."""
+    positions = image[DEFAULT_POSITIONS + 20 * fid :][:20]
+    flags = image[DEFAULT_FLAGS + 10 * fid :][:10]
+    return bytes([fid]) + bytes(positions) + bytes(flags)
