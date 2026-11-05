@@ -103,21 +103,23 @@ SLOT_SHAPES = (
 #: the first the patcher offers, the 4-4-2 every club was once written.
 DEFAULT_SHAPE = next(iter(FORMATION_DONORS))
 
-#: A place whose lateral (the high nibble of its second byte) is up to this is on the team's left,
-#: and from `_RIGHT` on its right; the retail records put the wide places at 1-4 and 10-13.
-_LEFT = 4
-_RIGHT = 10
+#: The lateral (the high nibble of a place's second byte) of the middle of the pitch, and how far
+#: the widest places of the retail records stand from it (Germany's wing backs, at 1 and 13): a
+#: place's side for `seat_line` is its lateral's distance from the middle over that, so -1 is the
+#: team's left touchline and 1 its right.
+_MIDDLE = 7
+_HALF_WIDTH = 6
 
 
-def _donor_places(shape: str) -> list[tuple[int, str, int]]:
-    """The line (0 keeper, 1 defence, 2 midfield, 3 attack), side (`"L"`, `"C"` or `"R"`) and
-    depth of each of the eleven places of `shape`'s donor record, in place order."""
+def _donor_places(shape: str) -> list[tuple[int, float, int]]:
+    """The line (0 keeper, 1 defence, 2 midfield, 3 attack), side (from -1 at the team's left
+    touchline to 1 at its right) and depth of each of the eleven places of `shape`'s donor record,
+    in place order."""
     record = FORMATION_DONORS[shape]
     places = []
     for k in range(11):
         depth, lateral_line = record[4 * k], record[4 * k + 1]
-        lateral = lateral_line >> 4
-        side = "L" if lateral <= _LEFT else "R" if lateral >= _RIGHT else "C"
+        side = ((lateral_line >> 4) - _MIDDLE) / _HALF_WIDTH
         places.append((lateral_line & 3, side, depth))
     return places
 
@@ -371,8 +373,9 @@ class ISSStatMapper:
     def _seated(self, players: list[Player], shape: str) -> list[Player]:
         """`players` (the fifteen, the eleven in line order) with each line's starters on the
         places of `shape`'s donor record: the line of a place is the record's, and a line's
-        players take its places by role, the sides first and then the deeper role deeper
-        (`seat_line`). A player without a role keeps his turn in the line."""
+        players take its places by role, the sides first (a full back on the widest place on his
+        side) and then the deeper role deeper (`seat_line`). A player without a role keeps his
+        turn in the line."""
         places = _donor_places(shape)
         out = list(players)
         for line in (1, 2, 3):

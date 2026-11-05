@@ -115,16 +115,17 @@ FORMATION_PRESETS: dict[str, bytes] = {
     ),
 }
 
-#: A place of a preset is on the team's left below this y, on its right above `_RIGHT_ABOVE` and
-#: central between (the retail records put a wide place at y 7-37 or 71-101 and a central one at
-#: 31-77).
-_LEFT_BELOW = 45
-_RIGHT_ABOVE = 59
+#: A place's y is `_MIDDLE` in the middle of the pitch and low on the team's left. The presets'
+#: widest places, the wing backs of the 5-back ones (y 17 and 87), are `_HALF_WIDTH` away, which
+#: `_side` divides by.
+_MIDDLE = 52
+_HALF_WIDTH = 35
 
 
-def _side(y: int) -> str:
-    """`"L"`, `"C"` or `"R"`: the side of the pitch a place at width `y` is on."""
-    return "L" if y < _LEFT_BELOW else "R" if y > _RIGHT_ABOVE else "C"
+def _side(y: int) -> float:
+    """The side of the pitch a place at width `y` is on, for `seat_line`: -1 at the team's left
+    touchline, 0 in the middle and 1 at its right."""
+    return (y - _MIDDLE) / _HALF_WIDTH
 
 
 class StatMapper:
@@ -605,10 +606,10 @@ class StatMapper:
         of the ten on the places of the disc's `preset`, which is place k + 2 for the k-th.
 
         The ten are cut into the preset's lines by index and each line takes that line's places by
-        role (`seat_line`): first by side, a place being on the left below y 45, on the right
-        above 59 and central between, and then a deeper role on a deeper place, the place's x. A
-        player with no role reads as his group's. A squad of fewer than eleven seats the places
-        it has players for."""
+        role (`seat_line`): first by side, a full back on the widest place on his side (a place's
+        side is its y's distance from the middle, `_side`), and then a deeper role on a deeper
+        place, the place's x. A player with no role reads as his group's. A squad of fewer than
+        eleven seats the places it has players for."""
         record = FORMATION_PRESETS[preset]
         xs, ys = record[10:20], record[20:]
         defenders, midfielders, _ = map(int, preset[:-1].split("-"))

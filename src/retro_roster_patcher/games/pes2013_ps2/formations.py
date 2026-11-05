@@ -115,10 +115,12 @@ _ROLE_OF_CODE = (
     + ("ST",) * 10
 )
 
-#: A place is on the team's left below this y and on its right above `RIGHT_ABOVE`, central between
-#: (the disc's records put a wide place at y 7-37 or 71-101 and a central one at 31-77).
-LEFT_BELOW = 45
-RIGHT_ABOVE = 59
+#: A place's y is `MIDDLE` in the middle of the pitch and low on the team's left. The presets'
+#: widest places, their full backs and wing backs (y 17 and 87), are `HALF_WIDTH` away, so `seats`
+#: gives `seat_line` a place's side as its y's distance from the middle over that: -1 is the
+#: team's left touchline and 1 its right.
+MIDDLE = 52
+HALF_WIDTH = 35
 
 
 def lines(record: bytes) -> tuple[int, int, int]:
@@ -150,38 +152,22 @@ def pick_preset(shape: str, roles: Sequence[str]) -> str:
     )
 
 
-def _side(y: int) -> str:
-    return "L" if y < LEFT_BELOW else "R" if y > RIGHT_ABOVE else "C"
-
-
-def _own(places: list[str], role: str) -> int:
-    """Where in a line's `places` a player of `role` has a place of exactly his role: its index,
-    or past the end when the line has none."""
-    return places.index(role) if role in places else len(places)
-
-
 def seats(roles: Sequence[str], record: bytes) -> list[int]:
     """The place (0-9, for places 1-10) each outfield player stands on: `seats[i]` for the i-th of
     `roles`, which are cut into the record's lines by index (the first `lines(record)[0]` are the
     defence, and so on; a short list leaves the last places of its lines empty).
 
-    Each line is seated on its places by `seat_line`: a place's side comes from its y and its depth
-    from its x. A player whose role has a place in the line of exactly that role is offered to
-    `seat_line` before the others, in the order of those places, so where side and depth tie
-    (a right back and a centre back are both on the right and both deep) he keeps his own place,
-    and where they do not they decide."""
+    Each line is seated on its places by `seat_line`: a place's side is its y's distance from the
+    middle over `HALF_WIDTH` and its depth is its x. So a right back stands on the outer right
+    place and a centre back on a central one, though both are as deep, and a wing back on a wide
+    place and not on a midfielder's, though some presets put the wing backs a step ahead of them."""
     xs, ys = record[10:20], record[20:30]
-    names = place_roles(record)
     out: list[int] = []
     first = 0
     for count in lines(record):
         at = range(first, min(first + count, len(roles)))
-        have = [roles[k] for k in at]
-        own = names[first : first + len(have)]
-        order = sorted(range(len(have)), key=lambda i: _own(own, have[i]))
-        sat = seat_line([have[i] for i in order], [(_side(ys[k]), xs[k]) for k in at])
-        placed = dict(zip(order, sat, strict=True))
-        out += [first + placed[i] for i in range(len(have))]
+        spots = [((ys[k] - MIDDLE) / HALF_WIDTH, xs[k]) for k in at]
+        out += [first + seat for seat in seat_line([roles[k] for k in at], spots)]
         first += count
     return out
 

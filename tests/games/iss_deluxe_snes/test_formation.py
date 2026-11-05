@@ -272,12 +272,31 @@ def test_the_deeper_midfielder_takes_the_deeper_place():
     assert names[5:10] == ["CDM6", "CM7", "LM8", "CAM5", "RM9"]
 
 
+def test_a_back_five_keeps_its_full_backs_on_the_flank_places():
+    image = cartridge()
+    # The 5-3-2's back five stands at laterals -32, -11, 0, 11 and 32.
+    write_team(image, BRAZIL, squad("GK CB LB CB RB CB CM CM CM ST ST", "5-3-2"))
+    names, _ = written(image, BRAZIL)
+    assert names[1:6] == ["LB2", "CB1", "CB3", "CB5", "RB4"]
+
+
+def test_a_wide_midfielder_takes_the_flank_place_and_not_the_inner_one_on_his_side():
+    image = cartridge()
+    # The 3-5-2's midfield is at laterals -32, 0 and 32 (places 4-6) and -16 and 16 (places 7-8):
+    # -32 and -16 are both on the left, and a centre midfielder listed first took the flank.
+    write_team(image, BRAZIL, squad("GK CB CB CB CM LM CM RM CM ST ST", "3-5-2"))
+    names, _ = written(image, BRAZIL)
+    assert names[4:9] == ["LM5", "CM4", "RM7", "CM6", "CM8"]
+
+
 def test_the_ten_are_cut_by_index_over_the_formation_not_by_group():
     image = cartridge()
     write_team(image, BRAZIL, squad("GK CB CB RB LB CM CM CM RM ST ST", "3-5-2"))
     names, codes = written(image, BRAZIL)
     assert names[1:4] == ["CB1", "CB2", "RB3"]
-    assert names[4:9] == ["LB4", "CM5", "CM6", "CM7", "RM8"]
+    # The defender who plays midfield is on the left flank (-32) and the right midfielder on the
+    # right flank (32), the centre midfielders on the middle place and the inner pair.
+    assert names[4:9] == ["LB4", "CM5", "RM8", "CM6", "CM7"]
     assert names[9:11] == ["ST9", "ST10"]
     # The defender who plays midfield takes the code that plays both.
     assert codes[4] == R.FB
@@ -702,6 +721,13 @@ def test_every_record_and_default_has_the_lines_of_its_shape(retail):
         name = R.FORMATIONS[retail[R.formation_at(retail, team)]]
         d, m, f = map(int, name.split("-"))
         assert R.slot_lines(retail, team) == [0] + [1] * d + [2] * m + [3] * f, (team, name)
+
+
+@real_rom
+def test_the_widest_lateral_of_the_cartridge_is_40_which_is_what_a_side_divides_by(retail):
+    # The default formations' flank places are at 32; a few retail records go out to 40.
+    laterals = {lat for team in range(43) for _, lat in R.slot_offsets(retail, team)[1:]}
+    assert max(abs(lat) for lat in laterals) == patcher_module._TOUCHLINE == 40
 
 
 @real_rom

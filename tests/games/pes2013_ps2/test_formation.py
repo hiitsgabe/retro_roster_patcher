@@ -27,6 +27,8 @@ from retro_roster_patcher.core.models import SlotMapping
 from retro_roster_patcher.games.pes2013_ps2 import afs
 from retro_roster_patcher.games.pes2013_ps2.formations import (
     FORMATIONS,
+    HALF_WIDTH,
+    MIDDLE,
     PRESETS,
     FormationTable,
     lines,
@@ -365,13 +367,67 @@ def test_a_line_takes_the_places_whose_role_it_plays_whatever_the_order_it_is_gi
 
 
 def test_a_player_whose_role_no_place_has_is_seated_by_his_side():
-    # The 4-4-2's midfield is four CMF places, two on each side: the right midfielder takes one on
-    # the right (y over 59) and the left midfielder one on the left (y under 45).
+    # The 4-4-2's midfield is four CMF places at y 77, 61, 43 and 27: the right midfielder takes
+    # the outermost one on the right and the left midfielder the outermost on the left.
     roles = ["CB", "CB", "RB", "LB", "RM", "LM", "CM", "CM", "ST", "ST"]
     placed = seats(roles, PRESETS["4-4-2"])
     ys = PRESETS["4-4-2"][20:]
-    assert ys[placed[4]] > 59 and ys[placed[5]] < 45
+    assert (ys[placed[4]], ys[placed[5]]) == (77, 27)
     assert sorted(placed) == list(range(10))
+
+
+def standing(roles, preset):
+    """The role on each of places 1-10 once the ten `roles` are seated on the preset."""
+    stand = [""] * len(roles)
+    for role, place in zip(roles, seats(roles, PRESETS[preset]), strict=True):
+        stand[place] = role
+    return stand
+
+
+@pytest.mark.parametrize(
+    ("preset", "listed", "stand"),
+    [
+        # Lines that seating a role on a place of exactly its own first got wrong: RM, CM, CM, LM
+        # on the 4-4-2's four CMF places (y 77, 61, 43, 27), ...
+        ("4-4-2", "CB CB RB LB RM CM CM LM ST ST", "CB CB RB LB RM CM CM LM ST ST"),
+        # ... the 5-4-1's two wide midfielders on the RMF and LMF places, not the DMF ones, ...
+        ("5-4-1", "CB CB CB RB LB RM CM CM LM ST", "CB CB CB RB LB CM CM RM LM ST"),
+        # ... the 4-4-1-1's, with the left midfielder on his own place and not a DMF one, ...
+        ("4-4-1-1", "CB CB RB LB CDM CM RM LM CAM ST", "CB CB RB LB CDM CM RM LM CAM ST"),
+        # ... the 4-5-1's wide midfielders on the wide places, the two CMs on the CMF ones, ...
+        ("4-5-1", "CB CB RB LB CDM RM CM CM LM ST", "CB CB RB LB CDM CM CM RM LM ST"),
+        # ... and the back four, whichever the full backs are listed before.
+        ("4-4-2", "RB LB CB CB RM CM CM LM ST ST", "CB CB RB LB RM CM CM LM ST ST"),
+        ("4-4-2", "LB RB CB CB RM CM CM LM ST ST", "CB CB RB LB RM CM CM LM ST ST"),
+    ],
+)
+def test_the_review_lines_stand_the_wide_players_on_the_wide_places(preset, listed, stand):
+    assert standing(listed.split(), preset) == stand.split()
+
+
+@pytest.mark.parametrize(
+    ("preset", "listed", "stand"),
+    [
+        # The 3-4-1-2 puts its wing backs (x 24) a step ahead of its holding pair (x 18) ...
+        ("3-4-1-2", "CB CB CB CDM CDM RWB LWB CAM ST ST", "CB CB CB CDM CDM RWB LWB CAM ST ST"),
+        ("3-4-1-2", "CB CB CB RWB LWB CDM CDM CAM ST ST", "CB CB CB CDM CDM RWB LWB CAM ST ST"),
+        ("3-4-1-2", "CB CB CB LWB CAM CDM RWB CDM ST ST", "CB CB CB CDM CDM RWB LWB CAM ST ST"),
+        # ... and the 3-4-3 its own (x 24) ahead of its central midfielders (x 22), the opposite of
+        # the order of the roles' depths, but the wing backs are wide and the midfielders are not.
+        ("3-4-3", "CB CB CB RWB LWB CM CM RW LW ST", "CB CB CB RWB LWB CM CM RW LW ST"),
+        ("3-4-3", "CB CB CB CM CM RWB LWB RW LW ST", "CB CB CB RWB LWB CM CM RW LW ST"),
+        ("3-4-3", "CB CB CB LWB CM RWB CM LW RW ST", "CB CB CB RWB LWB CM CM RW LW ST"),
+    ],
+)
+def test_wing_backs_and_central_midfielders_do_not_trade_places(preset, listed, stand):
+    assert standing(listed.split(), preset) == stand.split()
+
+
+def test_the_widest_places_of_the_presets_are_the_touchlines():
+    # The full backs' and wing backs' places at y 17 and 87 are 35 from the middle, which is what
+    # a place's side is measured against.
+    ys = {y for preset in PRESETS.values() for y in preset[20:]}
+    assert (min(ys), max(ys)) == (MIDDLE - HALF_WIDTH, MIDDLE + HALF_WIDTH) == (17, 87)
 
 
 def test_strikers_listed_together_take_the_attack_in_the_given_order():

@@ -199,6 +199,49 @@ def test_a_back_four_lands_on_its_sides_whatever_order_the_slots_come_in():
     assert seat_line(["RB", "CB", "LB", "CB"], slots) == [0, 1, 2, 3]
 
 
+# A back five as ISS 2000's 5-3-2 stands it: the touchline places, the inner ones, and the middle,
+# as a side from -1 (the team's left touchline) to 1 (its right) and a depth.
+BACK_FIVE = [(-1, 18), (-0.5, 0), (0, -27), (0.5, 0), (1, 18)]
+
+
+@pytest.mark.parametrize(
+    ("back", "seats"),
+    [
+        (["CB", "LB", "CB", "RB", "CB"], [1, 0, 2, 4, 3]),
+        (["LB", "CB", "CB", "CB", "RB"], [0, 1, 2, 3, 4]),
+        (["RB", "CB", "CB", "CB", "LB"], [4, 1, 2, 3, 0]),
+        (["CB", "CB", "CB", "RB", "LB"], [1, 2, 3, 4, 0]),
+    ],
+)
+def test_a_back_five_keeps_its_full_backs_on_the_touchline_places(back, seats):
+    assert seat_line(back, BACK_FIVE) == seats
+
+
+def test_wing_backs_take_the_touchline_places_of_a_midfield_of_six():
+    # ISS 2000's 3-6-1: two inner places 20 back, two touchline ones 20 forward, and two between
+    # them 60 forward.
+    slots = [(-0.4, -20), (0.4, -20), (-0.96, 20), (0.96, 20), (-0.72, 60), (0.72, 60)]
+    roles = ["LWB", "CDM", "CM", "CAM", "CAM", "RWB"]
+    assert seat_line(roles, slots) == [2, 0, 1, 4, 5, 3]
+
+
+def test_a_side_given_as_a_letter_is_the_number_it_stands_for():
+    number = {"L": -1, "C": 0, "R": 1}
+    slots = [("L", 18), ("L", 0), ("C", -27), ("R", 0), ("R", 18)]
+    as_numbers = [(number[side], depth) for side, depth in slots]
+    for back in (["CB", "LB", "CB", "RB", "CB"], ["RB", "CB", "CB", "CB", "LB"], ["LB"] * 5):
+        assert seat_line(back, slots) == seat_line(back, as_numbers)
+    # Three sides cannot tell a touchline place from an inner one, so the given order wins.
+    assert seat_line(["CB", "LB", "CB", "RB", "CB"], slots) == [0, 1, 2, 3, 4]
+
+
+def test_distances_that_differ_only_in_the_last_bit_of_a_float_still_tie():
+    # Every place is on the left, so a centre back and two right backs cost the same wherever they
+    # sit (2 less the places' sides added up), though the floats are not added up the same way.
+    slots = [(-0.9, 0), (-0.82, 0), (-0.81, 0)]
+    assert seat_line(["CB", "RB", "RB"], slots) == [0, 1, 2]
+
+
 def test_the_deeper_role_takes_the_deeper_of_two_central_places():
     slots = [("C", 8), ("C", -8)]
     assert seat_line(["CDM", "CAM"], slots) == [1, 0]

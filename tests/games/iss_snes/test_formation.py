@@ -240,34 +240,47 @@ def test_every_slot_has_a_shape_among_the_donors_and_it_is_the_reports():
     assert set(SLOT_SHAPES) <= set(FORMATION_DONORS)
 
 
-# The side of each place of every donor, line by line, from the lateral of the retail records: 1 to
-# 4 is the team's left, 10 to 13 its right, the places between are central.
-SIDES = {
-    "4-4-2": ("LCCR", "LCCR", "CC"),
-    "4-3-3": ("LCCR", "CLR", "LRC"),
-    "3-4-3": ("LCR", "CLRC", "LRC"),
-    "5-3-2": ("LLCRR", "CLR", "LR"),
-    "4-5-1": ("LCCR", "CCLRC", "C"),
-    "3-5-2": ("LCR", "LRCLR", "LR"),
-    "4-2-4": ("LCCR", "LR", "LCCR"),
+# The lateral of each place of every donor, line by line, from the retail records: 1 to 13 across
+# the pitch, 7 the middle and the low ones the team's left.
+LATERALS = {
+    "4-4-2": ((2, 5, 9, 12), (2, 5, 9, 12), (5, 9)),
+    "4-3-3": ((2, 5, 9, 12), (7, 2, 12), (2, 12, 7)),
+    "3-4-3": ((3, 7, 11), (7, 2, 12, 7), (2, 12, 7)),
+    "5-3-2": ((1, 4, 7, 10, 13), (7, 3, 11), (4, 10)),
+    "4-5-1": ((2, 5, 9, 12), (5, 9, 2, 12, 8), (6,)),
+    "3-5-2": ((3, 7, 11), (2, 12, 7, 3, 11), (4, 10)),
+    "4-2-4": ((2, 5, 9, 12), (4, 10), (2, 5, 9, 12)),
 }
 
 
 @pytest.mark.parametrize("shape", FORMATIONS)
-def test_a_donor_place_is_on_the_side_its_lateral_gives(shape):
+def test_a_donor_place_is_as_wide_as_its_lateral_is_far_from_the_middle(shape):
     places = _donor_places(shape)
     assert [line for line, _, _ in places] == lines_of(FORMATION_DONORS[shape])
-    sides = {line: "".join(side for ln, side, _ in places if ln == line) for line in (1, 2, 3)}
-    assert tuple(sides[line] for line in (1, 2, 3)) == SIDES[shape]
+    for line in (1, 2, 3):
+        sides = [side for ln, side, _ in places if ln == line]
+        assert sides == pytest.approx([(lateral - 7) / 6 for lateral in LATERALS[shape][line - 1]])
 
 
-def test_a_donor_place_has_the_depth_of_its_first_byte():
-    assert _donor_places("4-3-3") == [
-        (0, "C", 0x00),
-        (1, "L", 0x0E), (1, "C", 0x0A), (1, "C", 0x0A), (1, "R", 0x0E),
-        (2, "C", 0x14), (2, "L", 0x18), (2, "R", 0x18),
-        (3, "L", 0x22), (3, "R", 0x22), (3, "C", 0x24),
+def test_a_donor_place_has_the_depth_of_its_first_byte_and_a_side_from_its_lateral():
+    places = _donor_places("4-3-3")
+    assert [(line, depth) for line, _, depth in places] == [
+        (0, 0x00),
+        (1, 0x0E), (1, 0x0A), (1, 0x0A), (1, 0x0E),
+        (2, 0x14), (2, 0x18), (2, 0x18),
+        (3, 0x22), (3, 0x22), (3, 0x24),
     ]  # fmt: skip
+    assert [side for _, side, _ in places] == pytest.approx(
+        [0, -5 / 6, -2 / 6, 2 / 6, 5 / 6, 0, -5 / 6, 5 / 6, -5 / 6, 5 / 6, 0]
+    )
+
+
+def test_germanys_wing_backs_are_the_widest_places_of_any_donor_and_stand_on_the_touchlines():
+    sides = [side for shape in FORMATIONS for _, side, _ in _donor_places(shape)]
+    assert min(sides) == -1 and max(sides) == 1
+    assert [side for _, side, _ in _donor_places("5-3-2")][1:6] == pytest.approx(
+        [-1, -0.5, 0, 0.5, 1]
+    )
 
 
 # --- the writer ----------------------------------------------------------------------------------
@@ -633,6 +646,17 @@ def test_a_back_five_seats_its_wing_backs_wide_and_deep_and_its_centre_backs_ins
         assert roles[2:5] == ["CB"] * 3, back
 
 
+def test_a_back_five_seats_its_full_backs_on_the_touchline_places(patcher):
+    # A full back is no deeper than a centre back, so only the width tells his place from the
+    # inner one next to it: Germany's laterals are 1, 4, 7, 10 and 13.
+    for back in ("CB LB CB RB CB", "LB CB CB CB RB", "RB CB CB CB LB", "CB CB CB RB LB"):
+        roster = squad(f"GK {back} CM CM CM ST ST", formation="5-3-2")
+        names = xi_names(patcher, roster, order_as_given=True)
+        roles = [n.rstrip("0123456789") for n in names]
+        assert roles[1] == "LB" and roles[5] == "RB", back
+        assert roles[2:5] == ["CB"] * 3, back
+
+
 def test_players_without_a_role_stay_as_given_inside_their_line(patcher):
     roster = squad(roles=False)
     names = xi_names(patcher, roster, order_as_given=True)
@@ -872,6 +896,15 @@ def test_each_slots_shape_is_the_one_its_retail_records_lines_count(retail):
         lines = lines_of(retail[at : at + 44])
         counts = tuple(lines.count(line) for line in (1, 2, 3))
         assert "-".join(map(str, counts)) == shape, TEAM_ENUM_ORDER[slot]
+
+
+@real_rom
+def test_the_widest_retail_laterals_are_6_from_the_middle_which_is_what_a_side_divides_by(retail):
+    laterals = set()
+    for slot in range(28):
+        at = 0x38000 + struct.unpack_from("<H", retail, 0x382E4 + 2 * slot)[0] - 0x8000
+        laterals |= {retail[at + 4 * k + 1] >> 4 for k in range(11)}
+    assert 7 in laterals and (min(laterals), max(laterals)) == (7 - 6, 7 + 6)
 
 
 @real_rom

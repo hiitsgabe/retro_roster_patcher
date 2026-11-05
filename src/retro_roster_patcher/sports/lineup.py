@@ -180,23 +180,25 @@ def slot_side(code: str) -> str:
     return "C"
 
 
-_SIDE_RANK = {"L": 0, "C": 1, "R": 2}
+_SIDE_VALUE = {"L": -1, "C": 0, "R": 1}
 
 
-def seat_line(roles: Sequence[str], slots: Sequence[tuple[str, float]]) -> list[int]:
+def seat_line(roles: Sequence[str], slots: Sequence[tuple[str | float, float]]) -> list[int]:
     """The place of one line each of its players takes: `seats[i]` is the index in `slots` of the
     place player i sits on.
 
     `roles` are the line's players' roles, in the order given. `slots` are its places, each a
-    side (`"L"`, `"C"` or `"R"`) and a depth (larger is further forward), as many as players, else
-    `ValueError`. A role outside `DEPTH`, such as none, reads as a central midfielder: side `"C"`,
-    depth of `CM`.
+    side and a depth (larger is further forward), as many as players, else `ValueError`. A side is
+    how far across the pitch the place is, from -1 at the team's left touchline to 1 at its right
+    and 0 in the middle; `"L"`, `"C"` and `"R"` read as -1, 0 and 1. A role outside `DEPTH`, such
+    as none, reads as a central midfielder: side 0, depth of `CM`.
 
     Of every order the players could sit in, the one chosen has, in turn, the smallest sum of
-    distances between a player's side (`slot_side` of his role) and his place's, left to right,
-    and then the fewest pairs where a deeper role (`DEPTH`) sits further forward than a more
-    advanced one. A tie goes to the first order tried, so the given order wins it. A line of more
-    than `SEAT_LIMIT` places keeps the given order.
+    distances between a player's side (-1, 0 or 1: `slot_side` of his role) and his place's, so a
+    full back takes a touchline place before an inner one, and then the fewest pairs where a
+    deeper role (`DEPTH`) sits further forward than a more advanced one. A tie goes to the first
+    order tried, so the given order wins it. A line of more than `SEAT_LIMIT` places keeps the
+    given order.
     """
     n = len(roles)
     if len(slots) != n:
@@ -204,11 +206,14 @@ def seat_line(roles: Sequence[str], slots: Sequence[tuple[str, float]]) -> list[
     if n > SEAT_LIMIT:
         return list(range(n))
     known = [role if role in DEPTH else "CM" for role in roles]
-    sides = [_SIDE_RANK[slot_side(role)] for role in known]
+    sides = [_SIDE_VALUE[slot_side(role)] for role in known]
+    wide = [_SIDE_VALUE[side] if isinstance(side, str) else side for side, _ in slots]
     depth = [DEPTH[role] for role in known]
 
-    def cost(seats: tuple[int, ...]) -> tuple[int, int]:
-        apart = sum(abs(sides[i] - _SIDE_RANK[slots[s][0]]) for i, s in enumerate(seats))
+    def cost(seats: tuple[int, ...]) -> tuple[float, int]:
+        # Rounded: the same distances added in another order can differ in the last bit of a
+        # float, and an order that is only that much cheaper must not beat the given one.
+        apart = round(sum(abs(sides[i] - wide[s]) for i, s in enumerate(seats)), 9)
         inverted = sum(
             depth[i] < depth[j] and slots[seats[i]][1] > slots[seats[j]][1]
             for i in range(n)

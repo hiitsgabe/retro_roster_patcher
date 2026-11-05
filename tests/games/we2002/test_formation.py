@@ -384,10 +384,48 @@ def test_a_formation_the_game_cannot_read_leaves_the_order_and_writes_no_record(
 
 @pytest.mark.parametrize(
     ("y", "side"),
-    [(0, "L"), (44, "L"), (45, "C"), (52, "C"), (59, "C"), (60, "R"), (112, "R")],
+    [(17, -1), (41, -11 / 35), (52, 0), (63, 11 / 35), (87, 1)],
 )
-def test_a_place_is_on_the_left_below_y_45_and_on_the_right_above_59(y, side):
-    assert stat_mapper._side(y) == side
+def test_a_places_side_is_its_y_from_the_middle_over_the_distance_of_the_widest_place(y, side):
+    assert stat_mapper._side(y) == pytest.approx(side)
+
+
+def test_the_widest_places_of_the_presets_are_the_touchlines():
+    # The wing backs of the 5-back presets stand at y 17 and 87, 35 from the middle, which is what
+    # `_side` divides by.
+    ys = [y for record in stat_mapper.FORMATION_PRESETS.values() for y in record[20:]]
+    assert (min(stat_mapper._side(y) for y in ys), max(stat_mapper._side(y) for y in ys)) == (-1, 1)
+
+
+@pytest.mark.parametrize(
+    "back", ["LB CB CB RB", "RB CB CB LB", "CB LB RB CB", "CB RB CB LB", "CB CB RB LB"]
+)
+def test_a_back_four_keeps_its_full_backs_on_the_side_places_whatever_order_it_is_listed_in(back):
+    # The preset's centre backs stand at y 41 and 63, one on each side of the middle, and its side
+    # backs at 19 and 85: a left back listed first used to take the centre back's place at y 41.
+    roles = back.split()
+    xi = ("GK", *roles, "CDM", "CM", "CM", "LW", "ST", "RW")
+    record = _map(_xi(xi, "4-3-3", lineup=False), order_as_given=True)
+    assert record.formation == FOUR_THREE_THREE_A
+    name = [f"P{i:02d}" for i in range(2, 6)]  # the back four's players, as listed
+    centre = [name[i] for i, role in enumerate(roles) if role == "CB"]
+    assert _on(record)[1:5] == [*centre, name[roles.index("LB")], name[roles.index("RB")]]
+
+
+@pytest.mark.parametrize("back", ["CB LB CB RB CB", "LB CB CB CB RB", "RB CB CB CB LB"])
+def test_a_back_five_keeps_its_full_backs_on_the_side_places_whatever_order_it_is_listed_in(back):
+    # A club switched from a back four to a 5-3-2 stands its back five at y 32, 52, 72, 17 and 87:
+    # the right back used to take the centre back's place at y 72 instead of the one at 87.
+    roles = back.split()
+    xi = ("GK", *roles, "CM", "CM", "CM", "ST", "ST")
+    record = _map(_xi(xi, "5-3-2", lineup=False), order_as_given=True)
+    assert record.formation in (
+        stat_mapper.FORMATION_PRESETS["5-3-2A"],
+        stat_mapper.FORMATION_PRESETS["5-3-2B"],
+    )
+    name = [f"P{i:02d}" for i in range(2, 7)]  # the back five's players, as listed
+    centre = [name[i] for i, role in enumerate(roles) if role == "CB"]
+    assert _on(record)[1:6] == [*centre, name[roles.index("LB")], name[roles.index("RB")]]
 
 
 def test_midfield_and_attack_are_seated_by_role_whatever_order_they_are_given_in():

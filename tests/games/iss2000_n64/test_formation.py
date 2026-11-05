@@ -164,6 +164,28 @@ def test_the_lw_cut_into_a_442_midfield_takes_its_left_place():
     assert width == min(w for _, w, line in row if line == 2) == -180
 
 
+@pytest.mark.parametrize(
+    "back", ["CB LB CB RB CB", "LB CB CB CB RB", "RB CB CB CB LB", "CB CB CB RB LB"]
+)
+def test_the_full_backs_of_a_back_five_stand_at_its_widest_places(back):
+    # The 5-3-2's back five is at widths -202, -101, 0, 101 and 202: both -202 and -101 are on the
+    # left, and a centre back listed first used to take the touchline place.
+    names = lined_up((5, 3, 2), [back.split(), ["CM"] * 3, ["ST"] * 2])
+    widths = {name.rstrip("0123456789"): ROWS[(5, 3, 2)][k][1] for k, name in enumerate(names[:6])}
+    assert (widths["LB"], widths["RB"]) == (-202, 202)
+
+
+def test_the_wing_backs_of_a_midfield_of_six_stand_at_its_widest_places():
+    # The 3-6-1's midfield: widths +-100 at depth -20, +-240 at 20 and +-180 at 60. The wing backs
+    # used to take the inner places (-100 and 100), where they are deepest.
+    names = lined_up((3, 6, 1), [["CB"] * 3, "LWB CDM CM CAM CAM RWB".split(), ["ST"]])
+    row = ROWS[(3, 6, 1)]
+    assert (row[names.index("LWB4")][1], row[names.index("RWB9")][1]) == (-240, 240)
+    # The CDM and the CM are on the inner places, the deepest, and the CAMs 60 forward.
+    assert [row[names.index(f"{r}{i}")][0] for r, i in (("CDM", 5), ("CM", 6))] == [-20, -20]
+    assert [row[names.index(f"CAM{i}")][0] for i in (7, 8)] == [60, 60]
+
+
 @pytest.mark.parametrize("shape", FORMATION_DONORS)
 @pytest.mark.parametrize("order", ["as is", "reversed", "rotated"])
 def test_a_side_role_stands_on_its_side_whatever_order_its_line_comes_in(shape, order):
@@ -239,6 +261,13 @@ def test_the_literal_rows_are_the_cartridges(retail):
             strict=True,
         )
         assert tuple(row) == ROWS[shape], shape
+
+
+@real_rom
+def test_the_widest_place_of_the_cartridge_is_262_which_is_what_a_side_divides_by(retail):
+    widths = [abs(w) for team in range(R.TEAMS) for w in R.formation_widths(retail, team)]
+    assert max(widths) == W.TOUCHLINE == 262
+    assert max(abs(w) for row in ROWS.values() for _, w, _ in row) == 250  # the donors' wingers
 
 
 @real_rom

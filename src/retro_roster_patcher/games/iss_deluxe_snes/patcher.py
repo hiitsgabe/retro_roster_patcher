@@ -92,8 +92,9 @@ ROLE_CODE = {
 }  # fmt: skip
 #: The code that plays only the line (0 keeper, 1 defence, 2 midfield, 3 attack).
 _OWN_CODE = (R.GK, R.CB, R.MF, R.FW)
-#: A place whose lateral offset is this far from the centre is on a side.
-_WIDE = 16
+#: The widest lateral offset of any place of the cartridge's 43 team records, which `_spot`
+#: divides by: the default formations' flanks are at 32 and a few retail records go out to 40.
+_TOUCHLINE = 40
 
 
 @dataclass
@@ -548,9 +549,10 @@ def _lineup_role(formation: str, tag: str) -> str:
     return role if role in ROLES else ""
 
 
-def _spot(depth: int, lateral: int) -> tuple[str, int]:
-    """A place's side and depth, as `seat_line` takes them: the team's left is negative."""
-    return ("L" if lateral <= -_WIDE else "R" if lateral >= _WIDE else "C", depth)
+def _spot(depth: int, lateral: int) -> tuple[float, int]:
+    """A place's side and depth, as `seat_line` takes them: the side runs from -1 at the team's
+    left touchline (a lateral of `-_TOUCHLINE`) to 1 at its right."""
+    return (lateral / _TOUCHLINE, depth)
 
 
 def _places(

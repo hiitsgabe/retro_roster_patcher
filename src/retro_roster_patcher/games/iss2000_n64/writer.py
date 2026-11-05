@@ -38,25 +38,27 @@ def write_formation(
     image[R.METADATA + slot * 6 + 5] = ident
 
 
-#: A place at least this far from the middle (`rom.formation_widths`) is on a side of the pitch,
-#: else it is central. The donors' centre backs and central midfielders stand at 65 or less, and
-#: every wide place, down to a striker of the 3-5-2 at 80, further out.
-WIDE = 70
+#: The widest place of any of the cartridge's 106 team rows (`rom.formation_widths`), which `_spot`
+#: divides by: the donors' wing backs and wingers stand at 200-250 and a few retail rows go out
+#: to 262.
+TOUCHLINE = 262
 
 
-def _spot(depth: int, width: int) -> tuple[str, int]:
-    """A place's side and depth as `seat_line` takes them."""
-    return ("L" if width <= -WIDE else "R" if width >= WIDE else "C", depth)
+def _spot(depth: int, width: int) -> tuple[float, int]:
+    """A place's side and depth as `seat_line` takes them: the side runs from -1 at the team's
+    left touchline (a width of `-TOUCHLINE`) to 1 at its right."""
+    return (width / TOUCHLINE, depth)
 
 
 def starting_order(image: bytes | bytearray, slot: int, roles: Sequence[str] = ()) -> list[int]:
     """Record index for each of the 11 starters as `mapper` orders them (the keeper, then each
     line), `roles` being theirs in that order.
 
-    Each line keeps its players and seats them on its places by role (`seat_line`): first by side
-    (the left is the smaller width), then a deeper role on a deeper place (the smaller depth). A
-    player with no role reads as a central midfielder, so a line of such players stands as given,
-    from the smallest width to the largest.
+    Each line keeps its players and seats them on its places by role (`seat_line`): first by how
+    wide a place is on the player's side (the left is the smaller width), so a full back takes the
+    widest place on his side, then a deeper role on a deeper place (the smaller depth). A player
+    with no role reads as a central midfielder, so a line of such players stands as given, from the
+    smallest width to the largest.
     """
     lines = R.formation_lines(image, slot)
     widths = R.formation_widths(image, slot)
