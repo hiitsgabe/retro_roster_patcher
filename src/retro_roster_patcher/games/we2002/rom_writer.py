@@ -28,6 +28,7 @@ import struct
 import unicodedata
 
 from ...core.kits import KitSpec
+from ...core.numbers import shirt_numbers
 from .flag_atlas import AtlasReport, LogoImages, patch_flag_atlas
 from .jersey_tex import apply_choice
 from .models import WEPlayerRecord, WETeamRecord
@@ -144,6 +145,21 @@ _OFS_LINK_ML2 = 2_013_336
 _LINK_SIZE = 46
 _LINK_SPLIT_SLOT = 6
 _LINK_SPLIT_HEAD = 28
+
+# Shirt numbers, in place order, a number 1-32 stored as the number less one. A national team's are
+# 16 bytes, 63 teams from `_OFS_NUMERI_NAZ` inside sector 172's user data: four little-endian 32-bit
+# words of six 5-bit fields each (the first field in the low bits; the top two bits of a word and
+# the 24th field stay 0), 23 fields used. A Master League club's are a row of 23 bytes, one a place:
+# the 32 clubs' rows follow the managed club's, which is 23 bytes and a pad byte at `_OFS_NUMERI_ML`
+# (the patcher never writes it), inside sector 856's user data. Moriero's editor (OFS_NUMERI_NAZ,
+# OFS_NUMERI_ML) gives the offsets and the number less one; the fields' layout is the disc's: retail
+# Wales (slot 2) reads 1, 5, 4, 3, 2, 7, 6, 11, 10, 9, 8 in places 1-11 as the emulator shows them,
+# and all 63 retail records are 23 different numbers that pack back byte for byte.
+_OFS_NUMERI_NAZ = 404_716
+_NUMERI_NAZ_SIZE = 16
+_OFS_NUMERI_ML = 2_014_504
+_OFS_NUMERI_ML_CLUBS = _OFS_NUMERI_ML + 24  # past the managed club's 23 bytes and the pad byte
+_MAX_SHIRT_NUMBER = 32
 
 # Sector boundary crossing points (from C++ switch-case indices).
 
@@ -1590,6 +1606,41 @@ def _squad_links(slot_index: int) -> bytes:
     return bytes(b for place in range(_PLAYERS_PER_NAT) for b in (slot_index, place))
 
 
+def _nat_numbers_chunks(nat_index: int) -> list[tuple[int, int]]:
+    """The (offset, size) piece of national slot `nat_index`'s 16 shirt-number bytes. Anything but
+    0-62 raises `ValueError`."""
+    if not 0 <= nat_index < _SQUADRE_NAZ:
+        raise ValueError(f"national slot {nat_index} is outside 0..{_SQUADRE_NAZ - 1}")
+    return [(_OFS_NUMERI_NAZ + _NUMERI_NAZ_SIZE * nat_index, _NUMERI_NAZ_SIZE)]
+
+
+def _ml_numbers_chunks(slot_index: int) -> list[tuple[int, int]]:
+    """The (offset, size) piece of Master League slot `slot_index`'s row of 23 shirt numbers.
+    Anything but 0-31 raises `ValueError`: the managed club's row has no slot and is never
+    written."""
+    if not 0 <= slot_index < _SQUADRE_ML:
+        raise ValueError(f"Master League slot {slot_index} is outside 0..{_SQUADRE_ML - 1}")
+    return [(_OFS_NUMERI_ML_CLUBS + _PLAYERS_PER_NAT * slot_index, _PLAYERS_PER_NAT)]
+
+
+def _pack_nat_numbers(numbers: list[int]) -> bytes:
+    """A national team's 16 shirt-number bytes for `numbers` (1-32), 23 in place order."""
+    words = [0] * 4
+    for place, number in enumerate(numbers):
+        words[place // 6] |= (number - 1) << (5 * (place % 6))
+    return struct.pack("<4I", *words)
+
+
+def _squad_numbers(players: list[WEPlayerRecord]) -> list[int]:
+    """The shirt numbers of a club's 23 places in place order, the same for both number tables:
+    each of the first 23 players' own (`shirt_number`) when it is in 1-32 and no earlier player has
+    it, else the lowest free number. A place with no player takes one of those too, so the 23
+    numbers are always different."""
+    wanted = [player.shirt_number or 0 for player in players[:_PLAYERS_PER_NAT]]
+    wanted += [0] * (_PLAYERS_PER_NAT - len(wanted))
+    return shirt_numbers(wanted, _MAX_SHIRT_NUMBER)
+
+
 def _write_chunks(f, data: bytes, chunks: list[tuple[int, int]]) -> None:
     """Write data bytes in pieces according to (offset, size) chunk list."""
     pos = 0
@@ -2233,9 +2284,10 @@ class RomWriter:
         teams' players. With `players=` the club's links are rewritten to the 23 places of the
         national slot of the same number, which `write_nat_team` fills from the same list (call it
         too, as `patch` does), and `team.formation`, when set, goes into the club's record
-        (63 + `slot_index`). No player record is written here. Without `players=` the links and
-        the record stay as the disc has them. The managed club (the default team: its squad and
-        its record 95) is never written.
+        (63 + `slot_index`). The club's row of shirt numbers gets the same 23 numbers that
+        `write_nat_team` gives the slot (`_squad_numbers`). No player record is written here.
+        Without `players=` the links, the numbers and the record stay as the disc has them. The
+        managed club (the default team: its squad, its numbers and its record 95) is never written.
 
         Keep every write inside one file open: the target is slow storage (SD
         cards on handhelds).
@@ -2260,6 +2312,8 @@ class RomWriter:
 
             if players is not None:
                 _write_chunks(f, _squad_links(slot_index), _link_chunks(slot_index))
+                numbers = bytes(n - 1 for n in _squad_numbers(players))
+                _write_chunks(f, numbers, _ml_numbers_chunks(slot_index))
                 if team.formation is not None:
                     _write_chunks(f, team.formation, _formation_chunks(_SQUADRE_NAZ + slot_index))
 
@@ -2464,9 +2518,11 @@ class RomWriter:
     ) -> int:
         """Write national team names, abbreviations, force bars, players, formation, and flag.
 
+        With `players=` the slot's 23 places get the players and their shirt numbers
+        (`_squad_numbers`: a player's own when it is in 1-32 and free, else the lowest free one).
         The formation is `team.formation` (30 bytes, `ValueError` otherwise) when the team has
         one, else the slot keeps its own. The Master League club of the same number takes the
-        squad written here through its links, and its own record, in `write_team`.
+        squad written here through its links, and its own numbers row and record, in `write_team`.
 
         Returns how many of `players` were written: at most the 23 places of a
         national squad, 0 when nothing was written.
@@ -2592,6 +2648,8 @@ class RomWriter:
                 carat_bytes = _DUMMY_CARAT
             _write_chunks(f, name_bytes, _nat_nome_chunks(nat_player_idx))
             _write_chunks(f, carat_bytes, _nat_carat_chunks(nat_player_idx))
+        numbers = _pack_nat_numbers(_squad_numbers(players))
+        _write_chunks(f, numbers, _nat_numbers_chunks(nat_index))
 
     def write_nat_players(self, nat_index: int, players: list[WEPlayerRecord]):
         if not os.path.exists(self.output_path):

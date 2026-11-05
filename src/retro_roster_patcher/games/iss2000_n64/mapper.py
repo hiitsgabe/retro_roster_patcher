@@ -34,6 +34,7 @@ from dataclasses import dataclass, field
 from datetime import date
 
 from ...core.kits import KitSpec
+from ...core.numbers import shirt_numbers
 from ...sports.espn import LINEUP_GROUPS
 from ...sports.lineup import fold_formation
 from ...sports.models import Player, PlayerStats, TeamRoster
@@ -484,7 +485,10 @@ class N64StatMapper:
                 # a forward who starts in midfield plays MF/FW.
                 mapped.position_bits |= (R.GK, R.DF, R.MF, R.FW)[played]
             players.append(mapped)
-        _numbers(players)
+        # Unique in 1-63, the 6-bit field; ESPN's number where it can be.
+        numbers = shirt_numbers((each.number for each in players), 63)
+        for each, number in zip(players, numbers, strict=True):
+            each.number = number
         team = roster.team
         return N64Team(
             name=team.name,
@@ -495,18 +499,3 @@ class N64StatMapper:
             team_id=team.id,
             logo_url=team.logo_url,
         )
-
-
-def _numbers(players: list[N64Player]) -> None:
-    """Shirt numbers unique in 1-63 (the 6-bit field); ESPN's where it can."""
-    used: set[int] = set()
-    for p in players:
-        if 1 <= p.number <= 63 and p.number not in used:
-            used.add(p.number)
-        else:
-            p.number = 0
-    free = (n for n in range(1, 64) if n not in used)
-    for p in players:
-        if not p.number:
-            p.number = next(free)
-            used.add(p.number)

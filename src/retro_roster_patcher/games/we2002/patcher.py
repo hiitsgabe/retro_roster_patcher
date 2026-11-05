@@ -5,8 +5,8 @@
   * `write_team` changes the club's squad only when handed a `players=` list,
     and then writes no player record: it points the Master League club's 23
     links at the national slot of the same number, which `write_nat_team`
-    fills, and writes the club's formation record. Call both for a slot, as
-    `patch` does.
+    fills, and writes the club's formation record and its row of shirt numbers.
+    Call both for a slot, as `patch` does.
   * `write_team` returns how many of the players it was handed the club fields,
     at most the 23 places of a national slot, so never count
     `len(record.players)` as patched.

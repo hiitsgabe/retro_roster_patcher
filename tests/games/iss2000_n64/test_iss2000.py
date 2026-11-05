@@ -210,6 +210,25 @@ def test_an_old_roster_without_formation_maps_as_before():
     assert team.formation == (4, 3, 3)
 
 
+def test_shirt_numbers_are_unique_in_1_to_63_and_espns_where_they_can_be():
+    # ESPN's number stays when it is in 1-63 (the 6-bit field) and no earlier player has it; the
+    # repeats, the missing (None, 0), the 64 and the 99 take the lowest free numbers in squad order.
+    wanted = [1, 1, None, 99, 7, 0, 63, 7, 64, 2, 5, 5, 9, 9, 9, 40, 41, 42, 43, 44, 45, 46]
+    roster = _squad_in_a_433()
+    for player, number in zip(roster.players, wanted, strict=True):
+        player.number = number
+    team = N64StatMapper().map_team(roster, {}, order_as_given=True)
+    assert [p.player_id for p in team.players] == list(range(1, 23))
+    assert [p.number for p in team.players] == [
+        1, 3, 4, 6, 7, 8, 63, 10, 11, 2, 5, 12, 9, 13, 14, 40, 41, 42, 43, 44, 45, 46,
+    ]  # fmt: skip
+
+
+def test_a_squad_of_nobodys_is_numbered_1_to_22():
+    team = N64StatMapper().map_team(_squad_in_a_433(), {}, order_as_given=True)
+    assert [p.number for p in team.players] == list(range(1, 23))
+
+
 def test_an_unreadable_formation_counts_as_none():
     # The 4-2-3-1 club's suggested XI is the given one, so the shortcut keeps its lineup shape.
     m = N64StatMapper()

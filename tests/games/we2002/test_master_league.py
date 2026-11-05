@@ -6,7 +6,8 @@ is a non-national ("nc") player of that nationality, counted from the nationalit
 (`start_link`). The retail links point at players of other teams, so a patched club would field
 strangers. `write_team` points a patched club's links at the 23 places of the national slot of the
 same number, which `write_nat_team` fills with the same club, and writes the club's formation at
-record 63 + slot (test_formation.py). It writes no player record.
+record 63 + slot (test_formation.py) and its row of shirt numbers (test_shirt_numbers.py). It
+writes no player record.
 
 The tests that write use an image of noise, so a byte nothing touched is told from a zero. The last
 two read the retail disc (the `disc` fixture: RETRO_ROSTER_TEST_ROMS has we2002.bin, Track 1).
@@ -149,7 +150,7 @@ def test_the_club_fields_the_players_written_for_it_in_the_order_given(tmp_path,
 
 
 @pytest.mark.parametrize("formation", [None, FORMATION], ids=["no_formation", "formation"])
-def test_a_squad_adds_the_links_and_the_record_when_it_has_one_and_nothing_else(
+def test_a_squad_adds_the_links_the_numbers_and_the_record_when_it_has_one_and_nothing_else(
     tmp_path, formation
 ):
     # Same call with and without the players: names, force bars, kit and flag are written either
@@ -158,7 +159,8 @@ def test_a_squad_adds_the_links_and_the_record_when_it_has_one_and_nothing_else(
     patched = _written(
         tmp_path, "patched", lambda w: w.write_team(2, _team(formation), players=_squad())
     )
-    pieces = rom_writer._link_chunks(2) + (_record_chunks([2]) if formation else [])
+    pieces = rom_writer._link_chunks(2) + rom_writer._ml_numbers_chunks(2)
+    pieces += _record_chunks([2]) if formation else []
     assert len(blank) == len(patched) == NOISE_SIZE
     assert _differs_only_in(blank, patched, pieces)
     assert _read(patched, rom_writer._link_chunks(2)) == bytes(b for g in range(23) for b in (2, g))
