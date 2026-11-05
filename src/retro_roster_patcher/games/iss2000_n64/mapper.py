@@ -421,17 +421,18 @@ class N64StatMapper:
         outfield = [p for p in players if group_of(p) != "GK"]
         xi_ids = {p.id for p in players[:11] if group_of(p) != "GK"}
         xi_out = [p for p in outfield if p.id in xi_ids]
-        xi_out += [p for p in outfield if p.id not in xi_ids][: 11 - len(keepers) - len(xi_out)]
+        xi_out += [p for p in outfield if p.id not in xi_ids]
+        # Eleven in all: a keeper listed below the first 11 takes the eleventh outfielder's place.
+        xi_out = xi_out[: 11 - len(keepers)]
         wanted = parse_formation(formation or "")
         if wanted is None:
             xi = sorted(keepers + xi_out, key=lambda p: _LINE[group_of(p)])
             lines = [_LINE[group_of(p)] for p in xi]
             shape = nearest_formation((lines.count(1), lines.count(2), lines.count(3)))
         else:
-            # Slot 1 is the goal: a keeper listed below the first 11 takes it from the eleventh
-            # outfielder; a squad without keepers puts its first player there.
+            # Slot 1 is the goal: a squad without keepers puts its first player there.
             shape = nearest_formation(wanted)
-            xi = (keepers + xi_out)[:11]
+            xi = keepers + xi_out
             lines = ([0] + [1] * shape[0] + [2] * shape[1] + [3] * shape[2])[: len(xi)]
         chosen = {p.id for p in xi}
         players = xi + [p for p in players if p.id not in chosen]
