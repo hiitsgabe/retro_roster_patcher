@@ -16,6 +16,7 @@ import pytest
 
 from retro_roster_patcher.core.models import SlotMapping
 from retro_roster_patcher.core.registry import get_patcher
+from retro_roster_patcher.games.iss_deluxe_snes import patcher as patcher_module
 from retro_roster_patcher.games.iss_deluxe_snes import rom as R
 from retro_roster_patcher.games.iss_deluxe_snes.patcher import (
     ROLE_CODE,
@@ -474,8 +475,12 @@ def test_patching_twice_gives_identical_bytes():
 # --- from the roster ----------------------------------------------------------------------
 
 
-def _roster(formation: str | None, *, roles: bool = True) -> TeamRoster:
-    sheet = "GK LB CB CB RB CM CDM CAM LW ST RW GK RB CB CM CAM LM RM ST CB".split()
+def _roster(
+    formation: str | None, *, roles: bool = True, xi: str = "GK LB CB CB RB CM CDM CAM LW ST RW"
+) -> TeamRoster:
+    """A roster listed as `xi` and then nine on the bench, player i named X<i> and in the squad
+    group of his role."""
+    sheet = f"{xi} GK RB CB CM CAM LM RM ST CB".split()
     position = {"GK": "Goalkeeper", "CB": "Defender", "RB": "Defender", "LB": "Defender"}
     position |= dict.fromkeys(("CM", "CDM", "CAM", "LM", "RM"), "Midfielder")
     players = [
@@ -536,6 +541,123 @@ def test_a_roster_without_a_formation_or_roles_keeps_its_slots_record(tmp_path):
     _, codes = written(image, ARGENTINA)
     lines = R.slot_lines(image, ARGENTINA)
     assert all(line in R.ALLOWED_LINES[code] for line, code in zip(lines, codes[:11], strict=True))
+
+
+def _mapped(tmp_path, roster: TeamRoster, slot: int = BRAZIL, *, given: bool = True) -> DeluxeTeam:
+    data = LeagueData(league=League(id=1, name="League"), teams=[roster])
+    patcher = get_patcher("iss-deluxe-snes")(tmp_path)
+    mapped = patcher.map_rosters(
+        data, [SlotMapping(slot_index=slot, team_id=1)], order_as_given=given
+    )
+    return mapped.teams[slot]
+
+
+def test_an_edited_order_keeps_its_places_under_a_formation(tmp_path):
+    # The sheet's right back and right midfielder trade places: the right back is the ninth player.
+    team = _mapped(tmp_path, _roster("4-4-2", xi="GK LB CB CB RM LM CM CM RB ST ST"))
+    assert [p.player_id for p in team.players[:11]] == [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+    # By index over the 4-4-2 he is the fourth midfielder, and the right midfielder a defender.
+    assert [p.group for p in team.players[:11]] == ["GK"] + ["DF"] * 4 + ["MF"] * 4 + ["FW"] * 2
+    image = cartridge()
+    write_team(image, BRAZIL, team)
+    names, codes = written(image, BRAZIL)
+    assert names[1:9] == ["X2", "X3", "X4", "X5", "X6", "X7", "X8", "X9"]
+    assert names.index("X9") in range(5, 9) and names.index("X5") in range(1, 5)
+    # Each plays a line his code does not: the one that plays both.
+    assert (codes[4], codes[8]) == (R.FB, R.FB)
+
+
+@pytest.mark.parametrize("order_as_given", [False, True])
+@pytest.mark.parametrize(
+    ("formation", "xi"),
+    # Each XI is listed by position as the shape ISS 2000 reads the written one as (4-3-3, 4-5-1).
+    [
+        ("4-2-4", "GK LB CB CB RB CM CM CAM LW ST RW"),
+        ("5-4-1", "GK LB CB CB RB LM CM CM CAM RM ST"),
+    ],
+)
+def test_the_eleven_are_in_the_lines_of_the_shape_written_not_iss_2000s(
+    tmp_path, formation, xi, order_as_given
+):
+    # ISS 2000 has neither shape: it reads a 4-2-4 as its 4-3-3 and a 5-4-1 as its 4-5-1.
+    team = _mapped(tmp_path, _roster(formation, xi=xi), given=order_as_given)
+    d, m, f = map(int, formation.split("-"))
+    assert [p.group for p in team.players[:11]] == ["GK"] + ["DF"] * d + ["MF"] * m + ["FW"] * f
+    # The group is the cartridge's baseline for his skills (no statistics: the median of it), so
+    # the left midfielder listed sixth, the fifth defender of a 5-4-1, rates as a defender.
+    if formation == "5-4-1":
+        spread = patcher_module.RETAIL
+        assert team.players[5].skills == {s: spread["DF"][s][2] for s in R.SKILL_NAMES}
+        assert team.players[6].skills == {s: spread["MF"][s][2] for s in R.SKILL_NAMES}
+
+
+def _older_roster(
+    formation: str = "4-4-2", codes: str = "G CD-L CD-R RB LB DM CM-R LM RM CF-L CF-R"
+) -> TeamRoster:
+    """A fetch from before roles and formations: a lineup in ESPN's codes (by default a 4-4-2 with
+    the full backs listed after the centre backs) and no role anywhere. Player i is X<i>, and
+    nine more are on the bench."""
+    given = codes.split()
+    group = {"G": "Goalkeeper"}
+    group |= dict.fromkeys(("CD-L", "CD-R", "RB", "LB"), "Defender")
+    group |= dict.fromkeys(("F", "CF-L", "CF-R"), "Attacker")
+    players = [
+        Player(id=i, name=f"X{i}", position=group.get(c, "Midfielder"))
+        for i, c in enumerate(given, start=1)
+    ]
+    players += [Player(id=i, name=f"X{i}", position="Midfielder") for i in range(12, 21)]
+    starters = [{"id": i, "position": c} for i, c in enumerate(given, start=1)]
+    lineup = {"formation": formation, "shape": "4-4-2", "starters": starters}
+    return TeamRoster(team=Team(id=1, name="Club"), players=players, extra={"lineup": lineup})
+
+
+@pytest.mark.parametrize("given", [False, True])
+def test_an_older_roster_takes_its_roles_from_its_lineup_codes(tmp_path, given):
+    team = _mapped(tmp_path, _older_roster(), given=given)
+    roles = {p.player_id: p.role for p in team.players}
+    assert [roles[i] for i in range(1, 12)] == [
+        "GK", "CB", "CB", "RB", "LB", "CDM", "CM", "LM", "RM", "ST", "ST",
+    ]  # fmt: skip
+    assert {roles[i] for i in range(12, 21)} == {""}  # the bench has no code to read
+
+
+def test_an_older_rosters_full_backs_take_the_flanks_and_its_holding_midfielder_his_code(tmp_path):
+    team = _mapped(tmp_path, _older_roster())
+    image = cartridge()
+    write_team(image, BRAZIL, team)  # no formation: Brazil keeps its own 4-4-2 record
+    names, codes = written(image, BRAZIL)
+    # The left back (X5) takes the left flank place 1 and the right back (X4) the right flank 4.
+    assert names[1:5] == ["X5", "X2", "X3", "X4"]
+    # The left (X8) and right (X9) midfielders take the flanks, the centre pair the deep places.
+    assert names[5:9] == ["X8", "X6", "X7", "X9"]
+    # The holding midfielder plays defence or midfield, the bench has its group's code.
+    assert codes[6] == R.FB and codes[11:] == [R.MF] * 9
+
+
+def test_a_players_own_role_beats_the_one_his_lineup_code_reads_as(tmp_path):
+    roster = _older_roster()
+    roster.players[6].role = "CAM"  # tagged CM-R in the lineup
+    team = _mapped(tmp_path, roster)
+    assert {p.player_id: p.role for p in team.players}[7] == "CAM"
+
+
+def test_a_lineup_code_reads_inside_the_lineups_own_formation(tmp_path):
+    # ESPN labels the two holding midfielders of a 4-2-3-1 LM and RM, and the wide attackers AM-R
+    # and AM-L: in that formation they are CDM, CDM, RW and LW; in a 4-4-2 they would be wide.
+    codes = "G RB LB LM CD-R CD-L AM-R RM F AM AM-L"
+    team = _mapped(tmp_path, _older_roster("4-2-3-1", codes))
+    roles = {p.player_id: p.role for p in team.players}
+    by_code = dict(zip(codes.split(), (roles[i] for i in range(1, 12)), strict=True))
+    assert by_code == {
+        "G": "GK", "RB": "RB", "LB": "LB", "LM": "CDM", "CD-R": "CB", "CD-L": "CB",
+        "AM-R": "RW", "RM": "CDM", "F": "ST", "AM": "CAM", "AM-L": "LW",
+    }  # fmt: skip
+
+
+def test_a_lineup_code_that_reads_as_no_known_role_leaves_the_player_without_one(monkeypatch):
+    monkeypatch.setattr(patcher_module, "slot_role", lambda formation, code: "SWEEPER")
+    assert patcher_module._lineup_role("4-4-2", "LB") == ""
+    assert patcher_module._lineup_role("4-4-2", "") == ""  # a player the lineup does not name
 
 
 # --- the real cartridge -------------------------------------------------------------------

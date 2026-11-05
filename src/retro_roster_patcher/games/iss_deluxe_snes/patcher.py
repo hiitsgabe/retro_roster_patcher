@@ -11,16 +11,20 @@ of Brazil v England.
 A club with a formation (`extra["formation"]`, a shape such as "4-3-3") is
 written the cartridge's formation nearest it (`formations`): the team's record
 becomes that formation's default and the ten outfielders, in the order the
-mapper gave them, are cut into its lines by index. Without one the slot keeps
-its own record and the players go to the lines of their groups. Either way a
-place is the record's index and its line comes from the record's flags (never
-the skill record's byte 5, the shirt number), and each line seats its players
-on its places by role: the sides across the pitch, the deeper role deeper.
+mapper gave them (with `order_as_given`, the team sheet's), are cut into its
+lines by index; the cut also gives each of the eleven the group whose spread
+rates his skills. Without a formation the slot keeps its own record and the
+players go to the lines of their groups. Either way a place is the record's
+index and its line comes from the record's flags (never the skill record's
+byte 5, the shirt number), and each line seats its players on its places by
+role: the sides across the pitch, the deeper role deeper. A player without a
+role (a roster fetched before roles) has the one his lineup code reads as.
 """
 
 from __future__ import annotations
 
 from collections import Counter
+from collections.abc import Sequence
 from copy import deepcopy
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -45,7 +49,7 @@ from ...core.text import to_ascii
 from ...formats.snes import fix_checksum
 from ...sports import _http
 from ...sports.espn import EspnClient
-from ...sports.lineup import nearest_shape, seat_line
+from ...sports.lineup import ROLES, nearest_shape, seat_line, slot_role
 from ...sports.models import LeagueData, Player, TeamRoster
 from ..iss2000_n64.mapper import GROUPS, N64StatMapper, _place, group_of, parse_formation
 from ..iss2000_n64.patcher import NATIONAL_ALIASES, NATIONAL_LEAGUE
@@ -97,14 +101,15 @@ class DeluxePlayer:
     name: str
     group: str
     skills: dict[str, int] = field(default_factory=dict)
-    tag: str = ""  # his ESPN lineup position, when he started
+    tag: str = ""  # his ESPN lineup position, when he started (`_lineup_role` reads a role in it)
     #: The provider's id and head shot, and the nationality, for `looks`.
     player_id: int = 0
     photo_url: str = ""
     nationality: str = ""
     #: Byte 6 bit 4, the team's alternate look; None keeps the cartridge's.
     alternate: bool | None = None
-    #: His `Player.role`; "" takes the position code of his group.
+    #: His `Player.role`, else the one his lineup `tag` reads as; "" takes the position code of
+    #: his group.
     role: str = ""
 
 
@@ -289,16 +294,28 @@ class ISSDeluxePatcher(Patcher):
     def _map_team(
         self, roster: TeamRoster, pcts: dict[int, dict[str, float]], order_as_given: bool
     ) -> DeluxeTeam:
+        extra = roster.extra or {}
+        formation = str(extra.get("formation") or "")
+        by_formation = parse_formation(formation) is not None
         if order_as_given:
-            squad, _ = self.mapper.given_22(list(roster.players))
+            # With a formation the team sheet's order stands: the keeper, then the outfield as
+            # given. The shape `given_22` returns is one of ISS 2000's seven, not ours.
+            squad, _ = self.mapper.given_22(
+                list(roster.players), formation if by_formation else None
+            )
         else:
             squad, _ = self.mapper.select_22(roster)
+        lineup = extra.get("lineup") or {}
+        lineup_formation = str(lineup.get("formation") or "")
         tags = {
             int(e["id"]): str(e.get("position", ""))
-            for e in ((roster.extra or {}).get("lineup") or {}).get("starters", [])
+            for e in lineup.get("starters", [])
             if "id" in e
         }
         squad = squad[: R.PLAYERS]
+        # The group of each of the eleven under a formation: its line by index over the shape
+        # written, not the line the mapper gave (ISS 2000's nearest shape).
+        cut = _cut_groups(formation, self.formations) if by_formation else []
         # `iss-snes`'s rule: the initial and surname ("I.Gomes", as the
         # cartridge's own J.Platt) when it fits, else the surname; told apart
         # within the team.
@@ -306,28 +323,34 @@ class ISSDeluxePatcher(Patcher):
         players = []
         for k, (p, name) in enumerate(zip(squad, shirt_names, strict=True)):
             line = self.mapper._lines.get(p.id)
-            group = ("GK", "DF", "MF", "FW")[line] if line is not None and k < 11 else group_of(p)
+            if by_formation and k < 11:
+                group = cut[k]
+            else:
+                group = (
+                    ("GK", "DF", "MF", "FW")[line] if line is not None and k < 11 else group_of(p)
+                )
             q = RETAIL[group]
             got = pcts.get(p.id, {})
             skills = {s: _place(q[s], got.get(FEED[s], 50.0)) for s in R.SKILL_NAMES}
-            players.append(
-                DeluxePlayer(
-                    name,
-                    group,
-                    skills,
-                    tags.get(p.id, ""),
-                    p.id,
-                    p.photo_url,
-                    p.nationality,
-                    role=p.role,
-                )
+            player = DeluxePlayer(
+                name,
+                group,
+                skills,
+                tags.get(p.id, ""),
+                p.id,
+                p.photo_url,
+                p.nationality,
+                role=p.role,
             )
+            # A roster fetched before roles: his lineup code says what he plays.
+            player.role = player.role or _lineup_role(lineup_formation, player.tag)
+            players.append(player)
         home, away = default_kits(roster.team)
         t = roster.team
         return DeluxeTeam(
             t.short_name or t.name, players, home, away, t.id, t.logo_url,
             (t.color, t.alternate_color), names.fit(t.name, t.short_name), t.name,
-            formation=str((roster.extra or {}).get("formation") or ""),
+            formation=formation,
         )  # fmt: skip
 
     # --- patch -----------------------------------------------------------------
@@ -509,6 +532,20 @@ def _kit_plans(
                 raise CapabilityError(f"slot {slot} {side} kit: {exc}") from exc
         plans[slot] = (sides[0], sides[1])
     return plans
+
+
+def _cut_groups(formation: str, offered: Sequence[str]) -> list[str]:
+    """The group of each of the eleven, by index, over the shape written for `formation` (the
+    nearest of `offered`): the keeper, then its defenders, midfielders and forwards."""
+    d, m, f = map(int, nearest_shape(formation, offered).split("-"))
+    return ["GK"] + ["DF"] * d + ["MF"] * m + ["FW"] * f
+
+
+def _lineup_role(formation: str, tag: str) -> str:
+    """The role the lineup code `tag` reads as in the lineup's `formation`; "" for a player who
+    had none (the bench) or a role outside `ROLES`."""
+    role = slot_role(formation, tag) if tag else ""
+    return role if role in ROLES else ""
 
 
 def _spot(depth: int, lateral: int) -> tuple[str, int]:
