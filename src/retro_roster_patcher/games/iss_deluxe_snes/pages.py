@@ -12,8 +12,12 @@
   its digits, ASIA-AFRICA, N.S.AMERICA, ALLSTAR.
 * A page with a club is labelled with its league (`label`), in the label
   font (`GLYPHS`, the cartridge's letters and the rest drawn to match); the
-  others keep their own. `write` packs the tiles anew, the same ones once,
-  and stores the stream in bank $AF's free space.
+  others keep their own while the tiles fit. The cartridge's labels take all
+  62 (the four EUROPE pages share ten), so the league's fits beside them only
+  once clubs hold the four EUROPE pages, 19 clubs or more; with fewer, the
+  pages without a club read NATIONS (`OTHERS`): the league, NATIONS and
+  ALLSTAR take 44 tiles at most. `write` packs the tiles anew, the same ones
+  once, and stores the stream in bank $AF's free space.
 """
 
 from __future__ import annotations
@@ -34,6 +38,7 @@ TEMPLATE_SOURCE = 0x10EEE  # $82:8EE0's entry for VRAM $4E00: its 24-bit source
 FIRST_BYTE, LAST_BYTE = 0xB2, 0xEF  # the 62 tiles VRAM holds from $4E00
 ROOM = (FREE[1] - 0x2000, FREE[1] - 0x1800)
 WIDTH = 64
+OTHERS = "NATIONS"  # the nation pages' label when the cartridge's do not fit
 
 _G = {
     "A": (" ### ", "#+ +#", "#   #", "#   #", "#   #", "#####", "#   #", "#   #", "#   #",
@@ -179,6 +184,12 @@ def _tile(g: list[list[int]], col: int, row: int) -> bytes:
     return bytes(out)
 
 
+def _drawn(text: str) -> list[bytes]:
+    """The 16 tiles of `text`'s label, top row then bottom."""
+    g = render(text)
+    return [_tile(g, c, 0) for c in range(8)] + [_tile(g, c, 1) for c in range(8)]
+
+
 def _source(image: bytes | bytearray) -> int:
     address = int.from_bytes(image[TEMPLATE_SOURCE : TEMPLATE_SOURCE + 3], "little")
     return (address >> 16 & 0x7F) * 0x8000 + (address & 0x7FFF)
@@ -206,16 +217,22 @@ def order(image: bytes | bytearray) -> list[int]:
 def write(image: bytearray, clubs: list[int], league: str) -> None:
     """Put `clubs` (team ids, in mapping order) on the first pages and label
     those pages `label(league)`; with no league the labels stay."""
-    rest = [t for t in order(image) if t not in clubs]
-    image[ORDER : ORDER + NATIONS] = bytes(2 * t for t in [*clubs, *rest][:NATIONS])
+    teams = [*clubs, *(t for t in order(image) if t not in clubs)][:NATIONS]
+    image[ORDER : ORDER + NATIONS] = bytes(2 * t for t in teams)
     text = label(league)
     tiles = [_tiles_of(image, p) for p in range(PAGES)]
     if text:
-        g = render(text)
-        new = [_tile(g, c, 0) for c in range(8)] + [_tile(g, c, 1) for c in range(8)]
-        for p in range(NATIONS // PER_PAGE):
-            if any(t in clubs for t in [*clubs, *rest][p * PER_PAGE : (p + 1) * PER_PAGE]):
-                tiles[p] = new
+        held = [
+            any(t in clubs for t in teams[p * PER_PAGE : (p + 1) * PER_PAGE])
+            for p in range(NATIONS // PER_PAGE)
+        ]
+        for p, h in enumerate(held):
+            if h:
+                tiles[p] = _drawn(text)
+        if len({t for page in tiles for t in page if any(t)}) > LAST_BYTE - FIRST_BYTE + 1:
+            for p, h in enumerate(held):
+                if not h:
+                    tiles[p] = _drawn(OTHERS)
     unique: dict[bytes, int] = {}
     strings = []
     for p in range(PAGES):
