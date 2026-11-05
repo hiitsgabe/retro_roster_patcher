@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import struct
+from collections.abc import Sequence
 
+from ...sports.lineup import seat_line
 from . import rom as R
 from .mapper import FORMATION_DONORS, N64Player, N64Team
 
@@ -36,12 +38,37 @@ def write_formation(
     image[R.METADATA + slot * 6 + 5] = ident
 
 
-def starting_order(image: bytes | bytearray, slot: int) -> list[int]:
-    """Record index for each of the 11 starters as `mapper` orders them:
-    keeper, then each line from one touchline to the other."""
+#: A place at least this far from the middle (`rom.formation_widths`) is on a side of the pitch,
+#: else it is central. The donors' centre backs and central midfielders stand at 65 or less, and
+#: every wide place, down to a striker of the 3-5-2 at 80, further out.
+WIDE = 70
+
+
+def _spot(depth: int, width: int) -> tuple[str, int]:
+    """A place's side and depth as `seat_line` takes them."""
+    return ("L" if width <= -WIDE else "R" if width >= WIDE else "C", depth)
+
+
+def starting_order(image: bytes | bytearray, slot: int, roles: Sequence[str] = ()) -> list[int]:
+    """Record index for each of the 11 starters as `mapper` orders them (the keeper, then each
+    line), `roles` being theirs in that order.
+
+    Each line keeps its players and seats them on its places by role (`seat_line`): first by side
+    (the left is the smaller width), then a deeper role on a deeper place (the smaller depth). A
+    player with no role reads as a central midfielder, so a line of such players stands as given,
+    from the smallest width to the largest.
+    """
     lines = R.formation_lines(image, slot)
     widths = R.formation_widths(image, slot)
-    return sorted(range(11), key=lambda k: (lines[k], widths[k], k))
+    depths = R.formation_depths(image, slot)
+    given = [*roles, *[""] * 11][:11]
+    order: list[int] = []
+    for line in range(4):
+        places = sorted((k for k in range(11) if lines[k] == line), key=lambda k: (widths[k], k))
+        spots = [_spot(depths[k], widths[k]) for k in places]
+        first = len(order)
+        order += [places[seat] for seat in seat_line(given[first : first + len(places)], spots)]
+    return order
 
 
 def write_player(image: bytearray, slot: int, index: int, p: N64Player) -> None:
@@ -73,7 +100,8 @@ def write_team(
     `donors` (`donor_rows` of the unpatched image) when writing several."""
     if team.formation is not None:
         write_formation(image, slot, team.formation, donors)
-    order = starting_order(image, slot) + list(range(11, R.PLAYERS_PER_TEAM))
+    roles = [p.role for p in team.players[:11]]
+    order = starting_order(image, slot, roles) + list(range(11, R.PLAYERS_PER_TEAM))
     for index, player in zip(order, team.players, strict=False):
         write_player(image, slot, index, player)
     write_team_ratings(image, slot)

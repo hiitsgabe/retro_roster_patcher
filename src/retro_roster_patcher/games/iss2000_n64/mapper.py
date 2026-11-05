@@ -21,8 +21,10 @@ A player without statistics gets his group's median.
 
 The XI is the club's starting eleven when there is one, each starter on the
 line he is given, in the cartridge's formation nearest the lineup's folded
-shape; each line is ordered by the side ESPN gives each player (L/R suffixes).
-The bench is the rest by starts and minutes, a second keeper first.
+shape; each line is ordered by the side ESPN gives each player (L/R suffixes),
+and the writer then seats it on the formation's places by role, side and depth
+(`writer.starting_order`). The bench is the rest by starts and minutes, a
+second keeper first.
 """
 
 from __future__ import annotations
@@ -146,6 +148,8 @@ class N64Player:
     look: tuple[int, int, int] | None = None
     player_id: int = 0
     photo_url: str = ""
+    #: His soccer role (`Player.role`), "" when he has none: the writer seats a line by it.
+    role: str = ""
 
 
 @dataclass
@@ -308,6 +312,7 @@ class N64StatMapper:
             build=build,
             player_id=player.id,
             photo_url=player.photo_url,
+            role=player.role,
         )
 
     def select_22(

@@ -14,7 +14,8 @@ Layout:
   edited in place.
 * Formation rows 0x313FD4: per team 11 slots x 6 bytes (`>hhBB`: depth,
   width, line | flags, role), slot k is player record k. Line 0 keeper,
-  1 defence, 2 midfield, 3 attack.
+  1 defence, 2 midfield, 3 attack. Further forward is a larger depth and the
+  team's right a larger width (`formation_depths`, `formation_widths`).
 * Team metadata 0x315BF0: per team 6 bytes, five record indices 0-10 (captain
   and set-piece takers) and the formation id.
 * Asset table 0x99D04 ("Nisitenma-Ichigo"): (start, end) word pairs, bit 31 of
@@ -414,6 +415,19 @@ def formation_lines(image: bytes | bytearray, team: int) -> list[int]:
 
 
 def formation_widths(image: bytes | bytearray, team: int) -> list[int]:
-    """Signed width coordinate of each starting slot."""
+    """Signed width coordinate of each starting slot: the team's left is negative, its right
+    positive. The left-footed players (byte 0x2A below 35) of the 106 teams stand at a defence's or
+    a midfield's smallest width 42 times and at its largest 10 times, and the full backs of the 77
+    back fours are its two widest places."""
     o = FORMATIONS + team * FORMATION_ROW
     return [struct.unpack_from(">h", image, o + 6 * k + 2)[0] for k in range(11)]
+
+
+def formation_depths(image: bytes | bytearray, team: int) -> list[int]:
+    """Signed depth coordinate of each starting slot: further forward is larger. It is an offset
+    inside the slot's line (the mean of each line is within 5 of 0), so compare it only between
+    the places of one line. The player at a team's most advanced midfield place leans further
+    towards attack (his attack byte 0x2F less his cover byte 0x30) than the one at its deepest in
+    82 teams, and less in 22."""
+    o = FORMATIONS + team * FORMATION_ROW
+    return [struct.unpack_from(">h", image, o + 6 * k)[0] for k in range(11)]
