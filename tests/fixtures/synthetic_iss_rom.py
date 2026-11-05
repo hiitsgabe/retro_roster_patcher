@@ -17,6 +17,11 @@ order, or dropping the 0x80 bias out of `_encode_p40000` breaks tests.
 punctuation at six scattered values, the digits from 0x62, upper case from 0x6C
 and lower case from 0x86 -- rather than as a copy of the table.
 
+The formation table is laid out as the cartridge's is: 28 pointers at 0x382E4 in
+`TEAM_ENUM_ORDER`, then 28 records of 44 bytes in `TEAM_NAME_ORDER` (Scotland's after Cameroon's),
+the last belonging to no team. Each record is salted per record and per byte, none a retail
+formation, so a record the writer did not mean to change is told from one it rewrote.
+
 `player_name(team, slot)` is `T00P00` through `T26P14` and every byte of the
 6-byte data record varies with both, so a writer that ignored the team index, or
 used the enum order where the names use the name order, cannot satisfy an
@@ -178,6 +183,17 @@ OFS_DESC_PTRS = 0x38000
 OFS_TEAM_NAME_TEXT_PTRS = 0x39DAE
 MAX_NAME_TEXT_ADDR = 0x44478
 
+#: The formation records. The 28 pointers are bank $87 addresses (file offset
+#: `FORMATION_BANK_BASE + pointer - FORMATION_BANK_SNES_BASE`), one per team in `TEAM_ENUM_ORDER`
+#: and a 28th for the record no team owns; the records follow in `TEAM_NAME_ORDER`, 44 bytes each
+#: (eleven places of depth, lateral and line, role code and ranges), up to the player data.
+OFS_FORMATION_PTRS = 0x382E4
+OFS_FORMATION_RECORDS = 0x3831C
+FORMATION_RECORD_LENGTH = 44
+FORMATION_RECORDS = 28
+FORMATION_BANK_BASE = 0x38000
+FORMATION_BANK_SNES_BASE = 0x8000
+
 #: The ten operand bytes `write_name_tiles` overwrites. Filled with 0x89 -- the
 #: bank the unpatched game reads from -- so the write to 0x82 is observable.
 DISPLACEMENT_PATCH_POINTS = (
@@ -218,9 +234,13 @@ DESC_BANK_SNES_BASE = 0x8000
 #: the displaced name-tile region at 0x17680.
 DESC_BASE = 0x10100
 DESC_STRIDE = 96
-#: `FE` + a 16-byte formation line + `FE` + a space + `FD`, so `FD` is the
-#: twentieth byte and the description text starts at the twenty-first.
-DESC_HEADER = bytes([0xFE]) + bytes(range(0x30, 0x40)) + bytes([0xFE, 0x20, 0xFD])
+#: `FE`, the colour byte ($2C Offense, $24 Defense), the 15-character label, then `FE`, a space and
+#: `FD`: `FD` is the twentieth byte and the description text starts at the twenty-first. The shape
+#: is the five characters from the eleventh byte of the block.
+DESC_COLOUR = 0x2C
+DESC_LABEL = b"Offense 4-4-2  "
+DESC_HEADER = bytes([0xFE, DESC_COLOUR]) + DESC_LABEL + bytes([0xFE, 0x20, 0xFD])
+DESC_SHAPE_OFFSET = 10
 DESC_TEXT_LENGTH = 60
 DESC_TERMINATOR = 0xFF
 DESC_LINE_WIDTH = 15
@@ -499,6 +519,26 @@ def desc_text_start(team: int) -> int:
     return desc_offset(team) + len(DESC_HEADER)
 
 
+def desc_shape_offset(team: int) -> int:
+    """File offset of the five shape characters of one team's label."""
+    return desc_offset(team) + DESC_SHAPE_OFFSET
+
+
+def formation_offset(team: int) -> int:
+    """File offset of slot `team`'s formation record: records are in *name* order."""
+    return OFS_FORMATION_RECORDS + name_storage_index(team) * FORMATION_RECORD_LENGTH
+
+
+def formation_pointer(offset: int) -> int:
+    """The bank $87 address of the record at file offset `offset`."""
+    return FORMATION_BANK_SNES_BASE + offset - FORMATION_BANK_BASE
+
+
+def formation_record(index: int) -> bytes:
+    """The 44 bytes of the record at position `index` (name order, 27 is no team's)."""
+    return bytes((index * 31 + k * 17) % 0xF0 + 0x08 for k in range(FORMATION_RECORD_LENGTH))
+
+
 def centred_description(name: str, available: int = DESC_TEXT_LENGTH) -> bytes:
     """What `write_team_descriptions` produces for `name`, retranscribed.
 
@@ -674,6 +714,20 @@ def build_iss_rom(
             for design, rows in ((BAND_DESIGN, BAND_TILE), (STRIPES_DESIGN, STRIPES_TILE)):
                 put(lorom(design + pose * POSE_STRIDE), b"\x20\x00" + tile_4bpp(rows))
         put(lorom(BLANK_DESIGN), b"\x20\x00" + bytes(32))
+
+    # -- formations: the pointer table in TEAM_ENUM_ORDER, then the records in TEAM_NAME_ORDER
+    for team in range(TOTAL_TEAMS):
+        put(
+            OFS_FORMATION_PTRS + team * 2,
+            struct.pack("<H", formation_pointer(formation_offset(team))),
+        )
+    last = OFS_FORMATION_RECORDS + TOTAL_TEAMS * FORMATION_RECORD_LENGTH
+    put(OFS_FORMATION_PTRS + TOTAL_TEAMS * 2, struct.pack("<H", formation_pointer(last)))
+    for index in range(FORMATION_RECORDS):
+        put(
+            OFS_FORMATION_RECORDS + index * FORMATION_RECORD_LENGTH,
+            formation_record(index),
+        )
 
     # -- descriptions: pointer table then blocks
     for team in range(TOTAL_TEAMS):

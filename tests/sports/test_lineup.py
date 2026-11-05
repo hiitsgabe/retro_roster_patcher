@@ -17,6 +17,7 @@ from retro_roster_patcher.sports.lineup import (
     code_line,
     fold_formation,
     nearest_shape,
+    parse_shape,
     pick_lineup,
     seat_line,
     slot_lines,
@@ -129,6 +130,37 @@ def test_a_code_alone_has_a_line():
 DELUXE_SHAPES = ("4-4-2", "4-3-3", "4-5-1", "3-5-2", "3-4-3", "5-3-2", "5-4-1", "4-2-4")
 
 
+@pytest.mark.parametrize(
+    ("text", "counts"),
+    [
+        ("4-3-3", (4, 3, 3)),
+        (" 4-3-3", (4, 3, 3)),
+        ("\t3-5-2\n", (3, 5, 2)),
+        ("5-3-2 ", (5, 3, 2)),
+        # A formation of more lines is read folded to three.
+        ("4-2-3-1", (4, 3, 3)),
+        ("4-1-4-1", (4, 5, 1)),
+        ("3-4-2-1", (3, 4, 3)),
+    ],
+)
+def test_a_shape_is_read_as_its_three_lines_whatever_surrounds_it(text, counts):
+    assert parse_shape(text) == counts
+
+
+@pytest.mark.parametrize("text", ["", " ", "4-4-x", "442", "4-6", "4-4-3", "4-2-3-2", "4 - 3 - 3"])
+def test_text_that_is_not_three_lines_of_ten_outfield_players_is_not_read(text):
+    assert parse_shape(text) is None
+
+
+def test_nearest_shape_reads_a_shape_the_way_parse_shape_does():
+    # Unread, a shape with a stray space was the first offered, whatever it said.
+    assert nearest_shape(" 3-5-2 ", DELUXE_SHAPES) == "3-5-2"
+    assert nearest_shape("4-3-3\n", DELUXE_SHAPES) == "4-3-3"
+    assert nearest_shape(" 4-4-x", DELUXE_SHAPES) == "4-4-2"
+    for text in ("4-3-3", " 3-4-3", "5-3-2 ", "4-2-3-1"):
+        assert parse_shape(text) is not None
+
+
 def test_an_offered_shape_is_its_own_nearest():
     for shape in DELUXE_SHAPES:
         assert nearest_shape(shape, DELUXE_SHAPES) == shape
@@ -196,6 +228,28 @@ def test_a_line_too_long_to_try_every_order_keeps_the_given_order():
     slots = [("R", 0), ("L", 0), *[("C", 0)] * 5]
     assert seat_line(roles[:6], slots[:6]) == [1, 0, 2, 3, 4, 5]
     assert seat_line(roles, slots) == list(range(7))
+
+
+def test_a_line_with_more_players_than_places_or_fewer_is_refused():
+    with pytest.raises(ValueError):
+        seat_line(["CB", "CB"], [("L", 0)])
+    with pytest.raises(ValueError):
+        seat_line(["CB"], [("L", 0), ("R", 0)])
+    with pytest.raises(ValueError):
+        seat_line([], [("C", 0)])
+
+
+def test_a_line_too_long_to_try_every_order_is_refused_too_when_the_counts_differ():
+    # The length of the given order is no reason to skip the check.
+    with pytest.raises(ValueError):
+        seat_line(["CB"] * 8, [("C", 0)] * 7)
+    with pytest.raises(ValueError):
+        seat_line(["CB"] * 7, [("C", 0)] * 8)
+
+
+def test_a_role_outside_the_depth_table_reads_as_a_central_midfielder():
+    slots = [("L", 0), ("C", 0), ("R", 0)]
+    assert seat_line(["GKX", "LB", ""], slots) == seat_line(["CM", "LB", "CM"], slots)
 
 
 def test_every_role_a_code_can_read_as_has_a_depth():

@@ -934,7 +934,13 @@ def _named_league(patcher):
 def test_order_as_given_writes_the_callers_first_fifteen_in_order(patcher):
     data = _named_league(patcher)
     team = data.teams[0]
-    team.players = team.players[::2] + team.players[1::2]
+    # The keeper leads, as he must in this ROM (`test_formation` has the ones who do not), and the
+    # rest of the squad is turned around. Without roles the places keep the order too.
+    keepers = [p for p in team.players if p.position == "Goalkeeper"]
+    outfield = [p for p in team.players if p.position != "Goalkeeper"]
+    team.players = keepers[:1] + outfield[::-1] + keepers[1:]
+    for player in team.players:
+        player.role = ""
 
     mapped = patcher.map_rosters(data, [SlotMapping(slot_index=0, team_id=1)], order_as_given=True)
 

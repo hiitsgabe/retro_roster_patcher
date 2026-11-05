@@ -15,6 +15,12 @@ The writer is a ROM hack and `rom_writer.py`'s docstring is the map. Two
 consequences reach this module: the order of the write calls in `patch` is load
 bearing, and there is no ROM version check anywhere, so a revision other than
 the one the ten 65816 patch addresses belong to is patched just as willingly.
+
+A team's formation is a record of eleven places in the ROM and its player k stands
+in place k, so `map_rosters` picks the record for each club (`formations`: the
+cartridge's seven shapes, the nearest to the club's own, else its lineup's, else
+the slot's own) and orders the club's fifteen for it, each line seated by role and
+side; `patch` writes the record and the "Offense 4-4-2" label of team select.
 """
 
 from __future__ import annotations
@@ -62,7 +68,7 @@ from .rom_writer import (
     design_pointers,
     two_band_flag,
 )
-from .stat_mapper import ISSStatMapper
+from .stat_mapper import FORMATION_DONORS, ISSStatMapper
 
 #: The goalkeeper kit every patched team gets: green shirt, black shorts. A
 #: constant, because no provider publishes a goalkeeper kit.
@@ -123,6 +129,11 @@ class ISSPatcher(Patcher):
     #: Screen art `patch(images={name: png})` can replace; `export_images`
     #: writes the cartridge's current art for each. See `screens.SLOTS`.
     image_slots: tuple[str, ...] = screens.IMAGE_SLOT_NAMES
+
+    #: `patch` writes each mapped club's formation: the cartridge's retail record of the shape
+    #: nearest the club's (`stat_mapper.FORMATION_DONORS`) and the shape in team select's label.
+    writes_formation: bool = True
+    formations: tuple[str, ...] = tuple(FORMATION_DONORS)
 
     def __init__(
         self,
@@ -252,9 +263,7 @@ class ISSPatcher(Patcher):
         return LeagueData(league=league, teams=rosters)
 
     def suggest_squad_order(self, team_roster):
-        ordered = self.mapper._select_best_15(
-            team_roster.players, team_roster.player_stats, team_roster.extra.get("lineup")
-        )
+        ordered = self.mapper._fifteen(team_roster, False)
         return self._append_unused(ordered, team_roster.players)
 
     def map_rosters(
@@ -293,7 +302,7 @@ class ISSPatcher(Patcher):
             # The whole league, not just this team: percentiles are normalised
             # league-wide.
             record = self.mapper.map_team_with_league_context(
-                roster, data.teams, order_as_given=order_as_given
+                roster, data.teams, order_as_given=order_as_given, slot=entry.slot_index
             )
             self._apply_colours(record, roster.team)
             record.team_id = roster.team.id
@@ -344,6 +353,13 @@ class ISSPatcher(Patcher):
         # `map_rosters` built them. Sorted, because `write_team_name_texts`
         # breaks a tie between two equally long names by whichever it met first.
         slots = sorted(slot for slot in rosters.teams if 0 <= slot < TOTAL_TEAMS)
+        for slot in slots:
+            shape = rosters.teams[slot].formation
+            if shape and shape not in FORMATION_DONORS:
+                raise MappingError(
+                    f"Slot {slot} ({TEAM_ENUM_ORDER[slot]}) asks for the formation {shape!r}; "
+                    f"the cartridge has {', '.join(FORMATION_DONORS)}"
+                )
         # Read and checked before the copy, so a bad kit picture is refused up
         # front; templates are read off the input, before any slot changes.
         given = options.get("kits", True)
@@ -379,6 +395,10 @@ class ISSPatcher(Patcher):
                     # `ISSRomWriter.write_name_tiles`.
                     writer.write_player_names(slot, record.players)
                     written = writer.write_player_data(slot, record.players)
+                    # Place k of the record is player k: the fifteen came in this order.
+                    if record.formation:
+                        writer.write_formation(slot, FORMATION_DONORS[record.formation])
+                        writer.write_formation_label(slot, record.formation)
                     if record.look is not None:
                         writer.write_look(slot, record.look)
                     # The shirt numbers (flag entry 12) are set against the

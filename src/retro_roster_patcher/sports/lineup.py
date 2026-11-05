@@ -11,8 +11,9 @@ a wide midfielder in a 4-4-2 and a wing-back in a 3-4-2-1.
     RWB LWB CDM CM CAM RM LM RW LW ST), and `slot_side` gives its side across the pitch;
   * `slot_lines` puts each place of a template on a line, so the lines add up to the folded
     shape; `code_line` gives a code's line when no formation is at hand;
-  * `nearest_shape` picks the shape a game offers that is nearest a team's, and `seat_line` seats
-    one line's players on that line's places by their roles;
+  * `parse_shape` reads a shape as its three line counts, `nearest_shape` picks the shape a game
+    offers that is nearest a team's, and `seat_line` seats one line's players on that line's places
+    by their roles;
   * `pick_lineup` chooses a club's eleven from its matchday squads, seats each one in a place of
     its usual formation, and gives the rest of the squad a role too;
   * `apply_lineup` puts that lineup on a roster: its formation, and a role on every player.
@@ -120,20 +121,32 @@ def fold_formation(text: str) -> str:
     return f"{back}-{sum(middle)}-{front}"
 
 
+def parse_shape(text: str) -> tuple[int, int, int] | None:
+    """`text` as its players per line (defenders, midfielders, forwards), or `None` when it is not
+    three lines of ten outfield players.
+
+    Surrounding whitespace is ignored, and a formation of more lines is folded to three first
+    (`fold_formation`): "4-2-3-1" reads as (4, 3, 3). This is the reading `nearest_shape` uses, so
+    a formation is readable exactly when this returns a tuple.
+    """
+    counts = _counts(fold_formation(text.strip()))
+    return (counts[0], counts[1], counts[2]) if len(counts) == 3 else None
+
+
 def nearest_shape(shape: str, offered: Sequence[str]) -> str:
     """The shape of `offered` with the smallest sum of differences in the players per line.
 
-    `shape` is folded to three lines first (`fold_formation`), as is each offered shape. A tie goes
-    to the shape offered first, and a `shape` that is not three lines of ten outfield players to
-    `offered[0]`.
+    `shape` and each offered shape are read by `parse_shape` (folded to three lines, surrounding
+    whitespace ignored). A tie goes to the shape offered first, and a `shape` that `parse_shape`
+    cannot read to `offered[0]`.
     """
-    want = _counts(fold_formation(shape))
-    if len(want) != 3:
+    want = parse_shape(shape)
+    if want is None:
         return offered[0]
 
     def distance(candidate: str) -> int:
-        have = _counts(fold_formation(candidate))
-        return sum(abs(a - b) for a, b in zip(want, have, strict=True)) if len(have) == 3 else 99
+        have = parse_shape(candidate)
+        return sum(abs(a - b) for a, b in zip(want, have, strict=True)) if have else 99
 
     return min(offered, key=distance)
 
@@ -175,8 +188,9 @@ def seat_line(roles: Sequence[str], slots: Sequence[tuple[str, float]]) -> list[
     place player i sits on.
 
     `roles` are the line's players' roles, in the order given. `slots` are its places, each a
-    side (`"L"`, `"C"` or `"R"`) and a depth (larger is further forward), as many as players. A
-    role outside `ROLES`, such as none, reads as a central midfielder: side `"C"`, depth of `CM`.
+    side (`"L"`, `"C"` or `"R"`) and a depth (larger is further forward), as many as players, else
+    `ValueError`. A role outside `DEPTH`, such as none, reads as a central midfielder: side `"C"`,
+    depth of `CM`.
 
     Of every order the players could sit in, the one chosen has, in turn, the smallest sum of
     distances between a player's side (`slot_side` of his role) and his place's, left to right,
@@ -185,6 +199,8 @@ def seat_line(roles: Sequence[str], slots: Sequence[tuple[str, float]]) -> list[
     than `SEAT_LIMIT` places keeps the given order.
     """
     n = len(roles)
+    if len(slots) != n:
+        raise ValueError(f"{n} players for {len(slots)} places")
     if n > SEAT_LIMIT:
         return list(range(n))
     known = [role if role in DEPTH else "CM" for role in roles]

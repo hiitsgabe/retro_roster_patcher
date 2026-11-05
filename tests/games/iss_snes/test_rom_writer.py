@@ -429,6 +429,7 @@ def test_the_bound_is_at_least_the_end_of_every_region_the_writer_touches():
         fixture.OFS_NAME_TILES_PTRS + TOTAL_TEAMS * 2,
         fixture.OFS_FLAG_TILE_PTRS + TOTAL_TEAMS * 4,
         fixture.NAME_TILES_DISPLACED_END,
+        fixture.OFS_FORMATION_RECORDS + fixture.FORMATION_RECORDS * fixture.FORMATION_RECORD_LENGTH,
         fixture.OFS_DESC_PTRS + TOTAL_TEAMS * 2,
         fixture.OFS_TEAM_NAME_TEXT_PTRS + TOTAL_TEAMS * 2,
         fixture.MAX_NAME_TEXT_ADDR,

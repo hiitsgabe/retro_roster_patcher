@@ -150,8 +150,9 @@ class ISSPlayerAttributes:
 class ISSPlayerRecord:
     """Complete player record ready to write to ROM.
 
-    The ROM derives a player's role from his slot in the fifteen, so `position`
-    never reaches the image; it only feeds `_select_best_15`'s 4-4-2.
+    The ROM derives a player's role from his place in the team's formation
+    record (place k is the k-th of the fifteen), so `position` never reaches the
+    image.
     """
 
     name: str  # 8 characters max, ISS custom encoding
@@ -194,6 +195,11 @@ class ISSTeamRecord:
     `kit_home_spec` / `kit_away_spec` are the kits `patch` draws by default
     (`core.kits.default_kits`), `kit_home` / `kit_away` their colours; a record
     with colours and no spec gets plain kits in them.
+
+    `formation` is the shape the fifteen are ordered for ("4-3-3", a key of
+    `stat_mapper.FORMATION_DONORS`): place k of that donor record is player k, so
+    `patch` writes the record and the label of that shape with them. "" says
+    nothing, and leaves the image's own record and label.
     """
 
     name: str  # full team name, for the selection screen and the description
@@ -205,6 +211,7 @@ class ISSTeamRecord:
     kit_away_spec: KitSpec | None = None
     flag_colors: list[tuple[int, int, int]] = field(default_factory=list)
     players: list[ISSPlayerRecord] = field(default_factory=list)  # up to 15
+    formation: str = ""
     # Where the crest comes from: `assets_dir/logos/<team_id>.png`, else the URL.
     team_id: int | None = None
     logo_url: str = ""

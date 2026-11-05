@@ -265,10 +265,16 @@ def test_every_game_takes_no_more_leagues_than_it_has_slot_groups():
 
 
 def test_the_other_soccer_games_write_no_formation():
-    for game in ("iss-snes", "we2002", "pes2013-ps2"):
+    for game in ("we2002", "pes2013-ps2"):
         cls = get_patcher(game)
         assert cls.writes_formation is False, game
         assert cls.formations == (), game
+
+
+def test_iss_writes_the_seven_formations_the_cartridge_has():
+    cls = get_patcher("iss-snes")
+    assert cls.writes_formation is True
+    assert cls.formations == ("4-4-2", "4-3-3", "3-4-3", "5-3-2", "4-5-1", "3-5-2", "4-2-4")
 
 
 def test_iss_deluxe_writes_the_formations_real_clubs_use():

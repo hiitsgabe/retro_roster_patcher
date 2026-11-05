@@ -19,6 +19,13 @@ The top value (15, or 7 on the 3-bit fields) is kept for the top few percent.
 
 A player with no appearances gets the retail medians, his position's offense
 and defense, and the same speed rule.
+
+The ROM has no formation id: a team's formation is a record of eleven places,
+and the team's player k stands in place k. So a club is written a record
+(`FORMATION_DONORS`) of the shape nearest its own and its fifteen are ordered
+for it: the keeper, then the shape's defenders, midfielders and forwards, each
+line seated on the record's places of that line by role, the sides across the
+pitch and the deeper role deeper (`seat_line`).
 """
 
 from __future__ import annotations
@@ -27,6 +34,7 @@ from bisect import bisect_left, bisect_right
 from collections.abc import Callable
 
 from ...sports.espn import LINEUP_GROUPS
+from ...sports.lineup import nearest_shape, parse_shape, seat_line
 from ...sports.models import Player, PlayerStats, TeamRoster
 from .models import (
     PLAYERS_PER_TEAM,
@@ -35,6 +43,84 @@ from .models import (
     ISSTeamRecord,
 )
 from .rom_writer import _to_ascii
+
+#: The cartridge's formation records, one per shape `ISSPatcher.formations` offers, in that order
+#: (ties in `nearest_shape` go to the first). Each is 44 bytes: eleven places of four, the keeper
+#: first, then the defence, midfield and attack. A place is a depth from its own goal line (the
+#: match anchor is the depth times 32), a lateral place in the high nibble of the second byte
+#: (1 to 13, the low ones the team's left) with the line in its low two bits (0 keeper, 1 defence,
+#: 2 midfield, 3 attack), a role code and two range nibbles. Place k is the team's player k.
+#:
+#: Constants, not read from the image: the donor slot may itself have been patched. Each is the
+#: retail record of the slot named, byte for byte (a test holds them to the cartridge).
+FORMATION_DONORS: dict[str, bytes] = {
+    # Wales' flat 4-4-2.
+    "4-4-2": bytes.fromhex(
+        "00700037 0b210132 0a510242 0a910242 0bc10132 "
+        "17220436 16520436 16920436 17c20436 22530600 22930600"
+    ),
+    # England's 4-3-3.
+    "4-3-3": bytes.fromhex(
+        "00700037 0e210132 0a510242 0a910242 0ec10132 "
+        "14720374 18220454 18c20454 22230634 22c30630 24730630"
+    ),
+    # Holland's 3-4-3.
+    "3-4-3": bytes.fromhex(
+        "00700037 0a310242 09710242 0ab10242 12720375 "
+        "16220454 16c20454 1a720573 20230600 20c30600 22730600"
+    ),
+    # Germany's 5-3-2, with a sweeper.
+    "5-3-2": bytes.fromhex(
+        "00700037 10110132 0a410242 09710732 0aa10242 "
+        "10d10132 14720374 18320544 18b20544 22430600 22a30600"
+    ),
+    # Sweden's 4-5-1: two deep, two wide and one attacking midfielder.
+    "4-5-1": bytes.fromhex(
+        "00700037 0c210132 0a510242 0a910242 0cc10132 "
+        "12520354 12920354 18220454 18c20484 1e820530 24630630"
+    ),
+    # Nigeria's 3-5-2.
+    "3-5-2": bytes.fromhex(
+        "00700037 0c310242 0a710242 0cb10242 12220354 "
+        "12c20354 16720474 1a320544 1ab20544 22430630 22a30630"
+    ),
+    # Super Star's 4-2-4.
+    "4-2-4": bytes.fromhex(
+        "00700037 0a210132 0a510742 0a910242 0ac10132 "
+        "16420578 16a20478 22230630 22530630 22930630 22c30630"
+    ),
+}
+
+#: The shape of each slot's retail record (`TEAM_ENUM_ORDER`): what a club with no formation of its
+#: own, and no lineup to say, is written. Counted from the lines of the retail records.
+SLOT_SHAPES = (
+    "5-3-2", "4-4-2", "3-4-3", "3-4-3", "4-3-3", "4-4-2", "4-4-2", "4-3-3", "4-4-2", "4-5-1",
+    "4-4-2", "4-4-2", "4-4-2", "4-4-2", "4-4-2", "4-5-1", "4-3-3", "5-3-2", "4-4-2", "4-4-2",
+    "4-4-2", "3-4-3", "4-4-2", "3-5-2", "4-4-2", "3-5-2", "4-2-4",
+)  # fmt: skip
+
+#: The shape of a club with nothing to say what it plays and no slot to say what the slot plays:
+#: the first the patcher offers, the 4-4-2 every club was once written.
+DEFAULT_SHAPE = next(iter(FORMATION_DONORS))
+
+#: A place whose lateral (the high nibble of its second byte) is up to this is on the team's left,
+#: and from `_RIGHT` on its right; the retail records put the wide places at 1-4 and 10-13.
+_LEFT = 4
+_RIGHT = 10
+
+
+def _donor_places(shape: str) -> list[tuple[int, str, int]]:
+    """The line (0 keeper, 1 defence, 2 midfield, 3 attack), side (`"L"`, `"C"` or `"R"`) and
+    depth of each of the eleven places of `shape`'s donor record, in place order."""
+    record = FORMATION_DONORS[shape]
+    places = []
+    for k in range(11):
+        depth, lateral_line = record[4 * k], record[4 * k + 1]
+        lateral = lateral_line >> 4
+        side = "L" if lateral <= _LEFT else "R" if lateral >= _RIGHT else "C"
+        places.append((lateral_line & 3, side, depth))
+    return places
+
 
 #: (percentile floor, value) rows, highest first. Tuned so the league's p10,
 #: median and p90 land on retail's.
@@ -140,17 +226,25 @@ class ISSStatMapper:
         team_roster: TeamRoster,
         all_rosters: list[TeamRoster],
         order_as_given: bool = False,
+        slot: int | None = None,
     ) -> ISSTeamRecord:
+        """The team's record for ROM slot `slot` (`TEAM_ENUM_ORDER`): `_shape` says the formation
+        it is written, and its fifteen come in that formation's places, the eleven seated by role
+        (`_seated`). Without a slot a club with no shape of its own is given `DEFAULT_SHAPE`."""
+        shape = self._shape(team_roster, slot)
+        best_15 = self._seated(self._fifteen(team_roster, order_as_given, slot), shape)
         # Rank only the players some team writes: bench and youth players
-        # with stats would push every written fifteen up the scale.
+        # with stats would push every written fifteen up the scale. Another
+        # team's slot is not known here, so one with no shape of its own is
+        # picked in `DEFAULT_SHAPE`; this team's fifteen is added to be sure.
         written = {p.id for r in all_rosters for p in self._fifteen(r, order_as_given)}
+        written |= {p.id for p in best_15}
         all_stats = {
             pid: s for r in all_rosters for pid, s in r.player_stats.items() if pid in written
         }
         positions = {p.id: p.position for r in all_rosters for p in r.players}
 
         percentiles = self._compute_percentiles(all_stats, positions)
-        best_15 = self._fifteen(team_roster, order_as_given)
 
         iss_players = [
             ISSPlayerRecord(
@@ -177,6 +271,7 @@ class ISSStatMapper:
                 else team_roster.team.name[:3].upper()
             ),
             players=iss_players,
+            formation=shape,
         )
 
     def map_player(
@@ -232,13 +327,60 @@ class ISSStatMapper:
                 attrs.defense += _lookup(self.SHIFT_TABLE, dfn)
         return attrs
 
-    def _fifteen(self, roster: TeamRoster, order_as_given: bool) -> list[Player]:
-        """The fifteen this mapper writes for `roster`: the caller's list as it
-        stands when `order_as_given` (slot index is the role in this ROM, so
-        index 0 keeps goal), else the selection."""
+    def _shape(self, roster: TeamRoster, slot: int | None = None) -> str:
+        """The shape written for `roster`: the nearest `FORMATION_DONORS` has to its formation
+        (`extra["formation"]`), else to its lineup's shape, when `parse_shape` reads them. A club
+        with neither is written the retail shape of ROM slot `slot`, else `DEFAULT_SHAPE`."""
+        extra = roster.extra or {}
+        for text in (extra.get("formation"), (extra.get("lineup") or {}).get("shape")):
+            if parse_shape(str(text or "")) is not None:
+                return nearest_shape(str(text), tuple(FORMATION_DONORS))
+        return DEFAULT_SHAPE if slot is None else SLOT_SHAPES[slot]
+
+    def _fifteen(
+        self, roster: TeamRoster, order_as_given: bool, slot: int | None = None
+    ) -> list[Player]:
+        """The fifteen this mapper writes for `roster`, the eleven in line order: the keeper, then
+        the defenders, midfielders and forwards of its `_shape`.
+
+        With `order_as_given` and a formation `parse_shape` reads, the caller's list as it stands
+        (`_given`), whose lines are cut over the shape by index. With one that does not read, the
+        caller's order still decides, inside each squad group: the selection, in that order. Else
+        the selection by lineup and starts.
+        """
+        shape = self._shape(roster, slot)
         if order_as_given:
-            return roster.players[:PLAYERS_PER_TEAM]
-        return self._select_best_15(roster.players, roster.player_stats, roster.extra.get("lineup"))
+            if parse_shape(str((roster.extra or {}).get("formation") or "")) is not None:
+                return self._given(roster.players)
+            return self._select_best_15(roster.players, None, None, shape)
+        return self._select_best_15(
+            roster.players, roster.player_stats, roster.extra.get("lineup"), shape
+        )
+
+    def _given(self, players: list[Player]) -> list[Player]:
+        """The caller's list as the fifteen: the keeper (the first goalkeeper listed, else the
+        first player) in goal, then the first ten outfield players in the order given, whatever
+        their positions, and the rest, a second keeper among them, as the bench in that order."""
+        goal = next((p for p in players if p.position == "Goalkeeper"), None)
+        if goal is None:
+            return players[:PLAYERS_PER_TEAM]
+        eleven = [goal, *[p for p in players if p.position != "Goalkeeper"][:10]]
+        taken = {p.id for p in eleven}
+        return (eleven + [p for p in players if p.id not in taken])[:PLAYERS_PER_TEAM]
+
+    def _seated(self, players: list[Player], shape: str) -> list[Player]:
+        """`players` (the fifteen, the eleven in line order) with each line's starters on the
+        places of `shape`'s donor record: the line of a place is the record's, and a line's
+        players take its places by role, the sides first and then the deeper role deeper
+        (`seat_line`). A player without a role keeps his turn in the line."""
+        places = _donor_places(shape)
+        out = list(players)
+        for line in (1, 2, 3):
+            at = [k for k in range(min(len(players), 11)) if places[k][0] == line]
+            seats = seat_line([players[k].role for k in at], [places[k][1:] for k in at])
+            for k, seat in zip(at, seats, strict=True):
+                out[at[seat]] = players[k]
+        return out
 
     def _technique_value(self, stats: PlayerStats) -> float:
         """Raw technique score: dribble success rate and pass accuracy, averaged.
@@ -300,9 +442,6 @@ class ISSStatMapper:
         spare = iter(n for n in range(1, PLAYERS_PER_TEAM + 1) if n not in kept)
         return [n or next(spare) for n in kept]
 
-    #: The fifteen's starting places by group: slot 0 keeps goal, then a 4-4-2.
-    XI_PLACES = (("Goalkeeper", 1), ("Defender", 4), ("Midfielder", 4), ("Attacker", 2))
-
     #: Where a group's extra starters play when its places are full, nearest
     #: first. Keepers never swap with outfield players.
     SPILL = {
@@ -316,18 +455,21 @@ class ISSStatMapper:
         players: list[Player],
         player_stats: dict[int, PlayerStats] | None = None,
         lineup: dict | None = None,
+        shape: str = DEFAULT_SHAPE,
     ) -> list[Player]:
         """The fifteen in ISS's order: the starting eleven, then four subs.
 
-        The eleven is the team's recent starting lineup when `lineup` (what
-        `EspnClient.get_lineup` returns) has one: every listed starter plays,
-        in his lineup group, and a group with more starters than places (a
-        front three) sends the rest to the nearest group with room. Places
-        still open go to the players with the most starts this season, in
-        their group, then in a neighbouring one, and only then to a player
-        who never started, so a forward with no starts never takes a place a
-        midfielder with twenty would. Subs are the backup keeper, then the
-        best of the rest the same way.
+        The eleven is the keeper and the `shape`'s defenders, midfielders and
+        forwards (a key of `FORMATION_DONORS`), in that order. It is the team's
+        recent starting lineup when `lineup` (what `EspnClient.get_lineup`
+        returns) has one: every listed starter plays, in his lineup group, and
+        a group with more starters than places (a front three in a 4-4-2)
+        sends the rest to the nearest group with room. Places still open go to
+        the players with the most starts this season, in their group, then in
+        a neighbouring one, and only then to a player who never started, so a
+        forward with no starts never takes a place a midfielder with twenty
+        would. Subs are the backup keeper, then the best of the rest the same
+        way.
         """
         stats = player_stats or {}
         recent = {int(s["id"]): (i, s) for i, s in enumerate((lineup or {}).get("starters") or [])}
@@ -352,7 +494,13 @@ class ISSStatMapper:
             return p.id in recent or bool(s and s.lineups)
 
         pool = sorted(players, key=key)
-        places = dict(self.XI_PLACES)
+        defenders, midfielders, forwards = map(int, shape.split("-"))
+        places = {
+            "Goalkeeper": 1,
+            "Defender": defenders,
+            "Midfielder": midfielders,
+            "Attacker": forwards,
+        }
         chosen: dict[str, list[Player]] = {g: [] for g in places}
         taken: set[int] = set()
 
@@ -370,7 +518,7 @@ class ISSStatMapper:
         for eligible in (lambda p: p.id in recent, started, lambda p: True):
             fill(eligible, spill=False)
             fill(eligible, spill=True)
-        eleven = [p for g, _ in self.XI_PLACES for p in chosen[g]]
+        eleven = [p for g in places for p in chosen[g]]
 
         rest = [p for p in pool if id(p) not in taken]
         keepers = [p for p in rest if group(p) == "Goalkeeper"][:1]

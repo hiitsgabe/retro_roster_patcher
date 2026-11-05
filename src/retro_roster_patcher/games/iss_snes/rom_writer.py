@@ -88,6 +88,17 @@ _PLAYER_NAME_LENGTH = 8
 _OFS_PLAYER_DATA = 0x387EC
 _PLAYER_DATA_LENGTH = 6
 
+# Team formations: 28 words at 0x382E4 in TEAM_ENUM_ORDER, each a SNES bank $87 address (file
+# offset 0x38000 + pointer - 0x8000), then 28 records of 44 bytes, in TEAM_NAME_ORDER, up to the
+# player data. The 28th belongs to no team and nothing here writes it. A record is eleven places
+# of four bytes; `stat_mapper.FORMATION_DONORS` says what they hold.
+_OFS_FORMATION_PTRS = 0x382E4
+_FORMATION_BANK_BASE = 0x38000
+_FORMATION_BANK_SNES_BASE = 0x8000
+_OFS_FORMATION_RECORDS = 0x3831C
+_FORMATION_RECORD_LENGTH = 44
+_FORMATION_RECORDS_END = _OFS_PLAYER_DATA
+
 # Uniform / kit colors
 # An outfield kit record is a 0x001D header and 15 BGR555 colours, OBJ palette
 # entries 1-15: hair, five skin shades, three shirt shades (body and sleeves
@@ -263,6 +274,11 @@ _DISPLACEMENT_PATCH_POINTS = [
 # Description is plain ASCII, 15-char line wrapping, variable length (46-90 bytes)
 _OFS_DESC_PTRS = 0x38000  # 2 bytes per team, 27 entries, TEAM_ENUM_ORDER
 _DESC_LINE_WIDTH = 15  # Characters per line in the description text box
+# The block opens with the label team select prints: FE, a colour byte ($2C Offense, $24 Defense)
+# and 15 characters ("Offense 4-4-2  "), whose shape is the five characters from the eleventh byte
+# of the block. The text comes after the next FE, a space and FD.
+_LABEL_SHAPE_OFFSET = 10
+_LABEL_SHAPE_LENGTH = 5
 #: Bank $02 of a LoROM image starts here and the SNES half of the pointer starts
 #: at $8000, so `rom_addr = _DESC_BANK_BASE + (snes_addr - _DESC_BANK_SNES_BASE)`,
 #: which reduces to `0x8000 + snes_addr`. A pointer below $8000 therefore lands
@@ -1042,6 +1058,7 @@ def _min_patchable_size() -> int:
         _OFS_CHEST_PTRS + CHEST_POSES * _CHEST_SLOTS * 3,
         _OFS_NAME_TILES_PTRS + TOTAL_TEAMS * 2,
         _NAME_TILES_DISPLACED_END,
+        _FORMATION_RECORDS_END,
         _OFS_DESC_PTRS + TOTAL_TEAMS * 2,
         _DESC_BANK_BASE + (0xFFFF - _DESC_BANK_SNES_BASE) + 1,
         _OFS_TEAM_NAME_TEXT_PTRS + TOTAL_TEAMS * 2,
@@ -1164,6 +1181,30 @@ class ISSRomWriter:
             )
             written += 1
         return written
+
+    def write_formation(self, enum_index: int, record: bytes) -> None:
+        """Replace slot `enum_index`'s formation: its 44-byte record, found by the pointer table.
+
+        `ValueError` unless `record` is 44 bytes, `IndexError` for a slot outside the 27 teams (the
+        record that belongs to none is never written) and `RomError` when the slot's pointer is
+        not inside the 28 records, so a table that is not the cartridge's is never followed.
+        """
+        if len(record) != _FORMATION_RECORD_LENGTH:
+            raise ValueError(
+                f"A formation record is {_FORMATION_RECORD_LENGTH} bytes: {len(record)}"
+            )
+        if not 0 <= enum_index < TOTAL_TEAMS:
+            raise IndexError(f"No formation record for slot {enum_index}")
+        self._seek(_OFS_FORMATION_PTRS + enum_index * 2)
+        raw = self._file.read(2)
+        at = _FORMATION_BANK_BASE + (raw[0] | raw[1] << 8) - _FORMATION_BANK_SNES_BASE
+        if not _OFS_FORMATION_RECORDS <= at <= _FORMATION_RECORDS_END - _FORMATION_RECORD_LENGTH:
+            raise RomError(
+                f"The formation pointer of slot {enum_index} ({TEAM_ENUM_ORDER[enum_index]}) "
+                f"leads to {at:#x}, outside the formation records"
+            )
+        self._seek(at)
+        self._file.write(record)
 
     def write_kit_colors(self, enum_index: int, team: ISSTeamRecord) -> None:
         """Write kit colors (home, away, GK) for a team, each one given.
@@ -1646,6 +1687,36 @@ class ISSRomWriter:
         for addr in new_ptrs:
             self._file.write(_encode_p17000(addr))
 
+    def _description_block(self, enum_index: int) -> int | None:
+        """Headerless file offset of slot `enum_index`'s description block, or None when its
+        pointer is not a bank $02 address."""
+        self._seek(_OFS_DESC_PTRS + enum_index * 2)
+        raw = self._file.read(2)
+        snes_addr = raw[0] | (raw[1] << 8)
+        # LoROM bank $02: ROM offset = 0x10000 + (snes_addr - 0x8000), which
+        # reduces to `0x8000 + snes_addr`. Keep this bank test: a pointer
+        # below $8000 addresses 0x8000..0xFFFF instead, where the
+        # predominant-colour table (0x8DB2) and the name-tile (0x93CD) and
+        # flag-tile (0x941A) pointer tables live.
+        if snes_addr < _DESC_BANK_SNES_BASE:
+            return None
+        return _DESC_BANK_BASE + (snes_addr - _DESC_BANK_SNES_BASE)
+
+    def write_formation_label(self, enum_index: int, shape: str) -> None:
+        """Print `shape` ("4-3-3") in the label of slot `enum_index`'s team select description
+        ("Offense 4-4-2"): its five characters from the eleventh byte of the block, so the line
+        keeps its 15 characters and the colour byte, "Offense" and the text stay as they were.
+
+        `ValueError` unless `shape` is five characters. A description pointer below $8000 (see
+        `_description_block`) leaves the slot as it is.
+        """
+        if len(shape) != _LABEL_SHAPE_LENGTH:
+            raise ValueError(f"A formation label is {_LABEL_SHAPE_LENGTH} characters: {shape!r}")
+        block = self._description_block(enum_index)
+        if block is not None:
+            self._seek(block + _LABEL_SHAPE_OFFSET)
+            self._file.write(shape.encode("ascii"))
+
     def write_team_descriptions(self, patched_names: dict[int, str]) -> None:
         """Replace the selection screen's description blurb with the team name.
 
@@ -1654,17 +1725,9 @@ class ISSRomWriter:
         patched_names: dict of {slot_index: team_name_str}.
         """
         for slot_index, name in patched_names.items():
-            self._seek(_OFS_DESC_PTRS + slot_index * 2)
-            raw = self._file.read(2)
-            snes_addr = raw[0] | (raw[1] << 8)
-            # LoROM bank $02: ROM offset = 0x10000 + (snes_addr - 0x8000), which
-            # reduces to `0x8000 + snes_addr`. Keep this bank test: a pointer
-            # below $8000 addresses 0x8000..0xFFFF instead, where the
-            # predominant-colour table (0x8DB2) and the name-tile (0x93CD) and
-            # flag-tile (0x941A) pointer tables live.
-            if snes_addr < _DESC_BANK_SNES_BASE:
+            rom_addr = self._description_block(slot_index)
+            if rom_addr is None:
                 continue
-            rom_addr = _DESC_BANK_BASE + (snes_addr - _DESC_BANK_SNES_BASE)
 
             # 0xFD is the control byte that starts the description text.
             desc_start = None
