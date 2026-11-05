@@ -932,20 +932,26 @@ def _named_league(patcher):
 
 
 def test_order_as_given_writes_the_callers_first_fifteen_in_order(patcher):
+    """The caller's outfielders stand in the order given. The ROM has one keeper, the first
+    goalkeeper listed, so the four others this shuffle leaves among the first eleven make way for
+    the next outfielders and wait on the bench, where the caller had them."""
     data = _named_league(patcher)
     team = data.teams[0]
-    # The keeper leads, as he must in this ROM (`test_formation` has the ones who do not), and the
-    # rest of the squad is turned around. Without roles the places keep the order too.
-    keepers = [p for p in team.players if p.position == "Goalkeeper"]
-    outfield = [p for p in team.players if p.position != "Goalkeeper"]
-    team.players = keepers[:1] + outfield[::-1] + keepers[1:]
-    for player in team.players:
+    team.players = team.players[::2] + team.players[1::2]
+    for player in team.players:  # without roles the places keep the order too
         player.role = ""
 
     mapped = patcher.map_rosters(data, [SlotMapping(slot_index=0, team_id=1)], order_as_given=True)
 
-    expected = [p.name for p in team.players[:PLAYERS_PER_TEAM]]
-    assert [r.name for r in mapped.teams[0].players] == expected
+    keeper = next(p for p in team.players if p.position == "Goalkeeper")
+    outfield = [p for p in team.players if p.position != "Goalkeeper"]
+    eleven = [keeper, *outfield[:10]]
+    taken = {p.id for p in eleven}
+    bench = [p for p in team.players if p.id not in taken]
+    written = mapped.teams[0].players
+    assert [r.name for r in written] == [p.name for p in eleven + bench][:PLAYERS_PER_TEAM]
+    assert [r.position for r in written[:11]].count(0) == 1  # one keeper starts
+    assert [r.position for r in written[11:]].count(0) == 4  # the others sit
 
 
 def test_without_order_as_given_the_input_order_is_ignored(patcher):

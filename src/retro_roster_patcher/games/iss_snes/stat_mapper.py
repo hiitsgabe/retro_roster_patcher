@@ -235,8 +235,9 @@ class ISSStatMapper:
         best_15 = self._seated(self._fifteen(team_roster, order_as_given, slot), shape)
         # Rank only the players some team writes: bench and youth players
         # with stats would push every written fifteen up the scale. Another
-        # team's slot is not known here, so one with no shape of its own is
-        # picked in `DEFAULT_SHAPE`; this team's fifteen is added to be sure.
+        # team's slot is not known here, so the selection picks one with no
+        # formation or lineup shape in `DEFAULT_SHAPE`; this team's own
+        # fifteen is added to be sure.
         written = {p.id for r in all_rosters for p in self._fifteen(r, order_as_given)}
         written |= {p.id for p in best_15}
         all_stats = {
@@ -343,18 +344,17 @@ class ISSStatMapper:
         """The fifteen this mapper writes for `roster`, the eleven in line order: the keeper, then
         the defenders, midfielders and forwards of its `_shape`.
 
-        With `order_as_given` and a formation `parse_shape` reads, the caller's list as it stands
-        (`_given`), whose lines are cut over the shape by index. With one that does not read, the
-        caller's order still decides, inside each squad group: the selection, in that order. Else
-        the selection by lineup and starts.
+        With `order_as_given` the caller's eleven always stand, formation or not: the caller's list
+        as it stands (`_given`), whose lines `_seated` cuts over the shape by index. Else the
+        selection by lineup and starts, in the shape's counts.
         """
-        shape = self._shape(roster, slot)
         if order_as_given:
-            if parse_shape(str((roster.extra or {}).get("formation") or "")) is not None:
-                return self._given(roster.players)
-            return self._select_best_15(roster.players, None, None, shape)
+            return self._given(roster.players)
         return self._select_best_15(
-            roster.players, roster.player_stats, roster.extra.get("lineup"), shape
+            roster.players,
+            roster.player_stats,
+            roster.extra.get("lineup"),
+            self._shape(roster, slot),
         )
 
     def _given(self, players: list[Player]) -> list[Player]:

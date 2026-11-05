@@ -548,29 +548,37 @@ def test_each_places_line_comes_from_the_formation_by_index(patcher):
     assert lines == {"4-4-2": 1, "3-4-3": 2, "5-3-2": 1}
 
 
-def test_a_formation_that_cannot_be_read_leaves_the_given_order_to_each_squad_group(patcher):
-    """Nothing says how to cut the eleven, so every player stays in the line of his position: the
-    lineup's 3-5-2 (the shape then) takes the first three defenders as the caller listed them and
-    the fourth plays in midfield, after the midfielders."""
-    roster = squad("GK CB CB CB CB CM CM CM CM ST ST", formation=None, bench="GK CB ST")
+def test_a_formation_that_cannot_be_read_still_leaves_the_eleven_to_the_caller(patcher):
+    """The lineup's 3-5-2 is the shape then, and the caller's ten outfielders are cut over it by
+    index, as over a formation that reads."""
+    roster = squad("GK " + "CM " * 10, formation="4-4-x")
     roster.extra["lineup"] = {"shape": "3-5-2", "formation": "3-5-2", "starters": []}
     record = mapped(patcher, roster, slot=0, order_as_given=True).teams[0]
-    names = written_names(record)
     assert record.formation == "3-5-2"
-    assert names[0] == "GK0"
-    assert sorted(names[1:4]) == ["CB1", "CB2", "CB3"]
-    assert sorted(names[4:9]) == ["CB4", "CM5", "CM6", "CM7", "CM8"]
-    assert sorted(names[9:11]) == ["ST10", "ST9"]
+    assert written_names(record)[:11] == [p.name for p in roster.players[:11]]
+    # The fourth outfielder is the first midfielder of a 3-5-2 (the last defender of a 4-4-2).
+    assert lines_of(FORMATION_DONORS[record.formation])[4] == 2
 
 
-def test_a_formation_that_cannot_be_read_still_orders_each_group_as_the_caller_did(patcher):
-    roster = squad("GK CB CB CB CB CM CM CM CM ST ST", formation="4-4-x", roles=False)
-    roster.players[1:5] = roster.players[1:5][::-1]  # the defenders turned around
+def test_with_no_lineup_either_the_slots_own_shape_cuts_the_callers_eleven(patcher):
+    roster = squad("GK " + "CM " * 10, formation=None)
+    record = mapped(patcher, roster, slot=17, order_as_given=True).teams[17]
+    assert record.formation == "5-3-2"  # Russia's own
+    assert written_names(record)[:11] == [p.name for p in roster.players[:11]]
+
+
+def test_an_older_roster_edited_so_a_bench_player_stays_out_keeps_him_out_of_the_eleven(patcher):
+    """No role, no formation, only a lineup whose shape is a 5-3-2, which wants a fifth defender:
+    the caller's eleven has four and the fifth waits on the bench, and he stays there."""
+    roster = squad("GK CB CB CB CB CM CM CM CM ST ST", formation=None, bench="GK CB CM ST")
+    roster.extra = {"lineup": lineup_of(roster.players[:11], "5-3-2")}
+    for player in roster.players:
+        player.role = ""
     record = mapped(patcher, roster, slot=1, order_as_given=True).teams[1]
-    assert record.formation == "4-4-2"  # Italy's own shape: nothing else says
-    assert written_names(record)[:11] == [
-        "GK0", "CB4", "CB3", "CB2", "CB1", "CM5", "CM6", "CM7", "CM8", "ST9", "ST10",
-    ]  # fmt: skip
+    names = written_names(record)
+    assert record.formation == "5-3-2"  # the lineup's, not Italy's own 4-4-2
+    assert names[:11] == [p.name for p in roster.players[:11]]
+    assert "CB12" not in names[:11] and "CB12" in names[11:]
 
 
 def test_a_given_squad_longer_than_fifteen_is_cut_there_and_a_keeper_listed_last_goes_first(
