@@ -434,8 +434,7 @@ def test_a_whole_squad_mapped_with_absent_duel_data_is_uniformly_clumsy(mapper):
 
 
 # The squad order: the first 11 slots are a 4-4-2 (keeper, four defenders, four
-# midfielders, two forwards), then the bench. Master League slots keep the
-# first 14 or 15.
+# midfielders, two forwards), then the bench.
 
 
 def _squad(**counts):

@@ -9,13 +9,13 @@ A player's position is the low three bits of the first byte of his characteristi
 tables when RETRO_ROSTER_TEST_ROMS has the image). The mapper picks the preset nearest the club's
 formation (variant B when the eleven hold two holding midfielders), cuts the eleven into its lines
 by index and seats each line on the preset's places by role. The writer puts the preset into the
-national slot's record; a Master League club keeps the disc's own record.
+national slot's record and, with the club's squad (test_master_league.py), into the Master League
+club's.
 """
 
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
 
 import pytest
@@ -213,9 +213,28 @@ def test_the_last_national_slot_never_reaches_the_default_master_league_record(t
     assert _differs_only_in(plain, written, [(2_305_864, 30)])
 
 
-def test_a_master_league_slot_writes_no_formation(tmp_path):
-    # An ML club fields its retail links, not its national slot's players: its record waits for
-    # the link fix.
+def _club(slot, formation):
+    """A Master League club with its 23 players and, when given, its formation."""
+    team = WETeamRecord(name="N", short_name="N", formation=formation)
+    squad = [WEPlayerRecord("A", "B", 2, 9)] * 23
+    return lambda writer: writer.write_team(slot, team, players=squad)
+
+
+@pytest.mark.parametrize("slot", [0, 2, 31])
+def test_a_master_league_clubs_record_lies_at_63_plus_its_slot_and_nowhere_else(tmp_path, slot):
+    # Record 63 + slot is the club's (31 reaches 94, never the default team's 95). Without a
+    # formation the club keeps the disc's record.
+    plain = _image(tmp_path, "plain", _club(slot, None))
+    written = _image(tmp_path, "written", _club(slot, FOUR_THREE_THREE_A))
+    chunks = rom_writer._formation_chunks(63 + slot)
+    assert b"".join(written[o : o + n] for o, n in chunks) == FOUR_THREE_THREE_A
+    assert b"".join(plain[o : o + n] for o, n in chunks) == bytes(30)
+    assert len(plain) == len(written)
+    assert _differs_only_in(plain, written, chunks)
+
+
+def test_a_master_league_call_without_players_writes_no_formation(tmp_path):
+    # The blank path: a club nobody patched keeps the disc's record along with its links.
     team = WETeamRecord(name="N", short_name="N", formation=FOUR_THREE_THREE_A)
     plain = WETeamRecord(name="N", short_name="N")
     with_formation = _image(tmp_path, "with", lambda writer: writer.write_team(2, team))
@@ -231,6 +250,8 @@ def test_a_record_that_is_not_30_bytes_is_refused_before_the_image_is_touched(tm
     team = WETeamRecord(name="N", short_name="N", formation=bytes(size))
     with pytest.raises(ValueError):
         writer.write_nat_team(2, team)
+    with pytest.raises(ValueError):
+        writer.write_team(2, team, players=[WEPlayerRecord("A", "B", 2, 9)] * 23)
     assert path.stat().st_size == 0
 
 
@@ -550,11 +571,11 @@ def test_the_patcher_offers_the_eight_shapes_the_disc_has():
     assert WE2002Patcher.formations == SHAPES
 
 
-def test_patch_writes_the_formation_of_a_national_slot_and_leaves_the_master_league_record(
+def test_patch_writes_the_formation_into_both_records_and_points_the_club_at_the_squad(
     tmp_path, monkeypatch
 ):
-    # A Master League slot (2) is written to both tables, but only the national one has a record
-    # to write: the club fields its retail links in the other.
+    # A Master League slot (2) is written to both tables: its national slot holds the squad and
+    # the record, and the club's 23 links and record (63 + 2) follow.
     monkeypatch.setattr(patcher_module, "apply_ppf", lambda *args, **kwargs: "")
     rom = tmp_path / "in.bin"
     with rom.open("wb") as handle:
@@ -570,28 +591,18 @@ def test_patch_writes_the_formation_of_a_national_slot_and_leaves_the_master_lea
 
     image = out.read_bytes()
     assert image[2_303_760:2_303_790] == FOUR_THREE_THREE_B
-    assert image[2_305_954:2_305_984] == bytes(30)  # record 63 + 2
+    assert image[2_305_954:2_305_984] == FOUR_THREE_THREE_B  # record 63 + 2
+    links = b"".join(image[o : o + n] for o, n in rom_writer._link_chunks(2))
+    assert links == bytes(b for place in range(23) for b in (2, place))
+    squad = mapped.teams[2].players
+    fielded = [
+        b"".join(image[o : o + n] for o, n in rom_writer._nat_nome_chunks(2 * 23 + place))
+        for place in range(len(squad))
+    ]
+    assert fielded == [rom_writer._encode_player_name(p.last_name) for p in squad]
 
 
-# --- the disc (RETRO_ROSTER_TEST_ROMS has we2002.bin: Track 1, the MODE2/2352 data track) -----
-
-
-@pytest.fixture
-def disc():
-    """`read(offset, size)` on the retail disc."""
-    root = os.environ.get("RETRO_ROSTER_TEST_ROMS")
-    if not root:
-        pytest.skip("set RETRO_ROSTER_TEST_ROMS to a directory holding we2002.bin")
-    path = Path(root) / "we2002.bin"
-    if not path.exists():
-        pytest.fail(f"RETRO_ROSTER_TEST_ROMS is set but {path} is missing")
-    with path.open("rb") as handle:
-
-        def read(offset, size):
-            handle.seek(offset)
-            return handle.read(size)
-
-        yield read
+# --- the disc (the `disc` fixture: RETRO_ROSTER_TEST_ROMS has we2002.bin, Track 1) -----------
 
 
 @pytest.mark.real_rom

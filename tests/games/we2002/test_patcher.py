@@ -25,7 +25,7 @@ from retro_roster_patcher.games.we2002 import patcher as patcher_module
 from retro_roster_patcher.games.we2002.models import WETeamRecord
 from retro_roster_patcher.games.we2002.patcher import MAX_ML_SLOTS, MAX_NAT_SLOTS, WE2002Patcher
 from retro_roster_patcher.games.we2002.ppf import PPFError
-from retro_roster_patcher.games.we2002.rom_writer import RomWriter, _slot_player_range
+from retro_roster_patcher.games.we2002.rom_writer import _PLAYERS_PER_NAT, RomWriter
 from retro_roster_patcher.sports.espn import EspnClient
 from retro_roster_patcher.sports.models import (
     League,
@@ -175,9 +175,8 @@ def _fake_writer_class(log, *, create_output=True):
 
         def write_team(self, slot_index, team, players=None, include_flag=True):
             log.append(("write_team", slot_index, team.name, len(players or []), include_flag))
-            # The real writer drops players past the slot's capacity, so ask the
-            # real `_slot_player_range` rather than restating the rule here.
-            return min(len(players or []), _slot_player_range(slot_index)[1])
+            # The real writer's club fields the national slot's places, none past them.
+            return min(len(players or []), _PLAYERS_PER_NAT)
 
         def write_nat_team(self, nat_index, team, players=None, include_flag=True):
             log.append(("write_nat_team", nat_index, team.name, len(players or []), include_flag))
@@ -1192,12 +1191,10 @@ def test_a_slot_the_writer_would_silently_drop_is_not_counted(patcher, tmp_path,
     assert (result.teams_patched, result.players_patched) == (2, 22)
 
 
-def test_players_past_the_slot_capacity_are_counted_as_written_not_as_supplied(
-    tmp_path, monkeypatch
-):
-    # Every team also gets a 23-place national squad, which holds a 22-man squad
-    # whole; the Master League copy (14 or 15 places) is a subset of it. So the
-    # count is the national one: 22 + 22.
+def test_a_team_is_counted_once_not_once_per_table(tmp_path, monkeypatch):
+    # A Master League club fields the 23 places of the national slot of its number, which the
+    # national writer fills, so the two writers count the same squad. `patch` reports the
+    # national one: 22 + 22, not 22 on each table for each team.
     log = []
     monkeypatch.setattr(patcher_module, "RomWriter", _fake_writer_class(log))
     _silence_translation(monkeypatch)
@@ -1215,19 +1212,11 @@ def test_players_past_the_slot_capacity_are_counted_as_written_not_as_supplied(
 
     result = p.patch(rom_path=rom, output_path=tmp_path / "out.bin", rosters=mapped)
 
-    # All 22 are still handed over — the truncation is the writer's, not the
-    # patcher's, and `patch` must not start second-guessing which ones fit.
+    # All 22 are handed to both writers, whatever the slot.
     assert [entry[3] for entry in log if entry[0] == "write_team"] == [22, 22]
     assert [entry[3] for entry in log if entry[0] == "write_nat_team"] == [22, 22]
     assert result.players_patched == 44
     assert result.teams_patched == 2
-
-
-def test_the_two_slot_capacities_differ_so_the_count_cannot_be_a_uniform_multiple(tmp_path):
-    # Slot 0 and slot 31 have to keep different capacities, or the 29 above stops
-    # separating "summed the writer's answers" from "doubled one capacity".
-    assert _slot_player_range(0)[1] == 14
-    assert _slot_player_range(31)[1] == 15
 
 
 def test_patch_raises_when_finalisation_leaves_no_output(patcher, tmp_path, monkeypatch):

@@ -41,12 +41,14 @@ def _sync(f):
 
 # Absolute byte offsets in the Mode2/2352 BIN (from WE2002-editor-2.0 source).
 
-# Master League player NAME sections (10 bytes per player)
+# The 462 non-national players' NAME sections (10 bytes per player). The retail links name them
+# (the links are below); the patcher no longer writes them: a patched club fields the national
+# slot of its number, and the links of the clubs nobody patched still read these.
 _OFS_NOMI_GML = 2_006_288  # ML player names, section 1: players 0–203
 _OFS_NOMI_GML2 = 2_008_632  # ML player names, section 2: players 204–407 + first 8 of 408
 _OFS_NOMI_GML3 = 2_010_984  # ML player names, section 3: last 2 of 408, then 409–461
 
-# Master League player CHARACTERISTICS sections (12 bytes per player)
+# And their CHARACTERISTICS sections (12 bytes per player)
 _OFS_CARAT_GML = 2_204_112  # Characteristics section 1: players 0–147
 # Characteristics section 2: last 4 of 148, then 149–318, + first 4 of 319
 _OFS_CARAT_GML1 = 2_206_200
@@ -128,6 +130,20 @@ _OFS_NOMI_SQK1 = 2_003_928  # Sector boundary continuation (national i=58 split)
 _OFS_FORMATIONS = 2_303_700
 _OFS_FORMATIONS_A = 2_304_984
 _FORMATION_SIZE = 30
+
+# Master League squads: a club is 23 links of two bytes, (nationality, index), 46 in all, in slot
+# order from `_OFS_LINK_ML1`, and it fields whoever they name. Byte 0 is the nationality, byte 1 the
+# index (Moriero's `trovaIDml`): an index up to 22 is place index + 1 of that nationality's national
+# team, a larger one a non-national player of that nationality (the retail links use both to mix
+# many teams' players into one club). Club 6 straddles the end of a sector: its first 28 bytes end
+# sector 855's user data and its last 18 start sector 856's, `_OFS_LINK_ML2`, where clubs 7-31
+# follow. The default Master League team (the managed club) has its squad's 46 bytes at 2_012_680,
+# which the patcher never writes, as it never writes its formation record (95).
+_OFS_LINK_ML1 = 2_012_728
+_OFS_LINK_ML2 = 2_013_336
+_LINK_SIZE = 46
+_LINK_SPLIT_SLOT = 6
+_LINK_SPLIT_HEAD = 28
 
 # Sector boundary crossing points (from C++ switch-case indices).
 
@@ -1530,23 +1546,6 @@ def _nat_slot_player_range(nat_index: int) -> tuple[int, int]:
     return nat_index * _PLAYERS_PER_NAT, _PLAYERS_PER_NAT
 
 
-def _slot_player_range(slot_index: int) -> tuple[int, int]:
-    """Return (first_global_player_index, player_count) for a ML slot.
-
-    WE2002 stores squad_ml[31] first in the ROM, squad_ml[0] last.  Player
-    indices 0-461 correspond to teams in that order.  Distribution assumption:
-      - Slots 18-31 (ROM positions 0-13):  15 players each  → indices 0-209
-      - Slots  0-17 (ROM positions 14-31): 14 players each  → indices 210-461
-    """
-    if slot_index >= 18:
-        rom_pos = 31 - slot_index
-        return rom_pos * 15, 15
-    else:
-        rom_pos = 31 - slot_index
-        first = 14 * 15 + (rom_pos - 14) * 14
-        return first, 14
-
-
 def _formation_chunks(table_index: int) -> list[tuple[int, int]]:
     """The (offset, size) pieces of record `table_index` of the formation table: 0-62 a national
     slot, 63-94 a Master League slot (63 plus the slot). Anything else raises `ValueError`; 95 is
@@ -1558,6 +1557,37 @@ def _formation_chunks(table_index: int) -> list[tuple[int, int]]:
     if table_index == 32:
         return [(_OFS_FORMATIONS + _FORMATION_SIZE * 32, 20), (_OFS_FORMATIONS_A, 10)]
     return [(_OFS_FORMATIONS_A + 10 + _FORMATION_SIZE * (table_index - 33), _FORMATION_SIZE)]
+
+
+def _check_formation(team: WETeamRecord) -> None:
+    """`ValueError` for a formation record of the wrong size, before anything is written: a short
+    one would leave half of the old record in the image."""
+    if team.formation is not None and len(team.formation) != _FORMATION_SIZE:
+        raise ValueError(
+            f"a formation record is {_FORMATION_SIZE} bytes, not {len(team.formation)}"
+        )
+
+
+def _link_chunks(slot_index: int) -> list[tuple[int, int]]:
+    """The (offset, size) pieces of Master League slot `slot_index`'s 46 link bytes. Anything but
+    0-31 raises `ValueError`: the default squad (2_012_680) has no slot and is never written."""
+    if not 0 <= slot_index < _SQUADRE_ML:
+        raise ValueError(f"Master League slot {slot_index} is outside 0..{_SQUADRE_ML - 1}")
+    if slot_index < _LINK_SPLIT_SLOT:
+        return [(_OFS_LINK_ML1 + _LINK_SIZE * slot_index, _LINK_SIZE)]
+    tail = _LINK_SIZE - _LINK_SPLIT_HEAD
+    if slot_index == _LINK_SPLIT_SLOT:
+        return [
+            (_OFS_LINK_ML1 + _LINK_SIZE * _LINK_SPLIT_SLOT, _LINK_SPLIT_HEAD),
+            (_OFS_LINK_ML2, tail),
+        ]
+    return [(_OFS_LINK_ML2 + tail + _LINK_SIZE * (slot_index - _LINK_SPLIT_SLOT - 1), _LINK_SIZE)]
+
+
+def _squad_links(slot_index: int) -> bytes:
+    """The links that make Master League slot `slot_index`'s club field the 23 places of the
+    national team of the same number: (nationality, index) for indices 0-22."""
+    return bytes(b for place in range(_PLAYERS_PER_NAT) for b in (slot_index, place))
 
 
 def _write_chunks(f, data: bytes, chunks: list[tuple[int, int]]) -> None:
@@ -2197,21 +2227,30 @@ class RomWriter:
         players: list[WEPlayerRecord] | None = None,
         include_flag: bool = True,
     ) -> int:
-        """Write team names, abbreviations, force bars, players, and flag.
+        """Write team names, abbreviations, force bars, squad, formation, and flag.
+
+        A Master League club fields whoever its 23 links name, and the retail links name other
+        teams' players. With `players=` the club's links are rewritten to the 23 places of the
+        national slot of the same number, which `write_nat_team` fills from the same list (call it
+        too, as `patch` does), and `team.formation`, when set, goes into the club's record
+        (63 + `slot_index`). No player record is written here. Without `players=` the links and
+        the record stay as the disc has them. The managed club (the default team: its squad and
+        its record 95) is never written.
 
         Keep every write inside one file open: the target is slow storage (SD
         cards on handhelds).
 
-        Returns the number of supplied player records that reached the ROM: 0
-        with no output file, a slot outside 0..31 or no `players=` list, and
-        otherwise the slot's capacity bounded by the list length.
+        A formation that is not 30 bytes raises `ValueError` before the file is opened.
+
+        Returns how many of the supplied players the club now fields: at most the 23 places of
+        its national slot, 0 with no output file, a slot outside 0..31 or no `players=` list.
         """
         if not os.path.exists(self.output_path):
             return 0
         if slot_index < 0 or slot_index >= _SQUADRE_ML:
             return 0
+        _check_formation(team)
 
-        written = 0
         with open(self.output_path, "r+b") as f:
             self._write_team_names(f, slot_index, team)
             self._write_kanji_name(f, slot_index, team)
@@ -2220,7 +2259,9 @@ class RomWriter:
             self._write_jersey_colors(f, slot_index, team)
 
             if players is not None:
-                written = self._write_players_impl(f, slot_index, players)
+                _write_chunks(f, _squad_links(slot_index), _link_chunks(slot_index))
+                if team.formation is not None:
+                    _write_chunks(f, team.formation, _formation_chunks(_SQUADRE_NAZ + slot_index))
 
             if include_flag:
                 self._write_flag_impl(f, slot_index, team)
@@ -2229,7 +2270,7 @@ class RomWriter:
         # Queue 3D jersey TEX patch (ML teams are TEX indices 63-94)
         if self.write_kits:
             self._pending_tex_patches.append((63 + slot_index, team))
-        return written
+        return min(len(players), _PLAYERS_PER_NAT) if players is not None else 0
 
     def _write_team_names(self, f, slot_index: int, team: WETeamRecord):
         """Write all 6 name variants + lowercase for an ML team slot.
@@ -2380,36 +2421,6 @@ class RomWriter:
         f.seek(_OFS_ANT_MAGLIE2 + slot_index * 64)
         f.write(_maglia(team))
 
-    def _write_players_impl(self, f, slot_index, players) -> int:
-        """Write player names + characteristics (uses existing file handle).
-
-        Returns the number of supplied records that reached the ROM. The loop is
-        bounded by the slot's fixed capacity (14 or 15, see `_slot_player_range`)
-        and `players[count:]` is dropped, so never report `len(players)`.
-        """
-        first_idx, count = _slot_player_range(slot_index)
-        for i in range(count):
-            global_idx = first_idx + i
-            if i < len(players):
-                p = players[i]
-                name_bytes = _encode_player_name(p.last_name)
-                carat_bytes = _encode_player_carat(p)
-            else:
-                name_bytes = _DUMMY_NAME
-                carat_bytes = _DUMMY_CARAT
-            _write_chunks(f, name_bytes, _nome_chunks(global_idx))
-            _write_chunks(f, carat_bytes, _carat_chunks(global_idx))
-        return min(len(players), count)
-
-    def write_players(self, slot_index: int, players: list[WEPlayerRecord]) -> int:
-        """Returns the number of records written, or 0 if there is no output file."""
-        if not os.path.exists(self.output_path):
-            return 0
-        with open(self.output_path, "r+b") as f:
-            written = self._write_players_impl(f, slot_index, players)
-            _sync(f)
-        return written
-
     def _write_flag_impl(self, f, slot_index, team):
         """Write team flag data.
 
@@ -2454,8 +2465,8 @@ class RomWriter:
         """Write national team names, abbreviations, force bars, players, formation, and flag.
 
         The formation is `team.formation` (30 bytes, `ValueError` otherwise) when the team has
-        one, else the slot keeps its own. Master League slots (`write_team`) write none: such a
-        club fields its retail links, not its national slot's players.
+        one, else the slot keeps its own. The Master League club of the same number takes the
+        squad written here through its links, and its own record, in `write_team`.
 
         Returns how many of `players` were written: at most the 23 places of a
         national squad, 0 when nothing was written.
@@ -2464,10 +2475,7 @@ class RomWriter:
             return 0
         if nat_index < 0 or nat_index >= _SQUADRE_NAZ:
             return 0
-        if team.formation is not None and len(team.formation) != _FORMATION_SIZE:
-            raise ValueError(
-                f"a formation record is {_FORMATION_SIZE} bytes, not {len(team.formation)}"
-            )
+        _check_formation(team)
 
         with open(self.output_path, "r+b") as f:
             self._write_nat_team_names(f, nat_index, team)
@@ -2936,9 +2944,11 @@ class RomWriter:
                     )
 
                 if we_team.players:
+                    # The club fields its national slot's places: the first one's name, and
+                    # the links that lead there.
                     expected_pn = _encode_player_name(we_team.players[0].last_name)
-                    first_idx, _ = _slot_player_range(si)
-                    pn_chunks = _nome_chunks(first_idx)
+                    first_idx, _ = _nat_slot_player_range(si)
+                    pn_chunks = _nat_nome_chunks(first_idx)
                     f.seek(pn_chunks[0][0])
                     actual_pn = f.read(pn_chunks[0][1])
                     # For straddle cases, only check the first chunk
@@ -2949,6 +2959,19 @@ class RomWriter:
                         lines.append(
                             f"  FAIL slot {si} Player0: "
                             f"expected {expected_pn[: len(actual_pn)]!r} got {actual_pn!r}"
+                        )
+
+                    actual_links = b""
+                    for link_offset, link_size in _link_chunks(si):
+                        f.seek(link_offset)
+                        actual_links += f.read(link_size)
+                    if actual_links == _squad_links(si):
+                        readback_ok += 1
+                    else:
+                        readback_fail += 1
+                        lines.append(
+                            f"  FAIL slot {si} Links: "
+                            f"expected {_squad_links(si).hex()} got {actual_links.hex()}"
                         )
 
         if readback_fail == 0:
@@ -2996,12 +3019,16 @@ class RomWriter:
         n1_budget = _ml_name_budget(slot_index, _LUN_NOMI1)
         checks.append(("Name1", n1_off, n1_budget))
 
-        first_idx, _ = _slot_player_range(slot_index)
-        pn_chunks = _nome_chunks(first_idx)
+        # The club fields the 23 places of its national slot (the links), not blocks of its own.
+        first_idx, _ = _nat_slot_player_range(slot_index)
+        pn_chunks = _nat_nome_chunks(first_idx)
         checks.append(("Player0", pn_chunks[0][0], pn_chunks[0][1]))
 
-        pc_chunks = _carat_chunks(first_idx)
+        pc_chunks = _nat_carat_chunks(first_idx)
         checks.append(("Carat0", pc_chunks[0][0], pc_chunks[0][1]))
+
+        link_chunks = _link_chunks(slot_index)
+        checks.append(("Links", link_chunks[0][0], link_chunks[0][1]))
 
         checks.append(("ForceBar", _ML_BAR_OFFSET + slot_index * 5, 5))
 

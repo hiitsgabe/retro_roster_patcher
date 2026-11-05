@@ -2,10 +2,14 @@
 
 `RomWriter` behaviours this module has to work around:
 
-  * `write_team` writes no players at all unless handed a `players=` list.
-  * `write_team` writes only as many players as the slot has room for — 14
-    places for slots 0-17, 15 for slots 18-31 — and returns the count it
-    actually wrote, so never count `len(record.players)` as patched.
+  * `write_team` changes the club's squad only when handed a `players=` list,
+    and then writes no player record: it points the Master League club's 23
+    links at the national slot of the same number, which `write_nat_team`
+    fills, and writes the club's formation record. Call both for a slot, as
+    `patch` does.
+  * `write_team` returns how many of the players it was handed the club fields,
+    at most the 23 places of a national slot, so never count
+    `len(record.players)` as patched.
   * `write_team` returns silently for a slot outside 0..31; bound every slot by
     `MAX_ML_SLOTS` before handing it over.
   * `write_team` only queues its 3D-jersey TEX patch; `flush_tex_patches` is
@@ -139,10 +143,11 @@ class WE2002Patcher(Patcher):
     #: Screen art `patch(images={name: png})` can replace; `export_images`
     #: writes the current art of each as a PNG to edit.
     image_slots: tuple[str, ...] = SLOT_NAMES
-    #: `patch` writes each national slot's formation: the disc's preset nearest the
+    #: `patch` writes each mapped slot's formation: the disc's preset nearest the
     #: team's (`stat_mapper.FORMATION_PRESETS`, variant B for two holding
     #: midfielders) into the team's record, with its eleven seated on the preset's
-    #: places. A Master League slot keeps the disc's own record.
+    #: places. A Master League slot's club fields the national slot's squad and
+    #: takes the same record.
     writes_formation: bool = True
     formations: tuple[str, ...] = FORMATIONS
 
@@ -419,8 +424,9 @@ class WE2002Patcher(Patcher):
                 if on_progress is not None:
                     on_progress(0.05 + 0.9 * (i / len(slots)), f"Writing slot {slot}...")
                 # Both tables, Master League first, as the original tool did.
-                # The national squad (23 places) holds what the Master League
-                # one (14 or 15) does and more, so its count is the one reported.
+                # The Master League club fields the national slot's 23 places
+                # (its links point there), so the two writers count the same
+                # squad: the national one is reported.
                 if slot < MAX_ML_SLOTS:
                     writer.write_team(slot, record, players=record.players, include_flag=True)
                 written = writer.write_nat_team(

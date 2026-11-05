@@ -516,8 +516,8 @@ class StatMapper:
         lineup: dict | None = None,
         formation: str | None = None,
     ) -> list[Player]:
-        """The 23 (a national squad's places; a Master League slot keeps the
-        first 14 or 15): the starting eleven, then the bench.
+        """The 23 (a national squad's places, which a Master League club of the
+        same slot number fields too): the starting eleven, then the bench.
 
         The eleven is the keeper, then ten outfielders in the 4-4-2 of the
         first 11 slots. When `lineup` (what `EspnClient.get_lineup` returns)
@@ -526,9 +526,8 @@ class StatMapper:
         still open go to the season's most frequent starters, from a line the
         lineup left short first. The bench then takes up to 2 keepers,
         3 defenders, 2 midfielders and 4 forwards (`BENCH_PLACES`), recent
-        starters and regulars first, one of each line in turn so the few subs
-        a Master League slot keeps cover every line; the best of the rest fill
-        what is left.
+        starters and regulars first, one of each line in turn so the first few
+        subs cover every line; the best of the rest fill what is left.
 
         With a `formation` that `parse_shape` reads, the eleven's outfielders
         go back to front by the depth of their roles (`ROLE_DEPTH`; a player
