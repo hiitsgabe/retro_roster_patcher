@@ -14,8 +14,10 @@ Both read as the emulator showed them: retail Wales (national slot 2) wears 1, 5
 11, 10, 9, 8 in places 1-11, and club 9 (ANDALUCIA) 1, 2, 4, 15, 20, 8, 22, 18, 19, 21, 7.
 
 A player wears his provider's number when it is in 1-32 and no earlier player has it; the others
-take the lowest free numbers, in order (`core.numbers.shirt_numbers`), over the 23 places. The last
-tests read the retail disc (the `disc` fixture: RETRO_ROSTER_TEST_ROMS has we2002.bin, Track 1).
+take the lowest free numbers, in order (`core.numbers.shirt_numbers`), over the 23 places. His own
+12-byte characteristics record carries that same number (5 bits, less one), as every retail
+national player's does. The last tests read the retail disc (the `disc` fixture:
+RETRO_ROSTER_TEST_ROMS has we2002.bin, Track 1).
 """
 
 from __future__ import annotations
@@ -95,6 +97,13 @@ def _nat_numbers(image, nat):
 
 def _club_numbers(image, slot):
     return [b + 1 for b in _read(image, rom_writer._ml_numbers_chunks(slot))]
+
+
+def _carat_numbers(image, nat):
+    """The number in each of a national slot's 23 characteristics records: 5 bits, less one."""
+    first, count = rom_writer._nat_slot_player_range(nat)
+    carats = [_read(image, rom_writer._nat_carat_chunks(first + place)) for place in range(count)]
+    return [((carat[3] >> 2) & 31) + 1 for carat in carats]
 
 
 def _team():
@@ -227,6 +236,38 @@ def test_a_number_above_32_and_a_repeat_take_the_lowest_free_numbers_in_both_tab
     assert _club_numbers(image, 5) == GIVEN
 
 
+def test_a_players_own_record_carries_the_number_his_squad_wears(tmp_path):
+    # The repeat of 10 (place 2), the 40 (place 3) and the 0 (place 4) wear 11, 22 and 23, and so
+    # do their records: the number is the same in the record and in both tables, not the clamped
+    # number the provider gave (a 10 twice, a 32, a 1).
+    squad = _squad(WANTED)
+
+    def write(writer):
+        writer.write_team(5, _team(), players=squad)
+        writer.write_nat_team(5, _team(), players=squad)
+
+    image = _written(tmp_path, "a", write)
+    numbers = _carat_numbers(image, 5)
+    assert numbers == GIVEN
+    assert numbers == _nat_numbers(image, 5) == _club_numbers(image, 5)
+    assert numbers[1:4] == [11, 22, 23]
+
+
+def test_the_encoder_writes_the_number_it_is_given_and_otherwise_the_players_own():
+    def number(carat):
+        return ((carat[3] >> 2) & 0x1F) + 1
+
+    player = WEPlayerRecord("A", "B", 2, 40)
+    assert number(rom_writer._encode_player_carat(player, 22)) == 22
+    assert number(rom_writer._encode_player_carat(player)) == 32  # his own, clamped to 5 bits
+    assert number(rom_writer._encode_player_carat(WEPlayerRecord("A", "B", 2, 0))) == 1
+    # Only the number differs.
+    given = rom_writer._encode_player_carat(player, 22)
+    plain = rom_writer._encode_player_carat(player)
+    assert given[:3] == plain[:3] and given[4:] == plain[4:]
+    assert given[3] & ~(31 << 2) == plain[3] & ~(31 << 2)
+
+
 def test_a_short_squads_empty_places_take_the_lowest_free_numbers_too(tmp_path):
     squad = _squad([5, 3])
 
@@ -238,6 +279,11 @@ def test_a_short_squads_empty_places_take_the_lowest_free_numbers_too(tmp_path):
     expected = [5, 3, 1, 2, 4, *range(6, 24)]
     assert _nat_numbers(image, 0) == expected
     assert _club_numbers(image, 0) == expected
+    # The two players' records carry theirs; the 21 empty places stay the dummy record (all zero).
+    assert _carat_numbers(image, 0)[:2] == [5, 3]
+    first = rom_writer._nat_slot_player_range(0)[0]
+    for place in range(2, 23):
+        assert _read(image, rom_writer._nat_carat_chunks(first + place)) == bytes(12)
 
 
 def test_a_squad_longer_than_23_is_numbered_by_its_first_23(tmp_path):
@@ -394,6 +440,7 @@ def test_patch_writes_the_galos_numbers_into_wales_slot_and_the_club_of_that_num
     assert _nat_numbers(image, 2)[:11] == [22, 2, 4, 14, 16, 21, 17, 7, 28, 18, 11]
     assert _nat_numbers(image, 2) == GALO_NUMBERS
     assert _club_numbers(image, 2) == GALO_NUMBERS
+    assert _carat_numbers(image, 2) == GALO_NUMBERS
     # The other teams' rows keep what the image had (here zeroes).
     for nat in (0, 1, 3, 40):
         assert _read(image, rom_writer._nat_numbers_chunks(nat)) == bytes(16)
@@ -419,6 +466,7 @@ def test_a_hand_built_mapping_gets_the_same_numbers(tmp_path, monkeypatch):
     image = out.read_bytes()
     assert _nat_numbers(image, 5) == _club_numbers(image, 5) == GIVEN
     assert _nat_numbers(image, 40) == GIVEN
+    assert _carat_numbers(image, 5) == _carat_numbers(image, 40) == GIVEN
 
 
 # --- the retail disc ----------------------------------------------------------------------
@@ -442,6 +490,18 @@ def test_the_packer_rewrites_all_63_retail_records_byte_for_byte(disc):
         numbers = _decode_nat(raw)
         assert len(set(numbers)) == 23 and 1 <= min(numbers) and max(numbers) <= 32, nat
         assert rom_writer._pack_nat_numbers(numbers) == raw, nat
+
+
+@pytest.mark.real_rom
+def test_every_retail_national_player_carries_the_number_his_team_wears(disc):
+    # 63 teams of 23: the number in a player's own record is the one the team's table gives his
+    # place (the editor's "default numbers" button copies one to the other).
+    for nat in range(63):
+        table = _decode_nat(b"".join(disc(o, n) for o, n in rom_writer._nat_numbers_chunks(nat)))
+        first, count = rom_writer._nat_slot_player_range(nat)
+        for place in range(count):
+            carat = b"".join(disc(o, n) for o, n in rom_writer._nat_carat_chunks(first + place))
+            assert ((carat[3] >> 2) & 31) + 1 == table[place], (nat, place)
 
 
 @pytest.mark.real_rom

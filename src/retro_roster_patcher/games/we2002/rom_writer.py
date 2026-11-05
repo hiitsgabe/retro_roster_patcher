@@ -1143,8 +1143,11 @@ def _clamp(value: int, low: int, high: int) -> int:
     return min(high, max(low, value))
 
 
-def _encode_player_carat(player: WEPlayerRecord) -> bytes:
+def _encode_player_carat(player: WEPlayerRecord, number: int | None = None) -> bytes:
     """Encode WEPlayerRecord attributes into the 12-byte str_carat format.
+
+    `number` is the shirt number his squad wears him in (`_squad_numbers`), the one both number
+    tables get, so that his own record and the tables agree; without it, his own `shirt_number`.
 
     Bit layout (from giocatore::decodifica() in WE2002-editor-2.0):
       Byte  0: posizione[2:0], stile_capelli_low4[7:4]
@@ -1178,7 +1181,9 @@ def _encode_player_carat(player: WEPlayerRecord) -> bytes:
     scarpe = 0
     piede = 0
     fuori_ruolo = 0
-    numero = max(1, min(32, player.shirt_number or 1))
+    numero = _clamp(
+        number if number is not None else player.shirt_number or 1, 1, _MAX_SHIRT_NUMBER
+    )
 
     attacco = _we_val(a.offensive)
     difesa = _we_val(a.defensive)
@@ -2637,19 +2642,19 @@ class RomWriter:
 
     def _write_nat_players_impl(self, f, nat_index, players):
         first_nat_idx, count = _nat_slot_player_range(nat_index)
+        numbers = _squad_numbers(players)
         for i in range(count):
             nat_player_idx = first_nat_idx + i
             if i < len(players):
                 p = players[i]
                 name_bytes = _encode_player_name(p.last_name)
-                carat_bytes = _encode_player_carat(p)
+                carat_bytes = _encode_player_carat(p, numbers[i])
             else:
                 name_bytes = _DUMMY_NAME
                 carat_bytes = _DUMMY_CARAT
             _write_chunks(f, name_bytes, _nat_nome_chunks(nat_player_idx))
             _write_chunks(f, carat_bytes, _nat_carat_chunks(nat_player_idx))
-        numbers = _pack_nat_numbers(_squad_numbers(players))
-        _write_chunks(f, numbers, _nat_numbers_chunks(nat_index))
+        _write_chunks(f, _pack_nat_numbers(numbers), _nat_numbers_chunks(nat_index))
 
     def write_nat_players(self, nat_index: int, players: list[WEPlayerRecord]):
         if not os.path.exists(self.output_path):
