@@ -714,6 +714,8 @@ class DiscSpec:
     db_dir_exact_size: bool = False
     db_viv_last: bool = False
     no_pad_file: bool = False
+    #: When set, the root also holds `SLUS_210.01` with these bytes.
+    elf: bytes | None = None
 
 
 def build_db_viv(spec: DiscSpec | None = None) -> bytes:
@@ -760,7 +762,8 @@ def build_iso(spec: DiscSpec | None = None) -> bytes:
 
     pad_lba = DB_VIV_SECTOR + _sectors_for(len(viv)) + GAP_SECTORS
     root_file_lba = pad_lba + _sectors_for(len(PAD_FILE_BYTES))
-    total_sectors = root_file_lba + _sectors_for(len(ROOT_FILE_BYTES))
+    elf_lba = root_file_lba + _sectors_for(len(ROOT_FILE_BYTES))
+    total_sectors = elf_lba + (_sectors_for(len(spec.elf)) if spec.elf else 0)
 
     declared = spec.declared_db_viv_size
     if declared is None:
@@ -796,6 +799,12 @@ def build_iso(spec: DiscSpec | None = None) -> bytes:
             is_dir=False,
         ),
     ]
+    files = {}
+    if spec.elf:
+        root_records.insert(
+            1, iso.dir_record(b"SLUS_210.01;1", elf_lba, len(spec.elf), is_dir=False)
+        )
+        files[elf_lba] = spec.elf
     root_dir = iso.directory_extent(ROOT_DIR_SECTOR, ROOT_DIR_SECTOR, root_records)
 
     image = iso.build_image(
@@ -812,6 +821,7 @@ def build_iso(spec: DiscSpec | None = None) -> bytes:
             DB_VIV_SECTOR: viv,
             pad_lba: PAD_FILE_BYTES,
             root_file_lba: ROOT_FILE_BYTES,
+            **files,
         },
         total_sectors,
     )

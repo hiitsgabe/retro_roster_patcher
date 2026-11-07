@@ -62,7 +62,7 @@ from ...sports.espn import EspnClient
 from ...sports.models import League, LeagueData, TeamRoster
 from ...sports.nhl import NhlApiClient
 from ..nhl07_psp.rom_writer import iso_entry, write_in_place
-from . import faces, logos, looks, portraits, screens, teams, wordmarks
+from . import faces, logos, looks, portraits, saves, screens, teams, wordmarks
 from .models import (
     ALL_STAR_SLOTS,
     NAMED_SLOT_COUNT,
@@ -72,7 +72,7 @@ from .models import (
     TDB_ROSTER,
     NHL05PlayerRecord,
 )
-from .rom_reader import ISO_SECTOR_SIZE, NHL05PS2RomReader
+from .rom_reader import DB_VIV_PATH, ISO_SECTOR_SIZE, NHL05PS2RomReader
 from .rom_writer import (
     LINE_FLAGS,
     PROGRESS_COPY_END,
@@ -535,12 +535,32 @@ class NHL05PS2Patcher(Patcher):
                 self._write_names(writer, renamed)
             if pictures:
                 self._write_images(writer, pictures)
+            self._own_save_folder(writer)
 
         return PatchResult(
             output_path=str(output_path),
             teams_patched=teams_patched,
             players_patched=players_patched,
         )
+
+    def _own_save_folder(self, writer: NHL05PS2RomWriter) -> None:
+        """Name the disc's memory card folder for its new roster (`saves`), so
+        the game never auto-loads a roster saved with another disc over it."""
+        with open(writer.output_path, "r+b") as f:
+            elf = iso_entry(f, saves.ELF_PATH)
+            viv = iso_entry(f, DB_VIV_PATH)
+            if elf is None or viv is None:
+                return
+            f.seek(viv[0].extent.offset)
+            db_viv = f.read(viv[0].extent.size)
+            f.seek(elf[0].extent.offset)
+            new = saves.own_folder(f.read(elf[0].extent.size), db_viv)
+            if new is None:
+                self.status("Save folder kept: SLUS_210.01 names no save folder")
+                return
+            f.seek(elf[0].extent.offset)
+            f.write(new)
+        self.status(f"Save folder: BASLUS-21001{saves.suffix(db_viv).decode()}")
 
     def _dress(self, rosters: MappedRosters, measure: bool) -> MappedRosters:
         """A copy of `rosters` with every player's `skin` set (`looks.dress`):
