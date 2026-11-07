@@ -882,6 +882,14 @@ def test_an_existing_formation_is_kept():
     assert roster.extra["formation"] == "4-4-2"
 
 
+@pytest.mark.parametrize("formation", ["", None])
+def test_an_empty_formation_counts_as_none_and_takes_the_lineups_shape(formation):
+    # A formation of "" or None says nothing: only a formation with something in it is an edit.
+    roster = _roster(Player(id=1, name="A", position="Defender"), formation=formation)
+    apply_lineup(roster, {"shape": "4-3-3", "roles": {}, "starters": []})
+    assert roster.extra["formation"] == "4-3-3"
+
+
 @pytest.mark.parametrize(
     "group, role",
     [

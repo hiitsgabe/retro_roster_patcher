@@ -7,6 +7,7 @@ from retro_roster_patcher.core.errors import CapabilityError
 from retro_roster_patcher.core.models import MappedRosters, PatchResult, RomInfo, SlotMapping
 from retro_roster_patcher.core.patcher import Patcher
 from retro_roster_patcher.sports import League, LeagueData, Player
+from retro_roster_patcher.sports.lineup import parse_shape
 
 
 class FakePatcher(Patcher):
@@ -271,6 +272,17 @@ def test_every_soccer_game_writes_a_formation():
         cls = get_patcher(game)
         assert cls.writes_formation is True, game
         assert cls.formations, game
+
+
+def test_a_patcher_writes_a_formation_exactly_when_it_offers_shapes_it_can_read():
+    # Every registered patcher, whatever its sport: the app builds its selector from `formations`
+    # and colours the lines by what `parse_shape` reads, so an offered shape must be three lines
+    # of ten outfield players, read as its own counts (a four-line one would be folded).
+    for info in list_patchers():
+        cls = get_patcher(info.game_id)
+        assert cls.writes_formation == bool(cls.formations), info.game_id
+        for shape in cls.formations:
+            assert parse_shape(shape) == tuple(map(int, shape.split("-"))), (info.game_id, shape)
 
 
 def test_pes2013_writes_the_six_shapes_its_twelve_presets_come_in():
