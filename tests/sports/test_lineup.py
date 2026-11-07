@@ -182,9 +182,10 @@ def test_a_code_that_reads_as_a_role_outside_the_vocabulary_gives_no_role(monkey
     [
         # The formation the roster holds, whatever its lineup says ...
         ({"formation": "4-4-2", "lineup": {"shape": "4-3-3"}}, "4-4-2"),
-        ({"formation": " 4-2-3-1 ", "lineup": {"shape": "4-3-3"}}, " 4-2-3-1 "),
+        ({"formation": " 4-2-3-1 ", "lineup": {"shape": "4-3-3"}}, "4-2-3-1"),  # stripped
         # ... else the lineup's shape, for a roster fetched before formations were kept ...
         ({"lineup": {"shape": "4-3-3"}}, "4-3-3"),
+        ({"lineup": {"shape": " 4-3-3\n"}}, "4-3-3"),
         ({"formation": "", "lineup": {"shape": "3-5-2"}}, "3-5-2"),
         ({"formation": "attack", "lineup": {"shape": "5-3-2"}}, "5-3-2"),
         ({"formation": None, "lineup": {"shape": "3-4-3"}}, "3-4-3"),

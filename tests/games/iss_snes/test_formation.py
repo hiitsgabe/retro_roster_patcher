@@ -36,7 +36,7 @@ from retro_roster_patcher.games.iss_snes.stat_mapper import (
     ISSStatMapper,
     _donor_places,
 )
-from retro_roster_patcher.sports.lineup import pick_lineup, slot_role
+from retro_roster_patcher.sports.lineup import apply_lineup, pick_lineup, slot_role
 from retro_roster_patcher.sports.models import (
     League,
     LeagueData,
@@ -878,6 +878,66 @@ def test_a_player_only_the_slots_own_shape_picks_is_still_ranked(mapper):
     assert five.formation == "5-3-2"
     scorer = next(p for p in five.players if p.player_id == 7)
     assert scorer.attributes.shooting >= 6
+
+
+def spilling_squad(*, roles: bool = False) -> TeamRoster:
+    """A club with no lineup and, unless `roles`, no role anywhere: two keepers, three defenders,
+    five midfielders and five attackers, each named by his group and id (G1, D3, M6, A11) and
+    started as many times as the table says. A 5-3-2 has five places in defence for the three
+    defenders, and the group fill sends it the third attacker (A13) and then the fourth midfielder
+    (M9). `roles` gives each player his group's role, as `apply_lineup` does without a lineup."""
+    kinds = "G G D D D M M M M M A A A A A".split()
+    starts = [38, 2, 20, 19, 18, 25, 24, 23, 22, 21, 30, 29, 28, 5, 4]
+    group = {"G": "Goalkeeper", "D": "Defender", "M": "Midfielder", "A": "Attacker"}
+    players = [
+        Player(id=i, name=f"{kind}{i}", position=group[kind]) for i, kind in enumerate(kinds, 1)
+    ]
+    stats = {p.id: stats_of(p.id, lineups=n) for p, n in zip(players, starts, strict=True)}
+    roster = TeamRoster(
+        team=Team(id=1, name="Club", code="CLB"), players=players, player_stats=stats
+    )
+    if roles:
+        apply_lineup(roster, None)
+    return roster
+
+
+#: What the group fill gave a 5-3-2 of `spilling_squad` before roles existed: the back five is the
+#: three defenders and the attacker and the midfielder who spilled into it.
+SPILLED_BY_GROUP = ["G1", "D3", "D4", "D5", "A13", "M9", "M6", "M7", "M8", "A11", "A12"]
+
+
+def test_a_roster_with_no_lineup_and_no_roles_keeps_the_order_its_groups_gave_it(mapper, patcher):
+    roster = spilling_squad()
+    eleven = mapper._select_best_15(roster.players, roster.player_stats, None, "5-3-2")[:11]
+    assert [p.name for p in eleven] == SPILLED_BY_GROUP
+    # Mapped into Germany's slot (a 5-3-2), whose places keep the turn of players with no role.
+    assert written_names(mapped(patcher, roster, slot=0).teams[0])[:11] == SPILLED_BY_GROUP
+    # The suggested order has no slot to say 5-3-2: the 4-4-2's, with the attacker spilled
+    # into the back four and the midfield the four midfielders.
+    suggested = patcher.suggest_squad_order(roster)
+    assert [p.name for p in suggested[:11]] == [
+        "G1", "D3", "D4", "D5", "A13", "M6", "M7", "M8", "M9", "A11", "A12",
+    ]  # fmt: skip
+
+
+def test_a_roster_with_no_lineup_and_no_roles_keeps_the_callers_order_as_given(patcher):
+    record = mapped(patcher, spilling_squad(), slot=0, order_as_given=True).teams[0]
+    # The keeper, the first ten outfield players as listed, then the rest: the roster's own order.
+    assert written_names(record) == [
+        "G1", "D3", "D4", "D5", "M6", "M7", "M8", "M9", "M10", "A11", "A12",
+        "G2", "A13", "A14", "A15",
+    ]  # fmt: skip
+
+
+def test_a_roster_with_roles_and_no_lineup_is_cut_by_the_depth_of_its_roles(mapper):
+    # Each player has his group's role (`apply_lineup` gives it without a lineup): the roles are
+    # there to sort by, so the back five takes the two deepest midfielders and the spilled attacker
+    # plays in midfield, the line his role is on.
+    roster = spilling_squad(roles=True)
+    eleven = mapper._select_best_15(roster.players, roster.player_stats, None, "5-3-2")[:11]
+    assert [p.name for p in eleven] == [
+        "G1", "D3", "D4", "D5", "M9", "M6", "M7", "M8", "A13", "A11", "A12",
+    ]  # fmt: skip
 
 
 def test_the_suggested_order_follows_the_clubs_shape(patcher):

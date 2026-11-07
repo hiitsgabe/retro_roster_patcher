@@ -27,7 +27,8 @@ for it: the keeper, then the shape's defenders, midfielders and forwards, each
 line seated on the record's places of that line by role, the sides across the
 pitch and the deeper role deeper (`seat_line`). The suggested eleven goes in that order: its
 outfield back to front by the depth of its roles (`DEPTH`), so cutting it by index puts each in the
-line he plays, and each line from the left by the side of its lineup codes.
+line he plays, and each line from the left by the side of its lineup codes. A roster with neither a
+lineup nor a role keeps the lines of the group fill, as it did before roles.
 """
 
 from __future__ import annotations
@@ -492,13 +493,15 @@ class ISSStatMapper:
         would. Subs are the backup keeper, then the best of the rest the same
         way.
 
-        The ten outfield players are those picked, and they stand in the lines of
-        their roles, not of their groups (ESPN groups a 4-2-3-1's right winger
-        with its midfield and the attacking midfielder with its attack): back to
-        front by the depth of their roles (`DEPTH`; a player with none has the
-        one his lineup code reads as, else his squad group's), a stable sort,
-        cut by index into the shape's lines, and each line from the left by the
-        side of its players' lineup codes.
+        The ten outfield players are those picked, and with a lineup or a role
+        among them they stand in the lines of their roles, not of their groups
+        (ESPN groups a 4-2-3-1's right winger with its midfield and the
+        attacking midfielder with its attack): back to front by the depth of
+        their roles (`DEPTH`; a player with none has the one his lineup code
+        reads as, else his squad group's), a stable sort, cut by index into the
+        shape's lines, and each line from the left by the side of its players'
+        lineup codes. A roster with neither a lineup nor a role keeps the lines
+        the group fill made, as it did before roles.
         """
         stats = player_stats or {}
         recent = {int(s["id"]): (i, s) for i, s in enumerate((lineup or {}).get("starters") or [])}
@@ -557,17 +560,21 @@ class ISSStatMapper:
         def across(p: Player) -> int:
             return _across(str(recent[p.id][1].get("position") or "") if p.id in recent else "")
 
-        # The outfield back to front by the depth of its roles (stable: players of one depth keep
-        # the order they were chosen in), cut by index into the shape's lines, so each plays the
-        # line his role is on whatever group ESPN gives his code; then each line from the left.
-        outfield = sorted(
-            (p for g in places if g != "Goalkeeper" for p in chosen[g]),
-            key=lambda p: DEPTH[role(p)],
-        )
+        outfield = [p for g in places if g != "Goalkeeper" for p in chosen[g]]
         eleven = list(chosen["Goalkeeper"])
-        for count in (defenders, midfielders, forwards):
-            eleven += sorted(outfield[:count], key=across)
-            outfield = outfield[count:]
+        if recent or any(p.role in DEPTH for p in outfield):
+            # The outfield back to front by the depth of its roles (stable: players of one depth
+            # keep the order they were chosen in), cut by index into the shape's lines, so each
+            # plays the line his role is on whatever group ESPN gives his code; then each line
+            # from the left.
+            outfield.sort(key=lambda p: DEPTH[role(p)])
+            for count in (defenders, midfielders, forwards):
+                eleven += sorted(outfield[:count], key=across)
+                outfield = outfield[count:]
+        else:
+            # No lineup and no role to read: the lines the group fill made, as they always were
+            # (a spilled attacker stays in the line that had room for him).
+            eleven += outfield
 
         rest = [p for p in pool if id(p) not in taken]
         keepers = [p for p in rest if group(p) == "Goalkeeper"][:1]

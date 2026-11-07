@@ -161,14 +161,15 @@ def team_formation(roster: TeamRoster) -> str | None:
     """The formation a game writes for `roster`, or `None` for one with none.
 
     The roster's own (`extra["formation"]`) when `parse_shape` reads it, else its lineup's shape
-    (`extra["lineup"]["shape"]`) when that reads. A roster fetched before formations were kept has
-    only the lineup, and a game writes it that shape as it does a fresh fetch's. `None` when
-    neither reads: the game keeps the path it takes for a roster with no formation.
+    (`extra["lineup"]["shape"]`) when that reads, without the whitespace around it. A roster
+    fetched before formations were kept has only the lineup, and a game writes it that shape as
+    it does a fresh fetch's. `None` when neither reads: the game keeps the path it takes for a
+    roster with no formation.
     """
     extra = roster.extra or {}
     for text in (extra.get("formation"), (extra.get("lineup") or {}).get("shape")):
         if parse_shape(str(text or "")) is not None:
-            return str(text)
+            return str(text).strip()
     return None
 
 

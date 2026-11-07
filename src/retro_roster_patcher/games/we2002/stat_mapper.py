@@ -541,9 +541,10 @@ class StatMapper:
 
         With a `formation` that `parse_shape` reads, the eleven's outfielders
         go back to front by the depth of their roles (`ROLE_DEPTH`; a player
-        with none reads as his group's) and then by lineup position, so
-        cutting them by index over the formation's lines puts each in the line
-        he plays. The players picked are the same. The order is also the one
+        with none reads as the one his lineup code gives him, else his
+        group's) and then by lineup position, so cutting them by index over
+        the formation's lines puts each in the line he plays. The players
+        picked are the same. The order is also the one
         `map_team_with_league_context` writes.
         """
         stats = player_stats or {}

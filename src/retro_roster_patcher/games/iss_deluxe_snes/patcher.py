@@ -9,16 +9,15 @@ shots (`looks`). Main menu games start with the first two mapped clubs instead
 of Brazil v England.
 
 A club with a formation (`extra["formation"]`, a shape such as "4-3-3", else its
-lineup's shape: `team_formation`) is
-written the cartridge's formation nearest it (`formations`): the team's record
-becomes that formation's default and the ten outfielders, in the order the
-mapper gave them (with `order_as_given`, the team sheet's), are cut into its
-lines by index; the cut also gives each of the eleven the group whose spread
-rates his skills. Without a formation the slot keeps its own record and the
-players go to the lines of their groups. Either way a place is the record's
-index and its line comes from the record's flags (never the skill record's
-byte 5, the shirt number), and each line seats its players on its places by
-role: the sides across the pitch, the deeper role deeper. A player without a
+lineup's shape: `team_formation`) is written the cartridge's formation nearest it
+(`formations`): the team's record becomes that formation's default and the ten
+outfielders, in the order the mapper gave them (with `order_as_given`, the team
+sheet's), are cut into its lines by index; the cut also gives each of the eleven
+the group whose spread rates his skills. Without a formation the slot keeps its
+own record and the players go to the lines of their groups. Either way a place is
+the record's index and its line comes from the record's flags (never the skill
+record's byte 5, the shirt number), and each line seats its players on its places
+by role: the sides across the pitch, the deeper role deeper. A player without a
 role (a roster fetched before roles) has the one his lineup code reads as.
 """
 
