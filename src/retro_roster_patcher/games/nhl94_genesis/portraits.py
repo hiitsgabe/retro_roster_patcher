@@ -160,6 +160,8 @@ def write(
     urls = list(dict.fromkeys(url for players in teams.values() for *_, url in players if url))
     pictures = dict(zip(urls, load(urls), strict=True)) if load and urls else {}
     rom[REGION.start : REGION.stop] = b"\xff" * len(REGION)
+    # ponytail: no room check: 26 clubs of 23 players (the patcher's cap) take
+    # 523 KiB of cards and lists in the 960 KiB region; check if the cap grows.
     at = REGION.start
     cards: dict[str, int] = {}
     photos = drawings = 0

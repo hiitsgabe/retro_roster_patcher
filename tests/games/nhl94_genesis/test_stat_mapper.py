@@ -199,6 +199,12 @@ def test_youth_is_the_birth_date_where_the_roster_has_one(mapper):
     assert (youngest.speed, oldest.speed) == (4, 3)
 
 
+def test_a_birth_date_lost_to_none_is_no_birth_date(mapper):
+    # A Player rebuilt from JSON can carry None where the provider sent nothing.
+    record = mapper.map_player(_skater(birth_date=None, age=0), "BOS", {"GP": 82, "G": 9})
+    assert record.attributes.speed == on_retail(0.5, RETAIL["F"]["speed"])
+
+
 def test_a_goalie_without_age_keeps_the_cartridges_slowest_goalie_speed(mapper):
     record = mapper.map_player(_skater(position="G"), "BOS", {"GP": 30, "SV%": 0.9})
     assert record.attributes.speed == GOALIE_DEFAULTS.speed == 3

@@ -236,7 +236,7 @@ def _youth(player: Player) -> float | None:
     carry no age), else the birth day his age puts him near."""
     try:
         return float(date.fromisoformat(player.birth_date).toordinal())
-    except ValueError:
+    except (TypeError, ValueError):  # "" or a None that crossed JSON
         return date.today().toordinal() - 365.25 * player.age if player.age else None
 
 
