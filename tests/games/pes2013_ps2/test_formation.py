@@ -393,8 +393,9 @@ def standing(roles, preset):
 @pytest.mark.parametrize(
     ("preset", "listed", "stand"),
     [
-        # Lines that seating a role on a place of exactly its own first got wrong: RM, CM, CM, LM
-        # on the 4-4-2's four CMF places (y 77, 61, 43, 27), ...
+        # The wide players stand on the wide places and the middle ones on the middle places,
+        # whatever the order the line is listed in: RM, CM, CM, LM on the 4-4-2's four CMF places
+        # (y 77, 61, 43, 27), ...
         ("4-4-2", "CB CB RB LB RM CM CM LM ST ST", "CB CB RB LB RM CM CM LM ST ST"),
         # ... the 5-4-1's two wide midfielders on the RMF and LMF places, not the DMF ones, ...
         ("5-4-1", "CB CB CB RB LB RM CM CM LM ST", "CB CB CB RB LB CM CM RM LM ST"),
@@ -430,8 +431,8 @@ def test_wing_backs_and_central_midfielders_do_not_trade_places(preset, listed, 
 
 
 def test_the_widest_places_of_the_presets_are_the_touchlines():
-    # The full backs' and wing backs' places at y 17 and 87 are 35 from the middle, which is what
-    # a place's side is measured against.
+    # The full backs' places at y 17 and 87 are 35 from the middle, which is what a place's side is
+    # measured against (the wing backs stand at y 24 and 80).
     ys = {y for preset in PRESETS.values() for y in preset[20:]}
     assert (min(ys), max(ys)) == (MIDDLE - HALF_WIDTH, MIDDLE + HALF_WIDTH) == (17, 87)
 

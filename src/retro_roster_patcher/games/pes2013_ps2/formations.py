@@ -116,9 +116,9 @@ _ROLE_OF_CODE = (
 )
 
 #: A place's y is `MIDDLE` in the middle of the pitch and low on the team's left. The presets'
-#: widest places, their full backs and wing backs (y 17 and 87), are `HALF_WIDTH` away, so `seats`
-#: gives `seat_line` a place's side as its y's distance from the middle over that: -1 is the
-#: team's left touchline and 1 its right.
+#: widest places, their full backs (y 17 and 87), are `HALF_WIDTH` away, so `seats` gives
+#: `seat_line` a place's side as its y's distance from the middle over that: -1 is the team's left
+#: touchline and 1 its right. The wing backs stand a little inside them, at y 24 and 80.
 MIDDLE = 52
 HALF_WIDTH = 35
 
