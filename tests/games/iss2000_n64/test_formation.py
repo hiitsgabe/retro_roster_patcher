@@ -125,7 +125,7 @@ def place(name: str) -> int:
 def written(image: bytes | bytearray) -> list[str]:
     """The names at the slot's eleven records, in record order."""
     at = [R.record_offset(SLOT, k) + R.NAME for k in range(11)]
-    return [R.decode_name(image[o : o + R.NAME_LEN]) for o in at]
+    return [R.decode_name(bytes(image[o : o + R.NAME_LEN])) for o in at]
 
 
 def lined_up(shape: tuple[int, int, int], rows: list[list[str]]) -> list[str]:

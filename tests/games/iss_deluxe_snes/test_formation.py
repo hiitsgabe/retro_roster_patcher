@@ -128,7 +128,9 @@ def odd_one(role: str, line: int) -> DeluxeTeam:
 
 def written(image: bytes | bytearray, slot: int) -> tuple[list[str], list[int]]:
     """The 20 names and position codes in record order."""
-    names = [R.decode_name(image[R.name_at(slot, k) :][: R.NAME_LEN]) for k in range(R.PLAYERS)]
+    names = [
+        R.decode_name(bytes(image[R.name_at(slot, k) :][: R.NAME_LEN])) for k in range(R.PLAYERS)
+    ]
     codes = [R.nibbles(image[R.record_at(slot, k) :][: R.RECORD])[9] for k in range(R.PLAYERS)]
     return names, codes
 

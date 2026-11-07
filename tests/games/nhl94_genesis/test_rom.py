@@ -31,7 +31,7 @@ def _rom() -> Path:
 def _squad(tag: str) -> list[Player]:
     """Two goalies, four of each forward position and six defencemen, named by
     position: "LAK G1", "LAK C1", ... in the order a coach would dress them."""
-    players = []
+    players: list[Player] = []
     for pos, count in (("G", 2), ("C", 4), ("LW", 4), ("RW", 4), ("D", 6)):
         for k in range(count):
             players.append(

@@ -220,6 +220,7 @@ def galo(*, fetched_with_roles: bool) -> TeamRoster:
     name = {int(k): v for k, v in t["names"].items()}
     positions = {int(k): v for k, v in t["positions"].items()}
     lineup = pick_lineup(t["matches"], dict.fromkeys(t["squad"], ""), positions)
+    assert lineup is not None
     players = [
         Player(id=i, name=name[i], position=GROUP[lineup["roles"].get(str(i), "CM")])
         for i in t["squad"]
@@ -847,7 +848,7 @@ def test_players_of_one_depth_and_one_side_keep_the_lineups_order(patcher):
 
 
 def stats_of(player_id: int, **kwargs) -> PlayerStats:
-    base = dict(
+    base: dict = dict(
         appearances=20, minutes=1600, goals=5, assists=3, shots_total=30, shots_on=12,
         passes_total=600, passes_accuracy=80.0, tackles_total=20, interceptions=15, blocks=5,
         duels_total=100, duels_won=55, dribbles_attempts=40, dribbles_success=20,

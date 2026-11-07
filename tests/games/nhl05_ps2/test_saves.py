@@ -44,7 +44,10 @@ def test_the_suffix_is_never_the_retail_one():
 
 def _elf_of(path) -> bytes:
     with open(path, "rb") as f:
-        entry = iso9660.find_entry(f, iso9660.read_root(f), saves.ELF_PATH)
+        root = iso9660.read_root(f)
+        assert root is not None
+        entry = iso9660.find_entry(f, root, saves.ELF_PATH)
+        assert entry is not None
         f.seek(entry.extent.offset)
         return f.read(entry.extent.size)
 
