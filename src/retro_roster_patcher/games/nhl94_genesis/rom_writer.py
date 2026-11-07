@@ -143,10 +143,12 @@ class NHL94GenesisRomWriter:
             offset = self._write_player_stats(player, offset)
             written += 1
 
-        # end-of-roster sentinel
+        # End of roster: the word 2, as on the cartridge. The game counts a roster
+        # ($9FA8) by stepping record to record until it reads 2; a 0 sent it on
+        # into the team's strings and an address error on Player Stats.
         if offset + 2 <= end:
             self.data[offset] = 0x00
-            self.data[offset + 1] = 0x00
+            self.data[offset + 1] = 0x02
             offset += 2
 
         while offset < end:

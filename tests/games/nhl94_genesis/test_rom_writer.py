@@ -376,6 +376,24 @@ def test_a_goalie_is_written_in_the_games_goalie_fields(rom_paths):
     assert stats[0] == bytes.fromhex("3366444600005566")
 
 
+def test_a_roster_ends_in_the_word_2_the_games_count_stops_on(rom_paths):
+    # The game counts a roster ($9FA8) by stepping record to record until a word
+    # equal to 2; the cartridge ends every roster so, right before the team's
+    # strings. A roster ending in 0 sent the count on through the zero fill into
+    # the strings, an address error on Player Stats.
+    writer, output = _loaded_writer(rom_paths)
+    assert writer.write_team_roster(0, _squad()) == 15
+    assert writer.finalize() is True
+
+    data = output.read_bytes()
+    at = synthetic_rom.team_base(0) + synthetic_rom.SEC_PLAYERS
+    count = 0
+    while struct.unpack_from(">H", data, at)[0] != 2:
+        at += struct.unpack_from(">H", data, at)[0] + 8
+        count += 1
+    assert count == 15
+
+
 def test_the_jersey_number_is_written_as_bcd(rom_paths):
     writer, output = _loaded_writer(rom_paths)
     assert (
@@ -517,9 +535,9 @@ def test_the_roster_ends_with_a_sentinel_and_the_rest_is_zero_filled(tmp_path):
     # Fifteen 18-byte records: the goalies' 7-letter names carry their NUL.
     written_bytes = 15 * (2 + 8 + 8)
     data = output.read_bytes()
-    assert data[start + written_bytes : start + written_bytes + 2] == b"\x00\x00"
-    assert data[start + written_bytes : start + ROSTER_REGION] == (
-        b"\x00" * (ROSTER_REGION - written_bytes)
+    assert data[start + written_bytes : start + written_bytes + 2] == b"\x00\x02"
+    assert data[start + written_bytes + 2 : start + ROSTER_REGION] == (
+        b"\x00" * (ROSTER_REGION - written_bytes - 2)
     )
     assert data[start + ROSTER_REGION : start + ROSTER_REGION + 16] == bytes([POISON]) * 16
     # The region shrinks to the sentinel, which is what a later re-read sees.
@@ -556,7 +574,7 @@ def test_a_roster_larger_than_the_region_is_truncated_not_overflowed(rom_paths):
     # the 2-byte sentinel followed by 10 bytes of zero fill.
     data = output.read_bytes()
     region_end = synthetic_rom.team_base(0) + synthetic_rom.SEC_PLAYERS + ROSTER_REGION
-    assert data[region_end - 12 : region_end] == b"\x00" * 12
+    assert data[region_end - 12 : region_end] == b"\x00\x02" + b"\x00" * 10
     assert _read_back(output).read_team_roster(1) == _fixture_roster(1)
 
 
@@ -1046,7 +1064,7 @@ def test_a_negative_team_index_writes_a_roster_wherever_word_zero_points(tmp_pat
     assert writer.finalize() is True
 
     data = output.read_bytes()
-    assert data[8:10] == b"\x00\x00"
+    assert data[8:10] == b"\x00\x02"
     assert data[0:8] == b"\x00\x08\x00\x00\x00\x00\x00\x00"
 
 

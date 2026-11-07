@@ -141,6 +141,8 @@ def test_every_record_of_a_patched_team_starts_on_an_even_byte(tmp_path):
         at += length + 8
         count += 1
     assert count == 20
+    # And the roster ends in the word 2, which the game's count stops on.
+    assert reader._read_u16_be(at) == 2
 
 
 @pytest.mark.real_rom
