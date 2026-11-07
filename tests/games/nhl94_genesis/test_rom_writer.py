@@ -19,6 +19,7 @@ import pytest
 
 from retro_roster_patcher.games.nhl94_genesis.models import (
     TEAM_COUNT,
+    NHL94GenGoalieAttributes,
     NHL94GenPlayerAttributes,
     NHL94GenPlayerRecord,
 )
@@ -345,6 +346,34 @@ def test_no_player_is_written_into_one_byte_of_name_room(tmp_path):
     writer = NHL94GenesisRomWriter(str(_odd_region_rom(tmp_path, 1)), str(tmp_path / "out.bin"))
     assert writer.load() is True
     assert writer.write_team_roster(0, [NHL94GenPlayerRecord(name="Z", jersey_number=1)]) == 0
+
+
+def test_a_goalie_is_written_in_the_games_goalie_fields(rom_paths):
+    # Patrick Roy's own bytes on the cartridge: weight 6 | agility 6, speed 4 |
+    # defensive awareness 4 (written twice), 4 | puck control 6, unused 0 | glove
+    # hand 0, unused 00, stick right 5 | left 5, glove right 6 | left 6.
+    writer, output = _loaded_writer(rom_paths)
+    roy = NHL94GenPlayerRecord(
+        name="Patrick Roy",
+        position="G",
+        jersey_number=33,
+        weight_class=6,
+        is_goalie=True,
+        attributes=NHL94GenGoalieAttributes(
+            agility=6,
+            speed=4,
+            def_awareness=4,
+            puck_control=6,
+            stick_right=5,
+            stick_left=5,
+            glove_right=6,
+            glove_left=6,
+        ),
+    )
+    assert writer.write_team_roster(0, [roy]) == 1
+    assert writer.finalize() is True
+    _names, stats = _read_back(output).read_team_roster(0)
+    assert stats[0] == bytes.fromhex("3366444600005566")
 
 
 def test_the_jersey_number_is_written_as_bcd(rom_paths):

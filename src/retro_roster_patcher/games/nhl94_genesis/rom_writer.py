@@ -11,6 +11,7 @@ import os
 
 from .models import (
     TEAM_COUNT,
+    NHL94GenGoalieAttributes,
     NHL94GenPlayerRecord,
 )
 from .rom_reader import (
@@ -166,11 +167,30 @@ class NHL94GenesisRomWriter:
         Byte 5: Stick Handling (0-6) | Shot Accuracy (0-6)
         Byte 6: Endurance (0-6) | Roughness (0-6)
         Byte 7: Pass Accuracy (0-6) | Aggression (0-6)
+
+        A goalie's are his own fields: weight | agility, speed | defensive
+        awareness, defensive awareness | puck control, 0 | glove hand, 0 | 0,
+        stick right | stick left, glove right | glove left.
         """
         if not self.data or offset + STATS_SIZE > len(self.data):
             return offset
 
         attrs = player.attributes
+        if isinstance(attrs, NHL94GenGoalieAttributes):
+            jersey = max(1, min(99, player.jersey_number))
+            self.data[offset : offset + STATS_SIZE] = bytes(
+                [
+                    (jersey // 10) << 4 | jersey % 10,
+                    encode_weight_nibble(player.weight_class, attrs.agility),
+                    encode_nibble(attrs.speed, attrs.def_awareness),
+                    encode_nibble(attrs.def_awareness, attrs.puck_control),
+                    encode_nibble(0, player.handedness),
+                    0,
+                    encode_nibble(attrs.stick_right, attrs.stick_left),
+                    encode_nibble(attrs.glove_right, attrs.glove_left),
+                ]
+            )
+            return offset + STATS_SIZE
 
         jersey = max(1, min(99, player.jersey_number))
         self.data[offset] = ((jersey // 10) << 4) | (jersey % 10)

@@ -15,6 +15,46 @@ from collections.abc import Mapping
 #: Seconds of ice time a game dressed is worth.
 DRESSED_BONUS = 100
 
+#: A goalie's save % and goals-against average are pulled toward these, a
+#: little under the league's norm, by `SHRINK_GAMES` games' worth (`shrunk`): a
+#: backup's one-game 1.000 rates as a backup, not the best goalie in the league.
+SV_PRIOR = 0.895
+GAA_PRIOR = 3.1
+SHRINK_GAMES = 10
+
+#: Games a goalie's own numbers count for when his line has a save % but no
+#: games or wins (ESPN lists wins for its top goalies only): enough to move his
+#: rating a step and to rank him among such backups, not to make a relief
+#: appearance's 1.000 a star.
+NOMINAL_GAMES = 1
+
+
+def stat(line: Mapping[str, object], key: str) -> float | None:
+    """`line[key]` as a number, or None when the line has no such stat."""
+    try:
+        return float(line[key])  # type: ignore[arg-type]
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def shrunk(value: float | None, prior: float, games: float, k: float = SHRINK_GAMES) -> float:
+    """`value` measured over `games` games, pulled toward `prior` by `k` games'
+    worth; the prior itself when there is no value."""
+    if value is None:
+        return prior
+    return (value * games + prior * k) / (games + k)
+
+
+def goalie_starts(line: Mapping[str, object]) -> float:
+    """How much a goalie played: GP when the provider sends it (NHL API), else
+    W (ESPN's leaders carry wins, not games)."""
+    return (stat(line, "GP") if "GP" in line else stat(line, "W")) or 0.0
+
+
+def goalie_games(line: Mapping[str, object]) -> float:
+    """The games a goalie's save % and goals-against count for against the prior."""
+    return goalie_starts(line) or (NOMINAL_GAMES if stat(line, "SV%") is not None else 0.0)
+
 
 def _num(line: Mapping[str, object], name: str) -> float:
     value = line.get(name)

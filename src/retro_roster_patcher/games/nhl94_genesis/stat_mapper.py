@@ -7,6 +7,7 @@ from ...core.hockey import deployment
 from ...sports.models import Player
 from .models import (
     MODERN_NHL_TO_NHL94_GEN,
+    NHL94GenGoalieAttributes,
     NHL94GenPlayerAttributes,
     NHL94GenPlayerRecord,
 )
@@ -69,21 +70,20 @@ POSITION_DEFAULTS = {
         roughness=3,
         aggression=3,
     ),
-    "G": NHL94GenPlayerAttributes(
-        speed=2,
-        agility=4,
-        shot_power=2,
-        shot_accuracy=2,
-        stick_handling=3,
-        pass_accuracy=2,
-        off_awareness=2,
-        def_awareness=3,
-        checking=1,
-        endurance=4,
-        roughness=1,
-        aggression=1,
-    ),
 }
+
+
+#: A goalie with no stat line.
+GOALIE_DEFAULTS = NHL94GenGoalieAttributes(
+    agility=4,
+    speed=2,
+    def_awareness=3,
+    puck_control=2,
+    stick_right=4,
+    stick_left=1,
+    glove_right=2,
+    glove_left=1,
+)
 
 
 def _clamp(val: int, lo: int = 0, hi: int = 6) -> int:
@@ -108,8 +108,11 @@ class NHL94GenStatMapper:
         pos = player.position.upper() if player.position else "C"
         is_goalie = pos == "G"
 
+        attrs: NHL94GenPlayerAttributes | NHL94GenGoalieAttributes
         if stats:
             attrs = self._map_stats(stats, pos, is_goalie)
+        elif is_goalie:
+            attrs = dataclasses.replace(GOALIE_DEFAULTS)
         else:
             # Copied, not shared: `attributes` is public and mutable, so the module
             # constant must not be handed out.
@@ -137,7 +140,9 @@ class NHL94GenStatMapper:
             photo_url=player.photo_url,
         )
 
-    def _map_stats(self, stats: dict, pos: str, is_goalie: bool) -> NHL94GenPlayerAttributes:
+    def _map_stats(
+        self, stats: dict, pos: str, is_goalie: bool
+    ) -> NHL94GenPlayerAttributes | NHL94GenGoalieAttributes:
         """Per-season stat ranges used for scaling:
 
         G: 0-50, A: 0-70, PTS: 0-120, +/-: -30..+40
@@ -155,19 +160,10 @@ class NHL94GenStatMapper:
             # rather than `0.912` saturates `agility` at 6. Do not add a units guard.
             svp = float(stats.get("SV%", 0) or 0)
             gaa = float(stats.get("GAA", 3.0) or 3.0)
-            return NHL94GenPlayerAttributes(
-                speed=2,
+            return dataclasses.replace(
+                GOALIE_DEFAULTS,
                 agility=_scale(svp, 0.880, 0.930),
-                shot_power=2,
-                shot_accuracy=2,
-                stick_handling=3,
-                pass_accuracy=2,
-                off_awareness=2,
                 def_awareness=_scale(3.5 - gaa, 0, 1.5),
-                checking=1,
-                endurance=4,
-                roughness=1,
-                aggression=1,
             )
 
         off_rating = _scale(pts, 0, 90)

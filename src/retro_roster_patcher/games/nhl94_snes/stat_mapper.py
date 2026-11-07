@@ -4,7 +4,15 @@ lacks one (ESPN's team leaders list only each category's top players)."""
 
 from dataclasses import dataclass, replace
 
-from ...core.hockey import deployment
+from ...core.hockey import (
+    GAA_PRIOR,
+    SV_PRIOR,
+    deployment,
+    goalie_games,
+    goalie_starts,
+    shrunk,
+    stat,
+)
 from ...core.text import to_ascii
 from ...sports.models import Player
 from .models import (
@@ -88,21 +96,6 @@ def _scale(value: float, low: float, high: float) -> int:
     return _clamp(round(ratio * 6))
 
 
-def _stat(stats: dict, key: str) -> float | None:
-    """`stats[key]` as a number, or None when the line has no such stat."""
-    try:
-        return float(stats[key])
-    except (KeyError, TypeError, ValueError):
-        return None
-
-
-# A goalie's save % and goals-against average are pulled toward these, a
-# little under the league's norm, by `SHRINK_GAMES` games' worth: a backup's
-# one-game 1.000 rates as a backup rather than the best goalie in the league.
-SV_PRIOR = 0.895
-GAA_PRIOR = 3.1
-SHRINK_GAMES = 10
-
 # The save % and goals-against ranges spread over 0-6. On 2025-26's numbers
 # they put the starters' mean overall at 68 and the backups' near 50-60, where
 # the cartridge has 67 and 53.
@@ -110,37 +103,13 @@ SV_RANGE = (0.865, 0.915)
 GAA_RANGE = (3.6, 2.4)
 
 
-#: Games a goalie's own numbers count for when his line has a save % but no
-#: games or wins (ESPN lists wins for its top goalies only): enough to move his
-#: rating a step and to rank him among such backups, not to make a relief
-#: appearance's 1.000 a star.
-NOMINAL_GAMES = 1
-
-
-def _starts(stats: dict) -> float:
-    """How much a goalie played: GP when the provider sends it (NHL API), else
-    W (ESPN's leaders carry wins, not games)."""
-    return (_stat(stats, "GP") if "GP" in stats else _stat(stats, "W")) or 0.0
-
-
-def _weight(stats: dict) -> float:
-    """The games a goalie's save % and goals-against count for against the prior."""
-    return _starts(stats) or (NOMINAL_GAMES if _stat(stats, "SV%") is not None else 0.0)
-
-
-def _shrunk(value: float | None, prior: float, games: float) -> float:
-    if value is None:
-        return prior
-    return (value * games + prior * SHRINK_GAMES) / (games + SHRINK_GAMES)
-
-
 def goalie_rank(stats: dict) -> tuple[float, float]:
     """Higher starts first: the game always starts the first goalie, so the
     starter is the one who played most (his share of the team's starts when
     ESPN gives it), then the better (shrunk) save %."""
     espn = {"gameStarted", "dressed"} & stats.keys()
-    played = deployment(stats, goalie=True) if espn else _starts(stats)
-    return played, _shrunk(_stat(stats, "SV%"), SV_PRIOR, _weight(stats))
+    played = deployment(stats, goalie=True) if espn else goalie_starts(stats)
+    return played, shrunk(stat(stats, "SV%"), SV_PRIOR, goalie_games(stats))
 
 
 def display_name(name: str) -> str:
@@ -202,7 +171,7 @@ class NHL94StatMapper:
         A stat the line lacks keeps the position's default for what it drives.
         """
         base = POSITION_DEFAULTS.get(pos, POSITION_DEFAULTS["C"])
-        g, a, pts, pm, pim = (_stat(stats, k) for k in ("G", "A", "PTS", "+/-", "PIM"))
+        g, a, pts, pm, pim = (stat(stats, k) for k in ("G", "A", "PTS", "+/-", "PIM"))
 
         def scaled(value: float | None, low: float, high: float, default: int) -> int:
             return default if value is None else _scale(value, low, high)
@@ -229,9 +198,9 @@ class NHL94StatMapper:
         Puck control follows the two, and speed is 3 or 4, the cartridge's goalie
         range.
         """
-        games = _weight(stats)
-        agility = _scale(_shrunk(_stat(stats, "SV%"), SV_PRIOR, games), *SV_RANGE)
-        gaa = _shrunk(_stat(stats, "GAA"), GAA_PRIOR, games)
+        games = goalie_games(stats)
+        agility = _scale(shrunk(stat(stats, "SV%"), SV_PRIOR, games), *SV_RANGE)
+        gaa = shrunk(stat(stats, "GAA"), GAA_PRIOR, games)
         awareness = _scale(GAA_RANGE[0] - gaa, 0, GAA_RANGE[0] - GAA_RANGE[1])
         return NHL94GoalieAttributes(
             agility=agility,

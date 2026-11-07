@@ -5,7 +5,7 @@ record. The attributes are packed as 0-6 nibbles by `rom_writer.encode_nibble`,
 so a mapper that returned the right field names carrying the wrong numbers
 produces a ROM that loads and plays wrong.
 
-The goalie arm and `POSITION_DEFAULTS["G"]` agree on ten of the twelve
+The goalie arm and `GOALIE_DEFAULTS` agree on six of the eight goalie
 attributes; only `agility` and `def_awareness` are derived. Inputs here are
 chosen so those two land on values the defaults do not carry, otherwise a mapper
 that ignored the stats entirely would satisfy the same equality.
@@ -15,8 +15,11 @@ import dataclasses
 
 import pytest
 
-from retro_roster_patcher.games.nhl94_genesis.models import NHL94GenPlayerAttributes
+from retro_roster_patcher.games.nhl94_genesis.models import (
+    NHL94GenGoalieAttributes,
+)
 from retro_roster_patcher.games.nhl94_genesis.stat_mapper import (
+    GOALIE_DEFAULTS,
     POSITION_DEFAULTS,
     NHL94GenStatMapper,
 )
@@ -52,7 +55,7 @@ def test_a_goalies_save_percentage_and_gaa_become_agility_and_def_awareness(mapp
     # The whole goalie arm, pinned as integers. .920 sits four fifths of the way
     # up the .880-.930 band, so agility is 5; a 2.40 GAA is 1.10 of the 1.50 the
     # band allows below 3.50, so def_awareness is 4. Neither is the 4 and 3 that
-    # `POSITION_DEFAULTS["G"]` carries, so a mapper that skipped the stats and
+    # `GOALIE_DEFAULTS` carries, so a mapper that skipped the stats and
     # returned the defaults cannot satisfy this.
     record = mapper.map_player(
         _skater(position="G", number=31, weight=190.0, handedness="L"),
@@ -61,19 +64,15 @@ def test_a_goalies_save_percentage_and_gaa_become_agility_and_def_awareness(mapp
     )
 
     assert record.is_goalie is True
-    assert record.attributes == NHL94GenPlayerAttributes(
-        speed=2,
+    assert record.attributes == NHL94GenGoalieAttributes(
         agility=5,
-        shot_power=2,
-        shot_accuracy=2,
-        stick_handling=3,
-        pass_accuracy=2,
-        off_awareness=2,
+        speed=2,
         def_awareness=3 + 1,
-        checking=1,
-        endurance=4,
-        roughness=1,
-        aggression=1,
+        puck_control=2,
+        stick_right=4,
+        stick_left=1,
+        glove_right=2,
+        glove_left=1,
     )
 
 
@@ -119,7 +118,7 @@ def test_a_goalie_without_a_stat_line_falls_back_to_the_position_defaults(mapper
     # goalie arm would only produce for a very particular SV%/GAA pair.
     record = mapper.map_player(_skater(position="G", number=1), "BOS")
 
-    assert record.attributes == POSITION_DEFAULTS["G"]
+    assert record.attributes == GOALIE_DEFAULTS
     assert record.attributes.agility == 4
     assert record.attributes.def_awareness == 3
 

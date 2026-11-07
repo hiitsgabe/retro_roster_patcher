@@ -110,6 +110,25 @@ class NHL94GenPlayerAttributes:
 
 
 @dataclass
+class NHL94GenGoalieAttributes:
+    """A goalie's nibbles, 0-6 each, as the cartridge lays them out (nhl94.com's
+    edit_bin, and all 59 of its goalies): agility, speed, defensive awareness
+    (in byte 2's low nibble too), puck control, then stick and glove saves to
+    each side. The skater nibbles left over (checking, stick handling, shot
+    accuracy) are 0.
+    """
+
+    agility: int = 3
+    speed: int = 3
+    def_awareness: int = 3
+    puck_control: int = 3
+    stick_right: int = 3
+    stick_left: int = 3
+    glove_right: int = 3
+    glove_left: int = 3
+
+
+@dataclass
 class NHL94GenPlayerRecord:
     """A player record as the ROM stores it.
 
@@ -125,7 +144,9 @@ class NHL94GenPlayerRecord:
     weight_class: int = 7  # 0-14 (140 + class*8 = lbs)
     handedness: int = 0  # 0=L (even nibble), 1=R (odd nibble)
     is_goalie: bool = False
-    attributes: NHL94GenPlayerAttributes = field(default_factory=NHL94GenPlayerAttributes)
+    attributes: NHL94GenPlayerAttributes | NHL94GenGoalieAttributes = field(
+        default_factory=NHL94GenPlayerAttributes
+    )
     #: The head shot `portraits` draws his card from; "" for the game's drawing.
     photo_url: str = ""
 
