@@ -36,7 +36,7 @@ from datetime import date
 from ...core.kits import KitSpec
 from ...core.shirt_numbers import shirt_numbers
 from ...sports.espn import LINEUP_GROUPS
-from ...sports.lineup import fold_formation, lineup_role, team_formation
+from ...sports.lineup import lineup_role, nearest_shape, parse_shape, team_formation
 from ...sports.models import Player, PlayerStats, TeamRoster
 from . import rom as R
 
@@ -174,10 +174,11 @@ class N64Team:
 
 
 def nearest_formation(shape: tuple[int, int, int]) -> tuple[int, int, int]:
-    def distance(f: tuple[int, int, int]) -> tuple[int, tuple[int, int, int]]:
-        return sum(abs(a - b) for a, b in zip(f, shape, strict=True)), f
-
-    return min(FORMATION_DONORS, key=distance)
+    """The formation of `FORMATION_DONORS` nearest `shape`, by the rule of every game
+    (`nearest_shape`): the smallest total difference in players per line, then the nearest number
+    of defenders, then the first listed."""
+    offered = {f"{d}-{m}-{f}": (d, m, f) for d, m, f in FORMATION_DONORS}
+    return offered[nearest_shape("-".join(map(str, shape)), tuple(offered))]
 
 
 def parse_formation(text: str) -> tuple[int, int, int] | None:
@@ -325,7 +326,8 @@ class N64StatMapper:
 
         The same selection as `iss-snes` (`ISSStatMapper._select_best_15`),
         with the places of the club's formation (the nearest the cartridge has
-        to the lineup's folded shape, else 4-4-2) instead of a fixed 4-4-2:
+        to the roster's own, else to the lineup's folded shape, else 4-4-2)
+        instead of a fixed 4-4-2:
         every starter plays, on the line the lineup gives him (else the group
         his position code belongs to), a group with more starters than places
         sending the rest to the nearest group with room; open places go to the
@@ -337,12 +339,12 @@ class N64StatMapper:
         lineup = (roster.extra or {}).get("lineup") or {}
         listed = lineup.get("starters") or []
         recent = {int(e["id"]): (i, e) for i, e in enumerate(listed) if "id" in e}
-        # The lineup's folded shape; data fetched before `shape` existed folds its formation here.
-        shape = (
-            parse_formation(lineup.get("shape") or fold_formation(lineup.get("formation", "")))
-            if recent
-            else None
-        )
+        # The roster's own formation, else its lineup's shape (`team_formation`): an edited
+        # formation is the one to fill the lines for. Data fetched before `shape` existed has only
+        # the lineup's formation, which `parse_shape` folds.
+        shape = parse_shape(team_formation(roster) or "")
+        if shape is None and recent:
+            shape = parse_shape(lineup.get("shape") or lineup.get("formation") or "")
         # `formation` (defenders, midfielders, forwards) when a game fixes the
         # formation of a slot (ISS Deluxe), else the cartridge's nearest.
         shape = formation or (nearest_formation(shape) if shape else (4, 4, 2))
@@ -417,11 +419,11 @@ class N64StatMapper:
         game's lines (keeper, defence, midfield, attack, the caller's order
         kept inside each), in the formation those counts are nearest.
 
-        With a `formation` that `parse_formation` reads, the order is the team
-        sheet instead: the keeper, then the outfield as given, whatever each
-        player's position. The formation nearest it on the cartridge cuts the
-        outfield into lines by index: its defenders first, then its
-        midfielders, the rest up front."""
+        With a `formation` that `parse_shape` reads (a four-line one is folded
+        to three), the order is the team sheet instead: the keeper, then the
+        outfield as given, whatever each player's position. The formation
+        nearest it on the cartridge cuts the outfield into lines by index: its
+        defenders first, then its midfielders, the rest up front."""
         # Exactly one keeper starts: the first in the list; a second keeper
         # in the first 11 makes way for the next outfielder.
         keepers = [p for p in players if group_of(p) == "GK"][:1]
@@ -431,7 +433,7 @@ class N64StatMapper:
         xi_out += [p for p in outfield if p.id not in xi_ids]
         # Eleven in all: a keeper listed below the first 11 takes the eleventh outfielder's place.
         xi_out = xi_out[: 11 - len(keepers)]
-        wanted = parse_formation(formation or "")
+        wanted = parse_shape(formation or "")
         if wanted is None:
             xi = sorted(keepers + xi_out, key=lambda p: _LINE[group_of(p)])
             lines = [_LINE[group_of(p)] for p in xi]
@@ -454,9 +456,10 @@ class N64StatMapper:
         order_as_given: bool = False,
     ) -> N64Team:
         formation: tuple[int, int, int] | None  # as `select_22` is annotated
-        # The roster's formation, else (fetched before formations were kept) its lineup's shape.
+        # The roster's formation, else (fetched before formations were kept) its lineup's shape:
+        # empty, or one `parse_shape` reads.
         picked = team_formation(roster) or ""
-        if order_as_given and parse_formation(picked) is not None:
+        if order_as_given and picked:
             # The roster's formation (the lineup's, or the one picked since) reads the given
             # order: the shortcut below would answer with the lineup's own shape and lines.
             squad, formation = self.given_22(list(roster.players), picked)

@@ -592,7 +592,7 @@ def test_an_edited_order_keeps_its_places_under_a_formation(tmp_path):
 @pytest.mark.parametrize("order_as_given", [False, True])
 @pytest.mark.parametrize(
     ("formation", "xi"),
-    # Each XI is listed by position as the shape ISS 2000 reads the written one as (4-3-3, 4-5-1).
+    # Each XI is listed by position as another shape than the one written (4-3-3, 4-5-1).
     [
         ("4-2-4", "GK LB CB CB RB CM CM CAM LW ST RW"),
         ("5-4-1", "GK LB CB CB RB LM CM CM CAM RM ST"),
@@ -601,7 +601,7 @@ def test_an_edited_order_keeps_its_places_under_a_formation(tmp_path):
 def test_the_eleven_are_in_the_lines_of_the_shape_written_not_iss_2000s(
     tmp_path, formation, xi, order_as_given
 ):
-    # ISS 2000 has neither shape: it reads a 4-2-4 as its 4-3-3 and a 5-4-1 as its 4-5-1.
+    # ISS 2000 has neither shape: it reads a 4-2-4 as its 4-3-3 and a 5-4-1 as its 5-3-2.
     team = _mapped(tmp_path, _roster(formation, xi=xi), given=order_as_given)
     d, m, f = map(int, formation.split("-"))
     assert [p.group for p in team.players[:11]] == ["GK"] + ["DF"] * d + ["MF"] * m + ["FW"] * f

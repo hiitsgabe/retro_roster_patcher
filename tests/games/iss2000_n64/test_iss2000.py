@@ -14,6 +14,7 @@ from retro_roster_patcher.games.iss2000_n64.mapper import (
     parse_formation,
 )
 from retro_roster_patcher.sports.models import Player, Team, TeamRoster
+from tests.fixtures.older_roster import older_roster
 
 # The eleven places of a 4-2-3-1 as ESPN codes them, the squad group of the player at each, and
 # the line each place is on once the formation is folded to 4-3-3 (the lone striker is joined by
@@ -44,7 +45,10 @@ def test_names_use_the_cartridge_code():
 def test_formations_fall_back_to_ones_the_cartridge_has():
     assert parse_formation("4-2-3-1") == (4, 5, 1)
     assert nearest_formation((4, 5, 1)) == (4, 5, 1)
-    assert nearest_formation((5, 4, 1)) == (4, 4, 2)
+    # A tie in the line counts goes to the nearest number of defenders, as in the other games: a
+    # back five stays a back five.
+    assert nearest_formation((5, 4, 1)) == (5, 3, 2)
+    assert nearest_formation((5, 2, 3)) == (5, 3, 2)
 
 
 def _club_in_a_4231(starters, **lineup):
@@ -260,6 +264,72 @@ def test_an_unedited_roster_maps_as_the_suggested_one_does(roster):
     assert [p.player_id for p in given.players] == [p.player_id for p in suggested.players]
     assert given.formation == suggested.formation == (4, 3, 3)
     assert m._lines == suggested_lines
+
+
+def _back_five():
+    """A 5-4-1 club whose lineup (ESPN's codes) is ids 1-11: a keeper, five defenders, four
+    midfielders and a striker."""
+    codes = "G LB CD-L CD CD-R RB LM CM-L CM-R RM F".split()
+    roles = "GK LB CB CB CB RB LM CM CM RM ST".split()
+    return older_roster(codes, roles, formation="5-4-1", shape="5-4-1")
+
+
+def test_a_five_four_one_club_plays_five_three_two_with_all_five_defenders_in_defence():
+    # 5-3-2 is as near a 5-4-1 as 4-4-2 and 4-5-1 are, and the back five stays: the fifth
+    # defender used to be spilled to the attack of a 4-4-2.
+    m = N64StatMapper()
+    xi, shape = m.select_22(_back_five())
+    assert shape == (5, 3, 2)
+    assert {p.id for p in xi[1:6]} == {2, 3, 4, 5, 6}
+    assert [m._lines[p.id] for p in xi[:11]] == [0] + [1] * 5 + [2] * 3 + [3] * 2
+    assert m.map_team(_back_five(), {}).formation == (5, 3, 2)
+
+
+def test_an_edited_formation_fills_and_writes_the_eleven_without_order_as_given():
+    # The lineup says 4-3-3; the formation picked since, a 3-5-2, is the one the XI is chosen for.
+    m = N64StatMapper()
+    roster = _squad_in_a_433(lineup=_first_eleven_lineup("4-3-3"), formation="3-5-2")
+    team = m.map_team(roster, {})
+    assert team.formation == (3, 5, 2)
+    played = [m._lines[p.player_id] for p in team.players[:11]]
+    assert [played.count(line) for line in (1, 2, 3)] == [3, 5, 2]
+
+
+def test_the_suggested_order_follows_an_edited_formation(tmp_path):
+    patcher = get_patcher("iss2000-n64")(tmp_path)
+    roster = _squad_in_a_433(lineup=_first_eleven_lineup("4-3-3"), formation="3-5-2")
+    patcher.suggest_squad_order(roster)
+    played = list(patcher.mapper._lines.values())
+    assert [played.count(line) for line in (1, 2, 3)] == [3, 5, 2]
+
+
+@pytest.mark.parametrize(
+    "roster_of",
+    [
+        lambda: _club_in_a_4231(_starters_in_a_4231(), shape="4-3-3"),
+        lambda: _squad_in_a_433(lineup=_first_eleven_lineup("4-3-3")),
+    ],
+    ids=["4-2-3-1 club", "4-3-3 squad"],
+)
+def test_a_fresh_rosters_formation_changes_nothing_in_the_automatic_mapping(roster_of):
+    # A fetch sets the formation to the lineup's shape: such a roster maps as the one that has
+    # only the lineup (a rosters file from before formations).
+    m = N64StatMapper()
+    plain = m.map_team(roster_of(), {})
+    plain_lines = dict(m._lines)
+    fresh = roster_of()
+    fresh.extra["formation"] = fresh.extra["lineup"]["shape"]
+    assert m.map_team(fresh, {}) == plain
+    assert m._lines == plain_lines
+    assert plain.formation == (4, 3, 3)
+
+
+@pytest.mark.parametrize("order_as_given", [False, True])
+def test_a_four_line_formation_reads_as_its_three_lines_as_in_the_other_games(order_as_given):
+    # "4-2-3-1" is a 4-3-3 once folded (`parse_shape`); `parse_formation` reads it as (4, 5, 1).
+    roster = _squad_in_a_433(formation="4-2-3-1")
+    team = N64StatMapper().map_team(roster, {}, order_as_given=order_as_given)
+    assert team.formation == (4, 3, 3)
 
 
 def test_a_formation_comes_from_the_donor_as_shipped():
