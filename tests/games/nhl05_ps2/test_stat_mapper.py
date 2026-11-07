@@ -622,12 +622,12 @@ def squad(counts: dict[str, int]) -> list[Player]:
 
 
 def test_a_full_roster_is_capped_at_the_maximum():
-    players = squad({"C": 8, "LW": 8, "RW": 8, "D": 10, "G": 4})
+    players = squad({"C": 10, "LW": 10, "RW": 10, "D": 12, "G": 4})
     assert len(MAPPER.select_roster(players, {})) == MAX_PLAYERS
 
 
-def test_the_default_maximum_is_twenty_five():
-    assert MAX_PLAYERS == 25
+def test_the_default_maximum_is_the_discs_largest_roster_of_forty():
+    assert MAX_PLAYERS == 40
 
 
 def test_goalies_come_first():

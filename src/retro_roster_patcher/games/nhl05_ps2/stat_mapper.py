@@ -34,10 +34,10 @@ from .models import (
 ATTR_MIN = 0
 ATTR_MAX = 63
 
-# How many players a mapped roster holds. An NHL team dresses 20 and carries
-# scratches; anything larger is truncated by however many ROST rows the disc
-# gives a team in `patcher.patch`.
-MAX_PLAYERS = 25
+# The most ROST rows the disc gives a club (they ship 30 to 40), and
+# `select_roster`'s default size. `patcher.map_rosters` keeps the whole squad:
+# a club writes as many as its own rows hold, and the rest become free agents.
+MAX_PLAYERS = 40
 
 # The shape `select_roster` builds towards: two goalies, four forward lines of
 # three, two spare forwards, and seven defencemen.

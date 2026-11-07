@@ -13,12 +13,14 @@ produced it.
 from __future__ import annotations
 
 import os
+from datetime import date
 
 import pytest
 
 from retro_roster_patcher.core.errors import ApiError, MappingError, RomError
 from retro_roster_patcher.core.models import MappedRosters, PatchResult, RomSlot
 from retro_roster_patcher.core.registry import get_patcher
+from retro_roster_patcher.formats.ea_tdb import TDBFile
 from retro_roster_patcher.games.nhl05_ps2.models import (
     NAMED_SLOT_COUNT,
     NHL05_TEAM_NAMES,
@@ -33,13 +35,15 @@ from retro_roster_patcher.games.nhl05_ps2.patcher import (
     _db_viv_extent_fits,
     _index_map,
     _live_records,
+    _MasterTables,
     _play_id_by_indx,
 )
 from retro_roster_patcher.games.nhl05_ps2.rom_reader import ISO_SECTOR_SIZE, NHL05PS2RomReader
+from retro_roster_patcher.games.nhl05_ps2.rom_writer import NHL05PS2RomWriter
 from retro_roster_patcher.games.nhl05_ps2.stat_mapper import MAX_PLAYERS
 from retro_roster_patcher.sports.espn import EspnClient
 from retro_roster_patcher.sports.models import League, LeagueData, Player, Team, TeamRoster
-from retro_roster_patcher.sports.nhl import NhlApiClient
+from retro_roster_patcher.sports.nhl import NhlApiClient, current_season
 from tests.fixtures import synthetic_nhl05_iso as fixture
 
 #: Slots the fixture disc carries roster rows for. The disc has four teams;
@@ -54,12 +58,14 @@ class FakeApi:
     squad call, a URL path segment on the leaders call.
     """
 
-    def __init__(self, teams=None, squads=None, leaders=None):
+    def __init__(self, teams=None, squads=None, leaders=None, free_agents=None):
         self._teams = teams if teams is not None else default_teams()
         self._squads = squads or {}
         self._leaders = leaders or {}
+        self._free_agents = free_agents or ([], {})
         self.squad_calls: list[tuple] = []
         self.leader_calls: list[tuple] = []
+        self.free_agent_calls: list[int] = []
 
     def get_nhl_teams(self):
         return list(self._teams)
@@ -71,6 +77,11 @@ class FakeApi:
     def get_hockey_team_leaders(self, key, season=None):
         self.leader_calls.append((key, season))
         return dict(self._leaders.get(key, {}))
+
+    def get_hockey_free_agents(self, season):
+        self.free_agent_calls.append(season)
+        players, lines = self._free_agents
+        return list(players), dict(lines)
 
 
 def default_teams():
@@ -132,6 +143,7 @@ def build(tmp_path, api=None, **kw):
     patcher = NHL05PS2Patcher(tmp_path / "cache", **kw)
     if api is not None:
         patcher.api = api
+        patcher.free_agents_api = api
     return patcher
 
 
@@ -664,6 +676,59 @@ def test_fetching_reports_progress_once_per_team_plus_the_end(tmp_path):
     assert len(seen) == 5
 
 
+TODAY = current_season(date.today())
+
+
+def test_fetching_carries_the_free_agents_in_the_league(tmp_path):
+    api = FakeApi(free_agents=([make_player(77, "D", name="Nick Leddy")], {"77": {"GP": 32}}))
+    extra = build(tmp_path, api).fetch(season=2025).league.extra
+    assert (extra["free_agents"]["players"][0]["name"], extra["free_agents"]["stats"]) == (
+        "Nick Leddy",
+        {"77": {"GP": 32}},
+    )
+
+
+def test_the_free_agents_are_this_seasons_on_espn_whatever_season_is_asked(tmp_path):
+    # ESPN serves today's squads for any season, so the free agents are today's too.
+    api = FakeApi()
+    build(tmp_path, api).fetch(season=2019)
+    assert api.free_agent_calls == [TODAY]
+
+
+def test_a_past_nhl_season_fetches_no_free_agents(tmp_path):
+    # The NHL lists today's free agents: none of them belong in a 2022 league.
+    api = FakeApi(free_agents=([make_player(77, "D")], {}))
+    data = build(tmp_path, api, provider="nhl").fetch(season=TODAY - 4)
+    assert (api.free_agent_calls, data.league.extra) == ([], {})
+
+
+def test_the_current_nhl_season_fetches_its_free_agents(tmp_path):
+    api = FakeApi(free_agents=([make_player(77, "D")], {}))
+    data = build(tmp_path, api, provider="nhl").fetch(season=TODAY)
+    assert (api.free_agent_calls, len(data.league.extra["free_agents"]["players"])) == ([TODAY], 1)
+
+
+def test_a_free_agent_source_that_fails_leaves_the_rosters(tmp_path):
+    class Broken(FakeApi):
+        def get_hockey_free_agents(self, season):
+            raise ValueError("the NHL changed its pages")
+
+    lines = []
+    data = build(tmp_path, Broken(), on_status=lines.append).fetch(season=2025)
+    assert (len(data.teams), data.league.extra) == (4, {})
+    assert any(line.startswith("Free agents skipped:") for line in lines)
+
+
+def test_no_free_agents_leave_the_league_without_extra(tmp_path):
+    assert build(tmp_path, FakeApi()).fetch(season=2025).league.extra == {}
+
+
+def test_the_free_agents_come_from_the_nhl_api_on_both_providers(tmp_path):
+    espn = NHL05PS2Patcher(tmp_path / "a")
+    nhl = NHL05PS2Patcher(tmp_path / "b", provider="nhl")
+    assert (type(espn.free_agents_api), nhl.free_agents_api) == (NhlApiClient, nhl.api)
+
+
 def test_mapping_keys_by_rom_slot(tmp_path):
     mapped = build(tmp_path).map_rosters(league())
     assert sorted(mapped.teams) == DISC_SLOTS
@@ -673,9 +738,21 @@ def test_mapping_stamps_the_game_id(tmp_path):
     assert build(tmp_path).map_rosters(league()).game_id == "nhl05-ps2"
 
 
-def test_mapping_selects_at_most_twenty_five_players(tmp_path):
-    mapped = build(tmp_path).map_rosters(league())
-    assert len(mapped.teams[0]) == 22
+def test_mapping_keeps_every_player(tmp_path):
+    # A club takes as many as its rows of each kind hold, and the rest become
+    # free agents: cutting the list first could keep goalies for whom no goalie
+    # row is left and drop the skaters who had rows (Columbus 2022-23: 47
+    # players, six goalies, three goalie rows).
+    positions = ["G"] * 6 + ["C", "LW", "RW"] * 11 + ["D"] * 8
+    big = [make_player(5000 + i, p) for i, p in enumerate(positions)]
+    mapped = build(tmp_path).map_rosters(league(squads={"ANA": big}))
+    assert len(mapped.teams[0]) == 47
+
+
+def test_mapping_as_given_keeps_everyone_in_order(tmp_path):
+    big = [make_player(5000 + i, "C") for i in range(45)]
+    mapped = build(tmp_path).map_rosters(league(squads={"ANA": big}), order_as_given=True)
+    assert [r.player_id for r in mapped.teams[0]] == [p.id for p in big]
 
 
 def test_mapping_produces_this_games_record_type(tmp_path):
@@ -892,6 +969,32 @@ def test_the_rows_a_short_roster_did_not_reach_leave_the_team(tmp_path):
             row = rows[fixture.rost_position(0, r)]
             assert (row["TEAM"], row["DRES"]) == (63, 0)  # TEAM is 6 bits here
             assert not any(row[f] for f in fixture.LINE_FLAG_NAMES)
+
+
+def write_disc_teams(tmp_path, teams):
+    """`_write_all_teams` over the fixture's master TDB, in memory:
+    (teams patched, players patched, players with no row)."""
+    tables = _MasterTables.of(TDBFile.parse(fixture.build_master_tdb()))
+    writer = NHL05PS2RomWriter(str(tmp_path / "in.iso"), str(tmp_path / "out.iso"))
+    rosters = MappedRosters(game_id="nhl05-ps2", teams=teams)
+    return build(tmp_path)._write_all_teams(writer, rosters, tables, None, None)
+
+
+def records(goalies, skaters):
+    return [
+        NHL05PlayerRecord(last_name=f"G{i}", position="G", is_goalie=True) for i in range(goalies)
+    ] + [NHL05PlayerRecord(last_name=f"S{i}", position="C") for i in range(skaters)]
+
+
+def test_the_players_a_club_has_no_row_for_are_its_last_listed(tmp_path):
+    # 30 players for the fixture's 25 rows (2 goalie rows, 23 skater rows).
+    _, written, left = write_disc_teams(tmp_path, {0: records(2, 28)})
+    assert (written, [p.last_name for p in left]) == (25, [f"S{i}" for i in range(23, 28)])
+
+
+def test_a_goalie_past_the_goalie_rows_has_no_row(tmp_path):
+    _, written, left = write_disc_teams(tmp_path, {0: records(3, 20)})
+    assert (written, [p.last_name for p in left]) == (22, ["G2"])
 
 
 def test_a_patched_row_keeps_its_own_index(tmp_path):

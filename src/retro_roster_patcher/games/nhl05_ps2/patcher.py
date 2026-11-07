@@ -36,7 +36,8 @@ import os
 from collections import Counter
 from collections.abc import Mapping
 from copy import deepcopy
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field, fields
+from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -59,8 +60,8 @@ from ...core.registry import register
 from ...formats.ea_tdb import TDBFile, TDBTable, bigf_parse
 from ...sports import _http
 from ...sports.espn import EspnClient
-from ...sports.models import League, LeagueData, TeamRoster
-from ...sports.nhl import NhlApiClient
+from ...sports.models import League, LeagueData, Player, TeamRoster
+from ...sports.nhl import NhlApiClient, current_season
 from ..nhl07_psp.rom_writer import iso_entry, write_in_place
 from . import faces, logos, looks, portraits, saves, screens, teams, wordmarks
 from .models import (
@@ -79,7 +80,24 @@ from .rom_writer import (
     PROGRESS_RECORDS_END,
     NHL05PS2RomWriter,
 )
-from .stat_mapper import MAX_PLAYERS, NHL05StatMapper
+from .stat_mapper import (
+    DEFENCE_PAIRS,
+    DEFENCEMEN_PER_TEAM,
+    FORWARD_LINES,
+    FORWARDS_PER_TEAM,
+    GOALIES_PER_TEAM,
+    MAX_PLAYERS,
+    NHL05StatMapper,
+)
+
+#: The `MappedRosters.teams` key of today's free agents (no ROM slot is
+#: negative): `map_rosters` puts them there, `patch` writes them into `FREE`.
+FREE_AGENTS = -1
+
+#: The fewest goalies and skaters `_squad_caps` leaves an All-Star side (a
+#: dressed lineup) and a club (a full roster as `select_roster` builds it).
+SIDE_FLOOR = {True: GOALIES_PER_TEAM, False: FORWARD_LINES * 3 + DEFENCE_PAIRS * 2}
+CLUB_FLOOR = {True: GOALIES_PER_TEAM, False: FORWARDS_PER_TEAM + DEFENCEMEN_PER_TEAM}
 
 
 def _db_viv_extent(reader: NHL05PS2RomReader) -> tuple[int, int]:
@@ -129,12 +147,35 @@ def _live_records(table: TDBTable) -> range:
     return range(min(table.num_records, table.capacity))
 
 
-def _gone(rost: TDBTable) -> dict[str, object]:
-    """What a ROST row leaving its team takes: the highest `TEAM` the field
-    holds (127; the disc's teams run to 96), which no screen lists, undressed
-    and off every line."""
+def _hidden(rost: TDBTable) -> int:
+    """The team no screen lists: the highest `TEAM` the field holds (127; the
+    disc's teams run to 96)."""
     width = next((f.bit_width for f in rost.fields if f.name == "TEAM"), 7)
-    return {"TEAM": (1 << width) - 1, "DRES": 0, **dict.fromkeys(LINE_FLAGS, 0)}
+    return (1 << width) - 1
+
+
+def _gone(rost: TDBTable) -> dict[str, object]:
+    """What a ROST row leaving its team takes: the hidden team (`_hidden`),
+    undressed and off every line."""
+    return {"TEAM": _hidden(rost), "DRES": 0, **dict.fromkeys(LINE_FLAGS, 0)}
+
+
+def _cut(
+    players: list[NHL05PlayerRecord], goalies: int, skaters: int, dressed: list[bool]
+) -> tuple[list[NHL05PlayerRecord], list[NHL05PlayerRecord]]:
+    """`players` kept to `goalies` goalies and `skaters` skaters, and the rest,
+    both in list order. The ones `dressed` marks (the lineup a game dresses)
+    are kept first: the first eighteen skaters listed are fifteen forwards
+    and three defencemen, not twelve and six."""
+    room = {True: goalies, False: skaters}
+    keep: set[int] = set()
+    for player in [p for p, d in zip(players, dressed, strict=True) if d] + [
+        p for p, d in zip(players, dressed, strict=True) if not d
+    ]:
+        if room[player.is_goalie] > 0:
+            keep.add(id(player))
+            room[player.is_goalie] -= 1
+    return [p for p in players if id(p) in keep], [p for p in players if id(p) not in keep]
 
 
 def _index_map(table: TDBTable) -> dict[int, int]:
@@ -198,6 +239,10 @@ class _MasterTables:
     sgai_by_indx: dict[int, int]
     #: Bio records of the 2004 players whose rows were dropped.
     dropped: list[int] = field(default_factory=list)
+
+    def player(self, indx: object) -> int | None:
+        """The player id a ROST, FREE or MINI row's `INDX` leads to."""
+        return self.play_id_by_indx.get(indx) if isinstance(indx, int) else None
 
     @classmethod
     def of(cls, tdb: TDBFile) -> _MasterTables:
@@ -277,6 +322,12 @@ class NHL05PS2Patcher(Patcher):
             self.api: Any = NhlApiClient(str(self.cache_dir), on_status, transport=transport)
         else:
             self.api = EspnClient(str(self.cache_dir), on_status, transport=transport)
+        # ESPN lists no free agents, so they come from the NHL API either way.
+        self.free_agents_api: Any = (
+            self.api
+            if self.provider == "nhl"
+            else NhlApiClient(str(self.cache_dir), on_status, transport=transport)
+        )
 
     def analyze_rom(self, rom_path: Path) -> RomInfo:
         """Inspect an ISO and list its team slots.
@@ -374,6 +425,7 @@ class NHL05PS2Patcher(Patcher):
                 )
             )
 
+        free_agents = self._fetch_free_agents(season)
         if on_progress is not None:
             on_progress(1.0, "Complete")
         # Every field but `season` is synthesised: this game has no league
@@ -389,9 +441,31 @@ class NHL05PS2Patcher(Patcher):
                 logo_url="",
                 season=season,
                 teams_count=len(rosters),
+                extra={"free_agents": free_agents} if free_agents else {},
             ),
             teams=rosters,
         )
+
+    def _fetch_free_agents(self, season: int) -> dict[str, Any] | None:
+        """Today's NHL free agents, for `league.extra["free_agents"]`: their
+        players as dicts and their season lines. None for a past season on the
+        NHL API (the NHL lists today's free agents only), or when it lists none.
+        ESPN serves today's squads whatever the season, so on ESPN they are
+        always today's."""
+        today = current_season(date.today())
+        if self.provider == "nhl" and season != today:
+            self.status(f"Free agents skipped: the NHL lists {today}'s, not {season}'s")
+            return None
+        try:
+            players, lines = self.free_agents_api.get_hockey_free_agents(today)
+        except Exception as e:  # noqa: BLE001 - the squads are fetched; a page we cannot read costs only these
+            self.status(f"Free agents skipped: {e}")
+            return None
+        if not players:
+            self.status("Free agents: the NHL API listed none")
+            return None
+        self.status(f"Free agents: {len(players)} from the NHL API")
+        return {"players": [asdict(p) for p in players], "stats": lines}
 
     def suggest_squad_order(self, team_roster):
         """`select_roster`'s order with the starting six first: the first G, C,
@@ -429,12 +503,17 @@ class NHL05PS2Patcher(Patcher):
             if slot is None or not 0 <= slot < PATCHABLE_SLOT_COUNT:
                 continue
             leaders = roster.extra.get("leaders") or {}
-            # `order_as_given`: the writer splits goalies from skaters itself and
-            # keeps list order within each, so the caller's list goes as is.
+            # Everyone, best first: the writer splits goalies from skaters and
+            # fills each kind's rows in list order, and the players a club has
+            # no row for become free agents. A cut here, before the kinds are
+            # known, could keep goalies with no goalie row left and drop
+            # skaters who had one. `order_as_given`: the caller's list as is.
             selected = (
-                roster.players[:MAX_PLAYERS]
+                roster.players
                 if order_as_given
-                else self.mapper.select_roster(roster.players, leaders, max_players=MAX_PLAYERS)
+                else self.mapper.select_roster(
+                    roster.players, leaders, max_players=len(roster.players)
+                )
             )
             records = [
                 self.mapper.map_player(player, roster.team.code, leaders.get(str(player.id), {}))
@@ -449,6 +528,19 @@ class NHL05PS2Patcher(Patcher):
             if not records and teams.get(slot):
                 continue
             teams[slot] = records
+
+        free = (data.league.extra or {}).get("free_agents") or {}
+        if free.get("players"):
+            lines = free.get("stats") or {}
+            known = {f.name for f in fields(Player)}
+            teams[FREE_AGENTS] = [
+                self.mapper.map_player(
+                    Player(**{k: v for k, v in raw.items() if k in known}),
+                    "",
+                    lines.get(str(raw.get("id")), {}),
+                )
+                for raw in free["players"]
+            ]
         return MappedRosters(game_id=self.game_id, teams=teams)
 
     def patch(
@@ -509,9 +601,12 @@ class NHL05PS2Patcher(Patcher):
             mirror_rost = roster_tdb.get_table("ROST") if roster_tdb is not None else None
 
             self.status("Writing rosters...")
-            teams_patched, players_patched = self._write_all_teams(
+            teams_patched, players_patched, overflow = self._write_all_teams(
                 writer, rosters, tables, mirror_rost, on_progress
             )
+            # The players a team had no row for first: they are this season's
+            # NHL players, and some of today's free agents have played no game.
+            self._write_free_agents(writer, overflow + rosters.teams.get(FREE_AGENTS, []), tables)
 
             if options.get("portraits", True):
                 self._lend_portraits(writer, tables)
@@ -655,10 +750,7 @@ class NHL05PS2Patcher(Patcher):
 
     @staticmethod
     def _lend_portraits(writer: NHL05PS2RomWriter, tables: _MasterTables) -> None:
-        """Give each written player whose `ART_` has no portrait of his own (not
-        in `PORTAPT.VIV`, shared, or the silhouette) the one a dropped 2004
-        player leaves free; the dropped player takes the silhouette. The archive
-        has no room for new entries."""
+        """Lend portraits (`_lend`) from the ones in `PORTAPT.VIV`."""
         spbt = tables.tdb.get_table("SPBT")
         if spbt is None or not writer.photos:
             return
@@ -668,6 +760,18 @@ class NHL05PS2Patcher(Patcher):
                 return
             f.seek(found[0].extent.offset)
             names = {e.name for e in bigf_parse(f.read(found[0].extent.size))}
+        NHL05PS2Patcher._lend(spbt, names, tables.dropped, writer)
+
+    @staticmethod
+    def _lend(
+        spbt: TDBTable, names: set[str], dropped: list[int], writer: NHL05PS2RomWriter
+    ) -> None:
+        """Give each written player whose `ART_` has no portrait of his own (not
+        among `names`, shared, or the silhouette) the one a dropped 2004 player
+        leaves free; the dropped player takes the silhouette. The archive has no
+        room for new entries, and with whole squads there are too few to go
+        round, so they go by `writer.ranks`: every team's first players first,
+        free agents last."""
         art_of = {i: spbt.read_record(i).get("ART_") for i in _live_records(spbt)}
         uses = Counter(art_of.values())
 
@@ -679,8 +783,8 @@ class NHL05PS2Patcher(Patcher):
                 and portraits.entry_name(art) in names
             )
 
-        free = [b for b in tables.dropped if b not in writer.photos and own(art_of.get(b))]
-        for bio in writer.photos:
+        free = [b for b in dropped if b not in writer.photos and own(art_of.get(b))]
+        for bio in sorted(writer.photos, key=lambda b: writer.ranks.get(b, 0)):
             if not free:
                 break
             if not own(art_of.get(bio)):
@@ -894,15 +998,18 @@ class NHL05PS2Patcher(Patcher):
         tables: _MasterTables,
         mirror_rost: TDBTable | None,
         on_progress: ProgressFn | None,
-    ) -> tuple[int, int]:
-        """Write every mapped slot, returning (teams patched, players patched).
+    ) -> tuple[int, int, list[NHL05PlayerRecord]]:
+        """Write every mapped slot, returning (teams patched, players patched,
+        the players a club had no row for, in slot and list order).
 
         Re-check the slot range here as well as in `map_rosters`: the keys come
         from a plain dict that may have crossed a JSON boundary since.
 
         Clubs first, by sorting: an All-Star side takes rows the clubs left. A
         side with too few is left as it was and dropped from `rosters` (`patch`'s
-        own copy), so it is neither renamed nor given a crest.
+        own copy), so it is neither renamed nor given a crest. Every team is
+        first cut to `_squad_caps`' goalies and skaters, and the players cut
+        join the ones a club had no row for.
         """
         targets = sorted(
             slot
@@ -911,10 +1018,27 @@ class NHL05PS2Patcher(Patcher):
         )
         teams_patched = 0
         players_patched = 0
+        overflow: list[NHL05PlayerRecord] = []
         span = PROGRESS_RECORDS_END - PROGRESS_COPY_END
+        clubs_cap, sides_cap = self._squad_caps(rosters, tables)
+        if clubs_cap != (MAX_PLAYERS, MAX_PLAYERS):
+            self.status(
+                f"Every club keeps at most {clubs_cap[0]} goalies and {clubs_cap[1]} skaters, "
+                "so Seattle and Vegas find roster rows"
+            )
+        if sides_cap != (MAX_PLAYERS, MAX_PLAYERS):
+            self.status(
+                f"Seattle and Vegas keep at most {sides_cap[0]} goalies and {sides_cap[1]} "
+                "skaters: the roster rows the clubs leave"
+            )
 
         for i, slot in enumerate(targets):
-            players: list[NHL05PlayerRecord] = rosters.teams[slot]
+            team = rosters.teams[slot]
+            players, cut = _cut(
+                team,
+                *(sides_cap if slot in ALL_STAR_SLOTS else clubs_cap),
+                self.mapper.dressed(team),
+            )
             if on_progress is not None:
                 on_progress(
                     PROGRESS_COPY_END + (i / len(targets)) * span,
@@ -926,13 +1050,14 @@ class NHL05PS2Patcher(Patcher):
                 self.status(f"{NHL05_TEAM_NAMES[slot]} left as it was: too few free roster rows")
                 del rosters.teams[slot]
                 continue
-            written = self._write_team(writer, slot, players, tables, mirror_rost)
+            written, left = self._write_team(writer, slot, players, tables, mirror_rost)
             players_patched += written
+            overflow.extend(left + cut)
             # A slot that placed no player record did not get patched.
             if written > 0:
                 teams_patched += 1
 
-        return teams_patched, players_patched
+        return teams_patched, players_patched, overflow
 
     def _write_team(
         self,
@@ -941,14 +1066,15 @@ class NHL05PS2Patcher(Patcher):
         players: list[NHL05PlayerRecord],
         tables: _MasterTables,
         mirror_rost: TDBTable | None,
-    ) -> int:
+    ) -> tuple[int, list[NHL05PlayerRecord]]:
         """Write one team's players into the rows the disc already has for it.
 
         Records are never created, only overwritten. The disc's own ROST rows
         decide how many players a team holds and which are goalies; a goalie may
         only take a row whose occupant has an SGAI record, or his save ratings
-        have nowhere to go. Returns
-        `min(goalies, goalie rows) + min(skaters, skater rows)`.
+        have nowhere to go. Returns how many went in,
+        `min(goalies, goalie rows) + min(skaters, skater rows)`, and the
+        players left without a row, in list order.
         """
         team_rows, goalie_slots, skater_slots = self._classify_slots(slot, tables)
 
@@ -962,13 +1088,16 @@ class NHL05PS2Patcher(Patcher):
         # From the paired players, not `players`: line numbering and dressing
         # must not count anyone who was never written.
         written = [p for p, _ in pairs]
+        placed = {id(p) for p in written}
+        left = [p for p in players if id(p) not in placed]
         all_line_flags = self.mapper.generate_team_line_flags(written)
         dressed = self.mapper.dressed(written)
 
         used: set[int] = set()
+        place = {id(p): i for i, p in enumerate(players)}
         for position, (player, roster_slot) in enumerate(pairs):
             used.add(roster_slot.rost_index)
-            self._write_player(writer, player, roster_slot, tables)
+            self._write_player(writer, player, roster_slot, tables, place[id(player)])
 
             line_flags = all_line_flags[position] if position < len(all_line_flags) else {}
             values = writer.roster_values(
@@ -993,7 +1122,79 @@ class NHL05PS2Patcher(Patcher):
                 tables.rost.write_record(rost_index, gone)
                 self._mirror_rost(mirror_rost, rost_index, gone)
 
-        return len(pairs)
+        return len(pairs), left
+
+    def _squad_caps(
+        self, rosters: MappedRosters, tables: _MasterTables
+    ) -> tuple[tuple[int, int], tuple[int, int]]:
+        """(goalies, skaters) each club keeps, then each All-Star side.
+
+        A side plays on hidden rows whose bio no other row shows
+        (`_give_own_rows`), the rows the clubs leave, and plays exhibitions only,
+        while the clubs play the season. So, each kind apart: the sides keep as
+        many as those rows hold, both sides alike; only when that is not even a
+        dressed lineup (`SIDE_FLOOR`) is every club cut alike, the least that
+        makes room for it, never under `CLUB_FLOOR`. The rows are counted
+        without writing, as `_write_team` would leave them. A side that fits no
+        cut cuts no one. `MAX_PLAYERS` means uncut.
+        """
+        uncut = MAX_PLAYERS, MAX_PLAYERS
+        sides = [s for s in ALL_STAR_SLOTS if rosters.teams.get(s)]
+        if not sides:
+            return uncut, uncut
+        shown = self._shown(tables)
+
+        def free(rows: list[_RosterSlot]) -> int:
+            return sum(
+                shown[r.player_id] == 1 and (r.sgai_index is not None or r.spai_index is not None)
+                for r in rows
+            )
+
+        def count(players: list[NHL05PlayerRecord], goalie: bool) -> int:
+            return sum(p.is_goalie == goalie for p in players)
+
+        _, goalie_rows, skater_rows = self._classify_slots(_hidden(tables.rost), tables)
+        hidden = {True: free(goalie_rows), False: free(skater_rows)}
+        clubs = [
+            (players, *self._classify_slots(slot, tables)[1:])
+            for slot, players in rosters.teams.items()
+            if 0 <= slot < PATCHABLE_SLOT_COUNT and slot not in ALL_STAR_SLOTS and players
+        ]
+
+        def side_cap(goalie: bool, club_cap: int) -> int:
+            pool = hidden[goalie] + sum(
+                free((goalie_rows if goalie else skater_rows)[min(club_cap, count(team, goalie)) :])
+                for team, goalie_rows, skater_rows in clubs
+            )
+            return next(
+                n
+                for n in range(MAX_PLAYERS, -1, -1)
+                if sum(min(n, count(rosters.teams[side], goalie)) for side in sides) <= pool
+            )
+
+        caps: dict[bool, tuple[int, int]] = {}
+        for goalie in (True, False):
+            for club in range(MAX_PLAYERS, CLUB_FLOOR[goalie] - 1, -1):
+                side = side_cap(goalie, club)
+                if side >= SIDE_FLOOR[goalie]:
+                    caps[goalie] = club, side
+                    break
+            else:
+                return uncut, uncut
+        return (caps[True][0], caps[False][0]), (caps[True][1], caps[False][1])
+
+    @staticmethod
+    def _shown(tables: _MasterTables) -> Counter[int | None]:
+        """How many ROST, FREE and MINI rows show each player id."""
+        rost = tables.rost
+        shown = Counter(tables.player(rost.read_record(i).get("INDX")) for i in _live_records(rost))
+        for name in ("FREE", "MINI"):
+            table = tables.tdb.get_table(name)
+            if table is not None:
+                shown.update(
+                    tables.player(table.read_record(i).get("INDX")) for i in _live_records(table)
+                )
+        return shown
 
     @staticmethod
     def _give_own_rows(
@@ -1016,17 +1217,10 @@ class NHL05PS2Patcher(Patcher):
         gone = _gone(rost)
         records = {i: rost.read_record(i) for i in _live_records(rost)}
 
-        def player(indx: object) -> int | None:
-            return tables.play_id_by_indx.get(indx) if isinstance(indx, int) else None
-
-        shown = Counter(player(r.get("INDX")) for r in records.values())
-        for name in ("FREE", "MINI"):
-            table = tables.tdb.get_table(name)
-            if table is not None:
-                shown.update(player(table.read_record(i).get("INDX")) for i in _live_records(table))
+        shown = NHL05PS2Patcher._shown(tables)
         free: dict[bool, list[int]] = {True: [], False: []}
         for i, record in records.items():
-            pid = player(record.get("INDX"))
+            pid = tables.player(record.get("INDX"))
             if record.get("TEAM") != gone["TEAM"] or pid is None or shown[pid] != 1:
                 continue
             if pid in tables.spbt_by_indx and pid in tables.sgai_by_indx:
@@ -1053,6 +1247,71 @@ class NHL05PS2Patcher(Patcher):
             rost.write_record(i, values)
             NHL05PS2Patcher._mirror_rost(mirror_rost, i, values)
         return True
+
+    def _write_free_agents(
+        self,
+        writer: NHL05PS2RomWriter,
+        players: list[NHL05PlayerRecord],
+        tables: _MasterTables,
+    ) -> int:
+        """Free Agency's list, `FREE`, shows `players` in place of the disc's
+        2004 free agents.
+
+        A FREE row leads to a bio as a ROST row does: each goalie takes the
+        next row whose bio has an SGAI record, each skater the next with SPAI,
+        in FREE order, and the bio keeps its own SPBT `TEAM`. The rows stay as
+        they are, all 120 of them: Season mode breaks on a FREE with fewer
+        (checked in PCSX2), so a row no player reaches keeps its 2004 free
+        agent. A row whose bio a listed ROST row or a minor-leaguer (`MINI`)
+        also shows is never written: it would put one man in two places.
+        Returns how many went in.
+        """
+        free = tables.tdb.get_table("FREE")
+        spbt = tables.tdb.get_table("SPBT")
+        if free is None or spbt is None:
+            return 0
+        hidden = _hidden(tables.rost)
+        shown = {
+            tables.player(r.get("INDX"))
+            for r in (tables.rost.read_record(i) for i in _live_records(tables.rost))
+            if r.get("TEAM") != hidden
+        }
+        mini = tables.tdb.get_table("MINI")
+        if mini is not None:
+            shown |= {tables.player(mini.read_record(i).get("INDX")) for i in _live_records(mini)}
+
+        rows = [free.read_record(i) for i in _live_records(free)]
+        slots: dict[bool, list[tuple[int, _RosterSlot]]] = {True: [], False: []}
+        for i, row in enumerate(rows):
+            pid = tables.player(row.get("INDX"))
+            if pid is None or pid in shown:
+                continue
+            bio = tables.spbt_by_indx.get(pid)
+            if bio is None:
+                continue
+            # `rost_index` holds the FREE row here; `_write_player` never reads it.
+            slot = _RosterSlot(
+                i, pid, bio, tables.spai_by_indx.get(pid), tables.sgai_by_indx.get(pid)
+            )
+            slots[slot.sgai_index is not None].append((i, slot))
+
+        written: set[int] = set()
+        place = {id(p): MAX_PLAYERS + i for i, p in enumerate(players)}
+        for goalie, available in slots.items():
+            pool = [p for p in players if p.is_goalie == goalie]
+            for player, (i, slot) in zip(pool, available, strict=False):
+                team = spbt.read_record(slot.bio_index).get("TEAM")
+                if isinstance(team, int):
+                    player.team_index = team
+                self._write_player(writer, player, slot, tables, place[id(player)])
+                written.add(i)
+        no_place = len(players) - len(written)
+        self.status(
+            f"Free agents: {len(written)} of today's players; "
+            f"{len(rows) - len(written)} left from the 2004 disc"
+            + (f"; {no_place} found no place" if no_place else "")
+        )
+        return len(written)
 
     @staticmethod
     def _mirror_rost(mirror_rost: TDBTable | None, index: int, values: dict[str, object]) -> None:
@@ -1113,6 +1372,7 @@ class NHL05PS2Patcher(Patcher):
         player: NHL05PlayerRecord,
         roster_slot: _RosterSlot,
         tables: _MasterTables,
+        rank: int = 0,
     ) -> None:
         """Write one player's bio and attributes into the master TDB.
 
@@ -1125,6 +1385,7 @@ class NHL05PS2Patcher(Patcher):
         """
         writer.write_player_bio(tables.tdb, roster_slot.bio_index, player)
         writer.photos[roster_slot.bio_index] = player.photo_url
+        writer.ranks[roster_slot.bio_index] = rank
         if player.skin >= 0:
             writer.skins[roster_slot.bio_index] = player.skin
 

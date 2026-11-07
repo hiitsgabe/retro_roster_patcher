@@ -145,3 +145,132 @@ def test_the_players_go_into_those_bios_and_the_clubs_keep_theirs(tmp_path):
 def test_the_side_keeps_one_captain_and_two_alternates_on_skaters(tmp_path):
     rost = rows(write_east(tmp_path), "ROST")
     assert [rost[i]["CAPT"] for i in (6, 7, 8)] == [0, 1, 2]
+
+
+# A club as full as the disc allows: 40 rows (two goalie rows), 40 players.
+# The East side's own five rows share the club's first five bios, and eight
+# hidden rows are free: two goalies' (by default), the rest skaters'. A side
+# of 30 cannot fit until every team keeps fewer skaters.
+CLUB_ROWS = 40
+CROWD_ROWS = (
+    [(0, pid) for pid in range(1, CLUB_ROWS + 1)]
+    + [(30, pid) for pid in range(1, 6)]
+    + [(HIDDEN, pid) for pid in range(101, 109)]
+)
+
+
+def crowded(free_goalies: int = 2) -> TDBFile:
+    goalies = {1, 2, *range(101, 101 + free_goalies)}
+    ids = sorted({pid for _, pid in CROWD_ROWS})
+    play = [{"INDX": 100 + i, "TBLE": 0, "ID__": pid} for i, (_, pid) in enumerate(CROWD_ROWS)]
+    rost = [{"TEAM": team, "INDX": 100 + i, "DRES": 1} for i, (team, _) in enumerate(CROWD_ROWS)]
+    bios = [{"INDX": pid, "FNME": "Old", "LNME": f"Bio{pid}"} for pid in ids]
+    attrs = lambda pids: [{"INDX": pid} for pid in pids]  # noqa: E731
+    return TDBFile.parse(
+        build_tdb(
+            [
+                _table("PLAY", fx.PLAY_FIELDS, fx.PLAY_RECORD_SIZE, play),
+                _table("ROST", fx.ROST_FIELDS, fx.ROST_RECORD_SIZE, rost),
+                _table("SPBT", fx.SPBT_FIELDS, fx.SPBT_RECORD_SIZE, bios),
+                _table(
+                    "SPAI",
+                    fx.SPAI_FIELDS,
+                    fx.SPAI_RECORD_SIZE,
+                    attrs([p for p in ids if p not in goalies]),
+                ),
+                _table("SGAI", fx.SGAI_FIELDS, fx.SGAI_RECORD_SIZE, attrs(sorted(goalies))),
+            ]
+        )
+    )
+
+
+def team(goalies: int, skaters: int, tag: str) -> list[NHL05PlayerRecord]:
+    """`goalies` then `skaters`, named by tag, G or S, and place."""
+    return [
+        NHL05PlayerRecord(
+            last_name=f"{tag}G{i}",
+            position="G",
+            is_goalie=True,
+            goalie_attrs=NHL05GoalieAttributes(),
+        )
+        for i in range(goalies)
+    ] + [
+        NHL05PlayerRecord(last_name=f"{tag}S{i}", skater_attrs=NHL05SkaterAttributes())
+        for i in range(skaters)
+    ]
+
+
+def crowd(tmp_path, east, free_goalies=2, club=(2, 38)):
+    """The club (full by default), `east` for the East side:
+    (tdb, caps, rosters, result)."""
+    tdb = crowded(free_goalies)
+    tables = _MasterTables.of(tdb)
+    writer = NHL05PS2RomWriter(str(tmp_path / "in.iso"), str(tmp_path / "out.iso"))
+    rosters = MappedRosters(game_id="nhl05-ps2", teams={0: team(*club, "C"), 30: east})
+    patcher = NHL05PS2Patcher(tmp_path / "cache")
+    caps = patcher._squad_caps(rosters, tables)
+    result = patcher._write_all_teams(writer, rosters, tables, None, None)
+    return tdb, caps, rosters, result
+
+
+def east_rows(tdb):
+    return [r for r in rows(tdb, "ROST") if r["TEAM"] == 30]
+
+
+def test_the_caps_stay_at_forty_when_the_sides_fit(tmp_path):
+    _, caps, _, (_, written, left) = crowd(tmp_path, team(1, 6, "E"))
+    assert (caps, written, left) == (((40, 40), (40, 40)), 47, [])
+
+
+def test_a_side_gives_up_its_extras_before_any_club_does(tmp_path):
+    # A club of 22 leaves 18 skater rows: with the 6 free ones, room for 24 of
+    # the side's 29 skaters, and the club keeps everyone.
+    tdb, caps, _, (_, written, left) = crowd(tmp_path, team(1, 29, "E"), club=(2, 20))
+    assert (caps, len(east_rows(tdb)), [p.last_name for p in left]) == (
+        ((40, 40), (40, 24)),
+        25,
+        [f"ES{i}" for i in range(24, 29)],
+    )
+
+
+def test_seattle_and_vegas_still_find_rows_when_the_clubs_are_full(tmp_path):
+    # The full club leaves no row: it keeps 26 skaters so that, with the 6 free
+    # rows, the side dresses 18. Every club would be cut alike.
+    tdb, caps, rosters, _ = crowd(tmp_path, team(1, 29, "E"))
+    assert (caps, len(east_rows(tdb)), 30 in rosters.teams) == (((40, 26), (40, 18)), 19, True)
+
+
+def test_players_past_the_cap_become_free_agents(tmp_path):
+    _, _, _, (_, written, left) = crowd(tmp_path, team(1, 29, "E"))
+    names = [p.last_name for p in left]
+    assert (written, names) == (
+        47,
+        [f"CS{i}" for i in range(26, 38)] + [f"ES{i}" for i in range(18, 29)],
+    )
+
+
+def test_goalies_and_skaters_are_cut_apart(tmp_path):
+    # Three goalies for two free goalie rows: the side keeps two, the skaters
+    # fit uncut, and the club loses no one.
+    _, caps, _, (_, written, left) = crowd(tmp_path, team(3, 5, "E"))
+    assert (caps, written, [p.last_name for p in left]) == (((40, 40), (2, 40)), 47, ["EG2"])
+
+
+def test_no_team_is_cut_for_a_side_that_cannot_fit_anyway(tmp_path):
+    # One free goalie row, and a side dresses two goalies.
+    _, caps, rosters, (_, written, _) = crowd(tmp_path, team(2, 5, "E"), free_goalies=1)
+    assert (caps, written, 30 in rosters.teams) == (((40, 40), (40, 40)), 40, False)
+
+
+def test_a_side_cut_to_a_dressed_lineup_keeps_six_defencemen(tmp_path):
+    # Cut to 18 skaters (see the test above): the twelve forwards and six
+    # defencemen a game dresses, not the first eighteen listed (fifteen
+    # forwards come before the defence).
+    positions = ["C", "LW", "RW"] * 5 + ["D"] * 8
+    east = team(1, 0, "E") + [
+        NHL05PlayerRecord(last_name=f"E{p}{i}", position=p, skater_attrs=NHL05SkaterAttributes())
+        for i, p in enumerate(positions)
+    ]
+    _, caps, _, (_, _, left) = crowd(tmp_path, east)
+    cut = sorted(p.position for p in left if p.last_name.startswith("E"))
+    assert (caps[1], cut) == ((40, 18), ["C", "D", "D", "LW", "RW"])

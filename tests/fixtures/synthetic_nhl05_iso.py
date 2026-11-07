@@ -308,8 +308,8 @@ STEA_RECORD_SIZE = 33
 
 # Four teams is enough for the two collisions that matter -- a slot patched and
 # a slot left alone -- while keeping the whole image small. Twenty-five rows a
-# team is what `stat_mapper.MAX_PLAYERS` selects, so the fixture exercises the
-# exactly-full case rather than only the short one.
+# team, fewer than the forty `stat_mapper.MAX_PLAYERS` selects, so a mapped club
+# can hold more players than the disc has rows for, as on the retail disc.
 TEAM_COUNT = 4
 ROWS_PER_TEAM = 25
 GOALIE_ROWS_PER_TEAM = 2

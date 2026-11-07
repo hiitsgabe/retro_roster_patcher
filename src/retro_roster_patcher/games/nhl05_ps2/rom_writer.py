@@ -150,6 +150,9 @@ class NHL05PS2RomWriter:
         self.photos: dict[int, str] = {}
         #: Bio record index -> `SKIN` of the player written there (`looks`).
         self.skins: dict[int, int] = {}
+        #: Bio record index -> the player's place in his team's list (free
+        #: agents after every team): who borrows a portrait first.
+        self.ranks: dict[int, int] = {}
         self.iso_path = iso_path
         self.output_path = output_path
         self.reader: NHL05PS2RomReader | None = None
