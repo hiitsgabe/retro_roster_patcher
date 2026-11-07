@@ -104,7 +104,9 @@ FORMATION_DONORS: dict[str, bytes] = {
 }
 
 #: The shape of each slot's retail record (`TEAM_ENUM_ORDER`): what a club with no formation of its
-#: own, and no lineup to say, is written. Counted from the lines of the retail records.
+#: own, and no lineup to say, is written when the mapper picks its eleven. An order the caller gives
+#: is written `DEFAULT_SHAPE`, which `suggest_squad_order` cut it for. Counted from the lines of the
+#: retail records.
 SLOT_SHAPES = (
     "5-3-2", "4-4-2", "3-4-3", "3-4-3", "4-3-3", "4-4-2", "4-4-2", "4-3-3", "4-4-2", "4-5-1",
     "4-4-2", "4-4-2", "4-4-2", "4-4-2", "4-4-2", "4-5-1", "4-3-3", "5-3-2", "4-4-2", "4-4-2",
@@ -251,8 +253,11 @@ class ISSStatMapper:
     ) -> ISSTeamRecord:
         """The team's record for ROM slot `slot` (`TEAM_ENUM_ORDER`): `_shape` says the formation
         it is written, and its fifteen come in that formation's places, the eleven seated by role
-        (`_seated`). Without a slot a club with no shape of its own is given `DEFAULT_SHAPE`."""
-        shape = self._shape(team_roster, slot)
+        (`_seated`). Without a slot, or with `order_as_given`, a club with no shape of its own is
+        given `DEFAULT_SHAPE`."""
+        # The order a caller hands back came from `suggest_squad_order`, which has no slot and cut
+        # it for `DEFAULT_SHAPE`: the slot's own shape would cut it again.
+        shape = self._shape(team_roster, None if order_as_given else slot)
         best_15 = self._seated(
             self._fifteen(team_roster, order_as_given, slot), shape, team_roster.extra.get("lineup")
         )

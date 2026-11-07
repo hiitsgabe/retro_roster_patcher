@@ -19,7 +19,8 @@ the one the ten 65816 patch addresses belong to is patched just as willingly.
 A team's formation is a record of eleven places in the ROM and its player k stands
 in place k, so `map_rosters` picks the record for each club (`formations`: the
 cartridge's seven shapes, the nearest to the club's own, else its lineup's, else
-the slot's own) and orders the club's fifteen for it, each line seated by role and
+the slot's own, or with `order_as_given` the 4-4-2 that `suggest_squad_order` cuts
+the order for) and orders the club's fifteen for it, each line seated by role and
 side; `patch` writes the record and the "Offense 4-4-2" label of team select.
 """
 

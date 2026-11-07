@@ -640,10 +640,10 @@ def test_a_formation_that_cannot_be_read_still_leaves_the_eleven_to_the_caller(p
     assert lines_of(FORMATION_DONORS[record.formation])[4] == 2
 
 
-def test_with_no_lineup_either_the_slots_own_shape_cuts_the_callers_eleven(patcher):
+def test_with_no_lineup_either_the_suggested_shape_cuts_the_callers_eleven(patcher):
     roster = squad("GK " + "CM " * 10, formation=None)
     record = mapped(patcher, roster, slot=17, order_as_given=True).teams[17]
-    assert record.formation == "5-3-2"  # Russia's own
+    assert record.formation == "4-4-2"  # what `suggest_squad_order` is cut for, not Russia's 5-3-2
     assert written_names(record)[:11] == [p.name for p in roster.players[:11]]
 
 
@@ -1077,6 +1077,28 @@ def test_a_roster_with_nothing_but_players_plays_the_slots_own_shape(patcher, ro
     image = patch(patcher, rom, out, mapped(patcher, roster, slot=0))
     assert record_of(image, 0) == FORMATION_DONORS["5-3-2"]
     assert label_of(image, 0) == b"Offense 5-3-2  "
+
+
+def test_a_roster_with_neither_a_formation_nor_a_lineup_keeps_the_suggested_lines_in_any_slot(
+    patcher, rom, out
+):
+    """`suggest_squad_order` has no slot, so it cuts the eleven for a 4-4-2: four in defence (the
+    attacker spilled into it among them), four in midfield, two up front. Handed back into
+    Germany's slot, a 5-3-2, that order is written the 4-4-2 it was cut for, not cut again over
+    the back five."""
+    roster = spilling_squad()
+    roster.players = patcher.suggest_squad_order(roster)
+    suggested = [p.name for p in roster.players[:11]]
+    image = patch(patcher, rom, out, mapped(patcher, roster, slot=0, order_as_given=True))
+    assert record_of(image, 0) == FORMATION_DONORS["4-4-2"]
+    assert label_of(image, 0) == b"Offense 4-4-2  "
+    assert lines_of(record_of(image, 0)) == [0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3]
+    assert names_of(out, 0)[:11] == suggested == [
+        "G1", "D3", "D4", "D5", "A13", "M6", "M7", "M8", "M9", "A11", "A12",
+    ]  # fmt: skip
+    # The automatic path has no suggestion to keep: Germany's own 5-3-2.
+    image = patch(patcher, rom, out, mapped(patcher, spilling_squad(), slot=0))
+    assert record_of(image, 0) == FORMATION_DONORS["5-3-2"]
 
 
 def patched_galo(patcher, rom, out, *, fetched_with_roles, as_suggested) -> dict[str, bytes]:
