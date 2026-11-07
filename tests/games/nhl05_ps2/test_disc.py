@@ -95,12 +95,16 @@ def patched(retail, tmp_path_factory):
 def rows_by_team(tables: _MasterTables) -> dict[int, list[str]]:
     """Each team's ROST rows, as their bios' last names."""
     rost, spbt = tables.rost, tables.tdb.get_table("SPBT")
+    assert spbt is not None
     out: dict[int, list[str]] = {}
     for i in _live_records(rost):
         row = rost.read_record(i)
-        bio = tables.spbt_by_indx.get(tables.player(row.get("INDX")))
-        name = spbt.read_record(bio).get("LNME") if bio is not None else ""
-        out.setdefault(row.get("TEAM"), []).append(name)
+        pid = tables.player(row.get("INDX"))
+        bio = tables.spbt_by_indx.get(pid) if pid is not None else None
+        team = row.get("TEAM")
+        if isinstance(team, int):
+            name = spbt.read_record(bio).get("LNME") if bio is not None else ""
+            out.setdefault(team, []).append(str(name))
     return out
 
 
