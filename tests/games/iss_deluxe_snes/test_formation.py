@@ -632,8 +632,8 @@ def test_a_back_five_keeps_its_defenders_in_defence_and_its_midfielders_in_midfi
 ):
     # The mapper fills the eleven's lines for the shape this cartridge writes, so the cut by index
     # (the keeper, five defenders, four midfielders, a striker) finds each player in his own line.
-    # Filled for ISS 2000's nearest shape instead, the fifth defender is spilled to the attack, the
-    # left midfielder takes his place in the back five and the striker goes to midfield.
+    # Filled for ISS 2000's nearest shape instead, a 5-3-2, the right midfielder would be spilled
+    # to the attack and the striker cut into midfield.
     roster = _back_five()
     if order_as_given:  # the editor hands the suggested order back
         roster.players = get_patcher("iss-deluxe-snes")(tmp_path).suggest_squad_order(roster)

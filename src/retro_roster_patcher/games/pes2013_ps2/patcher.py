@@ -9,15 +9,15 @@ a plausible lineup; the record's abilities are left as they were. Slots the
 squad does not fill keep their original players.
 
 A team's formation is its roster's (`extra["formation"]`, else its lineup's shape:
-`sports.lineup.team_formation`), so a roster with a lineup has one. A team with a
-readable formation is also written the preset of `formations.PRESETS` nearest it, and
-its eleven stand on that preset's places: the keeper, then the ten outfielders cut
-into its lines by index and each line seated by role, side and depth. A player's role
-is his own or, for a rosters file from before the roles, the one his lineup code
-reads as (`sports.lineup.lineup_role`), and every player with a role is written that
-role's registered position and playable flag (`ROLE_NIBBLE`), whatever his team plays.
-Only a roster with no lineup and no formation of its own keeps the old placement: each
-starter takes the squad place whose record holds the position his lineup code gives him.
+`sports.lineup.team_formation`). A team with a readable formation is also written the
+preset of `formations.PRESETS` nearest it, and its eleven stand on that preset's places:
+the keeper, then the ten outfielders cut into its lines by index and each line seated
+by role, side and depth. A player's role is his own or, for a rosters file from before
+the roles, the one his lineup code reads as (`sports.lineup.lineup_role`), and every
+player with a role is written that role's registered position and playable flag
+(`ROLE_NIBBLE`), whatever his team plays. Only a roster with no formation of its own
+and no lineup shape keeps the old placement: each starter takes the squad place whose
+record holds the position his lineup code gives him.
 """
 
 from __future__ import annotations

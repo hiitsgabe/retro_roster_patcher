@@ -2,11 +2,12 @@
 
 The 100 national-team slots take club teams, so the slot mapping is explicit,
 as in `iss-snes`. A mapped slot gets the club's 22 (its starting XI in the
-cartridge's formation nearest its folded shape, then the bench), each player's
-name, number, position, foot, height, build and ratings (`mapper`), his look
-from his head shot (`looks`), the club's name on every menu (`names`) and its
-crest as the flag (`flags`), which the team select, the lineup screen, the VS
-banner, the flags in the stands and the match scoreboard all draw.
+cartridge's formation nearest its own, the lineup's folded shape unless edited,
+then the bench), each player's name, number, position, foot, height, build and
+ratings (`mapper`), his look from his head shot (`looks`), the club's name on
+every menu (`names`) and its crest as the flag (`flags`), which the team select,
+the lineup screen, the VS banner, the flags in the stands and the match
+scoreboard all draw.
 """
 
 from __future__ import annotations

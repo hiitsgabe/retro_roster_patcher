@@ -20,11 +20,11 @@ each percentile:
 A player without statistics gets his group's median.
 
 The XI is the club's starting eleven when there is one, each starter on the
-line he is given, in the cartridge's formation nearest the lineup's folded
-shape; each line is ordered by the side ESPN gives each player (L/R suffixes),
-and the writer then seats it on the formation's places by role, side and depth
-(`writer.starting_order`). The bench is the rest by starts and minutes, a
-second keeper first.
+line he is given, in the cartridge's formation nearest the roster's own (a
+fetch sets it to the lineup's folded shape); each line is ordered by the side
+ESPN gives each player (L/R suffixes), and the writer then seats it on the
+formation's places by role, side and depth (`writer.starting_order`). The
+bench is the rest by starts and minutes, a second keeper first.
 """
 
 from __future__ import annotations
