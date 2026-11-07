@@ -15,10 +15,12 @@ ranking exactly.
 from __future__ import annotations
 
 import dataclasses
+import random
 import statistics
 
 import pytest
 
+from retro_roster_patcher.games.iss_snes import stat_mapper as stat_mapper_module
 from retro_roster_patcher.games.iss_snes.models import PLAYERS_PER_TEAM, ISSPlayerAttributes
 from retro_roster_patcher.games.iss_snes.stat_mapper import ISSStatMapper, _lookup
 from retro_roster_patcher.sports.espn import SOCCER_UNSUPPLIED_STATS
@@ -505,6 +507,34 @@ def _numbered(*numbers):
 def test_a_free_real_number_stays_and_the_rest_take_the_lowest_free_in_squad_order(mapper):
     """The second 10 is taken, 23 and None are out of range: 2, 3, 4 in turn."""
     assert mapper._shirt_numbers(_numbered(10, 10, 23, None, 1)) == [10, 2, 3, 4, 1]
+
+
+def _numbers_as_the_method_gave_them(players):
+    """`ISSStatMapper._shirt_numbers` as it was before it used the shared helper, verbatim."""
+    kept = []
+    for p in players:
+        free = p.number is not None and 1 <= p.number <= PLAYERS_PER_TEAM
+        kept.append(p.number if free and p.number not in kept else None)
+    spare = iter(n for n in range(1, PLAYERS_PER_TEAM + 1) if n not in kept)
+    return [n or next(spare) for n in kept]
+
+
+def test_the_shirt_numbers_are_the_shared_helpers_with_a_top_of_fifteen(mapper, monkeypatch):
+    monkeypatch.setattr(stat_mapper_module, "shirt_numbers", lambda wanted, top: [top, *wanted])
+    assert mapper._shirt_numbers(_numbered(10, None, 0)) == [15, 10, 0, 0]
+
+
+def test_the_shared_helper_gives_the_numbers_the_method_always_did(mapper):
+    """Squads of 0 to 15 with numbers of every kind: free, taken, zero, negative, above fifteen,
+    and none."""
+    rng = random.Random(22)
+    pool = [None, None, 0, -4, 1, 2, 3, 5, 7, 9, 10, 10, 11, 14, 15, 15, 16, 23, 99]
+    for _ in range(5000):
+        players = _numbered(*[rng.choice(pool) for _ in range(rng.randint(0, PLAYERS_PER_TEAM))])
+        assert mapper._shirt_numbers(players) == _numbers_as_the_method_gave_them(players)
+    # Fifteen who all want the same number, or none: one to fifteen in squad order.
+    assert mapper._shirt_numbers(_numbered(*[7] * 15)) == [7, *[n for n in range(1, 16) if n != 7]]
+    assert mapper._shirt_numbers(_numbered(*[None] * 15)) == list(range(1, 16))
 
 
 def test_a_mapped_team_wears_fifteen_different_numbers_from_one_to_fifteen(mapper):

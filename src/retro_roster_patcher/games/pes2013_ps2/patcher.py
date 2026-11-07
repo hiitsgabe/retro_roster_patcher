@@ -8,12 +8,14 @@ position group (goalkeeper, defender, midfielder, attacker), so the game keeps
 a plausible lineup; the record's abilities are left as they were. Slots the
 squad does not fill keep their original players.
 
-A team with a readable formation (`extra["formation"]`) is also written the
-preset of `formations.PRESETS` nearest it, and its eleven stand on that
-preset's places: the keeper, then the ten outfielders cut into its lines by
-index and each line seated by role, side and depth. A player with a role gets
-that role's registered position and playable flag (`ROLE_NIBBLE`). A team with
-neither (a rosters file from before the roles) is patched as it always was.
+A team with a readable formation (`extra["formation"]`, else its lineup's shape:
+`sports.lineup.team_formation`) is also written the preset of `formations.PRESETS`
+nearest it, and its eleven stand on that preset's places: the keeper, then the ten
+outfielders cut into its lines by index and each line seated by role, side and
+depth. A player with a role gets that role's registered position and playable flag
+(`ROLE_NIBBLE`), his own or, for a rosters file from before the roles, the one his
+lineup code reads as (`sports.lineup.lineup_role`). A team with no formation is
+patched as it always was.
 """
 
 from __future__ import annotations
@@ -43,7 +45,8 @@ from ...core.patcher import Patcher
 from ...core.registry import register
 from ...sports import _http
 from ...sports.espn import LINEUP_GROUPS, EspnClient
-from ...sports.lineup import DEPTH, GROUP_ROLE, apply_lineup, parse_shape
+from ...sports.lineup import DEPTH, GROUP_ROLE, apply_lineup, parse_shape, team_formation
+from ...sports.lineup import lineup_role as lineup_role_name
 from ...sports.models import LeagueData, Player, TeamRoster
 from . import kit_textures, looks
 from .formations import FORMATIONS, PRESETS, pick_preset, seats
@@ -218,6 +221,13 @@ def role_or_group(role: str, group: str) -> str:
     return role if role in DEPTH else GROUP_ROLE.get(group, "CM")
 
 
+def role_name_of(player: Player, lineup: dict[str, Any] | None) -> str:
+    """The role a player is written by: his own when it is one of FotMob's 14, else the one his
+    lineup code reads as (`sports.lineup.lineup_role`, a rosters file from before the roles), else
+    none."""
+    return player.role if player.role in ROLE_NIBBLE else lineup_role_name(player.id, lineup)
+
+
 def lineup_role(player: Player, lineup: dict[str, Any] | None) -> int | None:
     """The nibble of the position the lineup had the player start in, or None
     when he did not start. A code the table lacks plays his group's position,
@@ -248,10 +258,10 @@ def squad_order(
 
     With a `formation` that `parse_shape` reads, the ten outfield players of the
     eleven then go back to front by the depth of their roles (`DEPTH`; a player
-    with none reads as his group's), a stable sort that keeps the order above
-    among equals, so cutting the ten by index into the formation's lines (as
-    `map_rosters` and the game do) puts each in the line he plays. The players
-    picked are the same.
+    with none reads as the one his lineup code gives him, else his group's), a
+    stable sort that keeps the order above among equals, so cutting the ten by
+    index into the formation's lines (as `map_rosters` and the game do) puts each
+    in the line he plays. The players picked are the same.
     """
     entries = (lineup or {}).get("starters") or []
     # Ties (every keeper has place 1) go by the lineup's own order: most starts first.
@@ -280,11 +290,12 @@ def squad_order(
         key=lambda i: (rank.get(groups[i], 2), place.get(players[i].id, (LINEUP_SIZE + 1, 0)))
     )
     if parse_shape(formation) is not None:
-        eleven.sort(
-            key=lambda i: (
-                0 if groups[i] == "Goalkeeper" else DEPTH[role_or_group(players[i].role, groups[i])]
-            )
-        )
+
+        def depth(i: int) -> int:
+            role = role_or_group(role_name_of(players[i], lineup), groups[i])
+            return 0 if groups[i] == "Goalkeeper" else DEPTH[role]
+
+        eleven.sort(key=depth)
     bench = sorted(
         (i for i in range(len(players)) if i not in eleven), key=lambda i: rank.get(groups[i], 2)
     )
@@ -541,7 +552,7 @@ class PES2013PS2Patcher(Patcher):
         return squad_order(
             team_roster.players,
             team_roster.extra.get("lineup"),
-            str(team_roster.extra.get("formation") or ""),
+            team_formation(team_roster) or "",
         )
 
     # -- map -----------------------------------------------------------------
@@ -574,9 +585,7 @@ class PES2013PS2Patcher(Patcher):
                     f"which is not in the fetched league data"
                 )
             lineup = roster.extra.get("lineup")
-            formation = str(roster.extra.get("formation") or "")
-            if parse_shape(formation) is None:
-                formation = ""
+            formation = team_formation(roster) or ""
             players = (
                 roster.players if order_as_given else squad_order(roster.players, lineup, formation)
             )
@@ -599,7 +608,7 @@ class PES2013PS2Patcher(Patcher):
                         # The list's first eleven start (the editor's, with
                         # order_as_given); `_assign` keeps one keeper among them.
                         role=starting_role(p, lineup) if i < starting else None,
-                        role_name=p.role if p.role in ROLE_NIBBLE else "",
+                        role_name=role_name_of(p, lineup),
                         player_id=p.id or 0,
                         photo_url=p.photo_url or "",
                         nationality=p.nationality or "",

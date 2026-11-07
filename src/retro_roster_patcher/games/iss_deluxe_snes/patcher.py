@@ -8,7 +8,8 @@ his position code from his role; each team's looks from its players' head
 shots (`looks`). Main menu games start with the first two mapped clubs instead
 of Brazil v England.
 
-A club with a formation (`extra["formation"]`, a shape such as "4-3-3") is
+A club with a formation (`extra["formation"]`, a shape such as "4-3-3", else its
+lineup's shape: `team_formation`) is
 written the cartridge's formation nearest it (`formations`): the team's record
 becomes that formation's default and the ten outfielders, in the order the
 mapper gave them (with `order_as_given`, the team sheet's), are cut into its
@@ -49,7 +50,7 @@ from ...core.text import to_ascii
 from ...formats.snes import fix_checksum
 from ...sports import _http
 from ...sports.espn import EspnClient
-from ...sports.lineup import ROLES, nearest_shape, seat_line, slot_role
+from ...sports.lineup import lineup_role, nearest_shape, seat_line, team_formation
 from ...sports.models import LeagueData, Player, TeamRoster
 from ..iss2000_n64.mapper import GROUPS, N64StatMapper, _place, group_of, parse_formation
 from ..iss2000_n64.patcher import NATIONAL_ALIASES, NATIONAL_LEAGUE
@@ -102,7 +103,7 @@ class DeluxePlayer:
     name: str
     group: str
     skills: dict[str, int] = field(default_factory=dict)
-    tag: str = ""  # his ESPN lineup position, when he started (`_lineup_role` reads a role in it)
+    tag: str = ""  # his ESPN lineup position, when he started
     #: The provider's id and head shot, and the nationality, for `looks`.
     player_id: int = 0
     photo_url: str = ""
@@ -129,7 +130,8 @@ class DeluxeTeam:
     national: bool = False  # a nation's own squad: it keeps its name, flag and kits
     #: Set by `looks.dress`; None leaves the cartridge's looks alone.
     look: ISSLook | None = None
-    #: The club's formation (`extra["formation"]`, "4-3-3"); "" keeps the slot's own.
+    #: The club's formation (`team_formation`: `extra["formation"]`, else its lineup's shape,
+    #: "4-3-3"); "" keeps the slot's own.
     formation: str = ""
 
 
@@ -296,7 +298,7 @@ class ISSDeluxePatcher(Patcher):
         self, roster: TeamRoster, pcts: dict[int, dict[str, float]], order_as_given: bool
     ) -> DeluxeTeam:
         extra = roster.extra or {}
-        formation = str(extra.get("formation") or "")
+        formation = team_formation(roster) or ""
         by_formation = parse_formation(formation) is not None
         if order_as_given:
             # With a formation the team sheet's order stands: the keeper, then the outfield as
@@ -307,7 +309,6 @@ class ISSDeluxePatcher(Patcher):
         else:
             squad, _ = self.mapper.select_22(roster)
         lineup = extra.get("lineup") or {}
-        lineup_formation = str(lineup.get("formation") or "")
         tags = {
             int(e["id"]): str(e.get("position", ""))
             for e in lineup.get("starters", [])
@@ -344,7 +345,7 @@ class ISSDeluxePatcher(Patcher):
                 role=p.role,
             )
             # A roster fetched before roles: his lineup code says what he plays.
-            player.role = player.role or _lineup_role(lineup_formation, player.tag)
+            player.role = player.role or lineup_role(p.id, lineup)
             players.append(player)
         home, away = default_kits(roster.team)
         t = roster.team
@@ -540,13 +541,6 @@ def _cut_groups(formation: str, offered: Sequence[str]) -> list[str]:
     nearest of `offered`): the keeper, then its defenders, midfielders and forwards."""
     d, m, f = map(int, nearest_shape(formation, offered).split("-"))
     return ["GK"] + ["DF"] * d + ["MF"] * m + ["FW"] * f
-
-
-def _lineup_role(formation: str, tag: str) -> str:
-    """The role the lineup code `tag` reads as in the lineup's `formation`; "" for a player who
-    had none (the bench) or a role outside `ROLES`."""
-    role = slot_role(formation, tag) if tag else ""
-    return role if role in ROLES else ""
 
 
 def _spot(depth: int, lateral: int) -> tuple[float, int]:

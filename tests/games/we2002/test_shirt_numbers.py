@@ -14,8 +14,8 @@ Both read as the emulator showed them: retail Wales (national slot 2) wears 1, 5
 11, 10, 9, 8 in places 1-11, and club 9 (ANDALUCIA) 1, 2, 4, 15, 20, 8, 22, 18, 19, 21, 7.
 
 A player wears his provider's number when it is in 1-32 and no earlier player has it; the others
-take the lowest free numbers, in order (`core.numbers.shirt_numbers`), over the 23 places. His own
-12-byte characteristics record carries that same number (5 bits, less one), as every retail
+take the lowest free numbers, in order (`core.shirt_numbers.shirt_numbers`), over the 23 places. His
+own 12-byte characteristics record carries that same number (5 bits, less one), as every retail
 national player's does. The last tests read the retail disc (the `disc` fixture:
 RETRO_ROSTER_TEST_ROMS has we2002.bin, Track 1).
 """

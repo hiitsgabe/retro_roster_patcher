@@ -5,7 +5,14 @@ from itertools import zip_longest
 
 from ...sports.espn import LINEUP_GROUPS
 from ...sports.lineup import DEPTH as ROLE_DEPTH
-from ...sports.lineup import GROUP_ROLE, nearest_shape, parse_shape, seat_line
+from ...sports.lineup import (
+    GROUP_ROLE,
+    lineup_role,
+    nearest_shape,
+    parse_shape,
+    seat_line,
+    team_formation,
+)
 from .models import (
     Player,
     PlayerStats,
@@ -16,7 +23,7 @@ from .models import (
 )
 from .rom_writer import _PLAYERS_PER_NAT
 
-#: The shapes the disc has presets for, in its order (a tie in `nearest_shape` goes to the first).
+#: The shapes the disc has presets for, in its order (`nearest_shape` ends a tie on the first).
 FORMATIONS = ("4-5-1", "4-4-2", "4-3-3", "3-6-1", "3-5-2", "3-4-3", "5-4-1", "5-3-2")
 
 
@@ -234,14 +241,15 @@ class StatMapper:
         `order_as_given`: the squad is the caller's list as it stands (first 23,
         a national squad's places) instead of the stat-ranked best 23.
 
-        A team whose `extra["formation"]` `parse_shape` reads is written the disc's
-        preset nearest it (`FORMATIONS`, variant B when the eleven hold two or more
-        CDMs, else A) and its eleven are ordered for it: the keeper, then the ten
-        outfield players cut into the preset's lines by index and each line seated on
-        the preset's places by role (`_seated`). The ten are the suggested eleven's
-        (`_select_best_23`) or, with `order_as_given`, the caller's in the order given
-        (`_given`), so an edited order or formation keeps its lines by index. Without
-        a readable formation the order is the 4-4-2's and the record has no formation.
+        A team with a readable formation (`team_formation`: its `extra["formation"]`, else
+        its lineup's shape) is written the disc's preset nearest it (`FORMATIONS`, variant
+        B when the eleven hold two or more CDMs, else A) and its eleven are ordered for it:
+        the keeper, then the ten outfield players cut into the preset's lines by index and
+        each line seated on the preset's places by role (`_seated`). The ten are the
+        suggested eleven's (`_select_best_23`) or, with `order_as_given`, the caller's in
+        the order given (`_given`), so an edited order or formation keeps its lines by
+        index. Without a readable formation the order is the 4-4-2's and the record has no
+        formation. A player with no role has the one his lineup code reads as.
         """
         all_stats = {}
         for roster in all_rosters:
@@ -250,8 +258,9 @@ class StatMapper:
 
         percentiles = self._compute_percentiles(all_stats)
 
-        formation = str(team_roster.extra.get("formation") or "")
-        lined = parse_shape(formation) is not None
+        formation = team_formation(team_roster) or ""
+        lineup = team_roster.extra.get("lineup")
+        lined = bool(formation)
         if order_as_given:
             squad = (
                 self._given(team_roster.players)
@@ -262,15 +271,15 @@ class StatMapper:
             squad = self._select_best_23(
                 team_roster.players,
                 team_roster.player_stats,
-                team_roster.extra.get("lineup"),
+                lineup,
                 formation,
             )
         preset = None
         if lined:
             preset = nearest_shape(formation, FORMATIONS) + (
-                "B" if sum(p.role == "CDM" for p in squad[:11]) >= 2 else "A"
+                "B" if sum(self._role(p, lineup) == "CDM" for p in squad[:11]) >= 2 else "A"
             )
-            squad = self._seated(squad, preset)
+            squad = self._seated(squad, preset, lineup)
 
         we_players = []
         for player in squad:
@@ -289,7 +298,7 @@ class StatMapper:
                     nationality=player.nationality or "",
                     height_cm=round(player.height * 2.54) if player.height > 0 else 0,
                     age=player.age or 0,
-                    role=player.role,
+                    role=player.role or lineup_role(player.id, lineup),
                 )
             )
 
@@ -574,7 +583,7 @@ class StatMapper:
         lined = parse_shape(str(formation or "")) is not None
 
         def line_key(p: Player) -> tuple[int, int]:
-            return (ROLE_DEPTH[self._role(p)] if lined else 0, depth(p))
+            return (ROLE_DEPTH[self._role(p, lineup)] if lined else 0, depth(p))
 
         eleven = keeper + sorted(outfield, key=line_key)
 
@@ -584,9 +593,12 @@ class StatMapper:
         bench += [p for p in rest if p not in bench]
         return (eleven + bench)[:_PLAYERS_PER_NAT]
 
-    def _role(self, player: Player) -> str:
-        """His role, else the one his squad group gives (`GROUP_ROLE`)."""
-        return player.role if player.role in ROLE_DEPTH else GROUP_ROLE.get(player.position, "CM")
+    def _role(self, player: Player, lineup: dict | None = None) -> str:
+        """His role, else the one his lineup code reads as (`lineup_role`), else the one his squad
+        group gives (`GROUP_ROLE`)."""
+        if player.role in ROLE_DEPTH:
+            return player.role
+        return lineup_role(player.id, lineup) or GROUP_ROLE.get(player.position, "CM")
 
     def _given(self, players: list[Player]) -> list[Player]:
         """The caller's list as the squad, for a team with a readable formation: the first
@@ -601,15 +613,15 @@ class StatMapper:
         order = eleven + [i for i in at if i not in eleven]
         return [players[i] for i in order][:_PLAYERS_PER_NAT]
 
-    def _seated(self, squad: list[Player], preset: str) -> list[Player]:
+    def _seated(self, squad: list[Player], preset: str, lineup: dict | None = None) -> list[Player]:
         """`squad` (the keeper, ten outfield players in line order, then the rest) with each line
         of the ten on the places of the disc's `preset`, which is place k + 2 for the k-th.
 
         The ten are cut into the preset's lines by index and each line takes that line's places by
         role (`seat_line`): first by side, a full back on the widest place on his side (a place's
         side is its y's distance from the middle, `_side`), and then a deeper role on a deeper
-        place, the place's x. A player with no role reads as his group's. A squad of fewer than
-        eleven seats the places it has players for."""
+        place, the place's x. A player with no role reads as the one his lineup code gives him,
+        else as his group's. A squad of fewer than eleven seats the places it has players for."""
         record = FORMATION_PRESETS[preset]
         xs, ys = record[10:20], record[20:]
         defenders, midfielders, _ = map(int, preset[:-1].split("-"))
@@ -618,7 +630,7 @@ class StatMapper:
         for first, end in zip(edges, edges[1:], strict=False):
             at = list(range(first, min(end, len(squad) - 1)))
             places = [(_side(ys[k]), xs[k]) for k in at]
-            seats = seat_line([self._role(squad[1 + k]) for k in at], places)
+            seats = seat_line([self._role(squad[1 + k], lineup) for k in at], places)
             for k, seat in zip(at, seats, strict=True):
                 out[1 + at[seat]] = squad[1 + k]
         return out

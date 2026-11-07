@@ -9,6 +9,9 @@ a wide midfielder in a 4-4-2 and a wing-back in a 3-4-2-1.
     plays most;
   * `slot_role` reads a code inside its formation as a role in FotMob's vocabulary (GK RB CB LB
     RWB LWB CDM CM CAM RM LM RW LW ST), and `slot_side` gives its side across the pitch;
+    `lineup_role` reads the code a starter played at, for a roster fetched before roles;
+  * `team_formation` gives the formation a game writes for a roster: its own, else its lineup's
+    shape (a roster fetched before formations were kept has only the lineup);
   * `slot_lines` puts each place of a template on a line, so the lines add up to the folded
     shape; `code_line` gives a code's line when no formation is at hand;
   * `parse_shape` reads a shape as its three line counts, `nearest_shape` picks the shape a game
@@ -137,18 +140,36 @@ def nearest_shape(shape: str, offered: Sequence[str]) -> str:
     """The shape of `offered` with the smallest sum of differences in the players per line.
 
     `shape` and each offered shape are read by `parse_shape` (folded to three lines, surrounding
-    whitespace ignored). A tie goes to the shape offered first, and a `shape` that `parse_shape`
-    cannot read to `offered[0]`.
+    whitespace ignored). A tie goes to the shape whose number of defenders is nearest, so a back
+    five stays a back five (5-3-2 is as near 4-4-2 and 4-3-3 as it is 5-4-1), and then to the
+    shape offered first. A `shape` that `parse_shape` cannot read gives `offered[0]`.
     """
     want = parse_shape(shape)
     if want is None:
         return offered[0]
 
-    def distance(candidate: str) -> int:
+    def distance(candidate: str) -> tuple[int, int]:
         have = parse_shape(candidate)
-        return sum(abs(a - b) for a, b in zip(want, have, strict=True)) if have else 99
+        if have is None:
+            return 99, 0
+        return sum(abs(a - b) for a, b in zip(want, have, strict=True)), abs(want[0] - have[0])
 
     return min(offered, key=distance)
+
+
+def team_formation(roster: TeamRoster) -> str | None:
+    """The formation a game writes for `roster`, or `None` for one with none.
+
+    The roster's own (`extra["formation"]`) when `parse_shape` reads it, else its lineup's shape
+    (`extra["lineup"]["shape"]`) when that reads. A roster fetched before formations were kept has
+    only the lineup, and a game writes it that shape as it does a fresh fetch's. `None` when
+    neither reads: the game keeps the path it takes for a roster with no formation.
+    """
+    extra = roster.extra or {}
+    for text in (extra.get("formation"), (extra.get("lineup") or {}).get("shape")):
+        if parse_shape(str(text or "")) is not None:
+            return str(text)
+    return None
 
 
 def choose_shape(formations: list[str]) -> str | None:
@@ -178,6 +199,23 @@ def slot_side(code: str) -> str:
     if code.startswith("R") or code.endswith("-R"):
         return "R"
     return "C"
+
+
+def lineup_role(player_id: int, lineup: dict[str, Any] | None) -> str:
+    """The role of `player_id` as the lineup played him: the ESPN code he started at, read in the
+    lineup's own formation (`slot_role`).
+
+    `""` for a player the lineup does not name (the bench), one it names without a code, a
+    `lineup` of `None` or with no starters, and a code that reads as a role outside `ROLES`. For a
+    roster fetched before roles, which has a lineup and no `Player.role`.
+    """
+    lineup = lineup or {}
+    for starter in lineup.get("starters") or []:
+        if "id" in starter and int(starter["id"]) == player_id:
+            code = str(starter.get("position") or "")
+            role = slot_role(str(lineup.get("formation") or ""), code) if code else ""
+            return role if role in ROLES else ""
+    return ""
 
 
 _SIDE_VALUE = {"L": -1, "C": 0, "R": 1}

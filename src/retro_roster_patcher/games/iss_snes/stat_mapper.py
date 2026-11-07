@@ -25,7 +25,9 @@ and the team's player k stands in place k. So a club is written a record
 (`FORMATION_DONORS`) of the shape nearest its own and its fifteen are ordered
 for it: the keeper, then the shape's defenders, midfielders and forwards, each
 line seated on the record's places of that line by role, the sides across the
-pitch and the deeper role deeper (`seat_line`).
+pitch and the deeper role deeper (`seat_line`). The suggested eleven goes in that order: its
+outfield back to front by the depth of its roles (`DEPTH`), so cutting it by index puts each in the
+line he plays, and each line from the left by the side of its lineup codes.
 """
 
 from __future__ import annotations
@@ -33,8 +35,17 @@ from __future__ import annotations
 from bisect import bisect_left, bisect_right
 from collections.abc import Callable
 
+from ...core.shirt_numbers import shirt_numbers
 from ...sports.espn import LINEUP_GROUPS
-from ...sports.lineup import nearest_shape, parse_shape, seat_line
+from ...sports.lineup import (
+    DEPTH,
+    GROUP_ROLE,
+    lineup_role,
+    nearest_shape,
+    seat_line,
+    slot_side,
+    team_formation,
+)
 from ...sports.models import Player, PlayerStats, TeamRoster
 from .models import (
     PLAYERS_PER_TEAM,
@@ -45,7 +56,7 @@ from .models import (
 from .rom_writer import _to_ascii
 
 #: The cartridge's formation records, one per shape `ISSPatcher.formations` offers, in that order
-#: (ties in `nearest_shape` go to the first). Each is 44 bytes: eleven places of four, the keeper
+#: (`nearest_shape` ends a tie on the first). Each is 44 bytes: eleven places of four, the keeper
 #: first, then the defence, midfield and attack. A place is a depth from its own goal line (the
 #: match anchor is the depth times 32), a lateral place in the high nibble of the second byte
 #: (1 to 13, the low ones the team's left) with the line in its low two bits (0 keeper, 1 defence,
@@ -122,6 +133,13 @@ def _donor_places(shape: str) -> list[tuple[int, float, int]]:
         side = ((lateral_line >> 4) - _MIDDLE) / _HALF_WIDTH
         places.append((lateral_line & 3, side, depth))
     return places
+
+
+def _across(code: str) -> int:
+    """How far across the pitch the place ESPN labels `code` is, from -2 (a left flank place: LB,
+    LM, LW) through -1 (the left of a centre: CD-L, CM-L, AM-L) and 0 (the middle) to 1 and 2."""
+    side = "LCR".index(slot_side(code)) - 1
+    return side * (2 if code[:1] in ("L", "R") else 1)
 
 
 #: (percentile floor, value) rows, highest first. Tuned so the league's p10,
@@ -234,7 +252,9 @@ class ISSStatMapper:
         it is written, and its fifteen come in that formation's places, the eleven seated by role
         (`_seated`). Without a slot a club with no shape of its own is given `DEFAULT_SHAPE`."""
         shape = self._shape(team_roster, slot)
-        best_15 = self._seated(self._fifteen(team_roster, order_as_given, slot), shape)
+        best_15 = self._seated(
+            self._fifteen(team_roster, order_as_given, slot), shape, team_roster.extra.get("lineup")
+        )
         # Rank only the players some team writes: bench and youth players
         # with stats would push every written fifteen up the scale. Another
         # team's slot is not known here, so the selection picks one with no
@@ -332,12 +352,11 @@ class ISSStatMapper:
 
     def _shape(self, roster: TeamRoster, slot: int | None = None) -> str:
         """The shape written for `roster`: the nearest `FORMATION_DONORS` has to its formation
-        (`extra["formation"]`), else to its lineup's shape, when `parse_shape` reads them. A club
-        with neither is written the retail shape of ROM slot `slot`, else `DEFAULT_SHAPE`."""
-        extra = roster.extra or {}
-        for text in (extra.get("formation"), (extra.get("lineup") or {}).get("shape")):
-            if parse_shape(str(text or "")) is not None:
-                return nearest_shape(str(text), tuple(FORMATION_DONORS))
+        (`team_formation`: `extra["formation"]`, else its lineup's shape). A club with neither is
+        written the retail shape of ROM slot `slot`, else `DEFAULT_SHAPE`."""
+        text = team_formation(roster)
+        if text is not None:
+            return nearest_shape(text, tuple(FORMATION_DONORS))
         return DEFAULT_SHAPE if slot is None else SLOT_SHAPES[slot]
 
     def _fifteen(
@@ -370,17 +389,21 @@ class ISSStatMapper:
         taken = {p.id for p in eleven}
         return (eleven + [p for p in players if p.id not in taken])[:PLAYERS_PER_TEAM]
 
-    def _seated(self, players: list[Player], shape: str) -> list[Player]:
+    def _seated(
+        self, players: list[Player], shape: str, lineup: dict | None = None
+    ) -> list[Player]:
         """`players` (the fifteen, the eleven in line order) with each line's starters on the
         places of `shape`'s donor record: the line of a place is the record's, and a line's
         players take its places by role, the sides first (a full back on the widest place on his
-        side) and then the deeper role deeper (`seat_line`). A player without a role keeps his
-        turn in the line."""
+        side) and then the deeper role deeper (`seat_line`). A player's role is his own, else the
+        one his code in the `lineup` reads as (a roster fetched before roles); one with neither
+        keeps his turn in the line."""
         places = _donor_places(shape)
+        roles = [p.role or lineup_role(p.id, lineup) for p in players]
         out = list(players)
         for line in (1, 2, 3):
             at = [k for k in range(min(len(players), 11)) if places[k][0] == line]
-            seats = seat_line([players[k].role for k in at], [places[k][1:] for k in at])
+            seats = seat_line([roles[k] for k in at], [places[k][1:] for k in at])
             for k, seat in zip(at, seats, strict=True):
                 out[at[seat]] = players[k]
         return out
@@ -438,12 +461,7 @@ class ISSStatMapper:
         """Unique numbers 1-15, the only ones retail uses. A real number of 15
         or below that is still free stays; everyone else takes the lowest free
         numbers in squad order."""
-        kept: list[int | None] = []
-        for p in players:
-            free = p.number is not None and 1 <= p.number <= PLAYERS_PER_TEAM
-            kept.append(p.number if free and p.number not in kept else None)
-        spare = iter(n for n in range(1, PLAYERS_PER_TEAM + 1) if n not in kept)
-        return [n or next(spare) for n in kept]
+        return shirt_numbers((p.number or 0 for p in players), PLAYERS_PER_TEAM)
 
     #: Where a group's extra starters play when its places are full, nearest
     #: first. Keepers never swap with outfield players.
@@ -473,6 +491,14 @@ class ISSStatMapper:
         forward with no starts never takes a place a midfielder with twenty
         would. Subs are the backup keeper, then the best of the rest the same
         way.
+
+        The ten outfield players are those picked, and they stand in the lines of
+        their roles, not of their groups (ESPN groups a 4-2-3-1's right winger
+        with its midfield and the attacking midfielder with its attack): back to
+        front by the depth of their roles (`DEPTH`; a player with none has the
+        one his lineup code reads as, else his squad group's), a stable sort,
+        cut by index into the shape's lines, and each line from the left by the
+        side of its players' lineup codes.
         """
         stats = player_stats or {}
         recent = {int(s["id"]): (i, s) for i, s in enumerate((lineup or {}).get("starters") or [])}
@@ -521,7 +547,27 @@ class ISSStatMapper:
         for eligible in (lambda p: p.id in recent, started, lambda p: True):
             fill(eligible, spill=False)
             fill(eligible, spill=True)
-        eleven = [p for g in places for p in chosen[g]]
+
+        def role(p: Player) -> str:
+            """His role, else the one his lineup code reads as, else his squad group's."""
+            if p.role in DEPTH:
+                return p.role
+            return lineup_role(p.id, lineup) or GROUP_ROLE.get(p.position, "CM")
+
+        def across(p: Player) -> int:
+            return _across(str(recent[p.id][1].get("position") or "") if p.id in recent else "")
+
+        # The outfield back to front by the depth of its roles (stable: players of one depth keep
+        # the order they were chosen in), cut by index into the shape's lines, so each plays the
+        # line his role is on whatever group ESPN gives his code; then each line from the left.
+        outfield = sorted(
+            (p for g in places if g != "Goalkeeper" for p in chosen[g]),
+            key=lambda p: DEPTH[role(p)],
+        )
+        eleven = list(chosen["Goalkeeper"])
+        for count in (defenders, midfielders, forwards):
+            eleven += sorted(outfield[:count], key=across)
+            outfield = outfield[count:]
 
         rest = [p for p in pool if id(p) not in taken]
         keepers = [p for p in rest if group(p) == "Goalkeeper"][:1]

@@ -59,6 +59,7 @@ from retro_roster_patcher.games.pes2013_ps2.rom_writer import RomWriter
 from retro_roster_patcher.sports.lineup import ROLES, apply_lineup, parse_shape, pick_lineup
 from retro_roster_patcher.sports.models import League, LeagueData, Player, Team, TeamRoster
 from tests.fixtures import synthetic_pes2013_iso as fixture
+from tests.fixtures.older_roster import older_roster
 
 EDITOR_ORDER = [
     "4-4-2",
@@ -184,6 +185,11 @@ def _stands(out, club=0):
     """The names on squad places 0-10 of a club."""
     tables = _read(out).player_tables(PLAYER_ENTRIES[0])
     return [_name(tables, i) for i in tables.club_squad(club)[:11]]
+
+
+def _stands_roles(out, club=0):
+    """The roles the names on squad places 0-10 of a club are named after."""
+    return [_role(name) for name in _stands(out, club)]
 
 
 def _galo():
@@ -349,8 +355,8 @@ def test_without_roles_a_shape_gets_the_first_of_its_presets_in_the_editors_orde
 def test_a_shape_the_presets_do_not_have_picks_among_the_nearest_ones():
     # A four-line formation is read by its three lines (4-2-3-1 is 4-3-3) ...
     assert pick_preset("4-2-3-1", "CB CB RB LB CM CM CM RW LW ST".split()) == "4-3-3"
-    # ... and 5-3-2 is as near 4-4-2 as 4-3-3 or 5-4-1: the first the patcher offers.
-    assert lines(PRESETS[pick_preset("5-3-2", [])]) == (4, 4, 2)
+    # ... and 5-3-2 is as near 4-4-2 and 4-3-3 as 5-4-1, which keeps the back five.
+    assert lines(PRESETS[pick_preset("5-3-2", [])]) == (5, 4, 1)
     assert pick_preset("not a formation", []) == "4-4-2"
 
 
@@ -562,6 +568,32 @@ def test_set_playable_sets_bit_7_of_the_flag_byte_and_nothing_else(iso, nibble, 
     assert tables.record(4) == _read(iso).player_tables().record(4)  # the neighbours are untouched
 
 
+@pytest.mark.parametrize(
+    ("nibble", "byte"),
+    [(0, 54), (2, 55), (3, 56), (4, 57), (5, 58), (6, 59), (7, 60), (8, 61), (9, 62)]
+    + [(10, 63), (11, 64), (12, 65)],
+)
+def test_set_playable_leaves_the_roles_flag_the_only_one_lit_and_every_ability_bit(
+    iso, nibble, byte
+):
+    """The record's last occupant played other positions (SS lit for the wingers, in Task 17's
+    emulator check): the twelve flags, bit 7 of bytes 54-65, are cleared first. Bits 0-6 of those
+    bytes are abilities, and every other byte stays."""
+    tables = _read(iso).player_tables()
+    players = bytearray(tables.players)
+    at = 5 * 124
+    for flag in range(54, 66):
+        players[at + flag] |= 0x80  # an occupant who played them all
+    tables.parts[0] = bytes(players)
+    before = tables.record(5)
+    RomWriter.set_playable(tables, 5, nibble)
+    after = tables.record(5)
+    assert [flag for flag in range(54, 66) if after[flag] & 0x80] == [byte]
+    assert all(after[i] & 0x7F == before[i] & 0x7F for i in range(124))
+    assert after[:54] == before[:54] and after[66:] == before[66:]
+    assert tables.record(4) == _read(iso).player_tables().record(4)  # the neighbours are untouched
+
+
 def test_a_role_writes_its_registered_position_and_its_flag(tmp_path, iso):
     """A left winger gets nibble 10 and byte 63's bit 7; bits 0-6 of it, the low nibble of byte 53
     and every other byte of the record stay."""
@@ -757,12 +789,54 @@ def test_a_national_team_gets_its_rows_record_and_its_row_in_place_order(tmp_pat
         assert all(tables.record(i)[57] & 0x80 for i in row[3:5])  # the fullbacks'
 
 
+def test_an_older_roster_is_written_the_preset_of_its_lineups_shape_and_stands_by_its_codes(
+    tmp_path, iso
+):
+    # No role, no extra["formation"]: the lineup's 4-3-3 and its codes (RB LB CM CD-R CD-L ...).
+    mapped = _map(tmp_path, older_roster())
+    record = mapped.teams[0]
+    assert record.formation == "4-3-3"
+    out = _patch(tmp_path, iso, mapped)
+    written = _read(out).formations().get(FIRST_CLUB_FORMATION)[:30]
+    # A 4-3-3 shape; with a holding player the preset nearest the roles may be the 4-1-2-3.
+    assert lines(written) == (4, 3, 3)
+    on = _stands_roles(out)
+    # Every preset's back four is CB, CB, RB and LB, and the front three the wingers and the
+    # striker, whoever stood where the lineup listed him.
+    assert on[0] == "GK" and on[1:3] == ["CB", "CB"] and on[3:5] == ["RB", "LB"]
+    assert sorted(on[8:]) == ["LW", "RW", "ST"]
+
+
+def test_the_suggested_order_of_an_older_roster_is_the_order_the_game_gets(tmp_path):
+    roster = older_roster()
+    suggested = PES2013PS2Patcher(tmp_path).suggest_squad_order(roster)
+    assert [p.name for p in suggested[:11]] == [
+        "GK1", "RB2", "LB3", "CB5", "CB6", "CDM4", "CM7", "CM8", "RW10", "LW11", "ST9",
+    ]  # fmt: skip
+    auto = _map(tmp_path, roster).teams[0]
+    given = TeamRoster(team=roster.team, players=suggested, extra=dict(roster.extra))
+    edited = _map(tmp_path, given, order_as_given=True).teams[0]
+    assert [p.player_id for p in auto.players] == [p.player_id for p in edited.players]
+    assert auto.formation == edited.formation == "4-3-3"
+
+
+def test_a_roster_with_a_formation_of_its_own_keeps_it_over_its_lineups_shape(tmp_path):
+    roster = older_roster()
+    roster.extra["formation"] = "3-5-2"
+    assert _map(tmp_path, roster).teams[0].formation == "3-5-2"
+
+
+def test_a_lineup_shape_that_cannot_be_read_leaves_no_formation(tmp_path):
+    roster = older_roster(shape="banana")
+    assert _map(tmp_path, roster).teams[0].formation == ""
+
+
 # --- patch: when nothing is written -------------------------------------------------------
 
 
-def test_an_older_roster_patches_as_today_and_entry_53_is_unchanged(tmp_path, iso):
+def test_a_roster_with_neither_a_formation_nor_a_lineup_patches_as_today(tmp_path, iso):
     xi = ("GK", "CB", "CB", "RB", "LB", "CM", "CM", "RM", "LM", "ST", "ST")
-    roster = _team(xi, formation="", bench=("GK", "CB", "CM", "ST"), lineup=True, roles=False)
+    roster = _team(xi, formation="", bench=("GK", "CB", "CM", "ST"), lineup=False, roles=False)
     mapped = _map(tmp_path, roster)
     assert mapped.teams[0].formation == ""
     assert all(p.role_name == "" for p in mapped.teams[0].players)
@@ -787,6 +861,23 @@ def test_an_older_roster_patches_as_today_and_entry_53_is_unchanged(tmp_path, is
     assert all(
         before.record(i)[53:66] == after.record(i)[53:66] for i in range(before.player_count)
     )
+
+
+def test_a_lineup_without_a_shape_writes_no_record_but_the_codes_still_give_the_roles(
+    tmp_path, iso
+):
+    xi = ("GK", "CB", "CB", "RB", "LB", "CM", "CM", "RM", "LM", "ST", "ST")
+    roster = _team(xi, formation="", bench=("GK", "CB", "CM", "ST"), lineup=True, roles=False)
+    mapped = _map(tmp_path, roster)
+    assert mapped.teams[0].formation == ""
+    assert [p.role_name for p in mapped.teams[0].players[:11]] == list(xi)
+    assert all(p.role_name == "" for p in mapped.teams[0].players[11:])  # the bench has no code
+    out = _patch(tmp_path, iso, mapped)
+    assert _entry(out, FORMATION_ENTRY) == _entry(iso, FORMATION_ENTRY)  # no formation, no record
+    tables = _read(out).player_tables()
+    assert [tables.record(i)[53] >> 4 for i in tables.club_squad(0)[:11]] == [
+        ROLE_NIBBLE[role] for role in _stands_roles(out)
+    ]
 
 
 def test_an_unreadable_formation_writes_no_record_but_the_roles_still_write_positions(

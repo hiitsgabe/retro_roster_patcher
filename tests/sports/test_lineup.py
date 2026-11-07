@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from retro_roster_patcher.sports import lineup as lineup_module
 from retro_roster_patcher.sports.lineup import (
     DEPTH,
     GROUP_ROLE,
@@ -16,6 +17,7 @@ from retro_roster_patcher.sports.lineup import (
     choose_shape,
     code_line,
     fold_formation,
+    lineup_role,
     nearest_shape,
     parse_shape,
     pick_lineup,
@@ -23,6 +25,7 @@ from retro_roster_patcher.sports.lineup import (
     slot_lines,
     slot_role,
     slot_side,
+    team_formation,
 )
 from retro_roster_patcher.sports.models import Player, Team, TeamRoster
 
@@ -121,6 +124,91 @@ def test_a_formation_without_overrides_still_cuts_to_its_fold():  # Review Focus
     assert lines[codes.index("AM")] == "FW"
 
 
+# The places of a 4-2-3-1 as ESPN labels them, one to eleven.
+CODES_4231 = "G RB LB LM CD-R CD-L AM-R RM F AM AM-L".split()
+
+
+def _lineup(formation, codes):
+    """A lineup whose starters are players 1, 2, ... at `codes`, in `formation`."""
+    starters = [{"id": i, "position": code} for i, code in enumerate(codes, start=1)]
+    return {"formation": formation, "starters": starters}
+
+
+def test_a_starters_lineup_role_is_his_code_read_in_the_lineups_formation():
+    lineup = _lineup("4-2-3-1", CODES_4231)
+    assert [lineup_role(i, lineup) for i in range(1, 12)] == [
+        "GK", "RB", "LB", "CDM", "CB", "CB", "RW", "CDM", "ST", "CAM", "LW",
+    ]  # fmt: skip
+
+
+def test_the_same_code_reads_differently_in_another_formation():
+    assert lineup_role(4, _lineup("4-2-3-1", CODES_4231)) == "CDM"  # LM, a holding midfielder
+    assert lineup_role(4, _lineup("4-4-2", CODES_4231)) == "LM"
+    assert lineup_role(4, _lineup("", CODES_4231)) == "LM"  # no formation: the code's own role
+    assert lineup_role(4, {"starters": _lineup("", CODES_4231)["starters"]}) == "LM"
+
+
+def test_a_lineup_role_is_the_same_for_an_id_the_json_boundary_gave_as_text():
+    lineup = {"formation": "4-4-2", "starters": [{"id": "7", "position": "LB"}]}
+    assert lineup_role(7, lineup) == "LB"
+
+
+@pytest.mark.parametrize(
+    "lineup", [None, {}, {"formation": "4-4-2"}, {"starters": []}, {"starters": None}]
+)
+def test_a_lineup_with_no_starters_gives_no_role(lineup):
+    assert lineup_role(1, lineup) == ""
+
+
+def test_a_player_the_lineup_does_not_name_has_no_lineup_role():
+    assert lineup_role(99, _lineup("4-2-3-1", CODES_4231)) == ""
+
+
+def test_a_starter_listed_without_a_code_has_no_lineup_role():
+    lineup = {"formation": "4-4-2", "starters": [{"id": 1}, {"id": 2, "position": ""}]}
+    assert (lineup_role(1, lineup), lineup_role(2, lineup)) == ("", "")
+    assert lineup_role(3, {"starters": [{"position": "LB"}, {"id": 3, "position": "LB"}]}) == "LB"
+
+
+def test_a_code_that_reads_as_a_role_outside_the_vocabulary_gives_no_role(monkeypatch):
+    lineup = _lineup("4-4-2", ["LB"])
+    assert lineup_role(1, lineup) == "LB"
+    monkeypatch.setattr(lineup_module, "slot_role", lambda formation, code: "SWEEPER")
+    assert lineup_role(1, lineup) == ""
+
+
+@pytest.mark.parametrize(
+    ("extra", "formation"),
+    [
+        # The formation the roster holds, whatever its lineup says ...
+        ({"formation": "4-4-2", "lineup": {"shape": "4-3-3"}}, "4-4-2"),
+        ({"formation": " 4-2-3-1 ", "lineup": {"shape": "4-3-3"}}, " 4-2-3-1 "),
+        # ... else the lineup's shape, for a roster fetched before formations were kept ...
+        ({"lineup": {"shape": "4-3-3"}}, "4-3-3"),
+        ({"formation": "", "lineup": {"shape": "3-5-2"}}, "3-5-2"),
+        ({"formation": "attack", "lineup": {"shape": "5-3-2"}}, "5-3-2"),
+        ({"formation": None, "lineup": {"shape": "3-4-3"}}, "3-4-3"),
+        ({"formation": 442, "lineup": {"shape": "4-4-2"}}, "4-4-2"),
+        # ... and none when neither reads.
+        ({}, None),
+        ({"formation": "4-4-x"}, None),
+        ({"lineup": {}}, None),
+        ({"lineup": None}, None),
+        ({"lineup": {"formation": "4-3-3", "starters": []}}, None),  # a lineup with no shape
+        ({"formation": "oops", "lineup": {"shape": "x"}}, None),
+        ({"formation": 442, "lineup": {"shape": 433}}, None),
+    ],
+)
+def test_a_teams_formation_is_its_own_else_its_lineups_shape_when_they_read(extra, formation):
+    assert team_formation(_roster(**extra)) == formation
+
+
+def test_a_team_without_extra_has_no_formation():
+    roster = _roster()
+    roster.extra = None  # type: ignore[assignment]
+    assert team_formation(roster) is None
+
+
 def test_a_code_alone_has_a_line():
     codes = ("G", "CD-L", "LM", "AM-L", "F", "SUB")
     assert [code_line(c) for c in codes] == ["GK", "DF", "MF", "FW", "FW", None]
@@ -175,15 +263,46 @@ def test_a_folded_four_line_formation_is_nearest_the_three_lines_it_folds_to():
 
 
 def test_a_shape_nobody_offers_takes_the_smallest_sum_of_line_differences():
-    # 3-6-1 is 2 from 4-5-1 and 2 from 3-5-2, and 4 or more from the rest.
-    assert nearest_shape("3-6-1", DELUXE_SHAPES) == "4-5-1"
+    # 6-3-1 is 2 from 5-3-2 and 2 from 5-4-1, and 4 or more from the rest.
     assert nearest_shape("6-3-1", DELUXE_SHAPES) == "5-3-2"
     assert nearest_shape("2-4-4", DELUXE_SHAPES) == "3-4-3"
+    assert nearest_shape("4-6-0", DELUXE_SHAPES) == "4-5-1"
 
 
 def test_a_tie_goes_to_the_shape_offered_first():
-    assert nearest_shape("3-6-1", DELUXE_SHAPES) == "4-5-1"
-    assert nearest_shape("3-6-1", ("3-5-2", "4-5-1")) == "3-5-2"
+    # 6-3-1 is as near 5-3-2 as 5-4-1 and has the same number of defenders from both.
+    assert nearest_shape("6-3-1", DELUXE_SHAPES) == "5-3-2"
+    assert nearest_shape("6-3-1", ("5-4-1", "5-3-2")) == "5-4-1"
+
+
+# The shapes the PES presets cover, and ISS's donors, each in the order the game offers them.
+PES_SHAPES = ("4-4-2", "4-3-3", "4-5-1", "3-5-2", "3-4-3", "5-4-1")
+ISS_SHAPES = ("4-4-2", "4-3-3", "3-4-3", "5-3-2", "4-5-1", "3-5-2", "4-2-4")
+
+
+@pytest.mark.parametrize(
+    ("shape", "offered", "nearest"),
+    [
+        # 5-3-2 is 2 from 4-4-2, from 4-3-3 and from 5-4-1: only the last keeps the back five.
+        ("5-3-2", PES_SHAPES, "5-4-1"),
+        # 5-4-1 is 2 from 4-4-2 and 5-3-2.
+        ("5-4-1", ISS_SHAPES, "5-3-2"),
+        # 3-6-1 is 2 from 4-5-1 and 3-5-2: the back three stays a back three.
+        ("3-6-1", DELUXE_SHAPES, "3-5-2"),
+        ("3-6-1", ISS_SHAPES, "3-5-2"),
+        ("3-6-1", ("4-5-1", "3-5-2"), "3-5-2"),
+    ],
+)
+def test_a_tie_goes_to_the_shape_with_the_nearest_number_of_defenders(shape, offered, nearest):
+    assert nearest_shape(shape, offered) == nearest
+
+
+def test_the_defenders_only_break_a_tie_and_never_beat_a_nearer_shape():
+    # 4-4-2 is 4 from 4-2-4, which has its four defenders, and 2 from 5-3-2: the nearer wins.
+    assert nearest_shape("4-4-2", ("4-2-4", "5-3-2")) == "5-3-2"
+    # An unreadable shape is still the first offered, and an unreadable offer never wins.
+    assert nearest_shape("x", ("3-5-2", "4-4-2")) == "3-5-2"
+    assert nearest_shape("4-4-2", ("x", "3-5-2")) == "3-5-2"
 
 
 @pytest.mark.parametrize("text", ["", "4-4-x", "442", "4-6", "4-4-3", "4-2-3-2"])

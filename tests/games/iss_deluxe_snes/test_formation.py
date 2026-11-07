@@ -25,8 +25,10 @@ from retro_roster_patcher.games.iss_deluxe_snes.patcher import (
     ISSDeluxePatcher,
     write_team,
 )
+from retro_roster_patcher.sports import lineup as lineup_module
 from retro_roster_patcher.sports.lineup import ROLES
 from retro_roster_patcher.sports.models import League, LeagueData, Player, Team, TeamRoster
+from tests.fixtures.older_roster import older_roster
 
 ITALY, BRAZIL, ARGENTINA = 0, 30, 31
 
@@ -223,7 +225,8 @@ def test_a_433_club_in_brazils_slot_gives_the_cartridges_433_record():
 def test_a_shape_the_cartridge_does_not_offer_is_written_as_the_nearest_it_does():
     image = cartridge()
     write_team(image, BRAZIL, squad("GK CB CB CB CM CM CM CM CM CM ST", "3-6-1"))
-    assert R.FORMATIONS[image[R.formation_at(image, BRAZIL)]] == "4-5-1"
+    # As near 4-5-1 as 3-5-2, and the club's back three stays a back three.
+    assert R.FORMATIONS[image[R.formation_at(image, BRAZIL)]] == "3-5-2"
 
 
 @pytest.mark.parametrize("formation", ["", "4-4-x", "442", "4-4-3"])
@@ -673,10 +676,65 @@ def test_a_lineup_code_reads_inside_the_lineups_own_formation(tmp_path):
     }  # fmt: skip
 
 
-def test_a_lineup_code_that_reads_as_no_known_role_leaves_the_player_without_one(monkeypatch):
-    monkeypatch.setattr(patcher_module, "slot_role", lambda formation, code: "SWEEPER")
-    assert patcher_module._lineup_role("4-4-2", "LB") == ""
-    assert patcher_module._lineup_role("4-4-2", "") == ""  # a player the lineup does not name
+def test_a_lineup_code_that_reads_as_no_known_role_leaves_the_player_without_one(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(lineup_module, "slot_role", lambda formation, code: "SWEEPER")
+    team = _mapped(tmp_path, _older_roster())
+    assert {p.role for p in team.players} == {""}
+
+
+@pytest.mark.parametrize("given", [False, True])
+def test_an_older_roster_is_written_its_lineups_shape_and_seated_by_its_codes(tmp_path, given):
+    # No formation and no role, only a lineup of a 4-3-3 with ESPN's codes: the formation is the
+    # lineup's shape and the roles are read from the codes, as for a fresh fetch.
+    roster = older_roster()
+    if given:  # the editor hands the suggested order back
+        roster.players = get_patcher("iss-deluxe-snes")(tmp_path).suggest_squad_order(roster)
+    team = _mapped(tmp_path, roster, given=given)
+    assert team.formation == "4-3-3"
+    assert {p.name: p.role for p in team.players[:11]} == {
+        "GK1": "GK", "RB2": "RB", "LB3": "LB", "CDM4": "CDM", "CB5": "CB", "CB6": "CB",
+        "CM7": "CM", "CM8": "CM", "ST9": "ST", "RW10": "RW", "LW11": "LW",
+    }  # fmt: skip
+    image = cartridge()
+    write_team(image, BRAZIL, team)
+    assert R.FORMATIONS[image[R.formation_at(image, BRAZIL)]] == "4-3-3"
+    names, _ = written(image, BRAZIL)
+    lateral = {n: o[1] for n, o in zip(names, R.slot_offsets(image, BRAZIL), strict=False)}
+    assert lateral["LB3"] < 0 < lateral["RB2"]  # the flank places, -32 and 32
+    assert lateral["LW11"] < 0 < lateral["RW10"]
+
+
+def test_an_older_rosters_edited_sheet_is_cut_by_index_over_its_lineups_shape(tmp_path):
+    # A bench striker replaces ST9, and the right back is listed before the left back.
+    roster = older_roster()
+    sheet = {p.name: p for p in roster.players}
+    first = "GK1 RB2 CB5 CB6 LB3 CDM4 CM7 CM8 RW10 ST15 LW11".split()
+    roster.players = [sheet[n] for n in first] + [p for p in roster.players if p.name not in first]
+    team = _mapped(tmp_path, roster)
+    assert team.formation == "4-3-3"
+    assert [p.group for p in team.players[:11]] == ["GK"] + ["DF"] * 4 + ["MF"] * 3 + ["FW"] * 3
+    image = cartridge()
+    write_team(image, BRAZIL, team)
+    names, _ = written(image, BRAZIL)
+    lateral = {n: o[1] for n, o in zip(names, R.slot_offsets(image, BRAZIL), strict=False)}
+    assert lateral["LB3"] < 0 < lateral["RB2"]
+
+
+def test_a_roster_with_a_formation_of_its_own_keeps_it_over_its_lineups_shape(tmp_path):
+    roster = older_roster()
+    roster.extra["formation"] = "3-5-2"
+    assert _mapped(tmp_path, roster).formation == "3-5-2"
+
+
+def test_a_lineup_with_no_shape_and_no_formation_keeps_the_slots_own_record(tmp_path):
+    team = _mapped(tmp_path, older_roster(shape=None), slot=ARGENTINA)
+    assert team.formation == ""
+    image = cartridge()
+    write_team(image, ARGENTINA, team)
+    at = R.formation_at(image, ARGENTINA)
+    assert image[at : at + 31] == bytes.fromhex(RETAIL[ARGENTINA][1])
 
 
 # --- the real cartridge -------------------------------------------------------------------

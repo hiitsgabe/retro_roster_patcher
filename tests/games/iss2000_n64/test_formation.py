@@ -24,6 +24,7 @@ from retro_roster_patcher.games.iss2000_n64.mapper import (
     N64Team,
 )
 from retro_roster_patcher.sports.models import Player, Team, TeamRoster
+from tests.fixtures.older_roster import older_roster
 
 SLOT = 69
 
@@ -239,6 +240,68 @@ def test_the_mapper_hands_each_player_his_role_to_the_writer():
     roster = TeamRoster(team=Team(id=1, name="Club"), players=players, extra={"formation": "4-3-3"})
     team = N64StatMapper().map_team(roster, {}, order_as_given=True)
     assert [p.role for p in team.players[:11]] == roles
+
+
+def test_the_mapper_hands_an_older_rosters_players_the_roles_their_lineup_codes_read_as():
+    # No formation and no role, only a lineup of a 4-3-3 with ESPN's codes.
+    team = N64StatMapper().map_team(older_roster(), {})
+    assert team.formation == (4, 3, 3)
+    assert [p.role for p in team.players[:11]] == "GK LB CB CB RB CM CDM CM LW ST RW".split()
+    assert [p.role for p in team.players[11:]] == [""] * 4  # the bench has no code to read
+
+
+def test_an_older_rosters_edited_sheet_is_seated_by_its_lineup_roles_over_its_lineups_shape():
+    # A bench striker replaces ST9, and the right back is listed before the left back.
+    roster = older_roster()
+    sheet = {p.name: p for p in roster.players}
+    first = "GK1 RB2 CB5 CB6 LB3 CDM4 CM7 CM8 RW10 ST15 LW11".split()
+    roster.players = [sheet[n] for n in first] + [p for p in roster.players if p.name not in first]
+    team = N64StatMapper().map_team(roster, {}, order_as_given=True)
+    assert team.formation == (4, 3, 3)
+    image = cartridge()
+    W.write_team(image, SLOT, team)
+    record = zip(
+        R.formation_depths(image, SLOT),
+        R.formation_widths(image, SLOT),
+        R.formation_lines(image, SLOT),
+        strict=True,
+    )
+    assert tuple(record) == ROWS[(4, 3, 3)]  # the 4-3-3 donor's row is the slot's
+    width = {name: ROWS[(4, 3, 3)][k][1] for k, name in enumerate(written(image))}
+    assert width["LB3"] < 0 < width["RB2"]  # -200 and 200
+    assert width["LW11"] < 0 < width["RW10"]  # -250 and 250
+
+
+def test_an_older_rosters_edited_sheet_is_cut_by_index_over_its_lineups_shape():
+    # The sheet lists CDM4 among the four defenders and LB3 first of the three midfielders, and a
+    # bench striker for ST9: by index over the lineup's 4-3-3 they play there, whatever their
+    # groups say (by their groups it would be the other way round).
+    roster = older_roster()
+    sheet = {p.name: p for p in roster.players}
+    first = "GK1 RB2 CB5 CB6 CDM4 LB3 CM7 CM8 RW10 ST15 LW11".split()
+    roster.players = [sheet[n] for n in first] + [p for p in roster.players if p.name not in first]
+    team = N64StatMapper().map_team(roster, {}, order_as_given=True)
+    assert team.formation == (4, 3, 3)
+    image = cartridge()
+    W.write_team(image, SLOT, team)
+    line = dict(zip(written(image), R.formation_lines(image, SLOT), strict=True))
+    assert (line["CDM4"], line["LB3"]) == (1, 2)
+
+
+def test_a_roster_with_a_formation_of_its_own_keeps_it_over_its_lineups_shape():
+    roster = older_roster()
+    roster.extra["formation"] = "3-5-2"
+    assert N64StatMapper().map_team(roster, {}, order_as_given=True).formation == (3, 5, 2)
+
+
+def test_a_roster_with_neither_a_formation_nor_a_lineup_maps_by_the_groups_it_always_did():
+    roster = older_roster()
+    del roster.extra["lineup"]
+    team = N64StatMapper().map_team(roster, {}, order_as_given=True)
+    squad, shape = N64StatMapper().given_22(list(roster.players))
+    assert team.formation == shape
+    assert [p.player_id for p in team.players] == [p.id for p in squad]
+    assert {p.role for p in team.players} == {""}
 
 
 # --- the real cartridge ----------------------------------------------------------------------

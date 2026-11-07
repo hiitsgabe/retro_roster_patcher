@@ -2,7 +2,7 @@
 
 import pytest
 
-from retro_roster_patcher.core.numbers import shirt_numbers
+from retro_roster_patcher.core.shirt_numbers import shirt_numbers
 
 
 def test_numbers_in_range_and_not_taken_are_kept():

@@ -28,7 +28,7 @@ import struct
 import unicodedata
 
 from ...core.kits import KitSpec
-from ...core.numbers import shirt_numbers
+from ...core.shirt_numbers import shirt_numbers
 from .flag_atlas import AtlasReport, LogoImages, patch_flag_atlas
 from .jersey_tex import apply_choice
 from .models import WEPlayerRecord, WETeamRecord

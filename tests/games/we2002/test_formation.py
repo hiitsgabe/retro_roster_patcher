@@ -29,6 +29,7 @@ from retro_roster_patcher.games.we2002.rom_writer import RomWriter, _encode_play
 from retro_roster_patcher.games.we2002.stat_mapper import StatMapper
 from retro_roster_patcher.sports.lineup import ROLES, apply_lineup, pick_lineup
 from retro_roster_patcher.sports.models import League, LeagueData, Player, Team, TeamRoster
+from tests.fixtures.older_roster import older_roster
 
 SHAPES = ("4-5-1", "4-4-2", "4-3-3", "3-6-1", "3-5-2", "3-4-3", "5-4-1", "5-3-2")
 PRESET_NAMES = [shape + variant for shape in SHAPES for variant in "AB"]
@@ -550,9 +551,9 @@ def test_a_roster_with_roles_but_no_formation_keeps_its_order_and_takes_codes_by
     ]
 
 
-def test_a_roster_with_a_formation_but_no_roles_reads_each_player_as_his_group():
+def test_a_roster_with_a_formation_but_no_roles_or_lineup_reads_each_player_as_his_group():
     xi = ("GK", "RB", "CB", "CB", "LB", "CM", "CM", "CM", "CM", "ST", "ST")
-    record = _map(_xi(xi, "4-4-2", roles=False))
+    record = _map(_xi(xi, "4-4-2", roles=False, lineup=False))
     assert record.formation == FOUR_FOUR_TWO_A
     assert {p.role for p in record.players} == {""}
     codes = [_encode_player_carat(p)[0] & 7 for p in record.players[:11]]
@@ -580,16 +581,35 @@ def _older_roster():
     )
 
 
-def test_an_older_roster_gives_the_same_23_and_no_formation_bytes():
-    # Fetched before roles and formations existed: neither a role nor extra["formation"].
+def test_an_older_roster_with_no_lineup_shape_gives_the_same_23_and_no_formation_bytes():
+    # Fetched before roles and formations existed: neither a role nor extra["formation"], and a
+    # lineup with no shape to take one from. The players are the same 23 as ever; the eleven the
+    # lineup names have the role their codes read as, and the bench none.
     record = _map(_older_roster())
     assert [p.player_id for p in record.players] == OLDER_SQUAD
     assert record.formation is None
-    assert {p.role for p in record.players} == {""}
+    assert [p.role for p in record.players[:11]] == [
+        "GK", "CB", "CB", "LB", "RB", "CDM", "CDM", "CDM", "LW", "RW", "ST",
+    ]  # fmt: skip
+    assert {p.role for p in record.players[11:]} == {""}
 
 
-def test_an_older_roster_keeps_the_codes_of_its_groups():
+def test_an_older_roster_takes_the_position_codes_of_its_lineup_roles_and_its_groups():
     record = _map(_older_roster())
+    by_group = {0: 0, 1: 1, 2: 3, 3: 6}
+    codes = [_encode_player_carat(p)[0] & 7 for p in record.players]
+    # The eleven the lineup names are read by their codes (a side back is 2, a holding midfielder
+    # 3, a winger 7, a striker 6); the bench takes its groups'.
+    assert codes[:11] == [0, 1, 1, 2, 2, 3, 3, 3, 7, 7, 6]
+    assert codes[11:] == [by_group[p.position] for p in record.players[11:]]
+
+
+def test_a_roster_with_neither_a_lineup_nor_a_formation_keeps_the_codes_of_its_groups():
+    roster = _older_roster()
+    roster.extra = {}
+    record = _map(roster)
+    assert record.formation is None
+    assert {p.role for p in record.players} == {""}
     assert [_encode_player_carat(p)[0] & 7 for p in record.players] == [
         {0: 0, 1: 1, 2: 3, 3: 6}[p.position] for p in record.players
     ]
@@ -599,6 +619,43 @@ def test_an_older_roster_in_the_callers_order_is_still_the_first_23_as_given():
     record = _map(_older_roster(), order_as_given=True)
     assert [p.player_id for p in record.players] == list(range(23))
     assert record.formation is None
+
+
+def test_an_older_roster_is_written_the_preset_of_its_lineups_shape_and_seated_by_its_codes():
+    # No role, no extra["formation"]: the lineup's 4-3-3 and its codes (RB LB CM CD-R CD-L ...).
+    record = _map(older_roster())
+    assert record.formation == FOUR_THREE_THREE_A  # one holding midfielder
+    # The centre backs from the left (CD-L, CD-R), then the preset's side backs, left and right;
+    # the holding midfielder deepest, the wide pair left (LM) and right (RM); the striker, then the
+    # left and the right winger.
+    assert _on(record) == [
+        "GK1", "CB6", "CB5", "LB3", "RB2", "CDM4", "CM8", "CM7", "ST9", "LW11", "RW10",
+    ]  # fmt: skip
+
+
+def test_an_older_roster_with_two_holding_midfielders_is_written_the_b_preset():
+    codes = "G RB LB LM CD-R CD-L AM-R RM F AM AM-L".split()
+    roles = "GK RB LB CDM CB CB RW CDM ST CAM LW".split()
+    roster = older_roster(codes, roles, formation="4-2-3-1", shape="4-3-3")
+    assert _map(roster).formation == FOUR_THREE_THREE_B
+
+
+def test_the_suggested_order_of_an_older_roster_is_the_order_the_game_gets(tmp_path):
+    roster = older_roster()
+    patcher = WE2002Patcher(cache_dir=tmp_path / "cache")
+    data = LeagueData(league=League(id=1, name="L", country="C", season=2026), teams=[roster])
+    mapping = [SlotMapping(slot_index=0, team_id=roster.team.id)]
+    automatic = patcher.map_rosters(data, mapping).teams[0]
+    roster.players = patcher.suggest_squad_order(roster)
+    given = patcher.map_rosters(data, mapping, order_as_given=True).teams[0]
+    assert [p.player_id for p in given.players] == [p.player_id for p in automatic.players]
+    assert given.formation == automatic.formation == FOUR_THREE_THREE_A
+
+
+def test_a_roster_with_a_formation_of_its_own_keeps_it_over_its_lineups_shape():
+    roster = older_roster()
+    roster.extra["formation"] = "3-5-2"
+    assert _map(roster).formation == THREE_FIVE_TWO_A
 
 
 # --- the patcher --------------------------------------------------------------------------

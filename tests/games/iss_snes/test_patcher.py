@@ -940,6 +940,7 @@ def test_order_as_given_writes_the_callers_first_fifteen_in_order(patcher):
     team.players = team.players[::2] + team.players[1::2]
     for player in team.players:  # without roles the places keep the order too
         player.role = ""
+    team.extra.pop("lineup", None)  # whose codes would give the roles back
 
     mapped = patcher.map_rosters(data, [SlotMapping(slot_index=0, team_id=1)], order_as_given=True)
 

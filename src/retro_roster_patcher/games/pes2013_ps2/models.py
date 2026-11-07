@@ -259,9 +259,10 @@ class PESTeamRecord:
     #: Home and away kits to draw from colours (`core.kits.KitSpec`); None keeps the disc's.
     kit_home: KitSpec | None = None
     kit_away: KitSpec | None = None
-    #: The team's formation as the roster gives it (`extra["formation"]`, when
-    #: `sports.lineup.parse_shape` reads it), "" otherwise: the patch then writes the preset
-    #: nearest to it (`formations.pick_preset`) and seats the eleven on its places.
+    #: The team's formation as the roster gives it (`sports.lineup.team_formation`:
+    #: `extra["formation"]`, else its lineup's shape, when `parse_shape` reads it), "" otherwise:
+    #: the patch then writes the preset nearest to it (`formations.pick_preset`) and seats the
+    #: eleven on its places.
     formation: str = ""
 
 

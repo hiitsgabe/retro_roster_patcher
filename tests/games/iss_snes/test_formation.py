@@ -9,6 +9,7 @@ iss.sfc).
 
 from __future__ import annotations
 
+import json
 import os
 import struct
 from pathlib import Path
@@ -35,6 +36,7 @@ from retro_roster_patcher.games.iss_snes.stat_mapper import (
     ISSStatMapper,
     _donor_places,
 )
+from retro_roster_patcher.sports.lineup import pick_lineup, slot_role
 from retro_roster_patcher.sports.models import (
     League,
     LeagueData,
@@ -44,6 +46,7 @@ from retro_roster_patcher.sports.models import (
     TeamRoster,
 )
 from tests.fixtures import synthetic_iss_rom as fixture
+from tests.fixtures.older_roster import older_roster
 
 # Italy's record (slot 1, at 0x38348) as the cartridge has it, and once England's 4-3-3 is written
 # over it: sixteen of the 44 bytes change (the research report's test vector).
@@ -188,6 +191,69 @@ def lineup_of(players: list[Player], shape: str) -> dict:
 
 def written_names(record: ISSTeamRecord) -> list[str]:
     return [p.name for p in record.players]
+
+
+FIXTURE = json.loads(
+    (Path(__file__).parents[2] / "fixtures" / "lineups_2026-11-02.json").read_text(encoding="utf-8")
+)
+#: The eleven of the emulator-checked cartridge of Task 15 (its second one, `t15-galo-433-roleorder
+#: -in-germany.sfc`), who stood in Germany's slot in this order: the keeper, the back four from the
+#: left, the midfield and the front three from the left. Their names there are
+#: `GALO_ON_THE_CARTRIDGE` (Vitor, on the checked one, where this squad, with no Victor Hugo, has
+#: V.Hugo).
+GALO_ROLE_ORDER = [
+    "Éverson", "Renan Lodi", "Vitor Hugo", "Ruan", "Natanael", "Alan Franco", "Fred",
+    "Igor Gomes", "Bernard", "Thiago Borbas", "Tomás Cuello",
+]  # fmt: skip
+GALO_ON_THE_CARTRIDGE = [
+    "Everson", "R.Lodi", "V.Hugo", "Ruan", "Natanael", "A.Franco", "Fred", "I.Gomes", "Bernard",
+    "T.Cuello", "T.Borbas",
+]  # fmt: skip
+
+
+def galo(*, fetched_with_roles: bool) -> TeamRoster:
+    """Atlético-MG of the 2026-11-02 snapshot, the Galo of Task 15: a 4-2-3-1 the lineup folds to a
+    4-3-3. As a fetch of that day left it, no role on anyone and no `extra["formation"]`, only the
+    lineup; or, `fetched_with_roles`, as Task 15 built it: a role on each starter, read from his
+    ESPN code, and the formation 4-3-3."""
+    t = FIXTURE["teams"]["7632"]
+    name = {int(k): v for k, v in t["names"].items()}
+    positions = {int(k): v for k, v in t["positions"].items()}
+    lineup = pick_lineup(t["matches"], dict.fromkeys(t["squad"], ""), positions)
+    players = [
+        Player(id=i, name=name[i], position=GROUP[lineup["roles"].get(str(i), "CM")])
+        for i in t["squad"]
+    ]
+    roster = TeamRoster(
+        team=Team(id=7632, name="Atletico MG", code="CAM"),
+        players=players,
+        extra={"lineup": lineup},
+    )
+    if fetched_with_roles:
+        by_id = {p.id: p for p in players}
+        for starter in lineup["starters"]:
+            by_id[starter["id"]].role = slot_role(lineup["formation"], starter["position"])
+        roster.extra["formation"] = "4-3-3"
+    return roster
+
+
+def slot_records(image: bytes, slot: int) -> dict[str, bytes]:
+    """What a slot holds that the club decides, found through the cartridge's own pointers: its
+    fifteen players' data (6 bytes each) and names (8), its formation record (44) and the first
+    twenty bytes of its description block, whose label ends in the shape."""
+    first = slot * PLAYERS_PER_TEAM
+    data = fixture.OFS_PLAYER_DATA + 6 * first
+    names = fixture.OFS_PLAYER_NAMES + 8 * name_storage_index(slot) * PLAYERS_PER_TEAM
+    record_pointer = struct.unpack_from("<H", image, fixture.OFS_FORMATION_PTRS + 2 * slot)[0]
+    record = 0x38000 + record_pointer - 0x8000
+    label_pointer = struct.unpack_from("<H", image, fixture.OFS_DESC_PTRS + 2 * slot)[0]
+    label = 0x10000 + label_pointer - 0x8000
+    return {
+        "data": bytes(image[data : data + 6 * PLAYERS_PER_TEAM]),
+        "names": bytes(image[names : names + 8 * PLAYERS_PER_TEAM]),
+        "formation": bytes(image[record : record + 44]),
+        "label": bytes(image[label : label + 20]),
+    }
 
 
 def real_rom(test):
@@ -426,7 +492,8 @@ def with_extra(roster: TeamRoster, **extra) -> TeamRoster:
         ({"formation": "4-2-3-1"}, None, "4-3-3"),
         ({"formation": "3-4-2-1"}, 0, "3-4-3"),
         ({"formation": " 3-5-2 "}, 0, "3-5-2"),
-        ({"formation": "3-6-1"}, 0, "4-5-1"),  # as near 3-5-2: the first the patcher offers
+        ({"formation": "3-6-1"}, 0, "3-5-2"),  # as near 4-5-1, but the back three stays
+        ({"formation": "5-4-1"}, 0, "5-3-2"),  # as near 4-4-2, but the back five stays
         ({"formation": "6-3-1"}, 9, "5-3-2"),
         # The formation wins over the lineup's shape.
         ({"formation": "4-3-3", "lineup": {"shape": "5-3-2"}}, 9, "4-3-3"),
@@ -694,6 +761,91 @@ def test_a_short_squad_is_seated_as_far_as_it_goes(patcher):
     assert names[0] == "GK0" and sorted(names) == sorted(p.name for p in roster.players)
 
 
+# An older rosters file has no role on any player: the codes of its lineup are the roles.
+
+
+def test_an_older_rosters_eleven_are_seated_by_the_roles_their_lineup_codes_read_as(patcher):
+    roster = older_roster()
+    # The squad listed in the lineup's own order, the right back before the left back and the
+    # winger before the striker. The 4-3-3 over Germany's 5-3-2: from the left, the back four, the
+    # holding midfielder in the middle and the wide pair, and the front three.
+    assert xi_names(patcher, roster) == [
+        "GK1", "LB3", "CB6", "CB5", "RB2", "CDM4", "CM8", "CM7", "LW11", "RW10", "ST9",
+    ]  # fmt: skip
+
+
+def test_an_older_rosters_edited_sheet_is_seated_by_the_same_roles(patcher):
+    roster = older_roster()
+    sheet = {p.name: p for p in roster.players}
+    first = "GK1 RB2 CB5 CB6 LB3 CDM4 CM7 CM8 RW10 ST9 LW11".split()
+    roster.players = [sheet[n] for n in first] + [p for p in roster.players if p.name not in first]
+    record = mapped(patcher, roster, order_as_given=True).teams[0]
+    assert record.formation == "4-3-3"
+    names = written_names(record)
+    assert [names[1], names[4]] == ["LB3", "RB2"]
+    assert [names[8], names[9]] == ["LW11", "RW10"]
+
+
+def test_the_suggested_order_of_an_older_roster_is_the_order_it_is_written_in(patcher):
+    roster = older_roster()
+    suggested = patcher.suggest_squad_order(roster)
+    # From the left in each line, by the side of the lineup's codes: the left back, the left and
+    # the right centre back (CD-L, CD-R), the right back, and so on.
+    assert [p.name for p in suggested[:11]] == [
+        "GK1", "LB3", "CB6", "CB5", "RB2", "CM8", "CDM4", "CM7", "LW11", "ST9", "RW10",
+    ]  # fmt: skip
+    roster.players = suggested
+    assert xi_names(patcher, roster, order_as_given=True) == xi_names(patcher, older_roster())
+
+
+def test_a_player_with_a_role_is_seated_by_it_whatever_his_lineup_code_says(patcher):
+    roster = older_roster()
+    for player in roster.players:
+        player.role = "CM"
+    assert xi_names(patcher, roster, order_as_given=True) == [p.name for p in roster.players[:11]]
+
+
+def test_a_player_with_no_role_and_no_lineup_code_reads_as_his_squad_groups_role(patcher):
+    # A 4-4-2 takes two of three attackers up front and sends the third to midfield, and the roles
+    # say which: ST10 has none and is an Attacker, so a striker, further forward than the wingers.
+    roster = squad("GK CB CB CB CB CM CM CM RW LW ST", formation="4-4-2", bench="GK")
+    roster.players[10].role = ""
+    eleven = [p.name for p in patcher.suggest_squad_order(roster)[:11]]
+    assert sorted(eleven[5:9]) == ["CM5", "CM6", "CM7", "RW8"]
+    assert sorted(eleven[9:]) == ["LW9", "ST10"]
+
+
+def test_the_suggested_eleven_cuts_its_lines_by_the_depth_of_its_roles_not_its_lineup_groups(
+    patcher,
+):
+    # ESPN groups a 4-2-3-1's wide attacking midfielders AM-R and AM-L, and the one behind the
+    # striker, with the midfield: the 4-3-3 took two holding midfielders and the right winger as
+    # its midfield and played the attacking midfielder up front.
+    codes = "G RB LB LM CD-R CD-L AM-R RM F AM AM-L".split()
+    roles = "GK RB LB CDM CB CB RW CDM ST CAM LW".split()
+    roster = older_roster(codes, roles, formation="4-2-3-1", shape="4-3-3")
+    names = [p.name for p in patcher.suggest_squad_order(roster)[:11]]
+    kinds = [n.rstrip("0123456789") for n in names]
+    assert sorted(kinds[1:5]) == ["CB", "CB", "LB", "RB"]
+    assert sorted(kinds[5:8]) == ["CAM", "CDM", "CDM"]
+    assert sorted(kinds[8:11]) == ["LW", "RW", "ST"]
+
+
+def test_inside_a_line_the_suggested_order_runs_from_the_left_by_lineup_code(patcher):
+    names = [p.name for p in patcher.suggest_squad_order(older_roster())[:11]]
+    # The left back, the left centre back, the right centre back, the right back: ESPN's -L and
+    # -R say which of two centre backs is on which side, which his role (CB) does not.
+    assert names[1:5] == ["LB3", "CB6", "CB5", "RB2"]
+    assert names[8:11] == ["LW11", "ST9", "RW10"]
+
+
+def test_players_of_one_depth_and_one_side_keep_the_lineups_order(patcher):
+    # Three holding midfielders at the same code: nothing tells them apart but the lineup's order.
+    codes = "G RB LB CM CD-R CD-L CM CM F RF LF".split()
+    names = [p.name for p in patcher.suggest_squad_order(older_roster(codes))[:11]]
+    assert names[5:8] == ["CDM4", "CM7", "CM8"]
+
+
 def stats_of(player_id: int, **kwargs) -> PlayerStats:
     base = dict(
         appearances=20, minutes=1600, goals=5, assists=3, shots_total=30, shots_on=12,
@@ -867,6 +1019,62 @@ def test_a_roster_with_nothing_but_players_plays_the_slots_own_shape(patcher, ro
     assert label_of(image, 0) == b"Offense 5-3-2  "
 
 
+def patched_galo(patcher, rom, out, *, fetched_with_roles, as_suggested) -> dict[str, bytes]:
+    """Slot 0's records after the Galo goes into Germany's slot: the squad as the editor hands it
+    back (`suggest_squad_order`, patched `order_as_given`), or, not `as_suggested`, as the mapper
+    orders it itself."""
+    roster = galo(fetched_with_roles=fetched_with_roles)
+    if as_suggested:
+        roster.players = patcher.suggest_squad_order(roster)
+    rosters = mapped(patcher, roster, order_as_given=as_suggested)
+    return slot_records(patch(patcher, rom, out, rosters), 0)
+
+
+@pytest.mark.parametrize("fetched_with_roles", [False, True], ids=["older", "with roles"])
+def test_the_galo_through_the_suggested_order_gives_the_role_order_the_emulator_checked(
+    patcher, rom, tmp_path, fetched_with_roles
+):
+    """Task 15 found the editor's order, by ESPN groups, put the right winger Cuello in midfield and
+    the attacking midfielder Fred up front; the order by role gave the eleven the emulator then
+    showed seated by role and side, in Germany's slot as a 4-3-3."""
+    roster = galo(fetched_with_roles=fetched_with_roles)
+    assert [p.name for p in patcher.suggest_squad_order(roster)[:11]] == GALO_ROLE_ORDER
+    suggested = patched_galo(
+        patcher, rom, tmp_path / "s.sfc", fetched_with_roles=fetched_with_roles, as_suggested=True
+    )
+    automatic = patched_galo(
+        patcher, rom, tmp_path / "a.sfc", fetched_with_roles=fetched_with_roles, as_suggested=False
+    )
+    assert suggested == automatic  # what the editor hands back is what the mapper writes
+    assert names_of(tmp_path / "s.sfc", 0)[:11] == GALO_ON_THE_CARTRIDGE
+    assert suggested["formation"] == FORMATION_DONORS["4-3-3"]
+    assert suggested["label"][2:17] == b"Offense 4-3-3  "
+
+
+def test_a_roster_with_a_formation_of_its_own_keeps_it_over_its_lineups_shape(patcher, rom, out):
+    roster = older_roster()
+    roster.extra["formation"] = "3-5-2"
+    image = patch(patcher, rom, out, mapped(patcher, roster, slot=1))
+    assert record_of(image, 1) == FORMATION_DONORS["3-5-2"]
+
+
+def test_an_older_rosters_lineup_shape_writes_its_record_and_label(patcher, rom, out):
+    image = patch(patcher, rom, out, mapped(patcher, older_roster(), slot=1))
+    assert record_of(image, 1) == ITALY_433
+    assert label_of(image, 1) == b"Offense 4-3-3  "
+    names = names_of(out, 1)
+    assert [names[1], names[4]] == ["LB3", "RB2"]  # England's lateral 2 and 12
+    assert [names[8], names[9], names[10]] == ["LW11", "RW10", "ST9"]
+
+
+def test_with_neither_a_formation_nor_a_lineup_shape_the_slots_own_stays(patcher, rom, out):
+    roster = older_roster(shape=None)
+    assert "shape" not in roster.extra["lineup"]
+    image = patch(patcher, rom, out, mapped(patcher, roster, slot=0))
+    assert record_of(image, 0) == FORMATION_DONORS["5-3-2"]  # Germany's own
+    assert label_of(image, 0) == b"Offense 5-3-2  "
+
+
 # --- the real cartridge --------------------------------------------------------------------------
 
 
@@ -947,3 +1155,27 @@ def test_a_patch_of_the_cartridge_writes_the_record_and_the_label(retail, tmp_pa
     assert image[0x120A4 : 0x120A4 + 5] == b"4-3-3"
     assert image[0x3831C:0x38348] == retail[0x3831C:0x38348]  # Germany's record is Germany's
     assert names_of(out, 1)[8:11] == ["LW10", "RW8", "ST9"]
+
+
+@real_rom
+def test_the_galo_in_germanys_slot_of_the_cartridge_is_the_one_the_emulator_checked(
+    retail, tmp_path
+):
+    """Task 15's second cartridge (`t15-galo-433-roleorder-in-germany.sfc`, checked in Mesen 2):
+    the Galo in Germany's slot, 4-3-3 and the label of Germany's description block with it."""
+    rom = tmp_path / "iss.sfc"
+    rom.write_bytes(retail)
+    patcher = ISSPatcher(cache_dir=tmp_path / "cache")
+    for fetched_with_roles in (False, True):
+        suggested = patched_galo(
+            patcher, rom, tmp_path / "s.sfc", fetched_with_roles=fetched_with_roles,
+            as_suggested=True,
+        )  # fmt: skip
+        automatic = patched_galo(
+            patcher, rom, tmp_path / "a.sfc", fetched_with_roles=fetched_with_roles,
+            as_suggested=False,
+        )  # fmt: skip
+        assert suggested == automatic
+        assert suggested["formation"] == FORMATION_DONORS["4-3-3"] == ITALY_433
+        assert suggested["label"] == b"\xfe\x24Defense 4-3-3  \xfe\x20\xfd"
+        assert names_of(tmp_path / "s.sfc", 0)[:11] == GALO_ON_THE_CARTRIDGE

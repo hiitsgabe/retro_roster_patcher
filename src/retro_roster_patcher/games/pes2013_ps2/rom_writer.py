@@ -145,12 +145,17 @@ class RomWriter:
 
     @staticmethod
     def set_playable(tables: PlayerTables, index: int, nibble: int) -> None:
-        """Turn on the playable flag of the position `nibble` (bit 7 of byte 54 for a goalkeeper,
-        else of byte 53 + the nibble). The registered position's own flag is always on, on the
-        disc's players; the rest of the byte, an ability, and every other byte stay."""
+        """Make the position `nibble` the record's only playable one: bit 7 of the twelve flag
+        bytes (54-65) is cleared, so what the record's last occupant played does not carry over,
+        and the position's own is set (byte 54 for a goalkeeper, else byte 53 + the nibble). The
+        registered position's flag is always on, on the disc's players. Bits 0-6 of those bytes
+        are abilities, and every other byte stays."""
         players = bytearray(tables.players)
+        at = index * PLAYER_RECORD_SIZE
+        for flag in range(PLAYABLE_GK_BYTE, PLAYABLE_GK_BYTE + 12):
+            players[at + flag] &= ~PLAYABLE_FLAG
         flag = PLAYABLE_GK_BYTE if nibble == 0 else POSITION_BYTE + nibble
-        players[index * PLAYER_RECORD_SIZE + flag] |= PLAYABLE_FLAG
+        players[at + flag] |= PLAYABLE_FLAG
         tables.parts[PART_PLAYERS] = bytes(players)
 
     @staticmethod

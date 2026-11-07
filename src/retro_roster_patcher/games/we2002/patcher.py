@@ -51,7 +51,7 @@ from ...core.patcher import Patcher
 from ...core.registry import register
 from ...sports import _http
 from ...sports.espn import EspnClient
-from ...sports.lineup import apply_lineup
+from ...sports.lineup import apply_lineup, team_formation
 from ...sports.models import LeagueData, Team, TeamRoster
 from . import looks
 from .flag_atlas import VALID_STYLES, LogoImages, assign_styles
@@ -289,7 +289,7 @@ class WE2002Patcher(Patcher):
             team_roster.players,
             team_roster.player_stats,
             team_roster.extra.get("lineup"),
-            str(team_roster.extra.get("formation") or ""),
+            team_formation(team_roster) or "",
         )
         return self._append_unused(ordered, team_roster.players)
 

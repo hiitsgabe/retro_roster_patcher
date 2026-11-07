@@ -34,9 +34,9 @@ from dataclasses import dataclass, field
 from datetime import date
 
 from ...core.kits import KitSpec
-from ...core.numbers import shirt_numbers
+from ...core.shirt_numbers import shirt_numbers
 from ...sports.espn import LINEUP_GROUPS
-from ...sports.lineup import fold_formation
+from ...sports.lineup import fold_formation, lineup_role, team_formation
 from ...sports.models import Player, PlayerStats, TeamRoster
 from . import rom as R
 
@@ -149,7 +149,8 @@ class N64Player:
     look: tuple[int, int, int] | None = None
     player_id: int = 0
     photo_url: str = ""
-    #: His soccer role (`Player.role`), "" when he has none: the writer seats a line by it.
+    #: His soccer role (`Player.role`, else the one his lineup code reads as), "" when he has
+    #: none: the writer seats a line by it.
     role: str = ""
 
 
@@ -453,7 +454,8 @@ class N64StatMapper:
         order_as_given: bool = False,
     ) -> N64Team:
         formation: tuple[int, int, int] | None  # as `select_22` is annotated
-        picked = (roster.extra or {}).get("formation") or ""
+        # The roster's formation, else (fetched before formations were kept) its lineup's shape.
+        picked = team_formation(roster) or ""
         if order_as_given and parse_formation(picked) is not None:
             # The roster's formation (the lineup's, or the one picked since) reads the given
             # order: the shortcut below would answer with the lineup's own shape and lines.
@@ -479,6 +481,8 @@ class N64StatMapper:
             name = short_player_name(p, taken | ({surname} if shared else set()))
             taken.add(surname)
             mapped = self.map_player(p, pcts.get(p.id, {}), name)
+            # A roster fetched before roles: his lineup code says what he plays.
+            mapped.role = mapped.role or lineup_role(p.id, (roster.extra or {}).get("lineup"))
             played = self._lines.get(p.id)
             if played is not None:
                 # The line he starts in, as well as his own: a winger ESPN calls
