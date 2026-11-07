@@ -27,7 +27,7 @@ from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
 
-from ...formats import ea_huff
+from ...formats import ea_huff, genesis
 from ...formats.ea_tdb import refpack_compress, refpack_decompress
 from ..iss_snes import screens as iss
 from .space import Space
@@ -53,7 +53,6 @@ GUIDES = (
     ("NBA LIVE 95 letters", (148, 28, 164, 172)),
     ("Credits", (0, 192, 312, 32)),
 )
-_LEVELS = (0, 52, 87, 116, 144, 172, 206, 255)
 
 
 def _start(rom: bytes | bytearray, index: int) -> int:
@@ -66,51 +65,14 @@ def _stream(rom: bytes | bytearray, index: int) -> bytes:
     return ea_huff.decompress(data) if data[:2] == ea_huff.MAGIC else refpack_decompress(data)
 
 
-def _rgb(word: int) -> tuple[int, int, int]:
-    return _LEVELS[(word >> 1) & 7], _LEVELS[(word >> 5) & 7], _LEVELS[(word >> 9) & 7]
-
-
-def _level(value: int) -> int:
-    return min(range(8), key=lambda i: abs(_LEVELS[i] - value))
-
-
-def _word(rgb: tuple[int, int, int]) -> int:
-    r, g, b = (_level(c) for c in rgb)
-    return b << 9 | g << 5 | r << 1
-
-
 def render(rom: bytes | bytearray):  # -> PIL.Image.Image
     """The title's background as the lit screen shows it, 312x224."""
-    from PIL import Image
-
     tiles = _stream(rom, TILES)[2:]
     cells = _stream(rom, MAP)
     width, height = struct.unpack_from(">HH", cells)
+    entries = struct.unpack_from(f">{width * height}H", cells, 4)
     words = struct.unpack_from(">64H", rom, _start(rom, PALETTES[1]))
-    picture = Image.new("RGB", (width * 8, height * 8))
-    px = picture.load()
-    assert px is not None
-    for i in range(width * height):
-        entry = struct.unpack_from(">H", cells, 4 + 2 * i)[0]
-        tile, line = entry & 0x7FF, entry >> 13 & 3
-        hflip, vflip = entry >> 11 & 1, entry >> 12 & 1
-        base = 32 * tile
-        for y in range(8):
-            for x in range(8):
-                sx, sy = (7 - x if hflip else x), (7 - y if vflip else y)
-                b = tiles[base + sy * 4 + sx // 2] if base + 32 <= len(tiles) else 0
-                c = b >> 4 if sx % 2 == 0 else b & 15
-                px[i % width * 8 + x, i // width * 8 + y] = _rgb(words[line * 16 + c])
-    return picture
-
-
-def _tiles_of(picture) -> list[list[tuple[int, int, int]]]:
-    px = picture.load()
-    return [
-        [px[tx * 8 + x, ty * 8 + y] for y in range(8) for x in range(8)]
-        for ty in range(ROWS)
-        for tx in range(COLUMNS)
-    ]
+    return genesis.render_tiles(tiles, entries, width, words)
 
 
 def _slots(line: int) -> list[int]:
@@ -118,102 +80,19 @@ def _slots(line: int) -> list[int]:
     return [i for i in range(1, 16) if i not in RESERVED.get(line, ())]
 
 
-def _palette(
-    tiles: list[list[tuple[int, int, int]]], members: list[int], count: int = 15
-) -> list[tuple]:
-    """Up to `count` Genesis colours for `members`' pixels (median cut)."""
-    from PIL import Image
-
-    sample = Image.new("RGB", (8, 8 * max(1, len(members))))
-    sp = sample.load()
-    assert sp is not None
-    for n, i in enumerate(members):
-        for k, p in enumerate(tiles[i]):
-            sp[k % 8, n * 8 + k // 8] = p
-    flat = sample.quantize(count, Image.Quantize.MEDIANCUT).getpalette() or []
-    colours = {
-        _rgb(_word((flat[j], flat[j + 1], flat[j + 2])))
-        for j in range(0, min(3 * count, len(flat)), 3)
-    }
-    return sorted(colours)[:count]
-
-
-def _indices(tile: list[tuple], colours: list[tuple]) -> tuple[int, list[int]]:
-    """Squared error and the nearest of `colours` (as 1-15) for each pixel."""
-    error, out, cache = 0, [], {}
-    for p in tile:
-        if p not in cache:
-            cache[p] = min(
-                range(len(colours)),
-                key=lambda j: sum((a - b) ** 2 for a, b in zip(colours[j], p, strict=True)),
-            )
-        j = cache[p]
-        out.append(j + 1)
-        error += sum((a - b) ** 2 for a, b in zip(colours[j], p, strict=True))
-    return error, out
-
-
 def encode(picture) -> tuple[bytes, list[int], list[list[int | None]]]:
     """`picture` as (tiles, map entries, three palette lines of 16 words, None
     where a colour is the cartridge's own)."""
-    from PIL import Image
-
-    tiles = _tiles_of(picture.convert("RGB").resize(SIZE, Image.Resampling.LANCZOS))
-
-    def lum(t: list[tuple]) -> float:
-        return sum(0.3 * r + 0.59 * g + 0.11 * b for r, g, b in t)
-
-    order = sorted(range(len(tiles)), key=lambda i: lum(tiles[i]))
-    groups = [order[k * len(order) // LINES : (k + 1) * len(order) // LINES] for k in range(LINES)]
-    for _ in range(2):  # build palettes, reassign tiles, once more
-        palettes = [_palette(tiles, g, len(_slots(line))) for line, g in enumerate(groups)]
-        choice = []
-        for t in tiles:
-            scored = [_indices(t, pal) for pal in palettes]
-            k = min(range(LINES), key=lambda k: scored[k][0])
-            choice.append((k, scored[k][1]))
-        groups = [
-            [i for i, (k, _) in enumerate(choice) if k == line] or [0] for line in range(LINES)
-        ]
-    patterns = [bytes(_slots(line)[j - 1] for j in idx) for line, idx in choice]
-    patterns = _merge(patterns)
-    unique: dict[bytes, int] = {}
-    data = bytearray()
-    entries = []
-    for (line, _), pattern in zip(choice, patterns, strict=True):
-        if pattern not in unique:
-            unique[pattern] = len(unique)
-            data += bytes(pattern[i] << 4 | pattern[i + 1] for i in range(0, 64, 2))
-        entries.append(line << 13 | unique[pattern])
+    encoded = genesis.encode(
+        picture, SIZE, range(LINES), {line: _slots(line) for line in range(LINES)}, MAX_TILES
+    )
     lines = []
-    for line, pal in enumerate(palettes):
-        words: list[int | None] = [None] * 16
+    for line in range(LINES):
+        words = list(encoded.palettes[line])
         words[0] = 0
-        for slot, colour in zip(_slots(line), pal, strict=False):
-            words[slot] = _word(colour)
         lines.append(words)
-    return struct.pack(">H", len(unique)) + bytes(data), entries, lines
-
-
-def _merge(patterns: list[bytes]) -> list[bytes]:
-    """`patterns` with similar tiles made one until at most `MAX_TILES` differ:
-    tiles alike when shrunk to 4x4, then to 2x2, then to one pixel."""
-    for step in (2, 4, 8):
-        if len(set(patterns)) <= MAX_TILES:
-            break
-        first: dict[tuple, bytes] = {}
-
-        def key(p: bytes, step: int = step) -> tuple:
-            return tuple(
-                sorted(p[(y + dy) * 8 + x + dx] for dy in range(step) for dx in range(step))[
-                    step * step // 2
-                ]
-                for y in range(0, 8, step)
-                for x in range(0, 8, step)
-            )
-
-        patterns = [first.setdefault(key(p), p) for p in patterns]
-    return patterns
+    tiles = struct.pack(">H", len(encoded.tiles)) + b"".join(encoded.tiles)
+    return tiles, encoded.entries, lines
 
 
 def _keep_overlays(rom: bytes | bytearray, tiles: bytes) -> tuple[bytes, dict[int, bytes]]:

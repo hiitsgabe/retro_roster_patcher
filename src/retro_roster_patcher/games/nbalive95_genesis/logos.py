@@ -18,6 +18,7 @@ from __future__ import annotations
 import io
 import struct
 
+from ...formats import genesis
 from .space import Space
 
 LOGO_TABLE = 0x504DA
@@ -26,13 +27,12 @@ PALETTE = 0xA4218
 WIDTH, HEIGHT = 48, 40
 #: (x, y, width in tiles, height in tiles) of the four sprites covering 48x40.
 _SPRITES = ((0, 0, 4, 4), (32, 0, 2, 4), (0, 32, 4, 1), (32, 32, 2, 1))
-_LEVELS = (0, 52, 87, 116, 144, 172, 206, 255)
 
 
 def palette(image: bytes | bytearray) -> list[tuple[int, int, int]]:
     """The shared logo palette as RGB, colour 0 (transparent) included."""
     words = struct.unpack_from(">16H", image, PALETTE)
-    return [(_LEVELS[(w >> 1) & 7], _LEVELS[(w >> 5) & 7], _LEVELS[(w >> 9) & 7]) for w in words]
+    return [genesis.rgb(w) for w in words]
 
 
 def pixels(png: bytes, pal: list[tuple[int, int, int]]) -> list[list[int]]:
