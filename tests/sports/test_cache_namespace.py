@@ -22,7 +22,7 @@ import json
 import pytest
 
 from retro_roster_patcher.sports.espn import EspnClient
-from retro_roster_patcher.sports.nhl import NhlApiClient
+from retro_roster_patcher.sports.nhl import SEARCH_URL, NhlApiClient
 from tests.sports.test_espn import NETWORK_CALLS as ESPN_CALLS
 from tests.sports.test_nhl import NETWORK_CALLS as NHL_CALLS
 
@@ -73,8 +73,13 @@ OMNIBUS = json.dumps(
 ).encode()
 
 
+# The NHL's player search answers a JSON array, which no dict envelope can be:
+# one free agent of the 2026 season, whose landing page is then the omnibus body.
+SEARCH = json.dumps([{"playerId": "1", "lastSeasonId": "20262027"}]).encode()
+
+
 def _transport(url, headers, timeout):
-    return OMNIBUS
+    return SEARCH if url.startswith(SEARCH_URL) else OMNIBUS
 
 
 def _drive(build, calls, cache_dir):

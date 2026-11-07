@@ -7,14 +7,25 @@ Used as an alternative to ESPN for the NHL94 SNES patcher.
 import json
 import os
 from collections.abc import Callable
+from dataclasses import asdict
+from datetime import date
 from typing import Any
 
-from ..core.concurrency import emit_status
+from ..core.concurrency import emit_status, parallel_map
 from ..core.errors import ensure_cache_dir
 from . import _http
 from .models import Player, Team
+from .serde import _only_declared
 
 BASE_URL = "https://api-web.nhle.com/v1"
+#: The NHL's player search: every player it knows, with his current club.
+SEARCH_URL = "https://search.d3.nhle.com/api/v1/search/player"
+
+
+def current_season(today: date) -> int:
+    """The start year of the NHL season `today` belongs to: the league year
+    turns over on July 1, when free agency opens."""
+    return today.year if today.month >= 7 else today.year - 1
 
 
 class NhlApiClient:
@@ -115,6 +126,74 @@ class NhlApiClient:
             self._save_cache(cache_key, stats)
         return stats
 
+    def get_hockey_free_agents(self, season: int) -> tuple[list[Player], dict[str, dict]]:
+        """The players without a club now, best first, and each one's latest
+        NHL regular-season line in `get_hockey_team_leaders`' keys.
+
+        A free agent is a player the NHL's search lists with no team whose
+        last season is `season` (start year) or the one before: an unsigned
+        player, or one who retired, which the search does not tell apart.
+        Best first is NHL games over those two seasons; one with none comes
+        last with the line `{"GP": 0}`, so he rates from zeros and not from
+        the position defaults, which rank above most real players' lines.
+        Cached per season, as the squads are, so the free agents stay the ones
+        fetched with them.
+        """
+        cache_key = f"nhl_api_free_agents_{season}"
+        cached = self._load_cache(cache_key)
+        if cached is None:
+            cached = self._find_free_agents(season)
+            # Not when a landing did not answer: a dropped connection would
+            # otherwise freeze a short list for the season.
+            if cached["players"] and not cached.pop("missing"):
+                self._save_cache(cache_key, cached)
+        # Leniently, as `serde` reads a rosters file: the cache outlives versions.
+        return [Player(**_only_declared(Player, p)) for p in cached["players"]], cached["stats"]
+
+    def _find_free_agents(self, season: int) -> dict[str, Any]:
+        recent = (season - 1) * 10000 + season, season * 10000 + season + 1
+        try:
+            emit_status(self.on_status, "Fetching the NHL's free agents...")
+            found = _http.get_json(
+                SEARCH_URL,
+                params={"culture": "en-us", "limit": 50000, "q": "*", "active": "false"},
+                transport=self._transport,
+            )
+        except Exception:
+            found = []
+        candidates = [
+            p
+            for p in (found if isinstance(found, list) else [])
+            if isinstance(p, dict)
+            and p.get("playerId")
+            and not p.get("teamAbbrev")
+            and str(p.get("lastSeasonId")) in {str(s) for s in recent}
+        ]
+        landings = parallel_map(
+            lambda p: self._request(f"/player/{p['playerId']}/landing"), candidates
+        )
+        missing = sum(1 for landing in landings if not landing)
+        if missing:
+            emit_status(
+                self.on_status,
+                f"Free agents: {missing} of {len(candidates)} did not answer; "
+                "asked again next time",
+            )
+        ranked = []
+        for found_player, landing in zip(candidates, landings, strict=True):
+            if not landing:
+                continue  # did not answer: counted in `missing`
+            try:
+                ranked.append(_free_agent(found_player, landing, season, recent))
+            except (AttributeError, KeyError, TypeError, ValueError):
+                continue  # a page not shaped as expected: skip the player, keep the rest
+        ranked.sort(key=lambda entry: -entry[2])
+        return {
+            "players": [asdict(player) for player, _, _ in ranked],
+            "stats": {str(player.id): line for player, line, _ in ranked if line},
+            "missing": missing,
+        }
+
     def _parse_standings_teams(self, data: dict) -> list[Team]:
         if not isinstance(data, dict):
             return []
@@ -212,3 +291,75 @@ class NhlApiClient:
         path = os.path.join(self.cache_dir, f"{key}.json")
         with open(path, "w") as f:
             json.dump(data, f)
+
+
+def _position(code: str) -> str:
+    """The NHL API's position code in this library's spelling: L/R are wings."""
+    return {"L": "LW", "R": "RW"}.get(code, code or "C")
+
+
+def _free_agent(
+    found: dict[str, Any], landing: dict[str, Any], season: int, recent: tuple[int, int]
+) -> tuple[Player, dict[str, Any], int]:
+    """One free agent from his search record and his landing page: the
+    player, his latest NHL regular-season line, and his NHL games in `recent`.
+
+    Birth place from the search, which spells a state as its postal code;
+    names, hand, head shot and birth date from the landing. Age as of
+    October 1 of `season`.
+    """
+    first = (landing.get("firstName") or {}).get("default", "")
+    last = (landing.get("lastName") or {}).get("default", "")
+    born = str(landing.get("birthDate") or "")
+    parts = born.split("-")
+    age = 0
+    if len(parts) == 3 and all(p.isdigit() for p in parts):
+        year, month, day = (int(p) for p in parts)
+        age = season - year - ((month, day) > (10, 1))
+    player = Player(
+        id=int(found.get("playerId") or 0),
+        name=f"{first} {last}".strip(),
+        first_name=first,
+        last_name=last,
+        age=age,
+        nationality=str(found.get("birthCountry") or ""),
+        position=_position(str(landing.get("position") or "")),
+        number=landing.get("sweaterNumber"),
+        photo_url=str(landing.get("headshot") or ""),
+        birth_date=born,
+        birth_city=str(found.get("birthCity") or ""),
+        birth_state=str(found.get("birthStateProvince") or ""),
+        weight=float(found.get("weightInPounds") or 0),
+        height=float(found.get("heightInInches") or 0),
+        handedness=str(landing.get("shootsCatches") or ""),
+    )
+    nhl = [
+        s
+        for s in landing.get("seasonTotals") or []
+        if s.get("leagueAbbrev") == "NHL" and s.get("gameTypeId") == 2 and s.get("season") in recent
+    ]
+    games = sum(int(s.get("gamesPlayed") or 0) for s in nhl)
+    if not nhl:
+        return player, {"GP": 0}, games
+    # ponytail: a player traded mid-season has one line per club; the one with
+    # the most games stands for his season.
+    latest = max(nhl, key=lambda s: (s["season"], s.get("gamesPlayed") or 0))
+    if player.position == "G":
+        line = {
+            "GP": latest.get("gamesPlayed", 0),
+            "W": latest.get("wins", 0),
+            "GAA": latest.get("goalsAgainstAvg", 0),
+            "SV%": latest.get("savePctg", 0) or 0,
+        }
+    else:
+        line = {
+            "G": latest.get("goals", 0),
+            "A": latest.get("assists", 0),
+            "PTS": latest.get("points", 0),
+            "+/-": latest.get("plusMinus", 0),
+            "PIM": latest.get("pim", 0),
+            "S": latest.get("shots", 0),
+            "FO%": latest.get("faceoffWinningPctg", 0),
+            "GP": latest.get("gamesPlayed", 0),
+        }
+    return player, line, games

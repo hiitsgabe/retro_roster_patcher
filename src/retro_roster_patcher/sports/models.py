@@ -15,6 +15,9 @@ class League:
     logo_url: str = ""
     season: int = 0
     teams_count: int = 0
+    # League-wide data a patcher fetched alongside the teams (NHL 2005's free
+    # agents). Only the patcher that put a key here reads it back.
+    extra: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass

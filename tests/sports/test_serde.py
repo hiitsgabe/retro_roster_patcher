@@ -354,3 +354,13 @@ def test_a_payload_missing_a_required_field_raises():
 def test_an_empty_roster_round_trips():
     empty = LeagueData(league=League(id=1, name="NHL"), teams=[])
     assert round_trip(empty) == empty
+
+
+def test_a_leagues_extra_round_trips():
+    # The rosters file's `league` map is what the app keeps untouched, so a
+    # patcher's league-wide data (NHL 2005's free agents) rides there.
+    data = LeagueData(
+        league=League(id=0, name="NHL", extra={"free_agents": {"players": [], "stats": {}}}),
+        teams=[],
+    )
+    assert round_trip(data).league.extra == {"free_agents": {"players": [], "stats": {}}}

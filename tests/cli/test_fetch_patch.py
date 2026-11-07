@@ -289,7 +289,8 @@ def test_a_league_data_partial_is_serialised_before_it_reaches_the_json_stream(
     lines = capsys.readouterr().out.splitlines()
     assert lines[1] == (
         '{"event":"partial","data":{"league":{"id":1,"name":"Test League","country":"",'
-        '"country_code":"","logo_url":"","season":2024,"teams_count":0},"teams":[{"team":'
+        '"country_code":"","logo_url":"","season":2024,"teams_count":0,"extra":{}},'
+        '"teams":[{"team":'
         '{"id":33,"name":"Team A","short_name":"","code":"","logo_url":"","country":"",'
         '"color":"","alternate_color":""},"players":[],"player_stats":{},"loading":true,'
         '"error":"","extra":{}},{"team":'
