@@ -256,8 +256,8 @@ def test_a_file_far_too_small_to_be_a_rom_loads_and_survives_every_operation(tmp
 
 
 def test_writing_a_roster_reports_how_many_players_fit(rom_paths):
-    # 452 bytes of region against 2 * (2 + 7 + 8) + 13 * (2 + 8 + 8) = 268 bytes of
-    # squad, so all fifteen fit with 184 bytes to spare and nothing is truncated.
+    # 452 bytes of region against 15 * (2 + 8 + 8) = 270 bytes of squad (the
+    # goalies' 7-letter names carry a NUL), so all fifteen fit with room to spare.
     writer, _ = _loaded_writer(rom_paths)
     assert writer.write_team_roster(0, _squad()) == 15
 
@@ -286,6 +286,65 @@ def test_written_names_read_back_through_the_reader(rom_paths):
         "DEFENCE3",
     ]
     assert [len(s) for s in stats] == [8] * 15
+
+
+def test_an_odd_length_name_gets_a_nul_so_every_record_starts_on_an_even_byte(rom_paths):
+    # The game walks a roster with `adda.w (a6),a6; addq.w #8,a6` (the photo lookup
+    # at $FAE70 among others): a word read, which on the 68000 is an address error at
+    # an odd address, and the game's exception handler then hangs on Matchups. All
+    # 634 of the cartridge's records have an even length word; its 310 odd names end
+    # in a NUL ("Ron Tugnutt\0", length 14).
+    writer, output = _loaded_writer(rom_paths)
+    roster = [
+        NHL94GenPlayerRecord(name="Ron Tugnutt", jersey_number=1),
+        NHL94GenPlayerRecord(name="Stu Grimson Jr", jersey_number=2),
+        NHL94GenPlayerRecord(name="X", jersey_number=3),
+    ]
+    assert writer.write_team_roster(0, roster) == 3
+    assert writer.finalize() is True
+
+    data = output.read_bytes()
+    at = synthetic_rom.team_base(0) + synthetic_rom.SEC_PLAYERS
+    lengths = []
+    while (length := struct.unpack_from(">H", data, at)[0]) >= 3:
+        assert at % 2 == 0
+        lengths.append(length)
+        at += length + 8
+    assert lengths == [14, 16, 4]
+    start = synthetic_rom.team_base(0) + synthetic_rom.SEC_PLAYERS
+    assert data[start + 2 : start + 14] == b"Ron Tugnutt\x00"
+    names, _ = _read_back(output).read_team_roster(0)
+    assert names == ["Ron Tugnutt", "Stu Grimson Jr", "X"]
+
+
+def _odd_region_rom(tmp_path, name_length):
+    """The fixture with team 0's roster replaced by one record whose name has
+    `name_length` letters and no NUL, as the writer before this fix left odd
+    names: the region then measures `2 + name_length + 8 + 2` bytes."""
+    rom = synthetic_rom.build_nhl94_genesis_rom()
+    start = synthetic_rom.team_base(0) + synthetic_rom.SEC_PLAYERS
+    record = struct.pack(">H", name_length + 2) + b"A" * name_length + bytes(8) + b"\x00\x00"
+    rom[start : start + len(record)] = record
+    return _write_rom(tmp_path, f"odd_{name_length}.bin", rom)
+
+
+def test_a_name_cut_to_an_odd_room_drops_a_letter_rather_than_its_nul(tmp_path):
+    # A 15-byte region (a ROM patched before names were padded) leaves 3 bytes of
+    # name room: "ABCD" is cut to "AB", not to "ABC" with no room for its NUL.
+    writer = NHL94GenesisRomWriter(str(_odd_region_rom(tmp_path, 3)), str(tmp_path / "out.bin"))
+    assert writer.load() is True
+    assert writer.write_team_roster(0, [NHL94GenPlayerRecord(name="ABCD", jersey_number=1)]) == 1
+    assert writer.finalize() is True
+    names, _ = _read_back(tmp_path / "out.bin").read_team_roster(0)
+    assert names == ["AB"]
+
+
+def test_no_player_is_written_into_one_byte_of_name_room(tmp_path):
+    # A 13-byte region leaves 1 byte of room: "Z" needs 2 with its NUL, and an
+    # empty name would read as the end of the roster, so nobody is written.
+    writer = NHL94GenesisRomWriter(str(_odd_region_rom(tmp_path, 1)), str(tmp_path / "out.bin"))
+    assert writer.load() is True
+    assert writer.write_team_roster(0, [NHL94GenPlayerRecord(name="Z", jersey_number=1)]) == 0
 
 
 def test_the_jersey_number_is_written_as_bcd(rom_paths):
@@ -426,7 +485,8 @@ def test_the_roster_ends_with_a_sentinel_and_the_rest_is_zero_filled(tmp_path):
     assert writer.write_team_roster(0, _squad()) == 15
     assert writer.finalize() is True
 
-    written_bytes = 2 * (2 + 7 + 8) + 13 * (2 + 8 + 8)
+    # Fifteen 18-byte records: the goalies' 7-letter names carry their NUL.
+    written_bytes = 15 * (2 + 8 + 8)
     data = output.read_bytes()
     assert data[start + written_bytes : start + written_bytes + 2] == b"\x00\x00"
     assert data[start + written_bytes : start + ROSTER_REGION] == (
@@ -434,7 +494,7 @@ def test_the_roster_ends_with_a_sentinel_and_the_rest_is_zero_filled(tmp_path):
     )
     assert data[start + ROSTER_REGION : start + ROSTER_REGION + 16] == bytes([POISON]) * 16
     # The region shrinks to the sentinel, which is what a later re-read sees.
-    assert _read_back(output).get_team_player_region(0) == (start, 270)
+    assert _read_back(output).get_team_player_region(0) == (start, 272)
 
 
 def test_writing_one_team_leaves_the_others_byte_identical(rom_paths):
@@ -493,8 +553,9 @@ def test_a_non_ascii_name_becomes_one_question_mark_per_character(rom_paths):
     # One byte per character, so the length words still describe the records.
     start = synthetic_rom.team_base(0) + synthetic_rom.SEC_PLAYERS
     data = output.read_bytes()
-    assert struct.unpack_from(">H", data, start)[0] == 9
-    assert struct.unpack_from(">H", data, start + 9 + 8)[0] == 8
+    # "N?SLUND" carries the NUL every odd name gets, so its record is 10 + 8 bytes.
+    assert struct.unpack_from(">H", data, start)[0] == 10
+    assert struct.unpack_from(">H", data, start + 10 + 8)[0] == 8
 
 
 def test_an_empty_name_is_written_as_a_length_word_the_reader_reads_as_the_end(rom_paths):
@@ -547,8 +608,9 @@ def test_a_one_character_name_survives_the_round_trip(rom_paths):
     names, stats = reader.read_team_roster(0)
     assert names == ["AAAA", "X", "BBBB", "CCCC"]
     assert stats[2][0] == 0x03
-    # Three 14-byte records, one 11-byte record, and the 2-byte sentinel.
-    assert reader.get_team_player_region(0)[1] == 55
+    # Three 14-byte records, one 12-byte record ("X" and its NUL), and the 2-byte
+    # sentinel.
+    assert reader.get_team_player_region(0)[1] == 56
 
 
 def test_a_name_is_truncated_when_only_part_of_it_fits(rom_paths):
@@ -638,9 +700,10 @@ def test_the_goalie_count_comes_from_the_flag_and_the_defence_count_from_the_pos
 
     base = synthetic_rom.team_base(0)
     assert output.read_bytes()[base + synthetic_rom.SEC_RATINGS + 3] == 0x11
-    # One forward at slot 2 and one defenceman at slot 3, so the two flagged
-    # goalies did occupy slots 0 and 1 of the roster the lines index into.
-    assert _line_data(output)[:8] == bytes([0x01, 3, 3, 2, 2, 2, 2, 0])
+    # One forward at slot 2 and one defenceman at slot 3 (3 and 4 counted from 1),
+    # so the two flagged goalies did occupy slots 0 and 1 of the roster the lines
+    # index into.
+    assert _line_data(output)[:8] == bytes([1, 4, 4, 3, 3, 3, 3, 0])
 
 
 def test_a_roster_of_twenty_five_at_one_position_saturates_its_count_nibble(rom_paths):
@@ -691,8 +754,9 @@ def test_writing_a_header_with_no_players_is_refused(rom_paths):
 
 
 def test_the_team_header_writes_sixty_four_bytes_of_line_data(rom_paths):
-    # Eight lines of [01, LD, RD, LW, C, RW, EA, G] over a roster laid out as two
-    # goalies, then forwards 2-10, then defence 11-14.
+    # Eight lines of [G, LD, RD, LW, C, RW, extra attacker, 0], each player counted
+    # from 1 as the cartridge's own tables do, over a roster laid out as two goalies
+    # (1-2), then forwards 3-11, then defence 12-15.
     writer, output = _loaded_writer(rom_paths)
     squad = _squad()
     assert writer.write_team_roster(0, squad) == 15
@@ -701,14 +765,14 @@ def test_the_team_header_writes_sixty_four_bytes_of_line_data(rom_paths):
 
     assert _line_data(output) == _line_bytes(
         [
-            [0x01, 11, 12, 3, 2, 4, 5, 0],
-            [0x01, 13, 14, 6, 5, 7, 8, 0],
-            [0x01, 11, 12, 9, 8, 10, 10, 0],
-            [0x01, 13, 14, 10, 10, 10, 2, 0],
-            [0x01, 11, 12, 3, 2, 4, 6, 0],
-            [0x01, 13, 14, 6, 5, 7, 9, 0],
-            [0x01, 11, 12, 9, 8, 10, 2, 0],
-            [0x01, 13, 14, 10, 10, 10, 5, 0],
+            [1, 12, 13, 4, 3, 5, 6, 0],
+            [1, 14, 15, 7, 6, 8, 9, 0],
+            [1, 12, 13, 10, 9, 11, 11, 0],
+            [1, 14, 15, 11, 11, 11, 3, 0],
+            [1, 12, 13, 4, 3, 5, 7, 0],
+            [1, 14, 15, 7, 6, 8, 10, 0],
+            [1, 12, 13, 10, 9, 11, 3, 0],
+            [1, 14, 15, 11, 11, 11, 6, 0],
         ]
     )
 
@@ -717,7 +781,7 @@ def test_a_roster_with_no_forwards_or_defence_points_every_slot_at_the_starter(r
     # The `forward_count == 0` and `defense_count == 0` arms of `_generate_lines`.
     # They do not prevent an overrun — `min(i, forward_count - 1)` would return the
     # last goalie, still a real slot. What the arms decide is *which* slot: every
-    # position on every line names the starting goalie at 0 rather than goalie 2.
+    # position on every line names the starting goalie (1) rather than goalie 2.
     writer, output = _loaded_writer(rom_paths)
     goalies = [
         NHL94GenPlayerRecord(name=f"GOALIE{i}", position="G", jersey_number=30 + i, is_goalie=True)
@@ -727,7 +791,7 @@ def test_a_roster_with_no_forwards_or_defence_points_every_slot_at_the_starter(r
     assert writer.write_team_header(0, goalies) is True
     assert writer.finalize() is True
 
-    assert _line_data(output) == _line_bytes([[0x01, 0, 0, 0, 0, 0, 0, 0]] * 8)
+    assert _line_data(output) == _line_bytes([[1, 1, 1, 1, 1, 1, 1, 0]] * 8)
     base = synthetic_rom.team_base(0)
     assert output.read_bytes()[base + synthetic_rom.SEC_RATINGS + 3] == 0x00
 
@@ -750,18 +814,18 @@ def test_a_single_defenceman_is_used_as_both_halves_of_every_pair(rom_paths):
     assert writer.write_team_header(0, roster) is True
     assert writer.finalize() is True
 
-    # Slot 5 is the lone defenceman and appears as both LD and RD on all eight
-    # lines; no byte names a slot past the end of a six-player roster.
+    # Slot 5 is the lone defenceman (6, counted from 1) and appears as both LD and
+    # RD on all eight lines; no byte names a slot past the end of a six-player roster.
     assert _line_data(output) == _line_bytes(
         [
-            [0x01, 5, 5, 3, 2, 4, 4, 0],
-            [0x01, 5, 5, 4, 4, 4, 4, 0],
-            [0x01, 5, 5, 4, 4, 4, 4, 0],
-            [0x01, 5, 5, 4, 4, 4, 2, 0],
-            [0x01, 5, 5, 3, 2, 4, 4, 0],
-            [0x01, 5, 5, 4, 4, 4, 4, 0],
-            [0x01, 5, 5, 4, 4, 4, 2, 0],
-            [0x01, 5, 5, 4, 4, 4, 4, 0],
+            [1, 6, 6, 4, 3, 5, 5, 0],
+            [1, 6, 6, 5, 5, 5, 5, 0],
+            [1, 6, 6, 5, 5, 5, 5, 0],
+            [1, 6, 6, 5, 5, 5, 3, 0],
+            [1, 6, 6, 4, 3, 5, 5, 0],
+            [1, 6, 6, 5, 5, 5, 5, 0],
+            [1, 6, 6, 5, 5, 5, 3, 0],
+            [1, 6, 6, 5, 5, 5, 5, 0],
         ]
     )
 
@@ -1030,7 +1094,7 @@ def test_a_negative_team_index_overwrites_the_start_of_the_rom_with_line_data(ro
     writer, output = _loaded_writer(rom_paths)
     assert writer.write_team_header(-1, _squad()) is True
     assert writer.finalize() is True
-    assert output.read_bytes()[:8] == bytes([0x01, 11, 12, 3, 2, 4, 5, 0])
+    assert output.read_bytes()[:8] == bytes([1, 12, 13, 4, 3, 5, 6, 0])
 
 
 def test_the_writers_reader_never_observes_the_writers_own_patches(rom_paths):
@@ -1072,10 +1136,11 @@ def test_patching_a_rom_that_was_already_patched_loses_roster_space(rom_paths):
 
     second = NHL94GenesisRomWriter(str(output), str(output.parent / "again.bin"))
     assert second.load() is True
-    assert second.reader.get_team_player_region(0) == (start, 270)
+    assert second.reader.get_team_player_region(0) == (start, 272)
     assert second.write_team_roster(0, full) == 15
     assert second.finalize() is True
 
     names, _ = _read_back(output.parent / "again.bin").read_team_roster(0)
-    assert len(names) == 15
-    assert names[14] == "NAME00"  # truncated to the six bytes that were left
+    # Fifteen of the twenty-five: the shrunken region holds fifteen 18-byte records
+    # and their sentinel, and nothing more.
+    assert names == [f"NAME{i:04d}" for i in range(15)]

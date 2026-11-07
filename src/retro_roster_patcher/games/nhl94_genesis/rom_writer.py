@@ -106,6 +106,17 @@ class NHL94GenesisRomWriter:
             # sentinel, burying the rest of the roster. Do not re-add the `or b"?"`.
             name = player.name[:max_name_len]
             name_bytes = name.encode("ascii", errors="replace")
+            if len(name_bytes) % 2:
+                # The game walks a roster with word reads (`adda.w (a6),a6`), an
+                # address error on the 68000 at an odd address, so every record
+                # starts on an even byte: an odd name ends in a NUL, as all 310 of
+                # the cartridge's do. Without room for it the name loses a letter.
+                if len(name_bytes) < max_name_len:
+                    name_bytes += b"\x00"
+                else:
+                    name_bytes = name_bytes[:-1]
+                if not name_bytes:
+                    break
             name_len = len(name_bytes)
 
             # 2-byte BE length, itself included
@@ -234,16 +245,18 @@ class NHL94GenesisRomWriter:
     ) -> list[list[int]]:
         """Eight 8-byte lines.
 
-        Line format:    [01, LD, RD, LW, C, RW, EA, G]
+        Line format:    [G, LD, RD, LW, C, RW, EA, 0], each player counted from
+                        1 as the cartridge's own tables do (its LA line 0 is
+                        [1, 17, 18, 8, 4, 13, 5, 0]: Hrudey, Blake, McSorley,
+                        Robitaille, Gretzky, Sandstrom); EA is the extra attacker
         Roster layout:  [G1,G2,..., C1,LW1,RW1, C2,LW2,RW2,..., D1,D2,...]
 
         Lines 0-3 even strength, 4-5 power play, 6-7 penalty kill.
         """
-        g_start = 0
-        f_start = goalie_count
-        d_start = goalie_count + forward_count
-
-        starter = g_start if goalie_count > 0 else 0
+        # Counted from 1: the starting goalie, roster record 0, is 1.
+        starter = 1
+        f_start = goalie_count + 1
+        d_start = goalie_count + forward_count + 1
 
         def f(i: int) -> int:
             if forward_count == 0:
@@ -267,7 +280,7 @@ class NHL94GenesisRomWriter:
             ld = d(pair * 2)
             rd = d(pair * 2 + 1)
             ea = f(((li + 1) % 4) * 3)  # next line's centre
-            lines.append([0x01, ld, rd, lw, c, rw, ea, starter])
+            lines.append([starter, ld, rd, lw, c, rw, ea, 0])
 
         for pp in range(2):
             c = f(pp * 3)
@@ -276,7 +289,7 @@ class NHL94GenesisRomWriter:
             ld = d(pp * 2)
             rd = d(pp * 2 + 1)
             ea = f(((pp + 1) * 3) + 1)
-            lines.append([0x01, ld, rd, lw, c, rw, ea, starter])
+            lines.append([starter, ld, rd, lw, c, rw, ea, 0])
 
         for pk in range(2):
             # 3rd and 4th line forwards kill penalties
@@ -287,7 +300,7 @@ class NHL94GenesisRomWriter:
             ld = d(pk * 2)
             rd = d(pk * 2 + 1)
             ea = f(pk * 3)
-            lines.append([0x01, ld, rd, lw, c, rw, ea, starter])
+            lines.append([starter, ld, rd, lw, c, rw, ea, 0])
 
         return lines
 
