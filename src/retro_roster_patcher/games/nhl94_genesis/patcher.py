@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from ...core.errors import ApiError, MappingError, RomError
+from ...core.errors import ApiError, MappingError, RomError, as_rom_error
 from ...core.models import (
     MappedRosters,
     PartialFn,
@@ -22,6 +22,7 @@ from ...sports import _http
 from ...sports.espn import EspnClient
 from ...sports.models import League, LeagueData, Player, TeamRoster
 from ...sports.nhl import NhlApiClient
+from . import screens
 from .models import NHL94_GEN_TEAM_ORDER, TEAM_COUNT, NHL94GenPlayerRecord
 from .rom_reader import NHL94GenesisRomReader
 from .rom_writer import NHL94GenesisRomWriter
@@ -64,6 +65,10 @@ class NHL94GenesisPatcher(Patcher):
     Only the `nhl` provider honours `fetch`'s `season`; ESPN's roster endpoint
     serves the current squad and nothing else.
     """
+
+    #: Screen art `patch(images={name: png})` can replace; `export_images`
+    #: writes the cartridge's current art for each. See `screens.SLOTS`.
+    image_slots: tuple[str, ...] = screens.IMAGE_SLOT_NAMES
 
     def __init__(
         self,
@@ -237,6 +242,13 @@ class NHL94GenesisPatcher(Patcher):
 
     # -- patch --------------------------------------------------------------
 
+    def export_images(self, rom_path: Path, out_dir: Path) -> list[Path]:
+        """Write each slot's current art as `<out_dir>/<slot>.png`, to edit and feed back."""
+        if not Path(rom_path).exists():
+            raise RomError(f"ROM not found: {rom_path}")
+        with as_rom_error(rom_path):
+            return screens.export(Path(rom_path).read_bytes(), Path(out_dir))
+
     def patch(
         self,
         *,
@@ -247,6 +259,9 @@ class NHL94GenesisPatcher(Patcher):
         **options: Any,
     ) -> PatchResult:
         rosters.require_game(self.game_id)
+        # Before the ROM is touched: an unknown slot or an unreadable picture
+        # never leaves a half-written output behind.
+        pictures = screens.load_images(options.get("images"), self.status)
         self.status("Validating ROM...")
         reader = NHL94GenesisRomReader(str(rom_path))
         if not reader.load() or not reader.validate():
@@ -289,6 +304,10 @@ class NHL94GenesisPatcher(Patcher):
                 ) from exc
             teams_patched += 1
             players_patched += written
+
+        if pictures and writer.data is not None:
+            self.status("Drawing screen art...")
+            screens.draw(writer.data, pictures, self.status)
 
         self.status("Saving patched ROM...")
         if on_progress is not None:

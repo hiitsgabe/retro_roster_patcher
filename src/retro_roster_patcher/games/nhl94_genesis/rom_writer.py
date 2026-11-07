@@ -19,6 +19,17 @@ from .rom_reader import (
     NHL94GenesisRomReader,
 )
 
+#: The largest image: the cartridge's battery RAM is mapped from 0x200000.
+GROWN_SIZE = 0x200000
+
+
+def grow(rom: bytearray) -> None:
+    """Pad `rom` with 0xFF to `GROWN_SIZE` (the screen art and player cards
+    live past the cartridge's 1 MiB) and set the header's ROM end to match."""
+    if len(rom) < GROWN_SIZE:
+        rom.extend(b"\xff" * (GROWN_SIZE - len(rom)))
+    rom[0x1A4:0x1A8] = (len(rom) - 1).to_bytes(4, "big")
+
 
 def encode_nibble(high: int, low: int) -> int:
     high = max(0, min(6, high))

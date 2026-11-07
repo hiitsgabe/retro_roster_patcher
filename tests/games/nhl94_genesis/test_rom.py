@@ -39,7 +39,14 @@ def _squad(tag: str) -> list[Player]:
     return players
 
 
-def _patch(tmp_path: Path, rosters: dict[str, list[Player]], **options) -> Path:
+def _patch(
+    tmp_path: Path,
+    rosters: dict[str, list[Player]],
+    source: Path | None = None,
+    name: str = "patched.md",
+    **options,
+) -> Path:
+    """Patch `source` (the cartridge by default) into `tmp_path / name`."""
     patcher = NHL94GenesisPatcher(tmp_path / "cache", provider="nhl")
     data = LeagueData(
         league=League(id=0, name="NHL", country="USA", country_code="US", logo_url="", season=2025),
@@ -48,9 +55,37 @@ def _patch(tmp_path: Path, rosters: dict[str, list[Player]], **options) -> Path:
             for i, (code, players) in enumerate(rosters.items())
         ],
     )
-    out = tmp_path / "patched.md"
-    patcher.patch(rom_path=_rom(), output_path=out, rosters=patcher.map_rosters(data), **options)
+    out = tmp_path / name
+    patcher.patch(
+        rom_path=source or _rom(), output_path=out, rosters=patcher.map_rosters(data), **options
+    )
     return out
+
+
+@pytest.mark.real_rom
+@real_rom
+def test_the_cartridges_title_and_menu_export(tmp_path):
+    image = pytest.importorskip("PIL.Image")
+    NHL94GenesisPatcher(tmp_path / "cache").export_images(_rom(), tmp_path / "art")
+    title = image.open(tmp_path / "art" / "title.png")
+    menu = image.open(tmp_path / "art" / "menu.png")
+    assert (title.size, menu.size) == ((256, 224), (320, 224))
+    assert title.getpixel((128, 200)) == (206, 255, 255)  # the ice under the players
+    assert menu.getpixel((160, 150)) == (144, 206, 255)  # the rink
+
+
+@pytest.mark.real_rom
+@real_rom
+def test_a_drawn_title_stays_through_a_patch_without_pictures(tmp_path):
+    image = pytest.importorskip("PIL.Image")
+    picture = tmp_path / "title.png"
+    image.new("RGB", (256, 224), (0, 0, 255)).save(picture)
+    first = _patch(tmp_path, {"LAK": _squad("LAK")}, images={"title": picture})
+    second = _patch(tmp_path, {"MTL": _squad("MTL")}, source=first, name="again.md")
+    a, b = first.read_bytes(), second.read_bytes()
+    assert len(b) == 0x200000
+    assert a[0x100000:0x108000] == b[0x100000:0x108000]
+    assert b[0xFF10E:0xFF112] == b[0xFF140:0xFF144] == (0x100000).to_bytes(4, "big")
 
 
 @pytest.mark.real_rom
