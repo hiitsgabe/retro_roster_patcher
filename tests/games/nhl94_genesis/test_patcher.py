@@ -602,8 +602,10 @@ def test_the_leader_stats_order_the_roster_and_shape_the_attributes(patcher):
 
     # Descending points; the player with no entry at all sorts last.
     assert [r.name for r in records] == ["C1", "C2", "C0", "C3"]
-    # shot_power is `_scale(G, 0, 40)`, against a positional default of 3.
-    assert [r.attributes.shot_power for r in records] == [6, 3, 1, 3]
+    # Stick handling ranks goals among the three lines (shares 5/6, 1/2, 1/6 of
+    # the cartridge's forwards' spread); the player without one keeps the
+    # position's 3.
+    assert [r.attributes.stick_handling for r in records] == [4, 3, 2, 3]
 
 
 def test_map_rosters_refuses_a_slot_the_rom_does_not_have(patcher, monkeypatch):

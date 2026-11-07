@@ -132,6 +132,8 @@ def test_get_hockey_squad_parses_the_recorded_roster(tmp_path, replay):
     # Height and head shot, which NHL 07 writes to `HEIG` and the portrait.
     assert pastrnak.height == 72.0
     assert pastrnak.photo_url == "https://assets.nhle.com/mugs/nhl/20252026/BOS/8477956.png"
+    # The birth date NHL 94 ranks youth on (the roster carries no age).
+    assert pastrnak.birth_date == "1996-05-25"
 
 
 def test_each_squad_team_and_season_caches_separately(tmp_path, replay):

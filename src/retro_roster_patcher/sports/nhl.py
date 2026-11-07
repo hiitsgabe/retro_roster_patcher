@@ -180,6 +180,7 @@ class NhlApiClient:
                         position=pos,
                         number=number,
                         photo_url=athlete.get("headshot", "") or "",
+                        birth_date=str(athlete.get("birthDate") or "")[:10],
                         weight=float(weight),
                         height=float(height),
                         handedness=hand,

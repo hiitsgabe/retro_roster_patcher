@@ -30,7 +30,7 @@ from . import portraits, screens
 from .models import NHL94_GEN_TEAM_ORDER, TEAM_COUNT, NHL94GenPlayerRecord
 from .rom_reader import NHL94GenesisRomReader
 from .rom_writer import GROWN_SIZE, NHL94GenesisRomWriter
-from .stat_mapper import NHL94GenStatMapper
+from .stat_mapper import LeagueStats, NHL94GenStatMapper
 
 # Two goalies, four forward lines plus two spares, seven defencemen. A selection
 # cap, not a capacity: the writer spends `2 + len(name) + 8` bytes per player
@@ -208,6 +208,13 @@ class NHL94GenesisPatcher(Patcher):
         order_as_given: bool = False,
     ) -> MappedRosters:
         self.check_slot_mapping(slot_mapping)
+        # Every fetched player is the league each one's ratings rank against
+        # (`stat_mapper`), those whose team has no slot among them.
+        league = LeagueStats.from_lines(
+            (player, (roster.extra.get("leaders") or {}).get(str(player.id)) or {})
+            for roster in data.teams
+            for player in roster.players
+        )
         teams: dict[int, list[NHL94GenPlayerRecord]] = {}
         for roster in data.teams:
             slot = self.mapper.get_team_slot(roster.team.code)
@@ -238,7 +245,9 @@ class NHL94GenesisPatcher(Patcher):
                     roster.players, leaders, max_players=MAX_PLAYERS_PER_SLOT
                 )
             records = [
-                self.mapper.map_player(player, roster.team.code, leaders.get(str(player.id), {}))
+                self.mapper.map_player(
+                    player, roster.team.code, leaders.get(str(player.id), {}), league
+                )
                 for player in selected
             ]
             # `MODERN_NHL_TO_NHL94_GEN` maps 30 codes onto 26 slots — LAK/LA, NJD/NJ,
