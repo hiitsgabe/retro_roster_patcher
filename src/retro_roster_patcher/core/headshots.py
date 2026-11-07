@@ -8,7 +8,7 @@ import hashlib
 import importlib.util
 from collections.abc import Callable, Mapping
 from pathlib import Path
-from typing import NamedTuple
+from typing import Any, NamedTuple
 
 from ..sports import _http
 from .concurrency import parallel_map
@@ -48,6 +48,45 @@ def load_headshot(
     except OSError:
         pass
     return content
+
+
+#: How far above the hair a portrait starts, as a share of its side: a row or
+#: two of 48, as EA's NHL 94 photographs have it.
+PORTRAIT_HEADROOM = 0.03
+#: A portrait's side as a share of the subject's height: the head about as wide
+#: as EA's NHL 94 photographs have it.
+PORTRAIT_SCALE = 0.68
+#: A head shot whose most saturated opaque pixel is below this is grey all
+#: over: the NHL API's silhouette for a player without a photo (0; real ones 208+).
+SILHOUETTE_SATURATION = 16
+
+
+def portrait(png: bytes, side: int) -> Any:
+    """A provider head shot cropped and scaled to a `side`x`side` RGBA portrait,
+    or None for a grey one (the NHL API's silhouette for a player without a
+    photo), which would draw as a blank head.
+
+    A square centred on the head (the opaque columns in the top third of the
+    subject, or the whole picture when it has no transparency), the hair a row
+    or two from the top. Raises whatever Pillow raises for a picture it cannot
+    read.
+    """
+    import io
+
+    from PIL import Image
+
+    picture = Image.open(io.BytesIO(png)).convert("RGBA")
+    alpha = picture.getchannel("A")
+    saturation = picture.convert("RGB").convert("HSV").getchannel("S")
+    if not any(saturation.histogram(mask=alpha)[SILHOUETTE_SATURATION:]):
+        return None
+    left, top, right, bottom = alpha.getbbox() or (0, 0, *picture.size)
+    head = alpha.crop((left, top, right, top + max(1, (bottom - top) // 3))).getbbox()
+    centre = left + ((head[0] + head[2]) // 2 if head else (right - left) // 2)
+    span = max(1, round((bottom - top) * PORTRAIT_SCALE))
+    x0, y0 = centre - span // 2, top - round(span * PORTRAIT_HEADROOM)
+    square = picture.crop((x0, y0, x0 + span, y0 + span))
+    return square.resize((side, side), Image.Resampling.LANCZOS)
 
 
 class Face(NamedTuple):

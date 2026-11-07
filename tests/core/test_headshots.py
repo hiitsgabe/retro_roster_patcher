@@ -3,7 +3,7 @@ picture; and the measuring pass every game shares."""
 
 import pytest
 
-from retro_roster_patcher.core.headshots import load_headshot, measure_faces
+from retro_roster_patcher.core.headshots import load_headshot, measure_faces, portrait
 
 PNG = b"\x89PNG\r\n\x1a\n" + b"body"
 JPEG = b"\xff\xd8\xff" + b"body"
@@ -110,3 +110,31 @@ def test_measure_faces_reads_the_beard_too(tmp_path):
 
     faces = measure_faces(tmp_path, {1: "a", 2: "b"}, transport)
     assert (faces[1].beard, faces[2].beard) == (True, False)
+
+
+def _cut_out(head, body=None):
+    """A cut-out head shot: a head on a transparent picture, and a body under it."""
+    pytest.importorskip("PIL")
+    import io
+
+    from PIL import Image, ImageDraw
+
+    picture = Image.new("RGBA", (300, 220), (0, 0, 0, 0))
+    ImageDraw.Draw(picture).ellipse((120, 20, 200, 120), fill=head)
+    if body:
+        ImageDraw.Draw(picture).rectangle((60, 120, 260, 220), fill=body)
+    png = io.BytesIO()
+    picture.save(png, "PNG")
+    return png.getvalue()
+
+
+@pytest.mark.parametrize("side", [48, 64])
+def test_a_head_shot_is_cropped_to_a_square_portrait_on_the_head(side):
+    shot = portrait(_cut_out((225, 170, 150, 255), (40, 40, 160, 255)), side)
+    assert shot.size == (side, side)
+    assert shot.getpixel((0, 0))[3] == 0  # the background stays transparent
+    assert shot.getpixel((side // 2, side // 5))[3] == 255  # the head, near the top centre
+
+
+def test_the_nhl_apis_grey_silhouette_is_no_portrait():
+    assert portrait(_cut_out((150, 150, 150, 255), (190, 190, 190, 255)), 48) is None

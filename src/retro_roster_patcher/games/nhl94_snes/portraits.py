@@ -28,10 +28,10 @@ where they are.
 
 from __future__ import annotations
 
-import io
 from collections.abc import Callable, Mapping, Sequence
 from typing import TYPE_CHECKING
 
+from ...core.headshots import portrait
 from ...formats import snes
 from ...formats.ea_tdb import refpack_compress
 
@@ -56,11 +56,6 @@ REGION = range(0x178000, 0x200000)
 _BANK = 0x8000
 _TWO_MIB = 0x200000
 
-# How far above the hair the cartridge's photographs start: a row or two of 48.
-_HEADROOM = 0.03
-# The square's side as a share of the subject's height: the head about as wide
-# as the cartridge's photographs have it.
-_SCALE = 0.68
 # A team colour (13-15) is taken only when it is this many times closer than
 # the nearest skin tone, so a highlight on a forehead stays skin and a jersey
 # takes the team's colour.
@@ -68,9 +63,6 @@ _TEAM_COLOUR_BIAS = 2
 
 # Head shots fetched at a time, in rank order: at most this many past the room.
 _BATCH = 32
-# A head shot whose most saturated opaque pixel is below this is grey all over:
-# the NHL API's silhouette for a player without a photo (0; real ones 208+).
-_GREY = 16
 
 
 def _off(address: int) -> int:
@@ -113,28 +105,10 @@ def palette(rom: bytes | bytearray, team: int) -> list[tuple[int, int, int]]:
 
 
 def headshot_portrait(png: bytes) -> Image.Image | None:
-    """A provider head shot cropped and scaled to a 48x48 portrait, or None
-    for a grey one (the NHL API's silhouette for a player without a photo),
-    which would draw as a blank skin-coloured head.
-
-    A square centred on the head (the opaque columns in the top third of the
-    subject, or the whole picture when it has no transparency), the hair a
-    row or two from the top as on the cartridge's photographs.
-    """
-    from PIL import Image
-
-    picture = Image.open(io.BytesIO(png)).convert("RGBA")
-    alpha = picture.getchannel("A")
-    saturation = picture.convert("RGB").convert("HSV").getchannel("S")
-    if not any(saturation.histogram(mask=alpha)[_GREY:]):
-        return None
-    left, top, right, bottom = alpha.getbbox() or (0, 0, *picture.size)
-    head = alpha.crop((left, top, right, top + max(1, (bottom - top) // 3))).getbbox()
-    centre = left + ((head[0] + head[2]) // 2 if head else (right - left) // 2)
-    side = max(1, round((bottom - top) * _SCALE))
-    x0, y0 = centre - side // 2, top - round(side * _HEADROOM)
-    square = picture.crop((x0, y0, x0 + side, y0 + side))
-    return square.resize((SIDE, SIDE), Image.Resampling.LANCZOS)
+    """A provider head shot as a 48x48 portrait (`core.headshots.portrait`), or
+    None for the NHL API's grey silhouette, which would draw as a blank
+    skin-coloured head."""
+    return portrait(png, SIDE)
 
 
 def encode(image: Image.Image, colours: Sequence[tuple[int, int, int]]) -> bytes:
