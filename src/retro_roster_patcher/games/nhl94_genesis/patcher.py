@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import importlib.util
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
+from ...core.concurrency import parallel_map
 from ...core.errors import ApiError, MappingError, RomError, as_rom_error
+from ...core.headshots import MEASURE_CHUNK, load_headshot, portrait
 from ...core.models import (
     MappedRosters,
     PartialFn,
@@ -22,10 +26,10 @@ from ...sports import _http
 from ...sports.espn import EspnClient
 from ...sports.models import League, LeagueData, Player, TeamRoster
 from ...sports.nhl import NhlApiClient
-from . import screens
+from . import portraits, screens
 from .models import NHL94_GEN_TEAM_ORDER, TEAM_COUNT, NHL94GenPlayerRecord
 from .rom_reader import NHL94GenesisRomReader
-from .rom_writer import NHL94GenesisRomWriter
+from .rom_writer import GROWN_SIZE, NHL94GenesisRomWriter
 from .stat_mapper import NHL94GenStatMapper
 
 # Two goalies, four forward lines plus two spares, seven defencemen. A selection
@@ -69,6 +73,10 @@ class NHL94GenesisPatcher(Patcher):
     #: Screen art `patch(images={name: png})` can replace; `export_images`
     #: writes the cartridge's current art for each. See `screens.SLOTS`.
     image_slots: tuple[str, ...] = screens.IMAGE_SLOT_NAMES
+    #: `patch` draws each written player's card (Game Setup, Matchups, Player
+    #: Cards) from his head shot unless `looks=False` (then the game's drawing
+    #: for his role and hand, with no download). See `portraits`.
+    supports_looks: bool = True
 
     def __init__(
         self,
@@ -86,6 +94,7 @@ class NHL94GenesisPatcher(Patcher):
             on_partial=on_partial,
         )
         self.mapper = NHL94GenStatMapper()
+        self._transport = transport
         # `Any`: the two clients take different arguments for squad and leaders, so
         # no single type describes both.
         if self.provider == "nhl":
@@ -249,6 +258,59 @@ class NHL94GenesisPatcher(Patcher):
         with as_rom_error(rom_path):
             return screens.export(Path(rom_path).read_bytes(), Path(out_dir))
 
+    def _draw_cards(
+        self,
+        writer: NHL94GenesisRomWriter,
+        drawn: Mapping[int, Sequence[NHL94GenPlayerRecord]],
+        *,
+        looks: bool,
+    ) -> None:
+        """Each written player's card (`portraits`): a photo from his head
+        shot, else the game's drawing for his role and hand; `looks=False`
+        gives every one the drawing, with no download. Left alone, with a
+        status line, on an image whose card table is not the cartridge's."""
+        data = writer.data
+        if data is None or not drawn:
+            return
+        if len(data) > GROWN_SIZE or not portraits.table_ok(data):
+            self.status("Player cards kept: not the retail cartridge's layout")
+            return
+        teams = {
+            slot: [(p.is_goalie, p.handedness, p.photo_url if looks else "") for p in players]
+            for slot, players in drawn.items()
+        }
+        load = None
+        if any(url for players in teams.values() for *_, url in players):
+            if importlib.util.find_spec("PIL") is None:
+                self.status("Player cards: Pillow is not installed; the game's drawings instead")
+            else:
+                load = self._load_portraits
+        lines = {}
+        for slot in teams:
+            at = (writer.reader.get_team_section_offsets(slot) or {}).get("lines")
+            lines[slot] = bytes(data[at : at + 8]) if at is not None else b""
+        photos, drawings = portraits.write(data, teams, lines, load)
+        self.status(f"Player cards: {photos} photos, {drawings} drawings")
+
+    def _load_portraits(self, urls: list[str]) -> list[Any]:
+        """Each head shot as a 48x48 portrait, None where it cannot be had; a
+        status line per chunk, for the app's stall watchdog."""
+        self.status("Loading head shots...")
+        out: list[Any] = []
+        for at in range(0, len(urls), MEASURE_CHUNK):
+            out += parallel_map(self._portrait, urls[at : at + MEASURE_CHUNK])
+            self.status(f"Head shots {min(at + MEASURE_CHUNK, len(urls))}/{len(urls)}...")
+        return out
+
+    def _portrait(self, url: str) -> Any:
+        png = load_headshot(self.cache_dir, url, self._transport)
+        if not png:
+            return None
+        try:
+            return portrait(png, portraits.SIDE)
+        except Exception:  # noqa: BLE001 - Pillow's errors (a decompression bomb among them) share no base
+            return None
+
     def patch(
         self,
         *,
@@ -283,6 +345,7 @@ class NHL94GenesisPatcher(Patcher):
 
         teams_patched = 0
         players_patched = 0
+        drawn: dict[int, list[NHL94GenPlayerRecord]] = {}
         for i, slot in enumerate(targets):
             if on_progress is not None:
                 on_progress(i / len(targets), f"Writing {NHL94_GEN_TEAM_ORDER[slot]}...")
@@ -304,6 +367,9 @@ class NHL94GenesisPatcher(Patcher):
                 ) from exc
             teams_patched += 1
             players_patched += written
+            drawn[slot] = players[:written]
+
+        self._draw_cards(writer, drawn, looks=bool(options.get("looks", True)))
 
         if pictures and writer.data is not None:
             self.status("Drawing screen art...")

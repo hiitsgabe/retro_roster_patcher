@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from retro_roster_patcher.games.nhl94_genesis import portraits
 from retro_roster_patcher.games.nhl94_genesis.patcher import NHL94GenesisPatcher
 from retro_roster_patcher.games.nhl94_genesis.rom_reader import NHL94GenesisRomReader
 from retro_roster_patcher.sports.models import League, LeagueData, Player, Team, TeamRoster
@@ -47,7 +48,9 @@ def _patch(
     **options,
 ) -> Path:
     """Patch `source` (the cartridge by default) into `tmp_path / name`."""
-    patcher = NHL94GenesisPatcher(tmp_path / "cache", provider="nhl")
+    patcher = NHL94GenesisPatcher(
+        tmp_path / "cache", provider="nhl", transport=options.pop("transport", None)
+    )
     data = LeagueData(
         league=League(id=0, name="NHL", country="USA", country_code="US", logo_url="", season=2025),
         teams=[
@@ -60,6 +63,41 @@ def _patch(
         rom_path=source or _rom(), output_path=out, rosters=patcher.map_rosters(data), **options
     )
     return out
+
+
+@pytest.mark.real_rom
+@real_rom
+def test_each_written_player_gets_his_card_and_the_other_teams_keep_theirs(tmp_path):
+    pytest.importorskip("PIL")
+    from tests.fixtures.synthetic_headshot import headshot
+
+    cartridge = _rom().read_bytes()
+    assert portraits.table_ok(cartridge)
+    squad = _squad("LAK")
+    for player in squad:
+        player.photo_url = f"https://example.test/{player.id}.png"
+    out = _patch(
+        tmp_path,
+        {"LAK": squad},
+        transport=lambda url, headers, timeout: headshot((220, 170, 140)),
+    )
+    rom = out.read_bytes()
+    assert portraits.table_ok(rom)
+    table = portraits.TABLE
+    at = int.from_bytes(rom[table + 4 * LA : table + 4 * LA + 4], "big")
+    found = {}
+    while card := int.from_bytes(rom[at : at + 4], "big"):
+        found[int.from_bytes(rom[at + 4 : at + 6], "big")] = card
+        at += 6
+    # The lookup at $FAE26 finds a card of his own for every one of the 20.
+    assert sorted(found) == list(range(20))
+    assert all(card in portraits.REGION for card in found.values())
+    # Montreal and the two All-Star teams keep the cartridge's lists.
+    for team in (11, 26, 27):
+        assert (
+            rom[table + 4 * team : table + 4 * team + 4]
+            == cartridge[table + 4 * team : table + 4 * team + 4]
+        )
 
 
 @pytest.mark.real_rom

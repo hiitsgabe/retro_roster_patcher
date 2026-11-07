@@ -767,7 +767,13 @@ def test_patch_forwards_status_messages(tmp_path):
 
     p.patch(rom_path=rom, output_path=tmp_path / "out.bin", rosters=mapped)
 
-    assert seen == ["Validating ROM...", "Initializing ROM writer...", "Saving patched ROM..."]
+    # The fixture has no card table, so the cards are left alone and said so.
+    assert seen == [
+        "Validating ROM...",
+        "Initializing ROM writer...",
+        "Player cards kept: not the retail cartridge's layout",
+        "Saving patched ROM...",
+    ]
 
 
 def test_a_slot_mapped_to_an_empty_squad_leaves_its_region_untouched(tmp_path, patcher):

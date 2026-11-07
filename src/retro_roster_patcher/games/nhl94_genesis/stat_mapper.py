@@ -134,6 +134,7 @@ class NHL94GenStatMapper:
             handedness=hand,
             is_goalie=is_goalie,
             attributes=attrs,
+            photo_url=player.photo_url,
         )
 
     def _map_stats(self, stats: dict, pos: str, is_goalie: bool) -> NHL94GenPlayerAttributes:

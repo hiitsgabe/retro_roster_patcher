@@ -126,6 +126,8 @@ class NHL94GenPlayerRecord:
     handedness: int = 0  # 0=L (even nibble), 1=R (odd nibble)
     is_goalie: bool = False
     attributes: NHL94GenPlayerAttributes = field(default_factory=NHL94GenPlayerAttributes)
+    #: The head shot `portraits` draws his card from; "" for the game's drawing.
+    photo_url: str = ""
 
 
 @dataclass
