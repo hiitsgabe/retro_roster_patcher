@@ -613,6 +613,44 @@ def test_the_eleven_are_in_the_lines_of_the_shape_written_not_iss_2000s(
         assert team.players[6].skills == {s: spread["MF"][s][2] for s in R.SKILL_NAMES}
 
 
+def _back_five() -> TeamRoster:
+    """A 5-4-1 club as a fetch leaves one: its formation, a role on each player and the lineup it
+    played (ESPN's codes, the keeper first and then the five defenders, the four midfielders and
+    the striker), then a bench of a keeper, a defender, a midfielder and a striker."""
+    codes = "G LB CD-L CD CD-R RB LM CM-L CM-R RM F".split()
+    roles = "GK LB CB CB CB RB LM CM CM RM ST".split()
+    roster = older_roster(codes, roles, formation="5-4-1", shape="5-4-1")
+    roster.extra["formation"] = "5-4-1"
+    for player in roster.players:
+        player.role = player.name.rstrip("0123456789")
+    return roster
+
+
+@pytest.mark.parametrize("order_as_given", [False, True], ids=["automatic", "suggested"])
+def test_a_back_five_keeps_its_defenders_in_defence_and_its_midfielders_in_midfield(
+    tmp_path, order_as_given
+):
+    # The mapper fills the eleven's lines for the shape this cartridge writes, so the cut by index
+    # (the keeper, five defenders, four midfielders, a striker) finds each player in his own line.
+    # Filled for ISS 2000's nearest shape instead, the fifth defender is spilled to the attack, the
+    # left midfielder takes his place in the back five and the striker goes to midfield.
+    roster = _back_five()
+    if order_as_given:  # the editor hands the suggested order back
+        roster.players = get_patcher("iss-deluxe-snes")(tmp_path).suggest_squad_order(roster)
+    team = _mapped(tmp_path, roster, given=order_as_given)
+    xi = team.players[:11]
+    assert [p.group for p in xi] == ["GK"] + ["DF"] * 5 + ["MF"] * 4 + ["FW"]
+    assert [p.group for p in xi] == [GROUP[p.role] for p in xi]
+    image = cartridge()
+    write_team(image, BRAZIL, team)
+    assert R.FORMATIONS[image[R.formation_at(image, BRAZIL)]] == "5-4-1"
+    names, _ = written(image, BRAZIL)
+    role = {p.name: p.role for p in team.players}
+    assert [LINE_NAMES[line] for line in R.slot_lines(image, BRAZIL)] == [
+        GROUP[role[name]] for name in names[:11]
+    ]
+
+
 def _older_roster(
     formation: str = "4-4-2", codes: str = "G CD-L CD-R RB LB DM CM-R LM RM CF-L CF-R"
 ) -> TeamRoster:

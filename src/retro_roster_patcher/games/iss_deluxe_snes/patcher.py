@@ -11,14 +11,15 @@ of Brazil v England.
 A club with a formation (`extra["formation"]`, a shape such as "4-3-3", else its
 lineup's shape: `team_formation`) is written the cartridge's formation nearest it
 (`formations`): the team's record becomes that formation's default and the ten
-outfielders, in the order the mapper gave them (with `order_as_given`, the team
-sheet's), are cut into its lines by index; the cut also gives each of the eleven
-the group whose spread rates his skills. Without a formation the slot keeps its
-own record and the players go to the lines of their groups. Either way a place is
-the record's index and its line comes from the record's flags (never the skill
-record's byte 5, the shirt number), and each line seats its players on its places
-by role: the sides across the pitch, the deeper role deeper. A player without a
-role (a roster fetched before roles) has the one his lineup code reads as.
+outfielders, in the order the mapper gave them (its lines filled for that
+formation; with `order_as_given`, the team sheet's), are cut into its lines by
+index; the cut also gives each of the eleven the group whose spread rates his
+skills. Without a formation the slot keeps its own record and the players go to
+the lines of their groups. Either way a place is the record's index and its line
+comes from the record's flags (never the skill record's byte 5, the shirt number),
+and each line seats its players on its places by role: the sides across the pitch,
+the deeper role deeper. A player without a role (a roster fetched before roles)
+has the one his lineup code reads as.
 """
 
 from __future__ import annotations
@@ -49,7 +50,7 @@ from ...core.text import to_ascii
 from ...formats.snes import fix_checksum
 from ...sports import _http
 from ...sports.espn import EspnClient
-from ...sports.lineup import lineup_role, nearest_shape, seat_line, team_formation
+from ...sports.lineup import lineup_role, nearest_shape, parse_shape, seat_line, team_formation
 from ...sports.models import LeagueData, Player, TeamRoster
 from ..iss2000_n64.mapper import GROUPS, N64StatMapper, _place, group_of, parse_formation
 from ..iss2000_n64.patcher import NATIONAL_ALIASES, NATIONAL_LEAGUE
@@ -261,8 +262,17 @@ class ISSDeluxePatcher(Patcher):
 
     # --- mapping ---------------------------------------------------------------
 
+    def _shape(self, roster: TeamRoster) -> tuple[int, int, int] | None:
+        """The players per line (defenders, midfielders, forwards) of the formation this cartridge
+        writes for `roster`, the nearest it offers to `team_formation`; None for a roster with no
+        formation. The mapper fills the eleven's lines for it, so that `_cut_groups` finds each
+        player in his own line: filled for ISS 2000's nearest shape, a 5-4-1 would spill its
+        fifth defender to the attack."""
+        formation = team_formation(roster)
+        return parse_shape(nearest_shape(formation, self.formations)) if formation else None
+
     def suggest_squad_order(self, team_roster: TeamRoster) -> list[Player]:
-        squad, _ = self.mapper.select_22(team_roster)
+        squad, _ = self.mapper.select_22(team_roster, self._shape(team_roster))
         return self._append_unused(squad, team_roster.players)
 
     def map_rosters(
@@ -306,7 +316,7 @@ class ISSDeluxePatcher(Patcher):
                 list(roster.players), formation if by_formation else None
             )
         else:
-            squad, _ = self.mapper.select_22(roster)
+            squad, _ = self.mapper.select_22(roster, self._shape(roster))
         lineup = extra.get("lineup") or {}
         tags = {
             int(e["id"]): str(e.get("position", ""))
@@ -315,7 +325,7 @@ class ISSDeluxePatcher(Patcher):
         }
         squad = squad[: R.PLAYERS]
         # The group of each of the eleven under a formation: its line by index over the shape
-        # written, not the line the mapper gave (ISS 2000's nearest shape).
+        # written, not the line `given_22` gives (ISS 2000's nearest shape).
         cut = _cut_groups(formation, self.formations) if by_formation else []
         # `iss-snes`'s rule: the initial and surname ("I.Gomes", as the
         # cartridge's own J.Platt) when it fits, else the surname; told apart
