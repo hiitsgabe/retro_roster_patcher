@@ -266,8 +266,9 @@ class ISSDeluxePatcher(Patcher):
         """The players per line (defenders, midfielders, forwards) of the formation this cartridge
         writes for `roster`, the nearest it offers to `team_formation`; None for a roster with no
         formation. The mapper fills the eleven's lines for it, so that `_cut_groups` finds each
-        player in his own line: filled for ISS 2000's nearest shape, a 5-4-1 would spill its
-        fifth defender to the attack."""
+        player in his own line: filled for ISS 2000's nearest shape instead, a 5-4-1 (a 5-3-2
+        there) would spill its right midfielder to the attack and cut its striker into
+        midfield."""
         formation = team_formation(roster)
         return parse_shape(nearest_shape(formation, self.formations)) if formation else None
 
