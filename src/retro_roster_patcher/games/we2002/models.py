@@ -93,6 +93,13 @@ class WETeamRecord:
     jersey_data: bytes | None = None  # Raw 64-byte jersey to copy from ROM
     flag_style: int | None = None  # Flag/emblem style byte (0-60); None = default stripes
     flag_palette: list[tuple[int, int, int]] | None = None  # 16 RGB colors; None = auto
+    # A national slot's 32-byte colour entry as the disc stores it, written with `flag_style`
+    # in place of `flag_palette` (a nation's own flag, `nations.flag`).
+    flag_clut: bytes | None = None
+    # A national team (the nation fill): written to the national table only, never to the
+    # Master League club of the slot's number. `nation` is its own slot on the disc, if any.
+    national: bool = False
+    nation: int | None = None
     # Where a logo for the flag slots comes from; `patch` fills `logo_png`.
     team_id: int | None = None
     logo_url: str = ""

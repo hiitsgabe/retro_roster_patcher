@@ -1,0 +1,278 @@
+"""The nation fill (#5): today's top national teams in the national slots a league leaves.
+
+A nation goes into the national table only (the Master League club of the slot's number is left
+alone), wears its own flag from the disc (`nations`, packaged) wherever it lands, and keeps its
+cartridge look untouched when it is on its own slot and nothing has rewritten it. The real-disc
+tests read RETRO_ROSTER_TEST_ROMS/we2002.bin (Track 1).
+"""
+
+from __future__ import annotations
+
+import io
+import os
+from pathlib import Path
+
+import pytest
+
+from retro_roster_patcher.core.models import MappedRosters, SlotMapping
+from retro_roster_patcher.games.we2002 import nations
+from retro_roster_patcher.games.we2002 import patcher as patcher_module
+from retro_roster_patcher.games.we2002 import rom_writer as W
+from retro_roster_patcher.games.we2002.flag_atlas import read_styles
+from retro_roster_patcher.games.we2002.models import WEPlayerRecord, WETeamRecord
+from retro_roster_patcher.games.we2002.patcher import WE2002Patcher
+from retro_roster_patcher.sports.models import League, LeagueData, Player, Team, TeamRoster
+from retro_roster_patcher.sports.nationals import NATIONAL_LEAGUE
+
+
+def _nation(team_id, name, code, players=23):
+    squad = [
+        Player(id=team_id * 100 + i, name=f"P{i}", last_name=f"N{team_id}x{i}", position=pos)
+        for i, pos in enumerate(
+            ["Goalkeeper"] + ["Defender"] * 8 + ["Midfielder"] * 8 + ["Forward"] * 6
+        )
+    ][:players]
+    return TeamRoster(team=Team(id=team_id, name=name, code=code), players=squad)
+
+
+def _nations(*rosters):
+    return LeagueData(league=League(id=NATIONAL_LEAGUE, name="Friendlies"), teams=list(rosters))
+
+
+def test_the_fill_takes_the_54_nations_but_the_slots_without_colours():
+    patcher = WE2002Patcher(cache_dir="unused")
+    assert patcher.supports_nation_fill
+    assert nations.NO_COLOURS == (36, 39, 47)
+    slots = patcher.fill_slots(Path("unused"))
+    assert slots == [s for s in range(54) if s not in (36, 39, 47)]
+
+
+@pytest.mark.parametrize(
+    ("name", "slot"),
+    [("Denmark", 13), ("Republic of Ireland", 0), ("Türkiye", 27), ("United States", 37),
+     ("South Korea", 49), ("Czechia", 11), ("Serbia", 23), ("Australia", 53), ("Canada", None)],
+)  # fmt: skip
+def test_a_nation_s_own_slot_is_its_name_on_the_disc(name, slot):
+    patcher = WE2002Patcher(cache_dir="unused")
+    assert patcher.own_national_slot(Path("unused"), Team(id=1, name=name)) == slot
+
+
+def test_a_nation_is_mapped_national_only_with_a_name_its_slot_can_show(tmp_path):
+    lines = []
+    patcher = WE2002Patcher(cache_dir=tmp_path, on_status=lines.append)
+    data = _nations(
+        _nation(1, "Spain", "ESP"),
+        _nation(2, "Netherlands", "NED"),
+        _nation(3, "Saudi Arabia", "KSA", players=0),
+        _nation(4, "Canada", "CAN"),
+    )
+    mapped = patcher.map_rosters(
+        data,
+        [SlotMapping(5, 1, "Spain"), SlotMapping(20, 2, "Netherlands"), SlotMapping(21, 3, "KSA"),
+         SlotMapping(46, 4, "Canada")],
+    )  # fmt: skip
+    assert sorted(mapped.teams) == [5, 20, 46]
+    spain, dutch, canada = mapped.teams[5], mapped.teams[20], mapped.teams[46]
+    assert spain.national and dutch.national and canada.national
+    assert (spain.nation, dutch.nation, canada.nation) == (5, 8, None)
+    # The grid shows 5 characters at slots 5 and 20, 7 at slot 46.
+    assert (spain.name, dutch.name, canada.name) == ("Spain", "NED", "Canada")
+    assert dutch.short_name == "NED"
+    # The grid's kanji table titlecases a name, but not a code.
+    assert W._encode_kanji_name("NED", 6)[:6] == "ＮＥＤ".encode("shift_jis")
+    assert any("Saudi Arabia" in line for line in lines)
+
+
+def test_a_club_mapping_is_not_national(tmp_path):
+    patcher = WE2002Patcher(cache_dir=tmp_path)
+    data = LeagueData(league=League(id=2001, name="PL"), teams=[_nation(7, "Liverpool", "LIV")])
+    record = patcher.map_rosters(data, [SlotMapping(13, 7, "Liverpool")]).teams[13]
+    assert not record.national and record.nation is None and record.name == "Liverpool"
+
+
+def test_a_nation_below_32_leaves_the_master_league_club_of_its_number(tmp_path, monkeypatch):
+    calls = []
+
+    class Writer:
+        def __init__(self, rom_path, output_path):
+            Path(output_path).write_bytes(b"")
+
+        def relink_clubs(self, rewritten, mapped):
+            calls.append(("relink", rewritten, mapped))
+
+        def write_team(self, slot, team, players=None, include_flag=True):
+            calls.append(("ml", slot))
+
+        def write_nat_team(self, slot, team, players=None, include_flag=True, kits=True):
+            calls.append(("nat", slot, include_flag, kits))
+            return len(players or [])
+
+        def flush_tex_patches(self):
+            pass
+
+        def queue_logo(self, style, images, stadium=None):
+            calls.append(("queue", style))
+
+        def flush_logo_patches(self):
+            from retro_roster_patcher.games.we2002.flag_atlas import AtlasReport
+
+            return AtlasReport()
+
+        def finalize(self):
+            pass
+
+    monkeypatch.setattr(patcher_module, "RomWriter", Writer)
+    monkeypatch.setattr(patcher_module, "apply_ppf", lambda *args, **kwargs: "")
+    rom = tmp_path / "rom.bin"
+    with rom.open("wb") as handle:
+        handle.write(b"\x00" + b"\xff" * 10 + b"\x00")
+        handle.truncate(100 * 1024 * 1024)
+    club = WETeamRecord(name="Club", short_name="CLB", players=[WEPlayerRecord("A", "B", 2, 1)])
+    nation = WETeamRecord(name="DEN", short_name="DEN", national=True, nation=13, players=[])
+    WE2002Patcher(cache_dir=tmp_path / "cache").patch(
+        rom_path=rom,
+        output_path=tmp_path / "out.bin",
+        rosters=MappedRosters(game_id="we2002", teams={0: club, 20: nation}),
+        kits=False,
+        logos=False,
+        looks=False,
+    )
+    assert ("relink", {0, 20}, {0}) in calls
+    assert ("ml", 0) in calls and ("ml", 20) not in calls
+    # Denmark away from home wears its disc flag: style 9, whose bitmaps are queued.
+    assert ("nat", 20, True, True) in calls and ("queue", nations.flag(13).style) in calls
+
+
+# --- the retail disc -----------------------------------------------------------------------
+
+
+def _disc():
+    root = os.environ.get("RETRO_ROSTER_TEST_ROMS")
+    if not root:
+        pytest.skip("set RETRO_ROSTER_TEST_ROMS to a directory holding we2002.bin")
+    return Path(root) / "we2002.bin"
+
+
+@pytest.mark.real_rom
+def test_the_package_is_the_disc_s_flags():
+    import json
+    import zlib
+
+    built = json.loads(zlib.decompress(nations.build(str(_disc()))))
+    assert built == nations._doc()
+
+
+def _png(rgb):
+    from PIL import Image, ImageDraw
+
+    im = Image.new("RGBA", (100, 100), (0, 0, 0, 0))
+    ImageDraw.Draw(im).ellipse((5, 5, 95, 95), fill=(*rgb, 255))
+    buf = io.BytesIO()
+    im.save(buf, "PNG")
+    return buf.getvalue()
+
+
+def _clubs(count):
+    return {
+        slot: WETeamRecord(
+            name=f"Club {slot}",
+            short_name="CLB",
+            team_id=900 + slot,
+            players=[WEPlayerRecord(f"C{slot}x{i}", "F", 2, i + 1) for i in range(23)],
+        )
+        for slot in range(count)
+    }
+
+
+def _patch(src, out, teams, assets=None, logos=True):
+    WE2002Patcher(cache_dir=out.parent / "cache", assets_dir=assets).patch(
+        rom_path=src,
+        output_path=out,
+        rosters=MappedRosters(game_id="we2002", teams=teams),
+        kits=False,
+        logos=logos,
+        looks=False,
+    )
+
+
+def _flag(image, slot):
+    with open(image, "rb") as f:
+        return nations.read_flag(f, slot)
+
+
+def _read(image, chunks):
+    with open(image, "rb") as f:
+        out = b""
+        for offset, size in chunks:
+            f.seek(offset)
+            out += f.read(size)
+        return out
+
+
+@pytest.mark.real_rom
+def test_nations_wear_their_own_flags_over_a_plain_patch_and_a_repatch_changes_nothing(
+    tmp_path, monkeypatch
+):
+    pytest.importorskip("PIL")
+    monkeypatch.setattr(patcher_module, "apply_ppf", lambda *args, **kwargs: "")
+    disc = _disc()
+    assets = tmp_path / "assets"
+    (assets / "logos").mkdir(parents=True)
+    for slot in range(20):
+        (assets / "logos" / f"{900 + slot}.png").write_bytes(_png((40 + 10 * slot, 0, 200)))
+
+    # A plain league patch first: slots 0-19 get club logos, which take the styles nobody
+    # untouched draws (Scotland's style 2 among them).
+    plain = tmp_path / "plain.bin"
+    _patch(disc, plain, _clubs(20), assets)
+    assert _flag(plain, 1) != nations.flag(1)
+    assert read_styles(str(plain), [2])[2].big != nations.bitmaps(2).big
+
+    # Then 12 clubs and the fill. Scotland, back on its own slot 1, is no longer untouched;
+    # Spain's slot 5 is a club's, so it moves to 20; Croatia is home and untouched; Canada, which
+    # the disc lacks, draws its ESPN flag.
+    patcher = WE2002Patcher(cache_dir=tmp_path / "cache", assets_dir=assets)
+    clubs = {s: r for s, r in _clubs(12).items() if s != 1}
+    data = _nations(
+        _nation(1, "Scotland", "SCO"),
+        _nation(2, "Spain", "ESP"),
+        _nation(3, "Croatia", "CRO"),
+        _nation(4, "Canada", "CAN"),
+    )
+    (assets / "logos" / "4.png").write_bytes(_png((255, 0, 0)))
+    mapping = [SlotMapping(1, 1, "Scotland"), SlotMapping(20, 2, "Spain"),
+               SlotMapping(22, 3, "Croatia"), SlotMapping(21, 4, "Canada")]  # fmt: skip
+    mapped = MappedRosters(game_id="we2002", teams=clubs).merge(patcher.map_rosters(data, mapping))
+    filled = tmp_path / "filled.bin"
+    patcher.patch(rom_path=plain, output_path=filled, rosters=mapped, kits=False, looks=False)
+
+    for slot, nation in ((1, 1), (20, 5), (22, 22)):
+        assert _flag(filled, slot) == nations.flag(nation), slot
+    assert read_styles(str(filled), [2])[2] == nations.bitmaps(2)
+    assert read_styles(str(filled), [nations.flag(5).style])[nations.flag(5).style] == (
+        nations.bitmaps(nations.flag(5).style)
+    )
+    # Croatia, untouched at home, keeps its disc flag but gets its name: the translation the
+    # patch applies renames some nations' slots (Iran's to "India").
+    assert _read(filled, W._nat_kanji_chunks(22)).startswith("ＣＲＯ".encode("shift_jis"))
+    # Spain at 20 is national only: Master League club 20 (LOMBARDIA) keeps its name.
+    assert _read(filled, W._nat_kanji_chunks(20)) != _read(disc, W._nat_kanji_chunks(20))
+    lombardia = [(W._ml_kanji_offset(20), W._LUN_NOMIK[63 + 20] * 2)]
+    assert _read(filled, lombardia) == _read(disc, lombardia)
+    # Canada drew its flag from the ESPN picture, through a style no nation here wears.
+    assert _flag(filled, 21).style not in {nations.flag(n).style for n in (1, 5, 22)}
+    # No club outside the league (Master League club 1 is one now) fields a player of a slot the
+    # patch wrote.
+    for club in [1, *range(12, 32)]:
+        links = _read(filled, W._link_chunks(club))
+        hits = [(links[i], links[i + 1]) for i in range(0, 46, 2)]
+        assert not [h for h in hits if h[1] <= 22 and (h[0] < 12 or h[0] in (20, 21, 22))], club
+
+    again = tmp_path / "again.bin"
+    patcher.patch(rom_path=filled, output_path=again, rosters=mapped, kits=False, looks=False)
+    for slot in (1, 20, 21, 22):
+        assert _flag(again, slot) == _flag(filled, slot), slot
+    styles = [_flag(filled, s).style for s in (1, 20, 21, 22)]
+    assert read_styles(str(again), styles) == read_styles(str(filled), styles)
+    for club in range(32):
+        assert _read(again, W._link_chunks(club)) == _read(filled, W._link_chunks(club))

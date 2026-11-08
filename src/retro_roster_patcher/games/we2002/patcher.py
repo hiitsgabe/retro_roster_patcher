@@ -30,6 +30,7 @@ import copy
 import hashlib
 import shutil
 import struct
+from collections.abc import Collection
 from pathlib import Path
 from typing import Any
 
@@ -49,11 +50,13 @@ from ...core.models import (
 )
 from ...core.patcher import Patcher
 from ...core.registry import register
+from ...core.text import to_ascii
 from ...sports import _http
 from ...sports.espn import EspnClient
 from ...sports.lineup import apply_lineup, team_formation
 from ...sports.models import LeagueData, Team, TeamRoster
-from . import looks
+from ...sports.nationals import NATIONAL_LEAGUE, cartridge_slot, cartridge_slot_map
+from . import looks, nations
 from .flag_atlas import VALID_STYLES, LogoImages, assign_styles
 from .jersey_tex import JERSEY_TEMPLATES, apply_choice, is_page_png, page_png, template_preview
 from .logo_render import render_logos
@@ -61,6 +64,7 @@ from .models import WETeamRecord
 from .ppf import PPFError, apply_ppf
 from .rom_reader import RomReader
 from .rom_writer import (
+    _LUN_NOMIK,
     _ML_COLOR_OFFSETS,
     _OFS_BANDIERE_FORMA1,
     _TEX_JERSEY_COLORS,
@@ -77,6 +81,8 @@ from .translations.we2002 import LANGUAGE_CODES, LANGUAGES, ensure_ppf
 # 32..62 are national-only, and a league of up to 63 teams fits.
 MAX_ML_SLOTS = 32
 MAX_NAT_SLOTS = 63
+#: The disc's spelling of a nation -> ESPN's, for `national_slot_map` and the fill.
+NATIONAL_ALIASES = nations.ALIASES
 
 
 def _parse_hex_colour(value: str) -> tuple[int, int, int] | None:
@@ -151,6 +157,9 @@ class WE2002Patcher(Patcher):
     #: takes the same record.
     writes_formation: bool = True
     formations: tuple[str, ...] = FORMATIONS
+    #: `fill_slots`: the 54 nations' national slots (all-star and classic sides 54-62 are
+    #: hidden on the grid), a nation into the national table only, in its own flag.
+    supports_nation_fill: bool = True
 
     def __init__(
         self,
@@ -285,6 +294,16 @@ class WE2002Patcher(Patcher):
             on_progress(1.0, "Complete")
         return LeagueData(league=league, teams=rosters)
 
+    def national_slot_map(self, rom_path: Path, data: LeagueData) -> list[SlotMapping]:
+        """Pair the disc's 54 nations with `data`'s national teams by name
+        (`NATIONAL_ALIASES` for the disc's spellings)."""
+        return cartridge_slot_map(nations.NAMES, NATIONAL_ALIASES, data)
+
+    def fill_slots(self, rom_path: Path) -> list[int]:
+        """National slots 0-53 but those without a colour entry (`nations.NO_COLOURS`), where a
+        nation's flag would draw through the slot's own colours."""
+        return [s for s in range(len(nations.NAMES)) if s not in nations.NO_COLOURS]
+
     def suggest_squad_order(self, team_roster):
         ordered = self.mapper._select_best_23(
             team_roster.players,
@@ -307,6 +326,7 @@ class WE2002Patcher(Patcher):
         entries = slot_mapping or []
 
         by_id = {roster.team.id: roster for roster in data.teams}
+        national = data.league.id == NATIONAL_LEAGUE
         teams: dict[int, WETeamRecord] = {}
         for entry in entries:
             # The writers return without writing for a slot outside this range,
@@ -321,6 +341,9 @@ class WE2002Patcher(Patcher):
                     f"Slot {entry.slot_index} maps to team {entry.team_id}, "
                     f"which is not in the fetched league data"
                 )
+            if national and not roster.players:
+                self.status(f"Skipped {roster.team.name}: ESPN has no squad for it")
+                continue
             # The whole league, not just this team: percentiles are normalised
             # league-wide.
             record = self.mapper.map_team_with_league_context(
@@ -339,6 +362,15 @@ class WE2002Patcher(Patcher):
             record.kit_third = record.kit_home
             record.team_id = roster.team.id
             record.logo_url = roster.team.logo_url
+            if national:
+                record.national = True
+                record.nation = cartridge_slot(nations.NAMES, NATIONAL_ALIASES, roster.team)
+                # The grid shows `_LUN_NOMIK - 1` characters: a longer name is the FIFA code.
+                name = to_ascii(roster.team.name)
+                code = roster.team.code.upper()
+                fits = len(name) < _LUN_NOMIK[entry.slot_index] or not code
+                record.name = name if fits else code
+                record.short_name = code or record.short_name
             teams[entry.slot_index] = record
         return MappedRosters(game_id=self.game_id, teams=teams)
 
@@ -408,19 +440,25 @@ class WE2002Patcher(Patcher):
             if kits is False:
                 writer.write_kits = False
 
-            # Logos go first: they decide each team's flag style and palette,
+            # Nations first: each wears its own flag, whose style no logo may take.
+            kept, dressed, avoid = self._nation_flags(rom_path, rosters, slots, writer)
+            logos_queued = len(avoid)
+            # Logos next: they decide each team's flag style and palette,
             # which the per-team writes below put into the ROM.
             blank_unused = bool(options.get("blank_unused", False))
-            logos_queued = 0
-            used_styles: set[int] = set()
+            used_styles: set[int] = set(avoid)
             if options.get("logos", True):
-                logos_queued, used_styles = self._prepare_logos(
-                    rom_path, rosters, slots, writer, blank_unused
+                queued, used = self._prepare_logos(
+                    rom_path, rosters, slots, writer, blank_unused, avoid, dressed
                 )
+                logos_queued += queued
+                used_styles |= used
 
+            # A nation fills the national slot only; its slot's Master League club is left.
+            clubs = [s for s in slots if s < MAX_ML_SLOTS and not rosters.teams[s].national]
             # Before the writes, which it reads the rewritten places' positions under: no
             # club outside the mapping keeps fielding a player of a slot written here.
-            writer.relink_clubs(set(slots), {slot for slot in slots if slot < MAX_ML_SLOTS})
+            writer.relink_clubs(set(slots), set(clubs))
 
             teams_patched = 0
             players_patched = 0
@@ -432,10 +470,17 @@ class WE2002Patcher(Patcher):
                 # The Master League club fields the national slot's 23 places
                 # (its links point there), so the two writers count the same
                 # squad: the national one is reported.
-                if slot < MAX_ML_SLOTS:
+                if slot in clubs:
                     writer.write_team(slot, record, players=record.players, include_flag=True)
+                # A nation home on an untouched slot keeps the disc's flag and kits. Not its
+                # names: the translation always rewrites those, some to other nations.
+                untouched = slot in kept
                 written = writer.write_nat_team(
-                    slot, record, players=record.players, include_flag=True
+                    slot,
+                    record,
+                    players=record.players,
+                    include_flag=not untouched,
+                    kits=not untouched,
                 )
                 # Unconditional: the writers write names, abbreviations, force
                 # bars, kit colours and flag before they look at `players`, so an
@@ -488,6 +533,40 @@ class WE2002Patcher(Patcher):
             looks.dress(dressed.teams[slot].players, faces)
         return dressed
 
+    def _nation_flags(
+        self, rom_path: Path, rosters: MappedRosters, slots: list[int], writer: Any
+    ) -> tuple[set[int], set[int], set[int]]:
+        """Dress each nation in its own flag from the disc (`nations`, packaged, so an
+        earlier patch's image gives it back too): its style and colour entry go on the
+        record, and the style's bitmaps are queued, which restores them where an
+        earlier patch drew a logo over them. A nation home on a slot that still wears
+        its disc flag keeps that flag and the slot's kits. A nation without a disc
+        flag of its own (one the disc lacks, or one of `nations.NO_COLOURS`) keeps its
+        ESPN picture for `_prepare_logos`. Returns (the slots whose flag and kits stay,
+        the slots dressed, the styles they wear)."""
+        candidates = {s: n for s in slots if (n := rosters.teams[s].nation) is not None}
+        if not candidates:
+            return set(), set(), set()
+        with open(rom_path, "rb") as f:
+            now = {s: nations.read_flag(f, s) for s in candidates}
+        kept: set[int] = set()
+        dressed: set[int] = set()
+        styles: set[int] = set()
+        for slot, nation in candidates.items():
+            record = rosters.teams[slot]
+            own = nations.flag(nation)
+            if slot == nation and now[slot] == own:
+                kept.add(slot)
+            elif own.clut is None:
+                continue
+            else:
+                record.flag_style, record.flag_clut = own.style, own.clut
+            dressed.add(slot)
+            styles.add(own.style)
+        for style in sorted(styles):
+            writer.queue_logo(style, nations.bitmaps(style))
+        return kept, dressed, styles
+
     def _prepare_logos(
         self,
         rom_path: Path,
@@ -495,6 +574,8 @@ class WE2002Patcher(Patcher):
         slots: list[int],
         writer: Any,
         blank_unused: bool = False,
+        avoid: Collection[int] = (),
+        skip: Collection[int] = (),
     ) -> tuple[int, set[int]]:
         """Give every mapped team with a logo a flag style of its own.
 
@@ -505,14 +586,15 @@ class WE2002Patcher(Patcher):
         status line. One team's bad logo costs that team its logo and nothing
         else. Master League slot 22 draws through slot 10's palette, so a logo
         there would take slot 10's colours: that slot keeps the striped flag.
-        Returns how many logos were queued.
+        The slots in `skip` (nations in their own flags) get none, and no logo takes
+        a style in `avoid` (those flags'). Returns how many logos were queued.
         """
         wanted = []
         for slot in slots:
             record = rosters.teams[slot]
-            if not (record.logo_url or self._logo_override(record)):
+            if slot in skip or not (record.logo_url or self._logo_override(record)):
                 continue
-            if slot < MAX_ML_SLOTS and slot not in _ML_COLOR_OFFSETS:
+            if slot < MAX_ML_SLOTS and not record.national and slot not in _ML_COLOR_OFFSETS:
                 self.status(
                     f"{record.name}: logo skipped, Master League slot {slot} has no "
                     f"palette of its own"
@@ -527,8 +609,15 @@ class WE2002Patcher(Patcher):
         if blank_unused:
             patched = set(range(MAX_NAT_SLOTS + MAX_ML_SLOTS))
         else:
-            patched = set(slots) | {MAX_NAT_SLOTS + s for s in slots if s < MAX_ML_SLOTS}
-        styles = assign_styles(forma, patched, wanted)
+            patched = set(slots) | {
+                MAX_NAT_SLOTS + s
+                for s in slots
+                if s < MAX_ML_SLOTS and not rosters.teams[s].national
+            }
+        # A nation draws a style nobody untouched uses, or none: a shared one would
+        # turn an untouched team's flag into that nation's.
+        nation_slots = [s for s in wanted if rosters.teams[s].national]
+        styles = assign_styles(forma, patched, wanted, avoid, nation_slots)
         queued = 0
         used: set[int] = set()
         for slot in wanted:

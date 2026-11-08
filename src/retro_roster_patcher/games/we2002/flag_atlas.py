@@ -459,7 +459,13 @@ def rebuild_data_file(parsed: DataFile, replacements: Mapping[int, bytes]) -> by
 # ---------------------------------------------------------------------------
 
 
-def assign_styles(forma: bytes, patched: Iterable[int], wanted: Iterable[int]) -> dict[int, int]:
+def assign_styles(
+    forma: bytes,
+    patched: Iterable[int],
+    wanted: Iterable[int],
+    avoid: Iterable[int] = (),
+    free_only: Iterable[int] = (),
+) -> dict[int, int]:
     """Give each wanted team a style of its own to draw its logo through.
 
     `forma` is the 95-byte style table (63 national entries, then 32 Master
@@ -468,22 +474,26 @@ def assign_styles(forma: bytes, patched: Iterable[int], wanted: Iterable[int]) -
     `63 + slot`. Styles nobody outside the patch uses go first, so a replaced
     bitmap is never seen under an untouched team's flag; when those run out, the
     styles with the fewest untouched users follow, and when every style is
-    taken the remaining slots get none.
+    taken the remaining slots get none. A style in `avoid` (a nation's own flag)
+    is never given, and a slot in `free_only` (a nation) gets a free style or none.
     """
-    patched = set(patched)
-    users: dict[int, set[int]] = {s: set() for s in VALID_STYLES}
+    patched, avoid = set(patched), set(avoid)
+    users: dict[int, set[int]] = {s: set() for s in VALID_STYLES if s not in avoid}
     for entry, style in enumerate(forma[:95]):
         if style in users:
             users[style].add(entry)
-    free = [s for s in VALID_STYLES if users[s] <= patched]
+    free = [s for s in users if users[s] <= patched]
     shared = sorted(
-        (s for s in VALID_STYLES if not users[s] <= patched),
+        (s for s in users if not users[s] <= patched),
         key=lambda s: (len(users[s] - patched), s),
     )
     order = free + shared
+    strict = set(free_only)
     out: dict[int, int] = {}
-    for slot, style in zip(sorted(set(wanted)), order, strict=False):
-        out[slot] = style
+    for slot in sorted(set(wanted)):
+        pick = next((s for s in (free if slot in strict else order) if s not in out.values()), None)
+        if pick is not None:
+            out[slot] = pick
     return out
 
 
@@ -851,6 +861,23 @@ def read_data_file(image_path: str, name: str) -> tuple[DataFile, DiscFile]:
     return parse_data_file(data, infer_base(data)), entry
 
 
+def _source_atlas(image_path: str) -> tuple[DataFile, Vram]:
+    """`SOURCE_FILE` parsed, and its atlas blocks decoded into a VRAM model."""
+    parsed, _entry = read_data_file(image_path, SOURCE_FILE)
+    vram = Vram()
+    for rec in _atlas_blocks(parsed):
+        raw, _ = lz_decompress(parsed.data, rec.ptr - parsed.base)
+        vram.put_block(rec.x, rec.y, rec.w, rec.h, raw)
+    return parsed, vram
+
+
+def read_styles(image_path: str, styles: Iterable[int]) -> dict[int, LogoImages]:
+    """The three bitmaps each of `styles` draws, as the disc's atlas holds them now (the
+    palette is left empty: a style is a shape, each team's CLUT colours it)."""
+    _parsed, vram = _source_atlas(image_path)
+    return {s: LogoImages([], *(vram.pixels(r) for r in style_rects(s))) for s in styles}
+
+
 def patch_flag_atlas(
     image_path: str,
     logos: Mapping[int, LogoImages],
@@ -864,11 +891,7 @@ def patch_flag_atlas(
     given, is what the stadium files (`GDC_*`, the flags a match draws) get
     instead of `logos`: the same logos on a white ground.
     """
-    source_parsed, _entry = read_data_file(image_path, SOURCE_FILE)
-    original = Vram()
-    for rec in _atlas_blocks(source_parsed):
-        raw, _ = lz_decompress(source_parsed.data, rec.ptr - source_parsed.base)
-        original.put_block(rec.x, rec.y, rec.w, rec.h, raw)
+    source_parsed, original = _source_atlas(image_path)
 
     def paint(images_by_style: Mapping[int, LogoImages]) -> tuple[Vram, list[Rect]]:
         painted = Vram()

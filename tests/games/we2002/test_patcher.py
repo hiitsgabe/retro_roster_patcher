@@ -178,7 +178,7 @@ def _fake_writer_class(log, *, create_output=True):
             # The real writer's club fields the national slot's places, none past them.
             return min(len(players or []), _PLAYERS_PER_NAT)
 
-        def write_nat_team(self, nat_index, team, players=None, include_flag=True):
+        def write_nat_team(self, nat_index, team, players=None, include_flag=True, kits=True):
             log.append(("write_nat_team", nat_index, team.name, len(players or []), include_flag))
             return min(len(players or []), 23)
 
@@ -1631,7 +1631,7 @@ def _recording_writer_class(log, written):
     base = _fake_writer_class(log)
 
     class RecordingWriter(base):
-        def write_nat_team(self, nat_index, team, players=None, include_flag=True):
+        def write_nat_team(self, nat_index, team, players=None, include_flag=True, kits=True):
             written[nat_index] = list(players or [])
             return super().write_nat_team(nat_index, team, players, include_flag)
 

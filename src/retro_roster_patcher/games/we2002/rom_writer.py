@@ -1287,10 +1287,13 @@ def _encode_kanji_name(name: str, budget: int) -> bytes:
     """Encode a team name to the 2-byte Kanji format for the SQK section.
 
     budget is lun_nomik[idx] (character count); output is budget * 2 bytes.
-    Name is titlecased (first char upper, rest lower) per C++ editor convention.
+    Name is titlecased (first char upper, rest lower) per C++ editor convention, but for one in
+    capitals already: a FIFA code ("NED") stays as it is.
     """
     # Titlecase: first char uppercase, rest lowercase
-    if len(name) > 1:
+    if name.isupper():
+        text = name
+    elif len(name) > 1:
         text = name[0].upper() + name[1:].lower()
     elif name:
         text = name.upper()
@@ -2607,8 +2610,12 @@ class RomWriter:
         team: WETeamRecord,
         players: list[WEPlayerRecord] | None = None,
         include_flag: bool = True,
+        kits: bool = True,
     ) -> int:
         """Write national team names, abbreviations, force bars, players, formation, and flag.
+
+        `kits=False` leaves the slot's kits (2D preview and 3D texture) as they are: a nation on
+        its own untouched slot keeps the disc's.
 
         With `players=` the slot's 23 places get the players and their shirt numbers
         (`_squad_numbers`: a player's own when it is in 1-32 and free, else the lowest free one).
@@ -2630,7 +2637,8 @@ class RomWriter:
             self._write_nat_kanji_name(f, nat_index, team)
             self._write_nat_abbreviations(f, nat_index, team)
             self._write_nat_force_bars(f, nat_index, team)
-            self._write_nat_jersey_colors(f, nat_index, team)
+            if kits:
+                self._write_nat_jersey_colors(f, nat_index, team)
 
             if players is not None:
                 self._write_nat_players_impl(f, nat_index, players)
@@ -2643,7 +2651,7 @@ class RomWriter:
             _sync(f)
 
         # Queue 3D jersey TEX patch (national teams are TEX indices 0-62)
-        if self.write_kits:
+        if self.write_kits and kits:
             self._pending_tex_patches.append((nat_index, team))
         return min(len(players), _PLAYERS_PER_NAT) if players is not None else 0
 
@@ -2756,6 +2764,8 @@ class RomWriter:
         if nat_index < 0 or nat_index >= _SQUADRE_NAZ:
             return
         style, color_data = _build_flag_data(team)
+        if team.flag_clut is not None and team.flag_style is not None:
+            style, color_data = team.flag_style, team.flag_clut
         for forma_base in [
             _OFS_BANDIERE_FORMA1,
             _OFS_BANDIERE_FORMA2,
@@ -2769,6 +2779,10 @@ class RomWriter:
         if nat_index in _NAT_COLOR_OFFSETS:
             chunks = _NAT_COLOR_OFFSETS[nat_index]
             _write_chunks(f, color_data, chunks)
+            if team.flag_clut is not None:
+                # The disc's flags draw index 0 see-through, which is the halfword before.
+                f.seek(chunks[0][0] - 2)
+                f.write(b"\x00\x00")
             _write_transparent_index(f, team, chunks)
 
     def write_nat_flag(self, nat_index: int, team: WETeamRecord):

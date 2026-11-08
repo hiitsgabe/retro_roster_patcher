@@ -46,7 +46,7 @@ class RecordingWriter:
         self.log.append(("ml", slot_index, team.flag_style, team.flag_palette, team.logo_png))
         return len(players or [])
 
-    def write_nat_team(self, nat_index, team, players=None, include_flag=True):
+    def write_nat_team(self, nat_index, team, players=None, include_flag=True, kits=True):
         self.log.append(("nat", nat_index, team.flag_style, team.flag_palette, team.logo_png))
         return len(players or [])
 

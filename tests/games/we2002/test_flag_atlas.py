@@ -361,6 +361,15 @@ def test_more_slots_than_styles_leaves_the_rest_unassigned():
     assert 59 not in styles
 
 
+def test_a_free_only_slot_never_gets_a_shared_style():
+    forma = _forma({40: 7})  # 0 is everybody's, 7 an untouched entry's: the rest are free
+    free = [s for s in VALID_STYLES if s not in (0, 7)]
+    styles = assign_styles(forma, patched=set(range(40)), wanted=range(60), free_only=[59])
+    assert 59 not in styles  # the free styles ran out on 0-50
+    styles = assign_styles(forma, set(range(40)), wanted=[3, 59], avoid=[1], free_only=[59])
+    assert styles == {3: free[1], 59: free[2]}
+
+
 def test_shared_styles_are_taken_by_fewest_untouched_users():
     forma = _forma({50: 1, 51: 1, 52: 1, 53: 2})  # style 1: 3 untouched users, style 2: one
     styles = assign_styles(forma, patched={0}, wanted=range(53))
