@@ -17,23 +17,20 @@ from retro_roster_patcher.sports.nationals import (
     ranked_slot_map,
 )
 
-PAGE = b'<html>{"id":"id14576","date":"2025-04-03"},{"id":"id14870"},{"id":"id14800"}</html>'
-OVERVIEW = {
-    "rankings": [
-        {"rankingItem": {"rank": 2, "name": "France", "countryCode": "FRA"}},
-        {"rankingItem": {"rank": 1, "name": "Spain", "countryCode": "ESP"}},
-        {"rankingItem": {"rank": None, "name": "Eritrea", "countryCode": "ERI"}},
-        {"rankingItem": {"rank": 3, "name": "Türkiye", "countryCode": "TUR"}},
-    ]
-}
+#: FotMob's shape: a bare list, unordered here, with names in FotMob's spelling.
+RANKING_LIST = [
+    {"name": "Argentina", "id": 6706, "rank": 2, "totalPoints": 1990},
+    {"name": "Spain", "id": 6720, "rank": 1, "totalPoints": 2012},
+    {"name": "South Korea", "id": 7804, "rank": 3},  # FIFA: "Korea Republic"
+    {"name": "Atlantis", "id": 1, "rank": 4},  # no code known
+    {"name": "Nowhere", "id": 2, "rank": None},  # unranked
+]
 
 
-def fifa_transport(page=PAGE, overview=OVERVIEW):
+def fotmob_transport(body=RANKING_LIST):
     def transport(url, headers, timeout):
         transport.calls.append(url)
-        if "ranking-overview" in url:
-            return json.dumps(overview).encode()
-        return page
+        return json.dumps(body).encode()
 
     transport.calls = []
     return transport
@@ -46,44 +43,47 @@ def failing_transport(url, headers, timeout):
 # --- fifa_ranking -----------------------------------------------------------
 
 
-def test_the_ranking_comes_from_the_latest_date_id_in_rank_order(tmp_path):
-    transport = fifa_transport()
+def test_the_ranking_comes_from_fotmob_in_rank_order_with_fifa_codes(tmp_path):
+    transport = fotmob_transport()
     ranking = fifa_ranking(tmp_path, transport=transport)
     assert ranking == [
         RankedNation(1, "Spain", "ESP"),
-        RankedNation(2, "France", "FRA"),
-        RankedNation(3, "Türkiye", "TUR"),
+        RankedNation(2, "Argentina", "ARG"),
+        RankedNation(3, "South Korea", "KOR"),
+        RankedNation(4, "Atlantis", ""),
     ]
-    assert transport.calls[0] == "https://inside.fifa.com/fifa-world-ranking/men"
-    assert transport.calls[1] == (
-        "https://inside.fifa.com/api/ranking-overview?locale=en&dateId=id14870"
-    )
+    assert transport.calls == ["https://www.fotmob.com/api/data/fifarankings/ranking?gender=men"]
 
 
 def test_the_ranking_is_cached_for_the_day(tmp_path):
-    fifa_ranking(tmp_path, transport=fifa_transport())
+    fifa_ranking(tmp_path, transport=fotmob_transport())
     assert (tmp_path / f"fifa_ranking_{date.today().isoformat()}.json").is_file()
     again = fifa_ranking(tmp_path, transport=failing_transport)
-    assert [n.code for n in again] == ["ESP", "FRA", "TUR"]
+    assert [n.code for n in again] == ["ESP", "ARG", "KOR", ""]
 
 
 @pytest.mark.parametrize(
     "transport",
     [
         failing_transport,
-        fifa_transport(page=b"<html>no dates</html>"),
-        fifa_transport(overview={"rankings": []}),
-        fifa_transport(overview={"oops": 1}),
+        fotmob_transport(body=[]),
+        fotmob_transport(body={"error": "not found"}),
+        fotmob_transport(body=[{"id": 1}]),
     ],
-    ids=["transport error", "no date id", "empty ranking", "wrong shape"],
+    ids=["transport error", "empty ranking", "not a list", "wrong shape"],
 )
 def test_a_failed_fetch_falls_back_to_the_packaged_snapshot(tmp_path, transport):
     lines: list[str] = []
     ranking = fifa_ranking(tmp_path, on_status=lines.append, transport=transport)
-    assert len(ranking) == 210  # the snapshot's 211 less the one unranked side
-    assert ranking[0] == RankedNation(1, "Spain", "ESP")
+    assert len(ranking) == 211
+    assert ranking[:3] == [
+        RankedNation(1, "Spain", "ESP"),
+        RankedNation(2, "Argentina", "ARG"),
+        RankedNation(3, "France", "FRA"),
+    ]
     assert [n.rank for n in ranking] == sorted(n.rank for n in ranking)
-    assert len(lines) == 1 and "snapshot" in lines[0]
+    assert all(n.code for n in ranking)
+    assert len(lines) == 1 and "snapshot" in lines[0] and "2026-10-07" in lines[0]
     assert list(tmp_path.iterdir()) == []  # a fallback is never cached
 
 
@@ -201,14 +201,7 @@ class FillPatcher(Patcher):
     def __init__(self, cache_dir, squads, own=None):
         super().__init__(cache_dir)
         self.api = FakeApi(squads)
-        self._transport = fifa_transport(
-            overview={
-                "rankings": [
-                    {"rankingItem": {"rank": n.rank, "name": n.name, "countryCode": n.code}}
-                    for n in RANKING
-                ]
-            }
-        )
+        self._transport = fotmob_transport([{"name": n.name, "rank": n.rank} for n in RANKING])
         self.own = own or {}
         self.lines: list[str] = []
         self.on_status = self.lines.append
@@ -321,4 +314,4 @@ def test_the_snapshot_is_package_data():
     from retro_roster_patcher.core.assets import package_bytes
 
     doc = json.loads(package_bytes("retro_roster_patcher.assets", "fifa_ranking.json"))
-    assert len(doc["rankings"]) == 211 and doc["dateId"].startswith("id1")
+    assert len(doc["ranking"]) == 211 and doc["date"] == "2026-10-07"

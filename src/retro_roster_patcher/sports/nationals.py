@@ -4,16 +4,23 @@ A soccer cartridge holds more slots than a club league fills, and the rest keep
 their 1990s nations. `fetch_top_nations` fills them with ESPN's national squads
 (league 2021) of the best-ranked sides that have one: `fifa_ranking` gives the
 order, `ranked_slot_map` the slots.
+
+The ranking is FIFA's men's world ranking as FotMob serves it
+(`https://www.fotmob.com/api/data/fifarankings/ranking?gender=men`): FIFA's own
+`ranking-overview` API stops at September 2025. FotMob gives no country code, so
+`RankedNation.code` comes from the packaged snapshot `assets/fifa_ranking.json`
+(FotMob's list of the 2026-10-07 ranking, fetched 2026-11-08, with each side's
+FIFA code added), which is also the fallback when FotMob cannot be reached.
 """
 
 from __future__ import annotations
 
 import json
-import re
 import sys
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date
+from functools import cache
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -23,14 +30,14 @@ from ..core.errors import ApiError, CapabilityError, ensure_cache_dir
 from ..core.models import ProgressFn, SlotMapping, StatusFn
 from ..core.text import to_ascii
 from . import _http
+from .fotmob import API_URL
 from .lineup import apply_lineup
 from .models import LeagueData, Team, TeamRoster
 
 if TYPE_CHECKING:
     from ..core.patcher import Patcher
 
-RANKING_PAGE = "https://inside.fifa.com/fifa-world-ranking/men"
-RANKING_API = "https://inside.fifa.com/api/ranking-overview"
+RANKING_URL = f"{API_URL}/fifarankings/ranking"
 #: ESPN's league of every men's national side it tracks, with current squads.
 NATIONAL_LEAGUE = 2021
 
@@ -39,41 +46,35 @@ NATIONAL_LEAGUE = 2021
 class RankedNation:
     rank: int
     name: str
-    code: str  # FIFA's three-letter code, which ESPN mostly uses as abbreviation
+    code: str  # FIFA's three-letter code, which ESPN mostly uses as abbreviation; "" if unknown
 
 
-def _parse(document: Any) -> list[RankedNation]:
-    """The ranked sides of a `ranking-overview` answer, best first; an unranked one is left out."""
-    items = (entry["rankingItem"] for entry in document["rankings"])
+def _key(name: str) -> str:
+    return to_ascii(name).upper()
+
+
+@cache
+def _snapshot() -> dict[str, Any]:
+    doc: dict[str, Any] = json.loads(
+        package_bytes("retro_roster_patcher.assets", "fifa_ranking.json")
+    )
+    return doc
+
+
+@cache
+def _codes() -> dict[str, str]:
+    """FIFA code by FotMob's spelling of the name, from the snapshot."""
+    return {_key(e["name"]): e["code"] for e in _snapshot()["ranking"]}
+
+
+def _parse(entries: Any) -> list[RankedNation]:
+    """The ranked sides of a FotMob ranking list, best first; an unranked one is left out."""
     nations = [
-        RankedNation(int(i["rank"]), str(i["name"]), str(i["countryCode"]))
-        for i in items
-        if i.get("rank") is not None
+        RankedNation(int(e["rank"]), str(e["name"]), _codes().get(_key(str(e["name"])), ""))
+        for e in entries
+        if e.get("rank") is not None
     ]
     return sorted(nations, key=lambda n: n.rank)
-
-
-def _fetch(transport: _http.Transport | None) -> dict[str, Any]:
-    """Today's `ranking-overview` document: the latest `id1NNNN` date the page lists."""
-    tx = transport or _http.default_transport
-    try:
-        page = tx(RANKING_PAGE, {}, _http.DEFAULT_TIMEOUT).decode("utf-8", "replace")
-    except ApiError:
-        raise
-    except Exception as exc:
-        raise ApiError(f"GET {RANKING_PAGE} failed: {exc}") from exc
-    # ponytail: newer releases list `FRS_Male_Football_<date>` ids, which this
-    # endpoint answers empty; switch when FIFA serves them here.
-    ids = re.findall(r'"id(1\d{4})"', page)
-    if not ids:
-        raise ApiError(f"No ranking date in {RANKING_PAGE}")
-    date_id = f"id{max(ids, key=int)}"
-    document = _http.get_json(
-        RANKING_API, params={"locale": "en", "dateId": date_id}, transport=transport
-    )
-    if not isinstance(document, dict):
-        raise ApiError(f"{RANKING_API} answered a {type(document).__name__}")
-    return document
 
 
 def fifa_ranking(
@@ -81,32 +82,31 @@ def fifa_ranking(
     on_status: StatusFn | None = None,
     transport: _http.Transport | None = None,
 ) -> list[RankedNation]:
-    """The FIFA men's ranking, best first: fetched once a day into `cache_dir`, or
-    the packaged snapshot (with a status line) when the fetch fails."""
+    """The FIFA men's ranking, best first: fetched from FotMob once a day into
+    `cache_dir`, or the packaged snapshot (with a status line) when that fails."""
     ensure_cache_dir(cache_dir)
-    cache = Path(cache_dir) / f"fifa_ranking_{date.today().isoformat()}.json"
+    path = Path(cache_dir) / f"fifa_ranking_{date.today().isoformat()}.json"
     try:
-        return _parse(json.loads(cache.read_text(encoding="utf-8")))
-    except (OSError, ValueError, KeyError, TypeError):
+        return _parse(json.loads(path.read_text(encoding="utf-8"))["ranking"])
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
         pass
     try:
-        document = _fetch(transport)
-        nations = _parse(document)
+        entries = _http.get_json(RANKING_URL, params={"gender": "men"}, transport=transport)
+        if not isinstance(entries, list):
+            raise ApiError(f"{RANKING_URL} answered a {type(entries).__name__}")
+        nations = _parse(entries)
         if not nations:
             raise ApiError("the ranking came back empty")
-    except (ApiError, KeyError, TypeError, ValueError) as exc:
-        snapshot = json.loads(package_bytes("retro_roster_patcher.assets", "fifa_ranking.json"))
+    except (ApiError, KeyError, TypeError, ValueError, AttributeError) as exc:
         emit_status(
             on_status,
-            f"FIFA ranking unavailable ({exc}); using the packaged snapshot of {snapshot['date']}",
+            f"FIFA ranking unavailable ({exc}); using the packaged snapshot of the "
+            f"{_snapshot()['date']} ranking",
         )
-        return _parse(snapshot)
-    cache.write_text(json.dumps(document), encoding="utf-8")
+        return _parse(_snapshot()["ranking"])
+    # A dict, as every cache file in the shared directory is.
+    path.write_text(json.dumps({"ranking": entries}), encoding="utf-8")
     return nations
-
-
-def _key(name: str) -> str:
-    return to_ascii(name).upper()
 
 
 def _ranked_teams(

@@ -67,7 +67,7 @@ def test_the_kit_catalogue_is_readable_as_package_data():
 
 def test_the_fifa_ranking_snapshot_is_readable_as_package_data():
     doc = json.loads(package_bytes("retro_roster_patcher.assets", "fifa_ranking.json"))
-    assert len(doc["rankings"]) == 211
+    assert len(doc["ranking"]) == 211
 
 
 def _shipped_game_packages() -> set[str]:

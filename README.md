@@ -304,7 +304,7 @@ Every soccer game takes its starting eleven from `EspnClient.get_lineup`, which 
 
 ### National teams in the free slots
 
-A cartridge holds more teams than a club league fills, and `patch --fill-nations` puts today's best national teams in the slots the slot map leaves out, instead of the 1990s originals (`--blank-unused` empties them instead; the two exclude each other). The order is the FIFA men's world ranking, fetched once a day into the cache. When FIFA cannot be reached, a snapshot packaged with the library is used, and a status line gives its date.
+A cartridge holds more teams than a club league fills, and `patch --fill-nations` puts today's best national teams in the slots the slot map leaves out, instead of the 1990s originals (`--blank-unused` empties them instead; the two exclude each other). The order is the FIFA men's world ranking as FotMob serves it, fetched once a day into the cache. When FotMob cannot be reached, a snapshot packaged with the library is used, and a status line gives its date.
 
 Each ranked nation is found among ESPN's national teams (league 2021) by FIFA code against ESPN's abbreviation, then by name. A nation goes into its own cartridge slot when that slot is free, and the others fill the free slots in the game's order, until they run out. A nation ESPN has no squad for is skipped with a status line, and the next one takes its place. Only games whose patcher has `supports_nation_fill` take the flag; `sports.nationals.fetch_top_nations` is the same step for library callers, its result merged into the league's rosters before `patch`.
 
