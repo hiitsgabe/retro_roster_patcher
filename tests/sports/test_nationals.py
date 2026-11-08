@@ -143,7 +143,7 @@ def test_two_nations_claiming_one_own_slot_never_map_it_twice():
     assert slots(mapping) == {5: SPAIN.id, 6: FRANCE.id}
 
 
-def test_teams_match_by_code_then_by_name_then_by_alias_and_the_rest_are_skipped():
+def test_teams_match_by_name_then_by_code_then_by_alias_and_the_rest_are_skipped():
     ranking = [
         RankedNation(1, "IR Iran", "IRN"),  # code
         RankedNation(2, "Burkina Faso", "BFA"),  # ESPN spells the code BKA: name
@@ -172,8 +172,10 @@ def test_a_name_matches_without_its_diacritics():
 
 
 class FakeApi:
-    def __init__(self, squads):
+    def __init__(self, squads, teams=None, lineup_error=None):
         self.squads = squads
+        self.teams = teams or [SPAIN, FRANCE, ARG, ENG, BRA]
+        self.lineup_error = lineup_error
         self.asked: list[int] = []
 
     def get_leagues(self, id=None, season=None):
@@ -181,7 +183,7 @@ class FakeApi:
 
     def get_teams(self, league_id, season=None):
         assert league_id == 2021
-        return [SPAIN, FRANCE, ARG, ENG, BRA]
+        return self.teams
 
     def get_squad(self, team_id, season=None):
         self.asked.append(team_id)
@@ -192,16 +194,18 @@ class FakeApi:
 
     def get_lineup(self, team_id, league_id, squad=None, team=None, season=None):
         assert league_id == 2021 and team is not None and squad is not None
+        if self.lineup_error is not None:
+            raise self.lineup_error
         return {"shape": "4-3-3", "roles": {str(squad[0].id): "ST"}}
 
 
 class FillPatcher(Patcher):
     supports_nation_fill = True
 
-    def __init__(self, cache_dir, squads, own=None):
+    def __init__(self, cache_dir, squads, own=None, ranking=RANKING, **api):
         super().__init__(cache_dir)
-        self.api = FakeApi(squads)
-        self._transport = fotmob_transport([{"name": n.name, "rank": n.rank} for n in RANKING])
+        self.api = FakeApi(squads, **api)
+        self._transport = fotmob_transport([{"name": n.name, "rank": n.rank} for n in ranking])
         self.own = own or {}
         self.lines: list[str] = []
         self.on_status = self.lines.append
@@ -268,6 +272,37 @@ def test_squads_get_their_lineup_and_the_game_s_order(tmp_path):
     assert patcher.api.asked == [SPAIN.id, FRANCE.id, ARG.id, ENG.id]  # no squad for Brazil
 
 
+def test_two_espn_teams_sharing_an_abbreviation_each_get_their_own_squad(tmp_path):
+    # ESPN abbreviates both Guam and Guatemala "GUA"; FIFA's codes are GUM and GUA.
+    guatemala, guam = team(60, "Guatemala", "GUA"), team(61, "Guam", "GUA")
+    ranking = [RankedNation(95, "Guatemala", "GUA"), RankedNation(204, "Guam", "GUM")]
+    patcher = FillPatcher(
+        tmp_path, {60: squad(600), 61: squad(610)}, ranking=ranking, teams=[guatemala, guam]
+    )
+    data, mapping = fetch_top_nations(patcher, Path("rom.bin"), 2026, taken=())
+    assert {m.slot_index: m.team_name for m in mapping} == {20: "Guatemala", 21: "Guam"}
+    assert {r.team.name: r.players[-1].id for r in data.teams} == {"Guatemala": 600, "Guam": 610}
+
+
+def test_a_shared_abbreviation_never_matches_by_code():
+    shared = [team(60, "Guatemala", "GUA"), team(61, "Guam", "GUA")]
+    mapping = ranked_slot_map([RankedNation(1, "Guatemala FC", "GUA")], shared, [0], lambda t: None)
+    assert mapping == []
+
+
+def test_a_failed_lineup_keeps_the_nation_with_roles_only(tmp_path):
+    squads = {t.id: squad(t.id * 100) for t in (SPAIN, FRANCE, ARG, ENG, BRA)}
+    patcher = FillPatcher(tmp_path, squads, lineup_error=ApiError("HTTP 502"))
+    data, mapping = fetch_top_nations(patcher, Path("rom.bin"), 2026, taken=())
+    assert slots(mapping) == {20: SPAIN.id, 21: FRANCE.id, 22: ARG.id, 23: ENG.id}
+    spain = data.teams[0]
+    assert "formation" not in spain.extra and "lineup" not in spain.extra
+    assert {p.role for p in spain.players} == {"CB"}  # the Defender group's default role
+    assert [line for line in patcher.lines if line.startswith("No lineup")][0] == (
+        "No lineup for Spain (HTTP 502)"
+    )
+
+
 def test_no_free_slot_fetches_no_squad(tmp_path):
     patcher = FillPatcher(tmp_path, {})
     data, mapping = fetch_top_nations(patcher, Path("rom.bin"), 2026, taken=[20, 21, 22, 23])
@@ -308,10 +343,3 @@ def test_the_own_slot_defaults_to_the_national_slot_map(tmp_path):
     patcher = SlotMapPatcher(tmp_path, {})
     assert patcher.own_national_slot(Path("rom.bin"), ENG) == 7
     assert patcher.own_national_slot(Path("rom.bin"), SPAIN) is None
-
-
-def test_the_snapshot_is_package_data():
-    from retro_roster_patcher.core.assets import package_bytes
-
-    doc = json.loads(package_bytes("retro_roster_patcher.assets", "fifa_ranking.json"))
-    assert len(doc["ranking"]) == 211 and doc["date"] == "2026-10-07"

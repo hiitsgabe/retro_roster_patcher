@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import sys
+from collections import Counter
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date
@@ -112,18 +113,20 @@ def fifa_ranking(
 def _ranked_teams(
     ranking: Iterable[RankedNation], espn_teams: Iterable[Team], aliases: Mapping[str, str]
 ) -> list[Team]:
-    """The ESPN teams the ranking names, in ranking order: by FIFA code against the
-    ESPN abbreviation, else by name, else by the name `aliases` gives it."""
+    """The ESPN teams the ranking names, in ranking order: by name, else by FIFA code
+    against the ESPN abbreviation, else by the name `aliases` gives it. A code more
+    than one ESPN team uses (Guam and Guatemala are both "GUA") never matches."""
     teams = list(espn_teams)
-    by_code = {t.code.upper(): t for t in teams if t.code}
+    codes = Counter(t.code.upper() for t in teams if t.code)
+    by_code = {t.code.upper(): t for t in teams if t.code and codes[t.code.upper()] == 1}
     by_name = {_key(t.name): t for t in teams}
     alias = {_key(k): _key(v) for k, v in aliases.items()}
     out: list[Team] = []
     for nation in ranking:
         name = _key(nation.name)
         team = (
-            by_code.get(nation.code.upper())
-            or by_name.get(name)
+            by_name.get(name)
+            or by_code.get(nation.code.upper())
             or by_name.get(alias.get(name, ""))
         )
         if team is not None and team not in out:
