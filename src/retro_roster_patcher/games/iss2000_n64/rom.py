@@ -349,16 +349,23 @@ class AssetSpace:
 
     def room(self, asset: Asset) -> int:
         """The most bytes `asset` can take without growing the image."""
-        return max([asset.end - asset.start] + [hi - lo for lo, hi in self.free])
+        return max([asset.end - self._up(asset.start)] + [hi - lo for lo, hi in self.free])
 
     def put(self, asset: Asset, data: bytes, compress: bool = True) -> None:
         self.place(asset, lz_compress(data) if compress else data, compress)
 
     def place(self, asset: Asset, blob: bytes, compressed: bool = True) -> None:
-        """`put` for a stream already compressed (or raw, `compressed=False`)."""
+        """`put` for a stream already compressed (or raw, `compressed=False`).
+
+        A rewritten asset always starts on an 8-byte boundary: the game streams
+        an asset in from its start in 0x1800-byte DMAs (0x80007DE8), and the
+        flag palettes (asset 669, at 0xF6E2F6 on the cartridge) rewritten from
+        their own start hung team select in Mupen64Plus-Next, while the same
+        bytes from an 8-byte boundary (or 2 or 4 past one) loaded (Nov 8 2026).
+        """
         blob += bytes(-len(blob) % 4)
-        start = asset.start
-        if len(blob) <= asset.end - asset.start:
+        start = self._up(asset.start)
+        if start + len(blob) <= asset.end:
             self._release(start + len(blob), asset.end)
         else:
             self._release(asset.start, asset.end)
@@ -371,7 +378,7 @@ class AssetSpace:
     def _grow(self, size: int) -> int:
         self.grew = True
         start = self.top
-        self.top += size
+        self.top = self._up(self.top + size)
         need = -(-self.top // 0x400000) * 0x400000
         if len(self.image) < need:
             self.image.extend(b"\xff" * (need - len(self.image)))

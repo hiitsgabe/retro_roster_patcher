@@ -484,3 +484,24 @@ def test_a_busy_title_drops_colours_rather_than_grow_the_image(tmp_path):
     assert len(image) == R.ROM_SIZE and not space.grew
     out = Image.open(screens.export(image, tmp_path)[1])
     assert len(set(out.getdata())) <= 256
+
+
+def test_a_rewritten_asset_starts_on_an_8_byte_boundary():
+    # The palette asset (669) starts at 0xF6E2F6 on the cartridge; rewritten there, a shorter
+    # stream hung team select in Mupen64Plus-Next (Nov 8 2026), the same bytes from an
+    # 8-byte boundary did not. In place when it still fits after the boundary, else moved.
+    image = bytearray(R.ROM_SIZE)
+    starts = (0x100006, 0x100406, 0x100800)
+    for k, (start, end) in enumerate(zip(starts, starts[1:], strict=False)):
+        image[R.ASSET_TABLE + 8 * k : R.ASSET_TABLE + 8 * k + 8] = (start | 0x80000000).to_bytes(
+            4, "big"
+        ) + end.to_bytes(4, "big")
+    image[0x100800:] = b"\xff" * (R.ROM_SIZE - 0x100800)
+    space = R.AssetSpace(image)
+    first, second = R.assets(image)
+    space.put(first, bytes(64))  # a few bytes: fits after 0x100008
+    space.put(second, os.urandom(2000))  # too big for its room: moved
+    one, two = R.assets(image)
+    assert one.start == 0x100008 and R.read_asset(image, one) == bytes(64)
+    assert two.start % 8 == 0 and two.start != 0x100406
+    assert len(image) == R.ROM_SIZE
