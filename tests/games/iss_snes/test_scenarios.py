@@ -68,6 +68,14 @@ def test_with_fewer_than_two_patched_teams_a_blanked_pair_stays():
     assert scenarios.repoint([(5, 6)], {0}, blank={5, 6}) == [(5, 6)]
 
 
+def test_a_pair_on_kept_slots_stays_but_no_pair_moves_onto_them():
+    # 30 and 31 still hold the cartridge's teams: their pair stays, and the pair that lost
+    # slot 5 plays two patched teams, never a kept one.
+    assert scenarios.repoint([(30, 31), (5, 0)], {0, 1, 2}, kept={30, 31}) == [(30, 31), (0, 1)]
+    # A pair with one kept and one patched slot stays too (a nation the fill moved).
+    assert scenarios.repoint([(30, 2)], {0, 2}, kept={30}) == [(30, 2)]
+
+
 @pytest.mark.parametrize("mapped", [set(), {4}, {19}])
 def test_fewer_than_two_mapped_slots_leave_every_pair(mapped):
     assert scenarios.repoint(RETAIL, mapped) == RETAIL

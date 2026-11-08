@@ -23,17 +23,20 @@ LINE = 23
 
 
 def repoint(
-    pairs: Sequence[tuple[int, int]], mapped: Collection[int], blank: Collection[int] = ()
+    pairs: Sequence[tuple[int, int]],
+    mapped: Collection[int],
+    blank: Collection[int] = (),
+    kept: Collection[int] = (),
 ) -> list[tuple[int, int]]:
-    """Each scenario's pair: its own while both slots are `mapped`, else the pair of mapped
-    slots no scenario plays whose teams play least so far (ties in slot order). With none left
-    it keeps its own, the cartridge's teams, unless that touches a `blank` slot: then it plays
-    the least used pair again. Fewer than two mapped slots leave every pair."""
+    """Each scenario's pair: its own while both slots are `mapped` or `kept` (slots that still
+    hold the cartridge's team), else the pair of mapped slots no scenario plays whose teams play
+    least so far (ties in slot order). With none left it keeps its own, the cartridge's teams,
+    unless that touches a `blank` slot: then it plays the least used pair again. Fewer than two
+    mapped slots leave every pair."""
     order = sorted(set(mapped))
     every = [(a, b) for i, a in enumerate(order) for b in order[i + 1 :]]
-    out: list[tuple[int, int] | None] = [
-        (a, b) if a in mapped and b in mapped else None for a, b in pairs
-    ]
+    stays = set(mapped) | set(kept)
+    out: list[tuple[int, int] | None] = [(a, b) if {a, b} <= stays else None for a, b in pairs]
     for k, pair in enumerate(out):
         if pair is not None:
             continue
