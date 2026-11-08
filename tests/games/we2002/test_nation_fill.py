@@ -373,3 +373,46 @@ def test_nations_wear_their_own_flags_over_a_plain_patch_and_a_repatch_changes_n
     assert read_styles(str(again), styles) == read_styles(str(filled), styles)
     for club in range(32):
         assert _read(again, W._link_chunks(club)) == _read(filled, W._link_chunks(club))
+
+
+def test_a_nation_takes_its_kit_along_even_with_kits_off(tmp_path):
+    """With `kits=False` a club keeps the disc's kit, but a nation away from home would wear its
+    slot owner's: its own kit goes with it (2D preview and 3D texture)."""
+    from retro_roster_patcher.games.we2002.rom_writer import RomWriter
+
+    path = tmp_path / "noise.bin"
+    path.write_bytes(bytes(range(256)) * 50_000)
+    writer = RomWriter(str(path), str(path))
+    writer.write_kits = False
+    team = WETeamRecord(name="ESP", short_name="ESP", kit_home=(200, 0, 0), kit_away=(0, 0, 200))
+    preview = slice(W._nat_jersey_offset(20), W._nat_jersey_offset(20) + 64)
+    before = path.read_bytes()[preview]
+    writer.write_nat_team(21, team)
+    assert path.read_bytes()[preview] == before and writer._pending_tex_patches == []
+    writer.write_nat_team(20, team, kits=True)
+    assert path.read_bytes()[preview] == W._maglia(team)
+    assert [index for index, _ in writer._pending_tex_patches] == [20]
+
+
+def test_patch_forces_a_nation_s_kit_and_leaves_an_untouched_home_one(tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr(patcher_module, "RomWriter", _recording_writer(calls))
+    monkeypatch.setattr(patcher_module, "apply_ppf", lambda *args, **kwargs: "")
+    rom = _sparse_rom(tmp_path, {22: nations.flag(22).style})
+    with rom.open("r+b") as handle:  # Croatia's slot still wears its disc flag
+        for offset, size in W._NAT_COLOR_OFFSETS[22]:
+            handle.seek(offset)
+            handle.write(nations.flag(22).clut[:size] if size == 32 else b"")
+    club = WETeamRecord(name="Club", short_name="CLB", players=[WEPlayerRecord("A", "B", 2, 1)])
+    spain = WETeamRecord(name="ESP", short_name="ESP", national=True, nation=5)
+    croatia = WETeamRecord(name="CRO", short_name="CRO", national=True, nation=22)
+    WE2002Patcher(cache_dir=tmp_path / "cache").patch(
+        rom_path=rom,
+        output_path=tmp_path / "out.bin",
+        rosters=MappedRosters(game_id="we2002", teams={0: club, 20: spain, 22: croatia}),
+        kits=False,
+        logos=False,
+        looks=False,
+    )
+    kits = {c[1]: c[3] for c in calls if c[0] == "nat"}
+    assert kits == {0: None, 20: True, 22: False}

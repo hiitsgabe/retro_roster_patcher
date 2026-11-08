@@ -492,14 +492,15 @@ class WE2002Patcher(Patcher):
                 if slot in clubs:
                     writer.write_team(slot, record, players=record.players, include_flag=True)
                 # A nation home on an untouched slot keeps the disc's flag and kits. Not its
-                # names: the translation always rewrites those, some to other nations.
+                # names: the translation always rewrites those, some to other nations. Any
+                # other nation brings its kit, kits off or not: never its slot owner's.
                 untouched = slot in kept
                 written = writer.write_nat_team(
                     slot,
                     record,
                     players=record.players,
                     include_flag=not untouched,
-                    kits=not untouched,
+                    kits=(not untouched) if record.national else None,
                 )
                 # Unconditional: the writers write names, abbreviations, force
                 # bars, kit colours and flag before they look at `players`, so an

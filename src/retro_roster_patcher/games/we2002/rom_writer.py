@@ -2619,12 +2619,14 @@ class RomWriter:
         team: WETeamRecord,
         players: list[WEPlayerRecord] | None = None,
         include_flag: bool = True,
-        kits: bool = True,
+        kits: bool | None = None,
     ) -> int:
         """Write national team names, abbreviations, force bars, players, formation, and flag.
 
-        `kits=False` leaves the slot's kits (2D preview and 3D texture) as they are: a nation on
-        its own untouched slot keeps the disc's.
+        The slot's kits (2D preview and 3D texture) follow `write_kits` unless `kits` says
+        otherwise: False leaves them as they are (a nation on its own untouched slot keeps the
+        disc's), True writes them even with `write_kits` off (a nation must not wear its slot
+        owner's).
 
         With `players=` the slot's 23 places get the players and their shirt numbers
         (`_squad_numbers`: a player's own when it is in 1-32 and free, else the lowest free one).
@@ -2646,8 +2648,9 @@ class RomWriter:
             self._write_nat_kanji_name(f, nat_index, team)
             self._write_nat_abbreviations(f, nat_index, team)
             self._write_nat_force_bars(f, nat_index, team)
-            if kits:
-                self._write_nat_jersey_colors(f, nat_index, team)
+            if kits or (kits is None and self.write_kits):
+                f.seek(_nat_jersey_offset(nat_index))  # the 2D kit preview (maglia1 + maglia2)
+                f.write(_maglia(team))
 
             if players is not None:
                 self._write_nat_players_impl(f, nat_index, players)
@@ -2660,7 +2663,7 @@ class RomWriter:
             _sync(f)
 
         # Queue 3D jersey TEX patch (national teams are TEX indices 0-62)
-        if self.write_kits and kits:
+        if kits or (kits is None and self.write_kits):
             self._pending_tex_patches.append((nat_index, team))
         return min(len(players), _PLAYERS_PER_NAT) if players is not None else 0
 
@@ -2736,13 +2739,6 @@ class RomWriter:
         bar_data = bytes([att, defe, power, speed, tech])
         chunks = _nat_bar_offset(nat_index)
         _write_chunks(f, bar_data, chunks)
-
-    def _write_nat_jersey_colors(self, f, nat_index: int, team: WETeamRecord):
-        """Write the 2D kit preview (maglia1 + maglia2), as `_write_jersey_colors`."""
-        if not self.write_kits:
-            return
-        f.seek(_nat_jersey_offset(nat_index))
-        f.write(_maglia(team))
 
     def _write_nat_players_impl(self, f, nat_index, players):
         first_nat_idx, count = _nat_slot_player_range(nat_index)
