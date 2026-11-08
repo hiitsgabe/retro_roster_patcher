@@ -47,6 +47,27 @@ def test_with_no_slot_left_free_a_pair_takes_the_first_pair_no_scenario_plays():
     ]
 
 
+def test_a_fallback_pair_takes_the_least_used_teams_first():
+    # 0 and 1 play scenario 1: the unplayed (0, 2) and (1, 2) tie on use, slot order picks
+    # (0, 2), and (1, 2) is the one unplayed pair left.
+    assert scenarios.repoint([(0, 1), (5, 6), (5, 7)], {0, 1, 2}) == [(0, 1), (0, 2), (1, 2)]
+    # (1, 2): 1 and 2 each play once, while 0 plays twice.
+    assert scenarios.repoint([(0, 1), (0, 2), (5, 6)], {0, 1, 2}) == [(0, 1), (0, 2), (1, 2)]
+    # With slots 0-3: (0, 1) and (0, 2) taken, (1, 3) uses 1 once and 3 never, (2, 3) the same,
+    # (1, 2) twice: the least used in slot order is (1, 3).
+    assert scenarios.repoint([(0, 1), (0, 2), (5, 6)], {0, 1, 2, 3}) == [(0, 1), (0, 2), (1, 3)]
+
+
+def test_a_pair_on_a_blanked_slot_reuses_a_played_pair_rather_than_stay():
+    assert scenarios.repoint([(0, 1), (5, 6)], {0, 1}, blank={5, 6, 7}) == [(0, 1), (0, 1)]
+    # Without blanking, a slot the patch left is the cartridge's team: the pair stays.
+    assert scenarios.repoint([(0, 1), (5, 6)], {0, 1}) == [(0, 1), (5, 6)]
+
+
+def test_with_fewer_than_two_patched_teams_a_blanked_pair_stays():
+    assert scenarios.repoint([(5, 6)], {0}, blank={5, 6}) == [(5, 6)]
+
+
 @pytest.mark.parametrize("mapped", [set(), {4}, {19}])
 def test_fewer_than_two_mapped_slots_leave_every_pair(mapped):
     assert scenarios.repoint(RETAIL, mapped) == RETAIL
@@ -70,7 +91,12 @@ def test_a_blurb_fills_the_cartridge_s_length_in_23_character_lines(length, a, b
     assert len(text) == length
     assert 0xFF not in text and 0xFD not in text
     assert b"&" not in text  # the font has none: "and"
+    assert b"'" not in text  # the font's apostrophe is the backtick
     assert a.split()[0].encode() in text
+
+
+def test_a_blurb_writes_the_apostrophe_as_the_font_s_backtick():
+    assert b"Nott`m Forest" in scenarios.blurb("Nott'm Forest", "Spurs", 79)
 
 
 # --- the patch ------------------------------------------------------------------------------
@@ -158,6 +184,15 @@ def test_blanked_slots_are_never_played(patcher, rom, tmp_path):
     rosters = _rosters(patcher, range(20))
     image = _patch(patcher, rom, tmp_path / "out.sfc", rosters, blank_unused=True)
     assert all(a < 20 and b < 20 for a, b in _pairs(image))
+
+
+def test_with_blanked_slots_and_few_clubs_every_scenario_plays_two_clubs(patcher, rom, tmp_path):
+    rosters = _rosters(patcher, [0, 1, 2])
+    image = _patch(patcher, rom, tmp_path / "out.sfc", rosters, blank_unused=True)
+    names = {s: t.name for s, t in rosters.teams.items()}
+    assert all(a in names and b in names and a != b for a, b in _pairs(image))
+    for k in range(scenarios.COUNT):
+        _rewritten(image, k, names)
 
 
 def test_a_scenario_too_few_patched_slots_reach_keeps_its_pair_and_blurb(patcher, rom, tmp_path):

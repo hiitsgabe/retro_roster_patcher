@@ -144,6 +144,23 @@ def test_a_situation_too_long_for_the_name_drops_it():
     assert _title(image, 4) == ("NO.5  SOUTHAMPTON 1-1 SPURS", "0:49 THROW IN")
 
 
+def test_with_blanked_slots_and_two_clubs_every_scenario_plays_them():
+    image = _synthetic()
+    names = {0: "Club A", 1: "Club B"}
+    scenarios.write(image, names, blank=set(range(2, len(R.TEAMS))))
+    assert _pairs(image) == [(0, 1)] * scenarios.COUNT
+    for k in range(scenarios.COUNT):
+        _rewritten(image, k, names)
+
+
+def test_twenty_clubs_spread_over_the_scenarios():
+    """No club plays more than two of the twelve."""
+    image = _synthetic()
+    scenarios.write(image, {s: f"Club {chr(65 + k)}" for k, s in enumerate(R.SLOT_ORDER[:20])})
+    plays = [s for pair in _pairs(image) for s in pair]
+    assert max(plays.count(s) for s in plays) <= 2
+
+
 def test_writing_twice_gives_the_same_image():
     names = {s: f"Club {chr(65 + k)}" for k, s in enumerate(R.SLOT_ORDER[:20])}
     once = _synthetic()
@@ -192,3 +209,26 @@ def test_the_cartridge_s_scenarios_name_the_league_s_clubs(deluxe_rom: Path, tmp
     again = tmp_path / "b.sfc"
     patcher.patch(rom_path=out, output_path=again, rosters=rosters, looks=False, logos=False)
     assert again.read_bytes() == image
+
+
+@pytest.mark.real_rom
+@pytest.mark.parametrize("count", [20, 2])
+def test_with_blank_unused_every_scenario_plays_two_patched_clubs(
+    deluxe_rom: Path, tmp_path, count
+):
+    patcher = ISSDeluxePatcher(tmp_path / "cache")
+    clubs = [roster(100 + k, f"Club {chr(65 + k)}") for k in range(count)]
+    rosters = patcher.map_rosters(
+        LeagueData(league=LEAGUE, teams=clubs),
+        [SlotMapping(slot_index=s, team_id=100 + k) for k, s in enumerate(R.SLOT_ORDER[:count])],
+    )
+    out = tmp_path / "a.sfc"
+    patcher.patch(
+        rom_path=deluxe_rom, output_path=out, rosters=rosters, looks=False, logos=False,
+        blank_unused=True,
+    )  # fmt: skip
+    image = out.read_bytes()
+    assert all(a in rosters.teams and b in rosters.teams for a, b in _pairs(image))
+    names = {s: t.name for s, t in rosters.teams.items()}
+    for k in range(scenarios.COUNT):
+        _rewritten(image, k, names)

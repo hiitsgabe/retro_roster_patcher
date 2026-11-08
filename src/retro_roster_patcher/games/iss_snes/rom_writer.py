@@ -57,7 +57,7 @@ import os
 import shutil
 import struct
 from collections import Counter
-from collections.abc import Iterable
+from collections.abc import Collection, Iterable
 from itertools import permutations
 from types import TracebackType
 from typing import IO
@@ -1761,7 +1761,8 @@ class ISSRomWriter:
 
             available = desc_end - desc_start
 
-            clean = _to_ascii(name).strip()
+            # The font's apostrophe is the backtick, as the cartridge's "hasn`t".
+            clean = _to_ascii(name).strip().replace("'", "`")
             lines = []
             words = clean.split()
             current_line = ""
@@ -1791,17 +1792,17 @@ class ISSRomWriter:
             self._seek(desc_start)
             self._file.write(text.encode("ascii", errors="replace"))
 
-    def write_scenarios(self, names: dict[int, str]) -> None:
+    def write_scenarios(self, names: dict[int, str], blank: Collection[int] = ()) -> None:
         """Point each scenario at slots `names` holds ({slot: team name}, every slot the patch
         wrote a team into) as `scenarios.repoint` pairs them, and rewrite in place, to its 0xFF,
-        the blurb of each scenario whose two slots it holds. A pair table that is not slot ids
-        is left alone."""
+        the blurb of each scenario whose two slots it holds; `blank` are the slots the patch
+        emptied, which no scenario keeps. A pair table that is not slot ids is left alone."""
         self._seek(scenarios.PAIRS)
         raw = self._file.read(2 * scenarios.COUNT)
         if len(raw) < 2 * scenarios.COUNT or any(b % 2 or b // 2 >= TOTAL_TEAMS for b in raw):
             return
         pairs = scenarios.repoint(
-            [(raw[k] // 2, raw[k + 1] // 2) for k in range(0, len(raw), 2)], names
+            [(raw[k] // 2, raw[k + 1] // 2) for k in range(0, len(raw), 2)], names, blank
         )
         self._seek(scenarios.PAIRS)
         self._file.write(bytes(2 * s for pair in pairs for s in pair))

@@ -20,6 +20,7 @@ rewrites the texts of every scenario on two patched slots, at those widths.
 from __future__ import annotations
 
 import textwrap
+from collections.abc import Collection
 
 from ...core.text import to_ascii
 from ..iss_snes.scenarios import repoint
@@ -51,13 +52,14 @@ def pairs(image: bytes | bytearray) -> list[tuple[int, int]]:
     return [(image[a + 4] // 2, image[a + 5] // 2) for a in at]
 
 
-def write(image: bytearray, names: dict[int, str]) -> None:
+def write(image: bytearray, names: dict[int, str], blank: Collection[int] = ()) -> None:
     """Point the scenarios at slots `names` holds ({slot: the name the patch gave it}, every
-    slot it wrote a team into) and write the title and description of each on two of them."""
+    slot it wrote a team into; `blank` the slots it emptied, which no scenario keeps) and write
+    the title and description of each on two of them."""
     old = pairs(image)
     if any(max(pair) >= len(R.TEAMS) for pair in old):
         return
-    for k, (a, b) in enumerate(repoint(old, names)):
+    for k, (a, b) in enumerate(repoint(old, names, blank)):
         at = RECORDS + RECORD * k
         image[at + 4], image[at + 5] = 2 * a, 2 * b
         if a in names and b in names:

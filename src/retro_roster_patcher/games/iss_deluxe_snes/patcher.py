@@ -450,7 +450,8 @@ class ISSDeluxePatcher(Patcher):
         )
         pages.write(image, in_league, league, nations)
         # A nation on its own slot keeps the cartridge's name; every other team shows its own.
-        scenarios.write(image, {s: R.TEAMS[s] if t.national else t.name for s, t in teams.items()})
+        shown = {s: R.TEAMS[s] if t.national else t.name for s, t in teams.items()}
+        scenarios.write(image, shown, unused)
         pins = {slot: home.pins for slot, (home, _) in plans.items() if home is not None}
         # A nation's retail flag goes whole, entry 12 (its numbers' colour) too, only on a slot
         # that wears the nation's own kit; any other slot keeps its entry 12.

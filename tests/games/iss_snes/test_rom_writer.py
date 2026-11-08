@@ -1520,6 +1520,15 @@ def test_a_long_name_wraps_across_lines(rom, out):
     assert _read(out, fixture.desc_text_start(0), len(expected)) == expected
 
 
+def test_an_apostrophe_is_the_font_s_backtick(rom, out):
+    """The cartridge writes "hasn`t": its font has no 0x27."""
+    writer = ISSRomWriter(str(rom), str(out))
+    writer.write_team_descriptions({0: "Newell's Old Boys"})
+    writer.finalize()
+    text = _read(out, fixture.desc_text_start(0), fixture.DESC_TEXT_LENGTH)
+    assert b"Newell`s" in text and b"'" not in text
+
+
 def test_the_description_write_stops_at_the_blocks_terminator(rom, out):
     """The 0xFF the scan found is the end, and it is not overwritten."""
     writer = ISSRomWriter(str(rom), str(out))
