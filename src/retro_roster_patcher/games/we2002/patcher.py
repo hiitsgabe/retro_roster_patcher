@@ -300,9 +300,12 @@ class WE2002Patcher(Patcher):
         return cartridge_slot_map(nations.NAMES, NATIONAL_ALIASES, data)
 
     def fill_slots(self, rom_path: Path) -> list[int]:
-        """National slots 0-53 but those without a colour entry (`nations.NO_COLOURS`), where a
-        nation's flag would draw through the slot's own colours."""
-        return [s for s in range(len(nations.NAMES)) if s not in nations.NO_COLOURS]
+        """The 54 nations' national slots, 0-53."""
+        return list(range(len(nations.NAMES)))
+
+    def home_only_slots(self, rom_path: Path) -> list[int]:
+        """`nations.HOME_ONLY`: a moved nation's flag would draw wrong there."""
+        return list(nations.HOME_ONLY)
 
     def suggest_squad_order(self, team_roster):
         ordered = self.mapper._select_best_23(
@@ -343,6 +346,16 @@ class WE2002Patcher(Patcher):
                 )
             if national and not roster.players:
                 self.status(f"Skipped {roster.team.name}: ESPN has no squad for it")
+                continue
+            if (
+                national
+                and entry.slot_index in nations.HOME_ONLY
+                and cartridge_slot(nations.NAMES, NATIONAL_ALIASES, roster.team) != entry.slot_index
+            ):
+                self.status(
+                    f"Skipped {roster.team.name}: slot {entry.slot_index} takes only its own "
+                    f"nation, whose flag colours it holds"
+                )
                 continue
             # The whole league, not just this team: percentiles are normalised
             # league-wide.
@@ -540,10 +553,11 @@ class WE2002Patcher(Patcher):
         earlier patch's image gives it back too): its style and colour entry go on the
         record, and the style's bitmaps are queued, which restores them where an
         earlier patch drew a logo over them. A nation home on a slot that still wears
-        its disc flag keeps that flag and the slot's kits. A nation without a disc
-        flag of its own (one the disc lacks, or one of `nations.NO_COLOURS`) keeps its
-        ESPN picture for `_prepare_logos`. Returns (the slots whose flag and kits stay,
-        the slots dressed, the styles they wear)."""
+        its disc flag keeps that flag and the slot's kits; one home on a slot without
+        a colour entry (`nations.NO_COLOURS`) gets back its style byte alone. A nation
+        away from home without a disc flag of its own (one the disc lacks, or one of
+        `nations.NO_COLOURS`) keeps its ESPN picture for `_prepare_logos`. Returns (the
+        slots whose flag and kits stay, the slots dressed, the styles they wear)."""
         candidates = {s: n for s in slots if (n := rosters.teams[s].nation) is not None}
         if not candidates:
             return set(), set(), set()
@@ -557,10 +571,11 @@ class WE2002Patcher(Patcher):
             own = nations.flag(nation)
             if slot == nation and now[slot] == own:
                 kept.add(slot)
-            elif own.clut is None:
+            elif own.clut is None and slot != nation:
                 continue
             else:
-                record.flag_style, record.flag_clut = own.style, own.clut
+                # Home without a colour entry: its own style byte alone (an empty clut).
+                record.flag_style, record.flag_clut = own.style, own.clut or b""
             dressed.add(slot)
             styles.add(own.style)
         for style in sorted(styles):

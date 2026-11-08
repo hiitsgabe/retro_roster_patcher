@@ -2776,7 +2776,8 @@ class RomWriter:
             off = forma_base + nat_index
             f.seek(off)
             f.write(bytes([style]))
-        if nat_index in _NAT_COLOR_OFFSETS:
+        # An empty `flag_clut` is the style byte alone: the slot keeps its colours.
+        if nat_index in _NAT_COLOR_OFFSETS and team.flag_clut != b"":
             chunks = _NAT_COLOR_OFFSETS[nat_index]
             _write_chunks(f, color_data, chunks)
             if team.flag_clut is not None:

@@ -39,12 +39,33 @@ def _nations(*rosters):
     return LeagueData(league=League(id=NATIONAL_LEAGUE, name="Friendlies"), teams=list(rosters))
 
 
-def test_the_fill_takes_the_54_nations_but_the_slots_without_colours():
+def test_the_fill_takes_the_54_nations_and_keeps_four_slots_for_their_own():
+    """36, 39 and 47 have no colour entry the writer knows, and 35's is Master League club 5's:
+    a moved nation's flag would draw wrong there, so only their own nation goes home to them."""
     patcher = WE2002Patcher(cache_dir="unused")
     assert patcher.supports_nation_fill
     assert nations.NO_COLOURS == (36, 39, 47)
-    slots = patcher.fill_slots(Path("unused"))
-    assert slots == [s for s in range(54) if s not in (36, 39, 47)]
+    assert W._NAT_COLOR_OFFSETS[35] == W._ML_COLOR_OFFSETS[5]
+    assert patcher.fill_slots(Path("unused")) == list(range(54))
+    assert patcher.home_only_slots(Path("unused")) == [35, 36, 39, 47]
+
+
+def test_a_moved_nation_on_a_home_only_slot_is_skipped_and_its_own_nation_kept(tmp_path):
+    lines = []
+    patcher = WE2002Patcher(cache_dir=tmp_path, on_status=lines.append)
+    data = _nations(
+        _nation(1, "Spain", "ESP"), _nation(2, "Senegal", "SEN"), _nation(3, "South Africa", "RSA")
+    )
+    mapped = patcher.map_rosters(
+        data, [SlotMapping(35, 1, "Spain"), SlotMapping(36, 2, "SEN"), SlotMapping(39, 3, "RSA")]
+    )
+    assert sorted(mapped.teams) == [36]
+    assert any("Spain" in line and "35" in line for line in lines)
+    assert any("South Africa" in line and "39" in line for line in lines)
+    home = patcher.map_rosters(
+        _nations(_nation(3, "South Africa", "RSA")), [SlotMapping(35, 3, "")]
+    )
+    assert sorted(home.teams) == [35]
 
 
 @pytest.mark.parametrize(
@@ -90,10 +111,12 @@ def test_a_club_mapping_is_not_national(tmp_path):
     assert not record.national and record.nation is None and record.name == "Liverpool"
 
 
-def test_a_nation_below_32_leaves_the_master_league_club_of_its_number(tmp_path, monkeypatch):
-    calls = []
+def _recording_writer(calls):
+    """A `RomWriter` stand-in that logs the calls `patch` makes and the records it hands over."""
 
     class Writer:
+        write_kits = True
+
         def __init__(self, rom_path, output_path):
             Path(output_path).write_bytes(b"")
 
@@ -103,8 +126,9 @@ def test_a_nation_below_32_leaves_the_master_league_club_of_its_number(tmp_path,
         def write_team(self, slot, team, players=None, include_flag=True):
             calls.append(("ml", slot))
 
-        def write_nat_team(self, slot, team, players=None, include_flag=True, kits=True):
+        def write_nat_team(self, slot, team, players=None, include_flag=True, kits=None):
             calls.append(("nat", slot, include_flag, kits))
+            calls.append(("record", slot, team))
             return len(players or [])
 
         def flush_tex_patches(self):
@@ -121,12 +145,27 @@ def test_a_nation_below_32_leaves_the_master_league_club_of_its_number(tmp_path,
         def finalize(self):
             pass
 
-    monkeypatch.setattr(patcher_module, "RomWriter", Writer)
-    monkeypatch.setattr(patcher_module, "apply_ppf", lambda *args, **kwargs: "")
+    return Writer
+
+
+def _sparse_rom(tmp_path, styles=None):
+    """A 100 MB sparse raw image; `styles` sets national style bytes ({slot: style})."""
     rom = tmp_path / "rom.bin"
     with rom.open("wb") as handle:
         handle.write(b"\x00" + b"\xff" * 10 + b"\x00")
         handle.truncate(100 * 1024 * 1024)
+        for slot, style in (styles or {}).items():
+            handle.seek(W._OFS_BANDIERE_FORMA1 + slot)
+            handle.write(bytes([style]))
+    return rom
+
+
+def test_a_nation_below_32_leaves_the_master_league_club_of_its_number(tmp_path, monkeypatch):
+    calls = []
+    Writer = _recording_writer(calls)
+    monkeypatch.setattr(patcher_module, "RomWriter", Writer)
+    monkeypatch.setattr(patcher_module, "apply_ppf", lambda *args, **kwargs: "")
+    rom = _sparse_rom(tmp_path)
     club = WETeamRecord(name="Club", short_name="CLB", players=[WEPlayerRecord("A", "B", 2, 1)])
     nation = WETeamRecord(name="DEN", short_name="DEN", national=True, nation=13, players=[])
     WE2002Patcher(cache_dir=tmp_path / "cache").patch(
@@ -141,6 +180,48 @@ def test_a_nation_below_32_leaves_the_master_league_club_of_its_number(tmp_path,
     assert ("ml", 0) in calls and ("ml", 20) not in calls
     # Denmark away from home wears its disc flag: style 9, whose bitmaps are queued.
     assert ("nat", 20, True, True) in calls and ("queue", nations.flag(13).style) in calls
+
+
+def test_a_home_nation_without_a_colour_entry_gets_back_its_style_byte_alone(tmp_path, monkeypatch):
+    """Senegal home on 36 after an earlier patch changed the slot's style: its own style byte,
+    never a logo or stripes through colours nobody can write."""
+    calls = []
+    monkeypatch.setattr(patcher_module, "RomWriter", _recording_writer(calls))
+    monkeypatch.setattr(patcher_module, "apply_ppf", lambda *args, **kwargs: "")
+    rom = _sparse_rom(tmp_path, {36: 41})
+    senegal = WETeamRecord(
+        name="SEN", short_name="SEN", national=True, nation=36, logo_url="http://x/sen.png"
+    )
+    WE2002Patcher(cache_dir=tmp_path / "cache").patch(
+        rom_path=rom,
+        output_path=tmp_path / "out.bin",
+        rosters=MappedRosters(game_id="we2002", teams={36: senegal}),
+        kits=False,
+        looks=False,
+    )
+    record = next(c[2] for c in calls if c[:2] == ("record", 36))
+    assert (record.flag_style, record.flag_clut) == (nations.flag(36).style, b"")
+    assert ("nat", 36, True, True) in calls
+    assert [c for c in calls if c[0] == "queue"] == [("queue", nations.flag(36).style)]
+
+
+def test_the_style_byte_alone_leaves_every_colour_as_it_is(tmp_path):
+    from retro_roster_patcher.games.we2002.rom_writer import RomWriter
+
+    path = tmp_path / "noise.bin"
+    path.write_bytes(bytes(range(256)) * 50_000)
+    before = path.read_bytes()
+    writer = RomWriter(str(path), str(path))
+    for slot in (36, 20):
+        writer.write_nat_team(
+            slot, WETeamRecord(name="X", short_name="X", flag_style=17, flag_clut=b"")
+        )
+    after = path.read_bytes()
+    for slot in (36, 20):
+        assert after[W._OFS_BANDIERE_FORMA1 + slot] == 17
+    colours = [c for chunks in W._NAT_COLOR_OFFSETS.values() for c in chunks]
+    region = (min(o for o, _ in colours) - 2, max(o + n for o, n in colours))
+    assert after[region[0] : region[1]] == before[region[0] : region[1]]
 
 
 # --- the retail disc -----------------------------------------------------------------------
