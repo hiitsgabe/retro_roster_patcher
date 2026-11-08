@@ -77,6 +77,7 @@ def _outside(image) -> bytes:
 def _rewritten(image, k: int, names: dict[int, str]) -> None:
     a, b = (names[s].upper() for s in _pairs(image)[k])
     matchup, situation = _title(image, k)
+    assert len(matchup) <= scenarios.SHOWN, matchup
     assert matchup == f"NO.{k + 1}".ljust(5) + f" {a} {SCORES[k]} {b}", k
     assert situation.startswith(CLOCKS[k] + " ") and situation.endswith(scenarios.PIECES[k])
     text = " ".join(_text(image, k).split())
@@ -130,13 +131,17 @@ def test_a_patch_that_reaches_no_scenario_leaves_scenario_mode_as_it_was(names):
     assert image == _synthetic()
 
 
-def test_a_long_name_is_cut_to_the_title_and_the_situation_drops_it():
+def test_long_names_are_cut_to_the_28_characters_the_box_shows():
     image = _synthetic()
     names = {0: "Wolverhampton Wanderers", 17: "Brighton and Hove Albion"}
     scenarios.write(image, names)
-    matchup, situation = _title(image, 0)
-    assert len(matchup) <= scenarios.MATCHUP and matchup.startswith("NO.1  WOLVERHAMP")
-    assert situation == "1:14 C.K."
+    assert _title(image, 0) == ("NO.1  WOLVERHAM 1-2 BRIGHTON", "1:14 WOLVERHAM'S C.K.")
+
+
+def test_a_situation_too_long_for_the_name_drops_it():
+    image = _synthetic()
+    scenarios.write(image, {26: "Southampton", 11: "Spurs"})
+    assert _title(image, 4) == ("NO.5  SOUTHAMPTON 1-1 SPURS", "0:49 THROW IN")
 
 
 def test_writing_twice_gives_the_same_image():

@@ -69,6 +69,7 @@ def test_a_blurb_fills_the_cartridge_s_length_in_23_character_lines(length, a, b
     text = scenarios.blurb(a, b, length)
     assert len(text) == length
     assert 0xFF not in text and 0xFD not in text
+    assert b"&" not in text  # the font has none: "and"
     assert a.split()[0].encode() in text
 
 

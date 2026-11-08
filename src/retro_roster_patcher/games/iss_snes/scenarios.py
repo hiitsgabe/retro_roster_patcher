@@ -47,6 +47,7 @@ def repoint(pairs: Sequence[tuple[int, int]], mapped: Collection[int]) -> list[t
 
 def blurb(a: str, b: str, length: int) -> bytes:
     """A blurb for `a` against `b` in `length` bytes: 23-character lines, padded with spaces."""
+    a, b = (name.replace("&", "and") for name in (a, b))  # the font has no "&"
     texts = (
         f"{a} take on {b} with everything to play for. Can you lead them to the win?",
         f"{a} take on {b}. Can you win it?",

@@ -8,7 +8,8 @@
 * Titles $87:EE3B (ROM 0x3EE3B, `TITLES`), 56 bytes each in the menu font
   (`rom.encode_name`'s), padded with spaces: the 34-character matchup ("NO.7
   ROMANIA 0-1 POLAND"), then the 22-character situation ("1:43 ROMANIA'S
-  F.K.").
+  F.K."). The box is 28 characters wide: the matchup's last six wrap under the
+  TIME REMAINING label, so the matchup keeps to `SHOWN`.
 * Descriptions $87:F12D (ROM 0x3F12D, `TEXTS`), 156 bytes each, six lines of
   26, in a second font (`TEXT_FONT`).
 
@@ -30,6 +31,7 @@ RECORD = 15
 TITLES = 0x3EE3B
 TITLE = 56
 MATCHUP = 34
+SHOWN = 28
 TEXTS = 0x3F12D
 TEXT = 156
 LINE = 26
@@ -77,7 +79,7 @@ def _texts(k: int, record: bytes | bytearray, a: str, b: str) -> tuple[bytes, by
     minutes, seconds, ga, gb = _bcd(record[3]), _bcd(record[2]), record[6], record[7]
     clock = f"{minutes}:{seconds:02}"
     head, short_a, short_b = f"NO.{k + 1}".ljust(5), a, b
-    while len(f"{head} {short_a} {ga}-{gb} {short_b}") > MATCHUP:
+    while len(f"{head} {short_a} {ga}-{gb} {short_b}") > SHOWN:
         if len(short_a) >= len(short_b):
             short_a = short_a[:-1].rstrip()
         else:
