@@ -24,12 +24,16 @@ from __future__ import annotations
 
 import struct
 from collections import Counter
+from collections.abc import Collection
 from io import BytesIO
 
 from . import rom as R
 
 TABLE = 0x87C80
 GENERIC = 0x49E
+#: The palette entries the generic stripe textures (GENERIC and the two after it:
+#: horizontal bands, vertical bands, a cross) draw with.
+STRIPES = (1, 6, 11)
 W, H = 48, 32
 TEX_SIZE = W * H // 2
 
@@ -72,21 +76,28 @@ def palette_place(block: int, index: int) -> int:
     return PALETTE_BASE + (block - PALETTE_BLOCK0) * 0x200 + index * 32
 
 
-def allocate(image: bytes | bytearray, crested: list[int], patched: set[int]) -> dict[int, int]:
-    """A texture of its own for every team in `crested`, {team: texture id}.
+def allocate(
+    image: bytes | bytearray,
+    crested: list[int],
+    patched: set[int],
+    keep: Collection[int] = (),
+    low: Collection[int] = (),
+) -> dict[int, int]:
+    """A texture of its own for every team in `crested` that one is left for,
+    {team: texture id}, served in `crested`'s order.
 
     `patched` are the teams this patch rewrites; their textures are free to
     reuse. Teams outside it whose texture is taken get the generic stripe one.
+    The textures of the teams in `keep` (cartridge flags a patch keeps or
+    moved) are never taken; those of the crested teams in `low` (the last
+    first) go to the others once nothing else is left.
     """
     teams = range(R.TEAMS)
     tex = {t: entry(image, t)[0] for t in teams}
     use = Counter(tex.values())
     out: dict[int, int] = {}
-    taken: set[int] = set()
-    for t in crested:
-        if use[tex[t]] == 1:
-            out[t] = tex[t]
-            taken.add(tex[t])
+    taken: set[int] = {tex[t] for t in keep}
+    own = {t: tex[t] for t in crested if use[tex[t]] == 1 and tex[t] not in taken}
     all_ids = {first + k for _, first, _, n in _BUNDLES for k in range(n)}
     spare = sorted(all_ids - set(tex.values()))
     spare += sorted(
@@ -96,10 +107,17 @@ def allocate(image: bytes | bytearray, crested: list[int], patched: set[int]) ->
         {tex[t] for t in reversed(teams) if t not in patched and use[tex[t]] == 1},
         key=lambda x: -x,
     )
-    spare = [s for s in spare if s not in taken and s != GENERIC]
+    spare = [s for s in spare if s not in taken and not GENERIC <= s < GENERIC + len(STRIPES)]
+    spare += [own[t] for t in reversed(crested) if t in low and t in own]
     for t in crested:
-        if t not in out and spare:
+        if t in own and own[t] not in taken:
+            out[t] = own[t]
+        else:
+            spare = [s for s in spare if s not in taken]
+            if not spare:
+                continue
             out[t] = spare.pop(0)
+        taken.add(out[t])
     return out
 
 
@@ -108,6 +126,36 @@ def allocate(image: bytes | bytearray, crested: list[int], patched: set[int]) ->
 
 def _rgba5551(r: int, g: int, b: int) -> int:
     return (r >> 3) << 11 | (g >> 3) << 6 | (b >> 3) << 1 | 1
+
+
+def _rgb(word: int) -> tuple[int, int, int]:
+    return ((word >> 11) & 31) << 3, ((word >> 6) & 31) << 3, ((word >> 1) & 31) << 3
+
+
+def _texels(tex: bytes) -> list[int]:
+    return [v for b in tex for v in (b >> 4, b & 15)]
+
+
+def stripes(generic: dict[int, bytes], tex: bytes, palette: bytes) -> tuple[int, bytes]:
+    """A flag with no texture left for it, as (generic texture id, palette): of the
+    generic stripe textures (`generic`, {id: texture bytes}), the one whose bands
+    fit the picture (`tex`, `palette`) best, each band its mean colour."""
+    words = struct.unpack(">16H", palette)
+    px = [_rgb(words[i]) for i in _texels(tex)]
+    best: tuple[float, int, list[int]] = (float("inf"), GENERIC, list(words))
+    for gid, data in sorted(generic.items()):
+        bands = _texels(data)
+        out, err = list(words), 0.0
+        for k in STRIPES:
+            mine = [c for c, b in zip(px, bands, strict=True) if b == k]
+            if not mine:
+                continue
+            mean = tuple(sum(c[i] for c in mine) / len(mine) for i in range(3))
+            err += sum(sum((c[i] - mean[i]) ** 2 for i in range(3)) for c in mine)
+            out[k] = _rgba5551(*(round(v) for v in mean))
+        if err < best[0]:
+            best = (err, gid, out)
+    return best[1], struct.pack(">16H", *best[2])
 
 
 def draw(logo_png: bytes | None, background: tuple[int, int, int]) -> tuple[bytes, bytes]:
@@ -138,10 +186,14 @@ def write(
     space: R.AssetSpace,
     crests: dict[int, tuple[bytes, bytes]],
     patched: set[int],
+    keep: Collection[int] = (),
+    low: Collection[int] = (),
 ) -> None:
-    """Give each team in `crests` ({team: (texture, palette)}) its crest."""
+    """Give each team in `crests` ({team: (texture, palette)}, served in that
+    order) its crest; the flags of `keep` stay as they are. A crest with no
+    texture left (those of `low` first) waves the generic stripes nearest it."""
     assets = R.assets(image)
-    owner = allocate(image, sorted(crests), patched)
+    owner = allocate(image, list(crests), patched, keep, low)
     bundles: dict[int, bytearray] = {}
 
     def bundle(k: int) -> bytearray:
@@ -157,12 +209,17 @@ def write(
             set_entry(image, t, GENERIC, block, idx)
     used_pal: Counter[tuple[int, int]] = Counter(entry(image, t)[1:] for t in range(R.TEAMS))
     for team, (tex_bytes, pal_bytes) in crests.items():
-        if team not in owner:
-            continue
         tex, block, idx = entry(image, team)
-        tex = owner[team]
-        asset, off = texture_place(tex)
-        bundle(asset)[off : off + TEX_SIZE] = tex_bytes
+        if team in owner:
+            tex = owner[team]
+            asset, off = texture_place(tex)
+            bundle(asset)[off : off + TEX_SIZE] = tex_bytes
+        else:
+            generic = {}
+            for k in range(GENERIC, GENERIC + len(STRIPES)):
+                asset, off = texture_place(k)
+                generic[k] = bytes(bundle(asset)[off : off + TEX_SIZE])
+            tex, pal_bytes = stripes(generic, tex_bytes, pal_bytes)
         if used_pal[(block, idx)] > 1:
             used_pal[(block, idx)] -= 1
             block, idx = _free_palette(used_pal)

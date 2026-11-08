@@ -10,6 +10,8 @@ squeezed when it would run past 62 pixels.
 
 from __future__ import annotations
 
+import base64
+import zlib
 from functools import lru_cache
 
 from . import rom as R
@@ -131,15 +133,67 @@ REGIONS = {
 
 VISIBLE = 52
 
+#: The cartridge's `REGIONS` cells, in that order, each 16 rows of its width.
+RETAIL_REGIONS = zlib.decompress(
+    base64.b64decode(
+        "eNrdVuFrE2cc/r23XLzsPa7vFEs3JbmWfRAE74P7A87RQcvA3MCCMjBX6YaC9PwPmo5mZEySG9hhEJoN2Vd7flAmJzbW"
+        "KnOG5F9Ih4bUhMTL7mJiQt69d6mrX/y80R8kgefJvXf5Pb/n9wTS6ZUZCGsT6QvA/TAPM2kNpdPLaFh8vAaSmWi0ZKPZ"
+        "h3ypxw+LD0MugA0xPQvKhR7kZRts4RVA2J0iTyGu3ofE7Db73IFneHOKCJT+1AGDlIo90YL4qcENV6RUw1vTB13IQD1r"
+        "jSXBODi4p0rXpoloAjv+GfIibcmEZ7wD7EbsdWduqn/OC7X5Du5+3RYqAPHUHFEo1fPDZNhBda48UHEBwKBUBlZoEoJC"
+        "BP6fxeUAcrmfhVxO41bhmK0FyF7hlswN7LtS/UE37PHDB56PvMMrhsZ3WGcs1I+0T9xGdR95h7fHkkKbtUkPdXElLwPx"
+        "kT065IoWpjRpNFq3pUJjF9njxc3jFWlrmuQvDSBm9lkffWSPT1DqxNj3S1DW4voAhG0f2eOL07NenN2vDoZpqBur+aSP"
+        "/EuHPQh12fNyPYhu58lRWg2Q93brIOyr4q8TOLcMMzBBQtdlmCEwvgqQglA6HfAbZevIYEg2VIVkm9tQ0lGzpfNNwI1i"
+        "0L2/wk5GVvSyeZ7rcB5fN/FDXBDzvn0C8UxEdth7o3I1UgAZX7IUDZHTMVnSAz7GGu+CtOy5tn+FMl5JMJvck7TYSMK4"
+        "jEJtiJ1x7v0xpiO4wTsZQFxbTMa/CUYsruIVFxbHK4sv2JTdprSdJdFZSi1j9POij/OTjbNdwYq5uJq9uPWFF18tRhe+"
+        "LFzdVb/1AhaHSWxih2vVojrUInQzQ8Kv7D253xqYGxn4o32l/zGmNkxocJaEvuPTaTX9vSyooZzqY/5vrm8woTIFKMui"
+        "KzaK88OSG9OMZtvHWEUKTDa0U0FD7bTD9mPIRbX4VBfVGBbwVda08KbD9XW7olyYDDucZ3xcAZlhwfnlHhuSeZd/ulwt"
+        "JGg/MihZa/4kMGy0HTY0OE+q4bu/X7eM6c/xk8ZoezDMpy+DokGZ9iKp0vHkGrCIyKpPJZOvMCxYDgtrh8940zZeGIja"
+        "/bkzMV1Z7uDq4jWGBbuNPse2BWvSKU+SW7SrqOKmyx4KM+z9dufI/hmAiSuAzqZA0GBmd2mvO3D0ZfmKkkQtX2MEH3T/"
+        "hiU5+ktCO1DzVT0AH/76GpZ+I5CVo6m2bzNmxJfwCa3BOmQO+cs1A38C2xCHy1qRDQNbp6jGUzrkNyHx1RuWxG8ABCo+"
+        "Orn+6ZvPSodeKzdPlpj9by5psKRl6KMD7i0C6wRujTr91oL/QSE/6rj3h+fG0IQjtMqGkOocS/yyLDhiAYzdhDrx5HIH"
+        "Nb8tTw7m5ggu60BNXBmzUKM94kvET02YnfLHNX7a5Oi2aClJ4fkooVgqQT/K0o0f5FbBFi2+2xkzE1p0eZRQvAeo56eb"
+        "0Lfv8C6uCE5R0bNyhtQDXnBZwMV1WMDMbmLtxzYuGHn1AWqkm6Pre3DiocJOlZjUCfu+J1lRSoqRut0KOo/KjaGMhy0r"
+        "1ihuFVkuxpKRAeopJmTV4IDx3DzApVWYYH/cVgClJmSUQissRo6p+8Ed/wDFfBe2"
+    )
+)
 
-def write_regions(image: bytearray, space: R.AssetSpace, labels: dict[str, str]) -> None:
-    """Rename team select's region labels, {region: text} (`REGIONS` keys)."""
+
+def _cells(sheet: bytes | bytearray) -> list[tuple[int, int]]:
+    """(sheet offset, bytes) of each row of every `REGIONS` cell, in order."""
+    return [
+        ((row0 + y) * SHEET_W // 2 + col0 // 2, width // 2)
+        for row0, col0, width in REGIONS.values()
+        for y in range(16)
+    ]
+
+
+def region_cells(image: bytes | bytearray) -> bytes:
+    """The region label cells team select shows, as `RETAIL_REGIONS` holds them."""
+    sheet = R.read_asset(image, R.assets(image)[NAMES_ASSET])
+    return b"".join(sheet[o : o + n] for o, n in _cells(sheet))
+
+
+def write_regions(image: bytearray, space: R.AssetSpace, labels: dict[str, str | None]) -> None:
+    """Rename team select's region labels, {region: text} (`REGIONS` keys); None
+    gives a region the cartridge's label back."""
     if not labels:
         return
     asset = R.assets(image)[NAMES_ASSET]
-    sheet = bytearray(R.read_asset(image, asset))
-    for region, text in labels.items():
-        row0, col0, width = REGIONS[region]
+    old = R.read_asset(image, asset)
+    sheet = bytearray(old)
+    retail = iter(_cells(sheet))
+    at = 0
+    for region, (row0, col0, width) in REGIONS.items():
+        rows = [next(retail) for _ in range(16)]
+        text = labels.get(region, "")
+        if text is None:
+            for o, n in rows:
+                sheet[o : o + n] = RETAIL_REGIONS[at : at + n]
+                at += n
+            continue
+        at += 16 * (width // 2)
+        if not text:
+            continue
         # Team select shows a 64-pixel cell's first 52 or so: squeeze the
         # name into that, centred there.
         cell = _render_face(text.upper(), min(width, VISIBLE) - min(width, VISIBLE) % 2, 16)
@@ -149,7 +203,8 @@ def write_regions(image: bytearray, space: R.AssetSpace, labels: dict[str, str])
                 sheet[(row0 + y) * SHEET_W // 2 + (col0 + x) // 2] = (
                     cell[y][x] << 4 | cell[y][x + 1]
                 )
-    space.put(asset, bytes(sheet))
+    if sheet != old:
+        space.put(asset, bytes(sheet))
 
 
 def write(image: bytearray, space: R.AssetSpace, names: dict[int, str]) -> None:

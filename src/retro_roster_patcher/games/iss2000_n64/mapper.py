@@ -161,8 +161,12 @@ class N64Team:
     code: str = ""
     #: The league the club plays in, for its region's label on team select.
     league: str = ""
-    #: A national side: it keeps the cartridge's name, flag and region label.
+    #: A national side: never a league's, so never on a region labelled after one.
     national: bool = False
+    #: A national side's slot on the cartridge (None: the cartridge lacks it). On that
+    #: slot, while it still shows the nation's flag and kits, it keeps the cartridge's
+    #: name, flag and kits; anywhere else it is written like a club, in those of its own.
+    nation: int | None = None
     players: list[N64Player] = field(default_factory=list)
     #: Starting-XI line counts (DF, MF, FW); None keeps the slot's formation.
     formation: tuple[int, int, int] | None = None

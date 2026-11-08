@@ -105,20 +105,34 @@ def paint(record: bytearray, kit: KitSpec) -> None:
         struct.pack_into(">16H", record, at, *recolour(pal, colour))
 
 
+def _record(team: int, side: int) -> int:
+    return FIRST + (KIT_INDEX[team] + AWAY * side) * SIZE
+
+
 def write(
-    image: bytearray, space: R.AssetSpace, kits: dict[int, tuple[KitSpec | None, KitSpec | None]]
+    image: bytearray,
+    space: R.AssetSpace,
+    kits: dict[int, tuple[KitSpec | None, KitSpec | None]],
+    copies: dict[int, int] | None = None,
 ) -> None:
-    """Give each team id in `kits` its (first, second) kit; None keeps one."""
-    if not kits:
+    """Give each team id in `kits` its (first, second) kit; None keeps one. Each
+    team in `copies` ({team: source}) first takes both kit records `source` had
+    before this call."""
+    if not kits and not copies:
         return
     assets = R.assets(image)
     data = {k: R.read_asset(image, assets[k]) for k in PACKS}
     stream = bytearray(b"".join(data[k] for k in PACKS))
+    before = bytes(stream)
+    for team, source in (copies or {}).items():
+        for side in (0, 1):
+            o, src = _record(team, side), _record(source, side)
+            stream[o : o + SIZE] = before[src : src + SIZE]
     for team, sides in kits.items():
         for side, kit in enumerate(sides):
             if kit is None:
                 continue
-            o = FIRST + (KIT_INDEX[team] + AWAY * side) * SIZE
+            o = _record(team, side)
             record = stream[o : o + SIZE]
             paint(record, kit)
             stream[o : o + SIZE] = record
