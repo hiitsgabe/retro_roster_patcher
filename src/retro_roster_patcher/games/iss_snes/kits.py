@@ -156,18 +156,44 @@ def retail_flag(rom: bytes, n: int) -> Flag:
     never patched, else `_RETAIL_FLAGS` in the colours `retail` gives back, so
     a nation keeps its flag wherever a patch put it and whatever stood in its
     slot."""
-    words = struct.unpack_from("<4H", retail(rom), ISSRomWriter._flag_colour_offset(n))
-    colours = [_bgr555_to_rgb(w) for w in words]
     if rom[_DISPLACEMENT_PATCH_POINTS[0]] != _DISPLACEMENT_PATCH_BYTE:
-        rows = []
-        for k in (0, 2):
-            at = 0x40000 + int.from_bytes(rom[_OFS_FLAG_TILE_PTRS + 4 * n + k :][:2], "little")
-            size = int.from_bytes(rom[at : at + 2], "little") & 0x7FFF
-            rows += _half_rows(decompress(rom[at : at + size]))
-        return Flag(rows, colours)
+        return _flag(rom, n)
+    words = struct.unpack_from("<4H", retail(rom), ISSRomWriter._flag_colour_offset(n))
     packed = _RETAIL_FLAGS[96 * n : 96 * (n + 1)]
     pixels = [b >> s & 3 for b in packed for s in (6, 4, 2, 0)]
-    return Flag([pixels[24 * r : 24 * (r + 1)] for r in range(16)], colours)
+    return Flag(
+        [pixels[24 * r : 24 * (r + 1)] for r in range(16)], [_bgr555_to_rgb(w) for w in words]
+    )
+
+
+def _flag(rom: bytes, n: int) -> Flag:
+    """Slot `n`'s flag as `rom` holds it."""
+    rows = []
+    for k in (0, 2):
+        at = 0x40000 + int.from_bytes(rom[_OFS_FLAG_TILE_PTRS + 4 * n + k :][:2], "little")
+        size = int.from_bytes(rom[at : at + 2], "little") & 0x7FFF
+        rows += _half_rows(decompress(rom[at : at + size]))
+    words = struct.unpack_from("<4H", rom, ISSRomWriter._flag_colour_offset(n))
+    return Flag(rows, [_bgr555_to_rgb(w) for w in words])
+
+
+def untouched(rom: bytes, n: int) -> bool:
+    """Whether slot `n` still holds nation `n` as the retail cartridge has it: its
+    flag shows the retail flag, and its kits, chest design and clash byte are the
+    retail ones. False once a patch wrote another team there."""
+    if rom[_DISPLACEMENT_PATCH_POINTS[0]] != _DISPLACEMENT_PATCH_BYTE:
+        return True
+    own = retail(rom)
+
+    def shown(flag: Flag) -> list[list[RGB]]:
+        return [[flag.colours[v] for v in row] for row in flag.pixels]
+
+    return (
+        shown(_flag(rom, n)) == shown(retail_flag(rom, n))
+        and all(rom[at : at + 16] == own[at : at + 16] for at in _kit_offsets(n))
+        and chest(rom, n) == chest(own, n)
+        and rom[_OFS_PREDOMINANT_COLOR + n] == own[_OFS_PREDOMINANT_COLOR + n]
+    )
 
 
 def retail(rom: bytes) -> bytes:

@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import io
 import json
+import os
+from pathlib import Path
 
 import pytest
 
@@ -18,8 +20,13 @@ from retro_roster_patcher.core.kits import default_kits
 from retro_roster_patcher.core.models import SlotMapping
 from retro_roster_patcher.games.iss_snes import ISSPatcher, kits
 from retro_roster_patcher.games.iss_snes.logo import logo_flag
+from retro_roster_patcher.games.iss_snes.patcher import GK_KIT
 from retro_roster_patcher.games.iss_snes.rom_writer import (
+    _DISPLACEMENT_PATCH_BYTE,
+    _DISPLACEMENT_PATCH_POINTS,
     _encode_team_name_text,
+    _gk_offset,
+    _make_shades,
     outfield_block,
 )
 from retro_roster_patcher.sports.models import League, LeagueData, Player, Team, TeamRoster
@@ -240,3 +247,68 @@ def test_the_top_nations_fill_the_six_slots_a_league_leaves(rom, tmp_path):
     assert _name_text(image, 25) == _encode_team_name_text("Portugal")
     assert _shown(image, 25) == _as_shown(logo_flag(PNG))
     assert _player_names(image, 26) == _player_names(before, 26)
+
+
+# --- a slot an earlier patch wrote ----------------------------------------------------------
+
+
+def _league(patcher, count: int):
+    clubs = [roster(900 + s, f"Club {s}", f"C{s:02d}") for s in range(count)]
+    return patcher.map_rosters(
+        LeagueData(league=LEAGUE, teams=clubs),
+        [SlotMapping(slot_index=s, team_id=900 + s) for s in range(count)],
+    )
+
+
+def test_a_nation_back_on_a_slot_an_earlier_patch_gave_a_club_writes_its_own_name_flag_and_kit(
+    patcher, rom, tmp_path
+):
+    """20 clubs, then 18 and the fill: Argentina's own slot 18 still holds Club 18
+    from the first patch, so Argentina writes its name, flag and kits there."""
+    first = tmp_path / "first.sfc"
+    _patch(patcher, rom, first, _league(patcher, 20))
+    nations = LeagueData(league=NATIONS, teams=[roster(1, "Argentina", "ARG")])
+    rosters = _league(patcher, 18).merge(
+        patcher.map_rosters(nations, [SlotMapping(slot_index=ARGENTINA, team_id=1)])
+    )
+    image = _patch(patcher, first, tmp_path / "second.sfc", rosters)
+    assert _name_text(image, ARGENTINA) == _encode_team_name_text("Argentina")
+    assert _name_tiles(image, ARGENTINA) != _name_tiles(first.read_bytes(), ARGENTINA)
+    assert _shown(image, ARGENTINA) == _as_shown(kits.retail_flag(image, ARGENTINA))
+    assert _block(image, ARGENTINA, 0) == kits.resolve(image, ARGENTINA, 0).block
+    assert _block(image, ARGENTINA, 1) == kits.resolve(image, ARGENTINA, 1).block
+    at = _gk_offset(ARGENTINA)
+    assert at is not None
+    keeper = b"".join(w.to_bytes(2, "little") for w in _make_shades(*GK_KIT[0], 4))
+    assert image[at + 2 : at + 10] == keeper
+
+
+# --- the real cartridge ---------------------------------------------------------------------
+
+
+@pytest.fixture
+def retail_rom() -> Path:
+    if not os.environ.get("RETRO_ROSTER_TEST_ROMS"):
+        pytest.skip("set RETRO_ROSTER_TEST_ROMS to a directory holding iss.sfc")
+    path = Path(os.environ["RETRO_ROSTER_TEST_ROMS"]) / "iss.sfc"
+    if not path.exists():
+        pytest.fail(f"RETRO_ROSTER_TEST_ROMS is set but {path} is missing")
+    return path
+
+
+@pytest.mark.real_rom
+def test_the_packaged_flags_are_the_cartridge_s(retail_rom):
+    retail = retail_rom.read_bytes()
+    patched = bytearray(retail)
+    patched[_DISPLACEMENT_PATCH_POINTS[0]] = _DISPLACEMENT_PATCH_BYTE
+    for n in range(kits.TEMPLATES):
+        assert kits.retail_flag(bytes(patched), n) == kits.retail_flag(retail, n), n
+
+
+@pytest.mark.real_rom
+def test_patching_the_cartridge_and_re_patching_give_the_same_image(patcher, retail_rom, tmp_path):
+    """Spain moved, Colombia on its own slot, Japan from ESPN: a patch of the retail
+    cartridge and a patch of that patch are the same image."""
+    rosters = _mapped(patcher, {MEXICO: "Spain", COLOMBIA: "Colombia", USA: "Japan"})
+    first = _patch(patcher, retail_rom, tmp_path / "a.sfc", rosters)
+    assert _patch(patcher, tmp_path / "a.sfc", tmp_path / "b.sfc", rosters) == first

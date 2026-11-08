@@ -341,8 +341,6 @@ class ISSPatcher(Patcher):
             record.logo_url = roster.team.logo_url
             if data.league.id == NATIONAL_LEAGUE:
                 record.nation = cartridge_slot(NATIONS, NATIONAL_ALIASES, roster.team)
-                if record.nation == entry.slot_index:
-                    record.kit_gk = ()  # the cartridge's own keeper kit
             teams[entry.slot_index] = record
         return MappedRosters(game_id=self.game_id, teams=teams)
 
@@ -400,6 +398,9 @@ class ISSPatcher(Patcher):
         # front; templates are read off the input, before any slot changes.
         given = options.get("kits", True)
         plans = None if given is False else self._kit_plans(image, rosters, slots, given)
+        # A nation on its own slot, which still holds it as the cartridge has it, keeps the
+        # cartridge's name and keeper kit; one an earlier patch wrote over is written whole.
+        own = {s for s in slots if rosters.teams[s].nation == s and kits.untouched(image, s)}
         blank = bool(options.get("blank_unused", False))
         unused = [s for s in range(TOTAL_TEAMS) if s not in slots] if blank else []
         flags, fallbacks = self._flags(image, rosters, slots, logos=options.get("logos", True))
@@ -450,7 +451,7 @@ class ISSPatcher(Patcher):
                             home.shades if home is not None else None,
                             away.shades if away is not None else None,
                         )
-                        if record.kit_gk:
+                        if record.kit_gk and slot not in own:
                             writer.write_gk_kit(slot, record.kit_gk)
                         # The chest design and the clash byte belong to the
                         # team, so they follow the home kit; without one the
@@ -466,8 +467,7 @@ class ISSPatcher(Patcher):
                         del shirts[slot]
 
                     described[slot] = record.name
-                    # A nation on its own slot keeps the cartridge's name.
-                    if record.nation != slot:
+                    if slot not in own:
                         patched_names[slot] = record.name
                         patched_tile_names[slot] = record.short_name
                     # Unconditional: the name, the kit and the description land
