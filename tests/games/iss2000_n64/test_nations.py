@@ -20,6 +20,7 @@ from retro_roster_patcher.core.kits import default_kits
 from retro_roster_patcher.core.models import SlotMapping
 from retro_roster_patcher.games.iss2000_n64 import flags, kits, names, scenarios
 from retro_roster_patcher.games.iss2000_n64 import rom as R
+from retro_roster_patcher.games.iss2000_n64 import writer as W
 from retro_roster_patcher.games.iss2000_n64.patcher import ISS2000Patcher
 from retro_roster_patcher.sports.models import League, LeagueData, Player, Team, TeamRoster
 from retro_roster_patcher.sports.nationals import fetch_top_nations
@@ -78,6 +79,11 @@ NATION = {
          ("Japan", "JPN")]
     )
 }  # fmt: skip
+
+# England plays a 4-3-3 over Norway's slot, which is the cartridge's 4-5-1 donor, and Scotland the
+# 4-5-1: a re-patch must still copy the cartridge's 4-5-1 row, not England's.
+NATION["England"].extra["formation"] = "4-3-3"
+NATION["Scotland"].extra["formation"] = "4-5-1"
 
 
 @pytest.fixture
@@ -391,9 +397,15 @@ def test_re_patching_with_the_fill_gives_the_same_image_but_the_clubs_kits(made,
             assert R.read_asset(first, x) == R.read_asset(second, y), x.index
     for t in (HOLLAND, NORWAY, FINLAND, *range(23, 100)):
         assert _kit(second, t) == _kit(first, t), t
-    raw = [(R.PLAYER_TABLE, flags.TABLE + 6 * R.TEAMS), (scenarios.TABLE, 0x50D8C0 + 128)]
+    # The players, formations and team metadata, the ratings, the flag table, the scenarios.
+    raw = [
+        (R.PLAYER_TABLE, R.METADATA + 6 * R.TEAMS),
+        (W.ATTACK_TABLE, W.DEFENCE_TABLE + R.TEAMS),
+        (flags.TABLE, flags.TABLE + 6 * R.TEAMS),
+        (scenarios.TABLE, 0x50D8C0 + 128),
+    ]
     for lo, hi in raw:
-        assert first[lo:hi] == second[lo:hi]
+        assert lo < hi and first[lo:hi] == second[lo:hi], hex(lo)
     assert _flag(second, NORWAY) == _flag(retail, ENGLAND)
 
 

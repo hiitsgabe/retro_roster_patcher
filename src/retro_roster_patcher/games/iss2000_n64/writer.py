@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import struct
 from collections.abc import Sequence
 
@@ -13,15 +14,26 @@ _ABILITY_BYTES = {name: R.ABILITIES + k for k, name in enumerate(R.ABILITY_NAMES
 _ABILITY_BYTES.update(goalkeeping=R.GOALKEEPING, keeper2=R.KEEPER2, attack=0x2F, cover=0x30)
 
 
+#: The donor teams' formation rows and ids on the cartridge, in `FORMATION_DONORS` order: a
+#: patch may write over every donor slot (the nation fill does), so even a re-patch copies these.
+_DONORS = base64.b64decode(
+    "AAAAAAAAAAX/OIEEAAD/vwECAAAAQQECAAUAyIEE/9j/xAIG/9gAPAIGACj/TAIHACgAtAIHAAD/nAMJAAAAZAMJAQAA"
+    "AAAAAP/s/ziBBP/Y/8QBAv/YADwBAv/sAMiBBP/Y/78CBv/YAEECBgAA/waCBQAAAPqCBQAUAACCBwAoAAADCQAAAAAA"
+    "AAAAHv84gQQAAP+/AQIAAABBAQIAHgDIgQT/4gAAAgYAFP9RAgcAFACvAgcAAP8GAwgAAAD6AwgACgAAAwkCAAAAAAAA"
+    "AAD/iAED/9gAAAEBAAAAeAED/9j/xAIG/9gAPAIGAAD/EIIFAAAA8IIFADwAAAIH/9j/nAMKAAAAUAMJBQAAAAAAAAAA"
+    "/34BA//OAACBAQAAAIIBA//s/5wCBv/sAGQCBgAU/xCCBQAUAPCCBQA8/0wCBwA8ALQCBwAUAAADCQQAAAAAAAD/9v+C"
+    "AQP/zgAAAQH/9gB+AQP/4v84ggUAHgDIggUAAP/EAgYACgA8Agf/4v9qAwj/xACWAwj/9gAAAwkGAAAAAAAAABL/NoEE"
+    "AAD/mwED/+UAAAEBAAAAZQEDABIAyoEEABL/UAIH/+4AAAIGABIAsAIHAAD/mwMJAAAAZQMJDQ=="
+)
+
+
 def donor_rows(image: bytes | bytearray) -> dict[tuple[int, int, int], tuple[bytes, int]]:
-    """Each formation's row and id as the donor team has it, read before any
-    team is written: a donor slot may itself be patched with another shape."""
+    """Each formation's row and id as the cartridge's donor team has it, whatever `image`
+    (an earlier patch's, say) holds in the donor slots now."""
+    size = R.FORMATION_ROW + 1
     return {
-        shape: (
-            bytes(image[R.FORMATIONS + d * R.FORMATION_ROW :][: R.FORMATION_ROW]),
-            image[R.METADATA + d * 6 + 5],
-        )
-        for shape, d in FORMATION_DONORS.items()
+        shape: (_DONORS[k * size : k * size + R.FORMATION_ROW], _DONORS[k * size + R.FORMATION_ROW])
+        for k, shape in enumerate(FORMATION_DONORS)
     }
 
 

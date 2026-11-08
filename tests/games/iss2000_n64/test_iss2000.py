@@ -336,15 +336,19 @@ def test_a_formation_comes_from_the_donor_as_shipped():
     from retro_roster_patcher.games.iss2000_n64 import writer as W
     from retro_roster_patcher.games.iss2000_n64.mapper import FORMATION_DONORS
 
+    # An image an earlier patch wrote over every donor slot (the nation fill does).
     image = bytearray(R.METADATA + 120 * 6)
     for donor in FORMATION_DONORS.values():
         image[R.FORMATIONS + donor * R.FORMATION_ROW] = donor + 1
     donors = W.donor_rows(image)
     # The 4-5-1 donor (slot 20) is itself patched with a 4-3-3 first ...
     W.write_formation(image, FORMATION_DONORS[(4, 5, 1)], (4, 3, 3), donors)
-    # ... and a later 4-5-1 still gets the shipped 4-5-1 row.
+    # ... and a later 4-5-1 still gets the shipped 4-5-1 row, never what the image holds.
     W.write_formation(image, 69, (4, 5, 1), donors)
-    assert image[R.FORMATIONS + 69 * R.FORMATION_ROW] == FORMATION_DONORS[(4, 5, 1)] + 1
+    row, ident = donors[(4, 5, 1)]
+    at = R.FORMATIONS + 69 * R.FORMATION_ROW
+    assert image[at : at + R.FORMATION_ROW] == row and image[R.METADATA + 69 * 6 + 5] == ident
+    assert row[0] != FORMATION_DONORS[(4, 5, 1)] + 1
 
 
 def test_a_kit_recolours_the_shading_ramps_and_keeps_the_skin():

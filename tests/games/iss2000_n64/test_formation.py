@@ -327,6 +327,13 @@ def test_the_literal_rows_are_the_cartridges(retail):
 
 
 @real_rom
+def test_the_packaged_donor_rows_are_the_cartridges(retail):
+    for shape, donor in FORMATION_DONORS.items():
+        row = retail[R.FORMATIONS + donor * R.FORMATION_ROW :][: R.FORMATION_ROW]
+        assert W.donor_rows(retail)[shape] == (row, retail[R.METADATA + donor * 6 + 5]), shape
+
+
+@real_rom
 def test_the_widest_place_of_the_cartridge_is_262_which_is_what_a_side_divides_by(retail):
     widths = [abs(w) for team in range(R.TEAMS) for w in R.formation_widths(retail, team)]
     assert max(widths) == W.TOUCHLINE == 262
