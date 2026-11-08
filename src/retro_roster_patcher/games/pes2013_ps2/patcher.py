@@ -67,6 +67,8 @@ from .models import (
     IMAGE_SLOTS,
     LEAGUE_GROUPS,
     LIBERTADORES_BASE,
+    LOOK_END,
+    LOOK_START,
     NATIONAL_COUNT,
     NATIONAL_NAMED,
     NATIONAL_SLOT_BASE,
@@ -661,8 +663,13 @@ class PES2013PS2Patcher(Patcher):
             primary = tables[PLAYER_ENTRIES[0]]
             # The disc's records as they are, before any write: a player who
             # is on the disc keeps the look of his old record even when that
-            # record has already been given to someone else.
-            disc = _Disc(primary.players, reader.libertadores_players())
+            # record has already been given to someone else, by this patch or an
+            # earlier one (the retail looks of those records are packaged).
+            main = bytearray(primary.players)
+            for index, look in looks.retail_looks().items():
+                at = index * PLAYER_RECORD_SIZE
+                main[at + LOOK_START : at + LOOK_END] = look
+            disc = _Disc(bytes(main), reader.libertadores_players())
             originals = {index: t.players for index, t in tables.items()}
             slots = sorted(slot for slot in rosters.teams if 0 <= slot < CLUB_COUNT)
             national_slots = sorted(

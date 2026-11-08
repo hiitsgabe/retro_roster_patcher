@@ -88,6 +88,15 @@ def disc_players() -> dict[int, int]:
     return found
 
 
+@cache
+def retail_looks() -> dict[int, bytes]:
+    """Main-table record -> its look region (`LOOK_START`-`LOOK_END`) as the retail disc
+    holds it, for every record `disc_players` matches a player to: an earlier patch may
+    have given the record to somebody else, and the player keeps his own face anyway."""
+    raw = json.loads(package_bytes("retro_roster_patcher.assets", DISC_PLAYERS_FILE))
+    return {int(k): bytes.fromhex(v) for k, v in raw.get("looks", {}).items()}
+
+
 def dress(
     players: Sequence[PESPlayer],
     faces: Mapping[int, Face] | None = None,

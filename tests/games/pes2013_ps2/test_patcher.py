@@ -8,6 +8,7 @@ reassigned by position, and that team names fit their overlay slots.
 
 from __future__ import annotations
 
+import json
 import os
 import random
 import struct
@@ -1368,6 +1369,45 @@ def test_a_player_already_on_the_disc_gets_that_records_look(tmp_path, monkeypat
         havertz, raya = by_name["KAI HAVERTZ"], by_name["DAVID RAYA"]
         assert havertz[92:124] == bytes([0xAB]) * 32  # the disc's look, licensed flags and all
         assert raya[102] & 3 == 0  # an unmapped player is dressed as usual: a built face
+
+
+def test_a_player_on_the_disc_gets_his_own_look_over_an_image_a_patch_rewrote(
+    tmp_path, monkeypatch
+):
+    """Record 5 holds another look now (an earlier patch gave it to somebody else): the
+    player matched to it still gets the disc's, packaged."""
+    iso = _iso_with_looks(tmp_path, {5: bytes([0xAB]) * 32})
+    monkeypatch.setattr(looks, "disc_players", lambda: {101: 5})
+    monkeypatch.setattr(looks, "retail_looks", lambda: {5: bytes([0xCD]) * 32})
+    patcher = PES2013PS2Patcher(tmp_path)
+    rosters = patcher.map_rosters(_league_with_photos(""), [SlotMapping(slot_index=0, team_id=10)])
+    out = tmp_path / "out.iso"
+    patcher.patch(
+        rom_path=iso, output_path=out, rosters=rosters, logos=False, kits=False, looks=False
+    )
+    found = {k: v[92:124] for k, v in _by_name(out, PLAYER_ENTRIES[0]).items()}
+    assert found["KAI HAVERTZ"] == bytes([0xCD]) * 32
+
+
+@pytest.mark.real_rom
+def test_the_packaged_looks_are_the_discs(disc):
+    from retro_roster_patcher.core.assets import package_bytes
+
+    raw = json.loads(package_bytes("retro_roster_patcher.assets", looks.DISC_PLAYERS_FILE))
+    reader = RomReader(str(disc))
+    assert reader.load()
+    for entry in PLAYER_ENTRIES:
+        t = reader.player_tables(entry)
+        assert {int(k): bytes.fromhex(v) for k, v in raw["looks"].items()} == {
+            i: t.record(i)[92:124] for i in set(raw["players"].values())
+        }
+
+
+def _by_name(out, entry):
+    reader = RomReader(str(out))
+    reader.load()
+    t = reader.player_tables(entry)
+    return {_name(t, i): t.record(i) for i in range(t.player_count)}
 
 
 # -- the South American clubs' table (0_TEXT.AFS entries 48/49) -------------
