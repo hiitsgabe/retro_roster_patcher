@@ -117,7 +117,16 @@ class PlayerTables:
             struct.unpack(f"<{NATIONAL_SQUAD_SIZE}H", part[start : start + NATIONAL_SQUAD_SIZE * 2])
         )
 
-    def set_national_squad(self, row: int, indices: list[int]) -> None:
+    def national_numbers(self, row: int) -> bytes:
+        """The shirt numbers (number - 1) of the row's places."""
+        part = self.parts[PART_NATIONAL_ORDER]
+        return part[row * NATIONAL_SQUAD_SIZE : (row + 1) * NATIONAL_SQUAD_SIZE]
+
+    def set_national_squad(
+        self, row: int, indices: list[int], numbers: bytes | None = None
+    ) -> None:
+        """Point the row's places at `indices`, with shirt numbers `numbers` (number - 1 per
+        place; 1 to 23 in place order when None)."""
         part = bytearray(self.parts[PART_NATIONAL_SQUADS])
         start = row * NATIONAL_SQUAD_SIZE * 2
         part[start : start + NATIONAL_SQUAD_SIZE * 2] = struct.pack(
@@ -125,10 +134,25 @@ class PlayerTables:
         )
         self.parts[PART_NATIONAL_SQUADS] = bytes(part)
         order = bytearray(self.parts[PART_NATIONAL_ORDER])
-        order[row * NATIONAL_SQUAD_SIZE : (row + 1) * NATIONAL_SQUAD_SIZE] = bytes(
-            range(NATIONAL_SQUAD_SIZE)
+        order[row * NATIONAL_SQUAD_SIZE : (row + 1) * NATIONAL_SQUAD_SIZE] = (
+            bytes(range(NATIONAL_SQUAD_SIZE)) if numbers is None else numbers
         )
         self.parts[PART_NATIONAL_ORDER] = bytes(order)
+
+    def set_record(self, index: int, record: bytes) -> None:
+        players = bytearray(self.players)
+        players[index * PLAYER_RECORD_SIZE : (index + 1) * PLAYER_RECORD_SIZE] = record
+        self.parts[PART_PLAYERS] = bytes(players)
+
+    def free_records(self) -> list[int]:
+        """The named records no club or national squad points at, in order: the pool a
+        national row may take records from without touching anybody."""
+        used = self.referenced()
+        return [
+            i
+            for i in range(1, self.player_count)
+            if i not in used and (self.record(i)[0] or self.record(i)[2])
+        ]
 
     def referenced(self) -> set[int]:
         """Every record some club or national squad points at."""

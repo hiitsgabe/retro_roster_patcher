@@ -857,10 +857,14 @@ def test_a_roster_with_neither_a_formation_nor_a_lineup_patches_as_today(tmp_pat
         "ST9",
         "ST10",
     ]
-    # No player's registered position or flags changed: bytes 53-65 of every record are the disc's.
+    # No player's registered position or flags changed: bytes 53-65 of every record are the disc's
+    # (the free records now hold the national rows' copies of the club's shared ones).
     before, after = _read(iso).player_tables(), _read(out).player_tables()
+    free = before.free_records()
     assert all(
-        before.record(i)[53:66] == after.record(i)[53:66] for i in range(before.player_count)
+        before.record(i)[53:66] == after.record(i)[53:66]
+        for i in range(before.player_count)
+        if i not in free
     )
 
 

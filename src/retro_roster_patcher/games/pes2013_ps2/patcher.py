@@ -6,7 +6,9 @@ language overlay, and the names and shirt numbers of the players its squad
 already points at. Each incoming player takes over a record of the same
 position group (goalkeeper, defender, midfielder, attacker), so the game keeps
 a plausible lineup; the record's abilities are left as they were. Slots the
-squad does not fill keep their original players.
+squad does not fill keep their original players. A national row that shares a
+record with a patched club gets its own copy of it first, so the nation keeps
+its player (`_unshare`).
 
 A team's formation is its roster's (`extra["formation"]`, else its lineup's shape:
 `sports.lineup.team_formation`). A team with a readable formation is also written the
@@ -65,6 +67,7 @@ from .models import (
     IMAGE_SLOTS,
     LEAGUE_GROUPS,
     LIBERTADORES_BASE,
+    NATIONAL_COUNT,
     NATIONAL_NAMED,
     NATIONAL_SLOT_BASE,
     NATIONAL_SQUAD_SIZE,
@@ -660,6 +663,7 @@ class PES2013PS2Patcher(Patcher):
             # is on the disc keeps the look of his old record even when that
             # record has already been given to someone else.
             disc = _Disc(primary.players, reader.libertadores_players())
+            originals = {index: t.players for index, t in tables.items()}
             slots = sorted(slot for slot in rosters.teams if 0 <= slot < CLUB_COUNT)
             national_slots = sorted(
                 slot
@@ -685,7 +689,9 @@ class PES2013PS2Patcher(Patcher):
                 players_patched += len(assignments)
             if on_progress is not None:
                 on_progress(0.8, "Compressing player tables...")
-            written, blocks = self._fit_player_tables(writer, tables, rosters, national_slots, disc)
+            written, blocks = self._fit_player_tables(
+                writer, tables, rosters, slots, national_slots, disc, originals
+            )
             players_patched += written
             for index, t in tables.items():
                 writer.write_player_tables(index, t, blocks[index])
@@ -794,20 +800,26 @@ class PES2013PS2Patcher(Patcher):
         writer: RomWriter,
         tables: dict[int, PlayerTables],
         rosters: MappedRosters,
+        clubs: list[int],
         national_slots: list[int],
         disc: _Disc,
+        originals: dict[int, bytes],
     ) -> tuple[int, dict[int, bytes]]:
-        """Write the national squads and deflate both player entries into their
-        room; returns national players written and the built entries.
+        """Keep the national rows apart from the patched clubs (`_unshare`), write the
+        national squads and deflate both player entries into their room; returns
+        national players written and the built entries.
 
         Real names compress worse than the disc's, so a full patch outgrows
         the room. What gives, in order: the records no squad points at are
         blanked (names and abilities, ~9 KB on the real disc), then the
-        national squads take fewer of those free records.
+        national squads take fewer of those free records, then fewer national
+        places shared with the clubs get a copy.
         """
         snapshot = {index: list(t.parts) for index, t in tables.items()}
         limit: int | None = None
+        copy_limit: int | None = None
         while True:
+            copied, lost = self._unshare(tables, originals, clubs, copy_limit)
             written = pool_used = 0
             if national_slots:
                 written, pool_used = self._write_nationals(
@@ -821,16 +833,79 @@ class PES2013PS2Patcher(Patcher):
                 over = max(len(b) - writer.room(TEXT_AFS, index) for index, b in blocks.items())
                 self.status(f"{blanked} records no squad uses blanked to make room")
             if over <= 0:
+                if lost:
+                    self.status(
+                        f"{lost} national places shared with the patched clubs blanked: "
+                        "no free record left to copy their players into"
+                    )
                 return written, blocks
-            if not pool_used:
+            if pool_used:
+                limit = int(pool_used * 0.8)
+                self.status(
+                    f"Player tables {over} bytes too big; nationals get {limit} free records"
+                )
+            elif copied:
+                copy_limit = int(copied * 0.8)
+                self.status(
+                    f"Player tables {over} bytes too big; {copy_limit} national players "
+                    "shared with the patched clubs keep a copy"
+                )
+            else:
                 raise RomError(
                     f"{TEXT_AFS} player entries need {over} bytes more than their room; "
                     "the new names did not compress small enough"
                 )
-            limit = int(pool_used * 0.8)
-            self.status(f"Player tables {over} bytes too big; nationals get {limit} free records")
             for index, t in tables.items():
                 t.parts = list(snapshot[index])
+
+    @staticmethod
+    def _unshare(
+        tables: dict[int, PlayerTables],
+        originals: dict[int, bytes],
+        clubs: list[int],
+        limit: int | None = None,
+    ) -> tuple[int, int]:
+        """Give the national rows their own copy of each record they share with the patched
+        `clubs`, so a nation keeps its player when the club's record takes another.
+
+        A club's records are renamed in place, and a national row pointing at one would show
+        the club's new player. So each such record's disc bytes (`originals`, every entry's
+        player part before the patch) go to a free record (`PlayerTables.free_records`, at
+        most `limit` of them) and every national row pointing at it points at the copy, on
+        the same place. A shared place left without a copy leaves its row, the places after
+        it moving up with their shirt numbers. Rows sharing nothing are left as they are.
+        Returns (records copied, places left out).
+        """
+        primary = tables[PLAYER_ENTRIES[0]]
+        patched = {
+            i for club in clubs for i in primary.club_squad(club) if 0 < i < primary.player_count
+        }
+        rows = [r for r in range(NATIONAL_COUNT) if patched.intersection(primary.national_squad(r))]
+        shared = list(
+            dict.fromkeys(i for r in rows for i in primary.national_squad(r) if i in patched)
+        )
+        if not shared:
+            return 0, 0
+        pool = primary.free_records()
+        copies = dict(zip(shared, pool[:limit] if limit is not None else pool, strict=False))
+        lost = 0
+        for index, t in tables.items():
+            for old, new in copies.items():
+                t.set_record(new, originals[index][old * PLAYER_RECORD_SIZE :][:PLAYER_RECORD_SIZE])
+            for row in rows:
+                numbers = t.national_numbers(row)
+                kept = [
+                    (copies.get(i, i), numbers[k])
+                    for k, i in enumerate(t.national_squad(row))
+                    if i not in patched or i in copies
+                ]
+                if index == PLAYER_ENTRIES[0]:
+                    lost += NATIONAL_SQUAD_SIZE - len(kept)
+                gap = NATIONAL_SQUAD_SIZE - len(kept)
+                t.set_national_squad(
+                    row, [i for i, _ in kept] + [0] * gap, bytes(n for _, n in kept) + bytes(gap)
+                )
+        return len(copies), lost
 
     @staticmethod
     def _blank_free_records(tables: dict[int, PlayerTables]) -> int:
@@ -869,11 +944,7 @@ class PES2013PS2Patcher(Patcher):
         """
         primary = tables[PLAYER_ENTRIES[0]]
         club_used = primary.club_referenced()
-        pool = sorted(
-            i
-            for i in range(1, primary.player_count)
-            if i not in primary.referenced() and (primary.record(i)[0] or primary.record(i)[2])
-        )
+        pool = primary.free_records()
         if pool_limit is not None:
             pool = pool[:pool_limit]
         per_row = -(-len(pool) // max(len(slots), 1))

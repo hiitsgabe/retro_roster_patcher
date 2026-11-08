@@ -8,9 +8,11 @@ reassigned by position, and that team names fit their overlay slots.
 
 from __future__ import annotations
 
+import os
 import random
 import struct
 import zlib
+from pathlib import Path
 
 import pytest
 
@@ -25,6 +27,7 @@ from retro_roster_patcher.games.pes2013_ps2.models import (
     PLAYER_ENTRIES,
     PLAYER_RECORD_SIZE,
     POSITION_BYTE,
+    TEXT_AFS,
     PESPlayer,
 )
 from retro_roster_patcher.games.pes2013_ps2.patcher import (
@@ -606,6 +609,96 @@ def test_a_national_squad_takes_only_the_records_no_club_shares(iso, tmp_path):
         assert tables.club_squad(0)[:3] == [1, 2, 3]
 
 
+def _name(tables, i):
+    return tables.record(i)[:32].decode("utf-16-le").split("\0")[0]
+
+
+def test_a_club_patch_leaves_the_national_rows_their_players(iso, tmp_path):
+    """National row 0 shares records 1-3 with club 0: patching club 0 gives the row its own
+    copies of them (the free records 37-39), so the nation keeps its 2012 players and the
+    club's records take the new ones."""
+    patcher = PES2013PS2Patcher(tmp_path)
+    rosters = patcher.map_rosters(LEAGUE, [SlotMapping(slot_index=0, team_id=10)])
+    out = tmp_path / "out.iso"
+    patcher.patch(rom_path=iso, output_path=out, rosters=rosters, logos=False)
+    reader = RomReader(str(out))
+    reader.load()
+    before = RomReader(str(iso))
+    before.load()
+    for entry in PLAYER_ENTRIES:
+        tables, original = reader.player_tables(entry), before.player_tables(entry)
+        assert tables.national_squad(0)[:6] == [37, 38, 39, 34, 35, 36]
+        assert [_name(tables, i) for i in tables.national_squad(0)[:3]] == [
+            "PLAYER 1",
+            "PLAYER 2",
+            "PLAYER 3",
+        ]
+        # Whole records, abilities and looks included; the shirt numbers stay on their places.
+        assert [tables.record(i) for i in (37, 38, 39)] == [original.record(i) for i in (1, 2, 3)]
+        assert tables.parts[3] == original.parts[3]
+        assert tables.club_squad(0)[:3] == [1, 2, 3] and _name(tables, 1) == "DAVID RAYA"
+
+
+def test_a_club_and_its_nation_patched_together_keep_apart(iso, tmp_path):
+    patcher = PES2013PS2Patcher(tmp_path)
+    clubs = patcher.map_rosters(LEAGUE, [SlotMapping(slot_index=0, team_id=10)])
+    nations = patcher.map_rosters(
+        NATIONS, [SlotMapping(slot_index=NATIONAL_SLOT_BASE, team_id=300)]
+    )
+    out = tmp_path / "out.iso"
+    patcher.patch(rom_path=iso, output_path=out, rosters=clubs.merge(nations), logos=False)
+    reader = RomReader(str(out))
+    reader.load()
+    for entry in PLAYER_ENTRIES:
+        tables = reader.player_tables(entry)
+        row = [i for i in tables.national_squad(0) if i]
+        assert not set(row) & set(tables.club_squad(0))
+        assert [_name(tables, i) for i in row[:5]] == [
+            "ALISSON BECKER",
+            "M. CORRÊA",
+            "BRUNO GUIMARÃES",
+            "VINÍCIUS JÚNIOR",
+            "R. BELLOLI",
+        ]
+        assert "DAVID RAYA" not in [_name(tables, i) for i in row]
+
+
+def test_a_club_patch_sharing_nothing_leaves_the_national_tables_alone(iso, tmp_path):
+    patcher = PES2013PS2Patcher(tmp_path)
+    rosters = patcher.map_rosters(LEAGUE, [SlotMapping(slot_index=1, team_id=10)])
+    out = tmp_path / "out.iso"
+    patcher.patch(rom_path=iso, output_path=out, rosters=rosters, logos=False)
+    reader, before = RomReader(str(out)), RomReader(str(iso))
+    reader.load()
+    before.load()
+    for entry in PLAYER_ENTRIES:
+        tables, original = reader.player_tables(entry), before.player_tables(entry)
+        assert tables.parts[1] == original.parts[1] and tables.parts[3] == original.parts[3]
+        assert [tables.record(i) for i in range(34, 40)] == [
+            original.record(i) for i in range(34, 40)
+        ]
+
+
+def test_a_shared_place_with_no_free_record_left_is_blanked(tmp_path):
+    """Only record 37 is free (38 and 39 have no name): record 1 gets the copy, and the places
+    of records 2 and 3 leave the row, the others moving up."""
+    names = [(f"PLAYER {i}", f"P{i}") for i in range(fixture.PLAYER_COUNT)]
+    names[38] = names[39] = ("", "")
+    iso = tmp_path / "pes.iso"
+    fixture.write_iso(iso, player_entry=fixture.build_player_entry(names=names))
+    statuses: list[str] = []
+    patcher = PES2013PS2Patcher(tmp_path, on_status=statuses.append)
+    rosters = patcher.map_rosters(LEAGUE, [SlotMapping(slot_index=0, team_id=10)])
+    out = tmp_path / "out.iso"
+    patcher.patch(rom_path=iso, output_path=out, rosters=rosters, logos=False)
+    reader = RomReader(str(out))
+    reader.load()
+    tables = reader.player_tables(PLAYER_ENTRIES[0])
+    assert tables.national_squad(0)[:6] == [37, 34, 35, 36, 0, 0]
+    assert _name(tables, 37) == "PLAYER 1"
+    assert any("2 national places" in s for s in statuses), statuses
+
+
 def test_a_mapping_outside_both_ranges_is_refused(tmp_path):
     with pytest.raises(MappingError):
         PES2013PS2Patcher(tmp_path).map_rosters(
@@ -615,12 +708,13 @@ def test_a_mapping_outside_both_ranges_is_refused(tmp_path):
 
 def test_merged_rosters_patch_clubs_and_nationals_together(iso, tmp_path):
     patcher = PES2013PS2Patcher(tmp_path)
-    clubs = patcher.map_rosters(LEAGUE, [SlotMapping(slot_index=0, team_id=10)])
+    # Club 1 shares no record with a national row, so the free records stay free.
+    clubs = patcher.map_rosters(LEAGUE, [SlotMapping(slot_index=1, team_id=10)])
     nations = patcher.map_rosters(
         NATIONS, [SlotMapping(slot_index=NATIONAL_SLOT_BASE + 1, team_id=301)]
     )
     merged = clubs.merge(nations)
-    assert sorted(merged.teams) == [0, NATIONAL_SLOT_BASE + 1]
+    assert sorted(merged.teams) == [1, NATIONAL_SLOT_BASE + 1]
     out = tmp_path / "out.iso"
     result = patcher.patch(rom_path=iso, output_path=out, rosters=merged, logos=False)
     assert result.teams_patched == 2
@@ -629,7 +723,7 @@ def test_merged_rosters_patch_clubs_and_nationals_together(iso, tmp_path):
     tables = reader.player_tables(PLAYER_ENTRIES[0])
     # Nation 1 had no players of its own, so its keeper comes from the pool.
     assert tables.national_squad(1)[0] == 37
-    assert reader.overlay_teams(DATABASE_OVERLAY_ENGLISH).clubs[0][0].text == "ARSENAL"
+    assert reader.overlay_teams(DATABASE_OVERLAY_ENGLISH).clubs[1][0].text == "ARSENAL"
 
 
 def test_a_block_that_runs_past_the_entry_size_is_read_whole(iso):
@@ -1331,3 +1425,43 @@ def test_without_the_libertadores_table_such_a_player_is_dressed_as_usual(tmp_pa
     )
     found = _written_looks(out)
     assert found["KAI HAVERTZ"] == [(0, 0, 0)] * 2  # pale, built face, plain hairstyle
+
+
+# -- the disc (RETRO_ROSTER_TEST_ROMS has pes2013.iso) ------------------------------------
+
+
+@pytest.fixture
+def disc():
+    """The retail image's path."""
+    root = os.environ.get("RETRO_ROSTER_TEST_ROMS")
+    if not root:
+        pytest.skip("set RETRO_ROSTER_TEST_ROMS to a directory holding pes2013.iso")
+    path = Path(root) / "pes2013.iso"
+    if not path.exists():
+        pytest.fail(f"RETRO_ROSTER_TEST_ROMS is set but {path} is missing")
+    return path
+
+
+@pytest.mark.real_rom
+def test_on_the_disc_a_premier_league_patch_leaves_every_nation_its_2012_players(disc):
+    """The 20 English clubs share 126 records with 31 national rows (England 22 of 23): the
+    disc's 150 free records take a copy of each, and both entries still fit their room."""
+    reader = RomReader(str(disc))
+    assert reader.load()
+    tables = {index: reader.player_tables(index) for index in PLAYER_ENTRIES}
+    originals = {index: t.players for index, t in tables.items()}
+
+    def rows(t):
+        return [[_name(t, i) for i in t.national_squad(r)] for r in range(67)]
+
+    before = {index: rows(t) for index, t in tables.items()}
+    clubs = list(range(20))
+    for t in tables.values():
+        for i in {i for club in clubs for i in t.club_squad(club) if 0 < i < t.player_count}:
+            RomWriter.set_player_names(t, i, "NEW PLAYER", "NEW")
+    assert PES2013PS2Patcher._unshare(tables, originals, clubs) == (126, 0)
+    writer = RomWriter(str(disc), str(disc))  # read only: its room
+    assert writer.reader.load()
+    for index, t in tables.items():
+        assert rows(t) == before[index]
+        assert len(t.build()) <= writer.room(TEXT_AFS, index)
