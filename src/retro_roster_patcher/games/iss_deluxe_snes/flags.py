@@ -127,13 +127,21 @@ def _gap(flag: Flag, a: int, b: int) -> int:
 
 
 def three_colours(flag: Flag) -> Flag:
-    """`flag` on entries 13-15 only: its rarest colours painted over in their
-    nearest until three are left, then the order that packs smallest."""
+    """`flag` on entries 13-15 only: the colour cheapest to repaint (its pixels
+    times its squared distance to the nearest other) painted over in that
+    nearest until three are left, then the order that packs smallest. The
+    rarest colour is often the emblem itself (Aston Villa's yellow lion)."""
     counts = Counter(v for row in flag.pixels for v in row)
     where = {v: v for v in counts}
     while len(set(where.values())) > 3:
         left = Counter(where[v] for v in where for _ in range(counts[v]))
-        rare = min(left, key=lambda v: (left[v], v))
+
+        def cost(v: int, left: Counter[int] = left) -> int:
+            return left[v] * min(
+                _distance(flag.colours[v], flag.colours[o]) for o in left if o != v
+            )
+
+        rare = min(left, key=lambda v: (cost(v), v))
         near = min(
             (v for v in left if v != rare),
             key=lambda v: _distance(flag.colours[v], flag.colours[rare]),

@@ -78,6 +78,41 @@ def test_a_crest_keeps_three_flag_entries():
         assert [[v for v in r] for r in flags._half_rows(flags._tiles(blob))] == rows
 
 
+WHITE, SKY, CLARET, YELLOW = (255, 255, 255), (149, 190, 229), (103, 14, 54), (254, 229, 0)
+
+
+def _flag_of(counts: list[int], colours: list[tuple[int, int, int]]) -> Flag:
+    """A 24x16 flag whose value v covers counts[v] pixels, in reading order."""
+    flat = [v for v, n in enumerate(counts) for _ in range(n)]
+    assert len(flat) == 24 * 16
+    return Flag([flat[r * 24 : (r + 1) * 24] for r in range(16)], colours)
+
+
+def test_a_crest_loses_the_colour_cheapest_to_repaint_not_the_rarest():
+    # Aston Villa's crest as `logo_flag` draws it: white 216, sky 95, claret 38, yellow 35. The
+    # yellow lion is the rarest colour, but sky costs least to paint over (into white).
+    flag = flags.three_colours(_flag_of([216, 95, 38, 35], [WHITE, SKY, CLARET, YELLOW]))
+    used = {flag.colours[v] for row in flag.pixels for v in row}
+    assert used == {WHITE, CLARET, YELLOW}
+    assert sum(row.count(flag.colours.index(YELLOW)) for row in flag.pixels) == 35
+
+
+def test_a_flag_of_three_colours_or_fewer_only_changes_its_order():
+    for counts, colours in (
+        ([200, 100, 84], [WHITE, CLARET, YELLOW]),
+        ([384], [SKY]),
+        ([0, 300, 84, 0], [WHITE, SKY, YELLOW, CLARET]),
+    ):
+        source = _flag_of(counts, colours)
+        flag = flags.three_colours(source)
+        pairs = {
+            (source.colours[a], flag.colours[b])
+            for r, s in zip(source.pixels, flag.pixels, strict=True)
+            for a, b in zip(r, s, strict=True)
+        }
+        assert all(a == b for a, b in pairs)
+
+
 def test_a_kit_spec_borrows_a_design_and_a_clash_class():
     image = bytes(R.ROM_SIZE)
     spec = KitSpec((255, 255, 255), (0, 0, 0), "stripes", (0, 0, 0), (255, 255, 255))
