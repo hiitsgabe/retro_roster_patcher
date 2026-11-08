@@ -58,7 +58,7 @@ from ..iss_snes.models import Flag, ISSLook
 from ..iss_snes.patcher import ISSPatcher, _parse_hex_colour
 from ..iss_snes.rom_writer import two_band_flag
 from ..iss_snes.stat_mapper import ISSStatMapper
-from . import bignames, flags, kits, looks, names, pages, screens
+from . import bignames, flags, kits, looks, names, pages, scenarios, screens
 from . import rom as R
 
 _Q = tuple[int, int, int, int, int]
@@ -449,6 +449,8 @@ class ISSDeluxePatcher(Patcher):
             else []
         )
         pages.write(image, in_league, league, nations)
+        # A nation on its own slot keeps the cartridge's name; every other team shows its own.
+        scenarios.write(image, {s: R.TEAMS[s] if t.national else t.name for s, t in teams.items()})
         pins = {slot: home.pins for slot, (home, _) in plans.items() if home is not None}
         own = frozenset(s for s, t in clubs.items() if t.nation is not None)
         for slot, note in flags.write(image, crests, fallbacks, pins, unused, own).items():
