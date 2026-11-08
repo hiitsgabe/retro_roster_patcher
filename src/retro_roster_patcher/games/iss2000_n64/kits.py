@@ -25,6 +25,7 @@ from __future__ import annotations
 import struct
 
 from ...core.kits import KitSpec
+from . import retail
 from . import rom as R
 
 PACKS = tuple(range(627, 636))
@@ -113,27 +114,27 @@ def write(
     image: bytearray,
     space: R.AssetSpace,
     kits: dict[int, tuple[KitSpec | None, KitSpec | None]],
-    copies: dict[int, int] | None = None,
+    records: dict[int, tuple[bytes, bytes]] | None = None,
 ) -> None:
-    """Give each team id in `kits` its (first, second) kit; None keeps one. Each
-    team in `copies` ({team: source}) first takes both kit records `source` had
-    before this call."""
-    if not kits and not copies:
+    """Give each team id in `kits` its (first, second) kit, painted over the
+    cartridge's record of that side (so a re-patch paints the same); None keeps a
+    side. Each team in `records` ({team: (first, second) record}) takes those
+    records, and its kits are painted over them."""
+    records = records or {}
+    if not kits and not records:
         return
     assets = R.assets(image)
     data = {k: R.read_asset(image, assets[k]) for k in PACKS}
     stream = bytearray(b"".join(data[k] for k in PACKS))
-    before = bytes(stream)
-    for team, source in (copies or {}).items():
+    for team, pair in records.items():
         for side in (0, 1):
-            o, src = _record(team, side), _record(source, side)
-            stream[o : o + SIZE] = before[src : src + SIZE]
+            stream[_record(team, side) : _record(team, side) + SIZE] = pair[side]
     for team, sides in kits.items():
         for side, kit in enumerate(sides):
             if kit is None:
                 continue
             o = _record(team, side)
-            record = stream[o : o + SIZE]
+            record = bytearray(records[team][side] if team in records else retail.kit(team, side))
             paint(record, kit)
             stream[o : o + SIZE] = record
     o = 0

@@ -190,16 +190,26 @@ def write(
     low: Collection[int] = (),
 ) -> None:
     """Give each team in `crests` ({team: (texture, palette)}, served in that
-    order) its crest; the flags of `keep` stay as they are. A crest with no
-    texture left (those of `low` first) waves the generic stripes nearest it."""
+    order) its crest; the flags of `keep` stay as they are. A crest whose texture
+    is one of the generic stripe ones (a cartridge flag in bands) takes that one;
+    a crest with no texture left (those of `low` first) waves the generic
+    stripes nearest it."""
     assets = R.assets(image)
-    owner = allocate(image, list(crests), patched, keep, low)
+    originals: dict[int, bytes] = {}
     bundles: dict[int, bytearray] = {}
 
     def bundle(k: int) -> bytearray:
         if k not in bundles:
-            bundles[k] = bytearray(R.read_asset(image, assets[k]))
+            originals[k] = R.read_asset(image, assets[k])
+            bundles[k] = bytearray(originals[k])
         return bundles[k]
+
+    generic = {}
+    for k in range(GENERIC, GENERIC + len(STRIPES)):
+        asset, off = texture_place(k)
+        generic[k] = bytes(bundle(asset)[off : off + TEX_SIZE])
+    banded = {t: g for t, (tex, _) in crests.items() for g, gt in generic.items() if tex == gt}
+    owner = allocate(image, [t for t in crests if t not in banded], patched, keep, low)
 
     # Teams left alone whose texture a crest takes wave the generic stripes.
     taken = set(owner.values())
@@ -210,15 +220,13 @@ def write(
     used_pal: Counter[tuple[int, int]] = Counter(entry(image, t)[1:] for t in range(R.TEAMS))
     for team, (tex_bytes, pal_bytes) in crests.items():
         tex, block, idx = entry(image, team)
-        if team in owner:
+        if team in banded:
+            tex = banded[team]
+        elif team in owner:
             tex = owner[team]
             asset, off = texture_place(tex)
             bundle(asset)[off : off + TEX_SIZE] = tex_bytes
         else:
-            generic = {}
-            for k in range(GENERIC, GENERIC + len(STRIPES)):
-                asset, off = texture_place(k)
-                generic[k] = bytes(bundle(asset)[off : off + TEX_SIZE])
             tex, pal_bytes = stripes(generic, tex_bytes, pal_bytes)
         if used_pal[(block, idx)] > 1:
             used_pal[(block, idx)] -= 1
@@ -228,7 +236,8 @@ def write(
         bundle(PALETTE_ASSET)[p : p + 32] = pal_bytes
         set_entry(image, team, tex, block, idx)
     for k, data in bundles.items():
-        space.put(assets[k], bytes(data))
+        if bytes(data) != originals[k]:
+            space.put(assets[k], bytes(data))
 
 
 def _free_palette(used: Counter[tuple[int, int]]) -> tuple[int, int]:

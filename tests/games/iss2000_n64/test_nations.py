@@ -20,7 +20,6 @@ from retro_roster_patcher.core.kits import default_kits
 from retro_roster_patcher.core.models import SlotMapping
 from retro_roster_patcher.games.iss2000_n64 import flags, kits, names, scenarios
 from retro_roster_patcher.games.iss2000_n64 import rom as R
-from retro_roster_patcher.games.iss2000_n64 import writer as W
 from retro_roster_patcher.games.iss2000_n64.patcher import ISS2000Patcher
 from retro_roster_patcher.sports.models import League, LeagueData, Player, Team, TeamRoster
 from retro_roster_patcher.sports.nationals import fetch_top_nations
@@ -30,7 +29,7 @@ from tests.sports.test_nationals import FakeApi
 PIL = pytest.importorskip("PIL")
 from PIL import Image  # noqa: E402
 
-GERMANY, HOLLAND, ENGLAND, SCOTLAND, NORWAY, FINLAND, ICELAND = 0, 4, 14, 15, 20, 21, 22
+GERMANY, HOLLAND, ENGLAND, SCOTLAND, NORWAY, FINLAND, ICELAND, QATAR = 0, 4, 14, 15, 20, 21, 22, 95
 LEAGUE = League(id=2001, name="English Premier League")
 NATIONS = League(id=2021, name="International Friendlies")
 GROUPS = ["Goalkeeper"] * 2 + ["Defender", "Midfielder", "Forward"] * 6
@@ -76,7 +75,7 @@ NATION = {
     for i, (n, c) in enumerate(
         [("England", "ENG"), ("Netherlands", "NED"), ("Senegal", "SEN"), ("Scotland", "SCO"),
          ("Spain", "ESP"), ("Argentina", "ARG"), ("Saudi Arabia", "KSA"), ("France", "FRA"),
-         ("Japan", "JPN")]
+         ("Japan", "JPN"), ("Qatar", "QAT")]
     )
 }  # fmt: skip
 
@@ -241,6 +240,34 @@ def test_the_top_nations_fill_the_slots_a_league_leaves(tmp_path):
     assert rosters.teams[70].nation == 70 and rosters.teams[98].nation == 3
 
 
+def test_more_free_slots_than_nations_maps_each_nation_once(tmp_path):
+    patcher = ISS2000Patcher(cache_dir=tmp_path / "c", transport=transport)
+    squads = {r.team.id: list(r.players) for r in NATION.values()}
+    squads[NATION["Saudi Arabia"].team.id] = []
+    patcher.api = FakeApi(squads, teams=[r.team for r in NATION.values()])
+    clubs = _clubs(patcher, range(20))
+    nations, mapping = fetch_top_nations(patcher, tmp_path / "x.z64", 2026, clubs.teams)
+    # Seven ranked sides, Saudi Arabia without a squad: six nations for 80 free slots.
+    assert sorted(m.team_name for m in mapping) == sorted(
+        ["Spain", "Argentina", "France", "England", "Senegal", "Japan"]
+    )
+    slots = [m.slot_index for m in mapping]
+    assert len(set(slots)) == len(slots) and all(20 <= s < 100 for s in slots)
+    rosters = clubs.merge(patcher.map_rosters(nations, mapping))
+    assert len(rosters.teams) == 26
+
+
+def test_with_three_clubs_a_scenario_that_lost_a_nation_never_plays_one_beside_a_club(patcher):
+    from tests.games.iss2000_n64.test_scenarios import cartridge
+
+    image = cartridge()
+    teams = {int(s): t for s, t in _clubs(patcher, range(3)).teams.items()}
+    patcher._scenarios(image, teams, {s: s for s in range(3, 100)}, set())
+    for k, (a, b) in enumerate(scenarios.read(image)):
+        assert {a, b} <= {0, 1, 2} or not {a, b} & {0, 1, 2}, k
+        assert (a, b) == scenarios.RETAIL[k] or {a, b} <= {0, 1, 2}, k
+
+
 # --- on the cartridge -----------------------------------------------------------------------
 #
 # A patch of the cartridge takes about half a minute (the assets are packed again), so each
@@ -278,10 +305,11 @@ def made(cartridge_rom, tmp_path_factory):
     out = tmp_path_factory.mktemp("out")
     found: dict[str, tuple] = {}
 
-    def make(name, rom, rosters):
+    def make(name, rom, rosters, **options):
         if name not in found:
             path = out / f"{name}.z64"
-            found[name] = (path, _patch(patcher, rom, path, rosters))
+            found[name] = (path, _patch(patcher, rom, path, rosters, **options))
+            assert len(found[name][1]) == R.ROM_SIZE, name
         return found[name]
 
     def get(name):
@@ -293,6 +321,13 @@ def made(cartridge_rom, tmp_path_factory):
             again = {**FILL, 23: "England"}
             del again[NORWAY]
             return make(name, get("filled")[0], _mapped(patcher, CLUBS, again))
+        if name == "plain then fill":  # kits=False: a nation's own kits still come with it
+            fill = _mapped(patcher, range(20), {NORWAY: "England", QATAR: "Qatar"})
+            return make(name, get("plain")[0], fill, kits=False)
+        if name == "arsenal":  # a club on England's slot, its name only
+            return make(name, cartridge_rom, _clubs(patcher, [ENGLAND]), logos=False, kits=False)
+        if name == "england home":
+            return make(name, get("arsenal")[0], _mapped(patcher, [], {ENGLAND: "England"}))
         assert name == "plain"
         # An earlier patch labelled Europe after the league (as every patch did before).
         stale = bytearray(cartridge_rom.read_bytes())
@@ -341,9 +376,12 @@ def _players(image, team) -> list[str]:
 
 @real_rom
 def test_the_packaged_looks_are_the_cartridge_s(retail):  # noqa: F811
-    from retro_roster_patcher.games.iss2000_n64 import patcher as P
+    from retro_roster_patcher.games.iss2000_n64 import retail as packaged
 
-    assert P._looks(retail) == [P.RETAIL_LOOKS[8 * t : 8 * t + 8] for t in range(100)]
+    for t in range(100):
+        assert b"".join(packaged.flag(t)) == _flag(retail, t), t
+        assert packaged.kit(t, 0) + packaged.kit(t, 1) == _kit(retail, t), t
+        assert packaged.name(t) == _name(retail, t), t
 
 
 @real_rom
@@ -355,13 +393,11 @@ def test_the_packaged_region_labels_are_the_cartridge_s(retail):  # noqa: F811
 def test_a_nation_whose_slot_a_club_took_lands_with_its_own_name_flag_and_kit(made, retail):  # noqa: F811
     _, image = made("filled")
     # England, in Norway's slot: its name, England's flag and kits, never Norway's.
-    assert flags.entry(image, NORWAY) == flags.entry(retail, ENGLAND)
     assert _flag(image, NORWAY) == _flag(retail, ENGLAND)
     assert _kit(image, NORWAY) == _kit(retail, ENGLAND)
     assert _name(image, NORWAY) != _name(retail, NORWAY)
     assert _players(image, NORWAY) != _players(retail, NORWAY)
-    # The club on England's slot wears its crest on a texture of its own.
-    assert flags.entry(image, ENGLAND)[0] != flags.entry(retail, ENGLAND)[0]
+    # The club on England's slot wears its crest.
     assert _flag(image, ENGLAND) != _flag(retail, ENGLAND)
     # The Netherlands on their own slot keep the cartridge's name, flag and kits, with
     # today's squad.
@@ -385,28 +421,40 @@ def test_a_nation_whose_slot_a_club_took_lands_with_its_own_name_flag_and_kit(ma
 
 
 @real_rom
-def test_re_patching_with_the_fill_gives_the_same_image_but_the_clubs_kits(made, retail):  # noqa: F811
+def test_re_patching_with_the_fill_gives_the_same_image(made, retail):  # noqa: F811
+    # Clubs' kits are painted from the cartridge's records, not over the last paint.
     _, first = made("filled")
     _, second = made("refilled")
-    # A painted kit (a club's, or Senegal's in ESPN's colours) is painted over the last one
-    # each time, so its shades drift a step; every other asset, and the kits of the nations
-    # in the cartridge's, come out the same.
-    a, b = R.assets(first), R.assets(second)
-    for x, y in zip(a, b, strict=True):
-        if x.index not in kits.PACKS:
-            assert R.read_asset(first, x) == R.read_asset(second, y), x.index
-    for t in (HOLLAND, NORWAY, FINLAND, *range(23, 100)):
-        assert _kit(second, t) == _kit(first, t), t
-    # The players, formations and team metadata, the ratings, the flag table, the scenarios.
-    raw = [
-        (R.PLAYER_TABLE, R.METADATA + 6 * R.TEAMS),
-        (W.ATTACK_TABLE, W.DEFENCE_TABLE + R.TEAMS),
-        (flags.TABLE, flags.TABLE + 6 * R.TEAMS),
-        (scenarios.TABLE, 0x50D8C0 + 128),
-    ]
-    for lo, hi in raw:
-        assert lo < hi and first[lo:hi] == second[lo:hi], hex(lo)
+    assert second == first
     assert _flag(second, NORWAY) == _flag(retail, ENGLAND)
+
+
+@real_rom
+def test_a_fill_over_a_plain_league_gives_the_nations_their_cartridge_looks_back(
+    made,
+    retail,  # noqa: F811
+):
+    _, plain = made("plain")
+    # The plain league's crests took Qatar's texture; its palette, kits and name stayed.
+    assert _flag(plain, QATAR) != _flag(retail, QATAR)
+    _, image = made("plain then fill")
+    # England, whose slot a club holds, on Norway's: England's flag and kits (with kits=False).
+    assert _flag(image, NORWAY) == _flag(retail, ENGLAND)
+    assert _kit(image, NORWAY) == _kit(retail, ENGLAND)
+    # Qatar on its own slot: its flag back, its kits and name as the cartridge has them.
+    assert _flag(image, QATAR) == _flag(retail, QATAR)
+    assert _kit(image, QATAR) == _kit(retail, QATAR)
+    assert _name(image, QATAR) == _name(retail, QATAR)
+
+
+@real_rom
+def test_a_nation_back_on_its_own_slot_reads_its_cartridge_name(made, retail):  # noqa: F811
+    _, arsenal = made("arsenal")
+    assert _name(arsenal, ENGLAND) != _name(retail, ENGLAND)
+    _, image = made("england home")
+    assert _name(image, ENGLAND) == _name(retail, ENGLAND)
+    assert _flag(image, ENGLAND) == _flag(retail, ENGLAND)
+    assert _kit(image, ENGLAND) == _kit(retail, ENGLAND)
 
 
 @real_rom
@@ -458,9 +506,9 @@ def test_a_patch_that_leaves_every_scenario_nation_in_place_leaves_the_scenarios
     retail,  # noqa: F811
 ):
     # Fiji and Papua NG play no scenario; the Netherlands stay on their own slot.
-    from retro_roster_patcher.games.iss2000_n64.patcher import _shown
+    from retro_roster_patcher.games.iss2000_n64.patcher import _present
 
     rosters = _clubs(patcher, [98, 99]).merge(_mapped(patcher, [], {HOLLAND: "Netherlands"}))
     image = bytearray(retail)
-    patcher._scenarios(image, {int(s): t for s, t in rosters.teams.items()}, _shown(retail), {4})
+    patcher._scenarios(image, {int(s): t for s, t in rosters.teams.items()}, _present(retail), {4})
     assert image == retail

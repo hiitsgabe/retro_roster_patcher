@@ -340,12 +340,11 @@ def test_a_formation_comes_from_the_donor_as_shipped():
     image = bytearray(R.METADATA + 120 * 6)
     for donor in FORMATION_DONORS.values():
         image[R.FORMATIONS + donor * R.FORMATION_ROW] = donor + 1
-    donors = W.donor_rows(image)
     # The 4-5-1 donor (slot 20) is itself patched with a 4-3-3 first ...
-    W.write_formation(image, FORMATION_DONORS[(4, 5, 1)], (4, 3, 3), donors)
+    W.write_formation(image, FORMATION_DONORS[(4, 5, 1)], (4, 3, 3))
     # ... and a later 4-5-1 still gets the shipped 4-5-1 row, never what the image holds.
-    W.write_formation(image, 69, (4, 5, 1), donors)
-    row, ident = donors[(4, 5, 1)]
+    W.write_formation(image, 69, (4, 5, 1))
+    row, ident = W.DONORS[(4, 5, 1)]
     at = R.FORMATIONS + 69 * R.FORMATION_ROW
     assert image[at : at + R.FORMATION_ROW] == row and image[R.METADATA + 69 * 6 + 5] == ident
     assert row[0] != FORMATION_DONORS[(4, 5, 1)] + 1
@@ -508,4 +507,6 @@ def test_a_rewritten_asset_starts_on_an_8_byte_boundary():
     one, two = R.assets(image)
     assert one.start == 0x100008 and R.read_asset(image, one) == bytes(64)
     assert two.start % 8 == 0 and two.start != 0x100406
+    # The stream is padded to 8 too, so it also ends on a boundary.
+    assert (one.end - one.start) % 8 == 0 and (two.end - two.start) % 8 == 0
     assert len(image) == R.ROM_SIZE

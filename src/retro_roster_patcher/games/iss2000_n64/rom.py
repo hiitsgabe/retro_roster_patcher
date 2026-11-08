@@ -363,7 +363,7 @@ class AssetSpace:
         their own start hung team select in Mupen64Plus-Next, while the same
         bytes from an 8-byte boundary (or 2 or 4 past one) loaded (Nov 8 2026).
         """
-        blob += bytes(-len(blob) % 4)
+        blob += bytes(-len(blob) % self.ALIGN)  # ends on a boundary as well
         start = self._up(asset.start)
         if start + len(blob) <= asset.end:
             self._release(start + len(blob), asset.end)

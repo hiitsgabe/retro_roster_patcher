@@ -207,19 +207,26 @@ def write_regions(image: bytearray, space: R.AssetSpace, labels: dict[str, str |
         space.put(asset, bytes(sheet))
 
 
-def write(image: bytearray, space: R.AssetSpace, names: dict[int, str]) -> None:
-    """Set the name of each team in `names` ({team id: text}); "" blanks it."""
+def write(image: bytearray, space: R.AssetSpace, names: dict[int, str | bytes]) -> None:
+    """Set the name of each team in `names` ({team id: text}); "" blanks it, and
+    bytes are a cell as drawn, both copies (8 rows of 64 bytes, `retail.name`)."""
     if not names:
         return
     assets = R.assets(image)
     font = R.read_asset(image, assets[FONT_ASSET])
-    sheet = bytearray(R.read_asset(image, assets[NAMES_ASSET]))
+    old = R.read_asset(image, assets[NAMES_ASSET])
+    sheet = bytearray(old)
     for team, text in names.items():
-        cell = render(text, font) if text else [[0] * CELL_W for _ in range(CELL_H)]
-        for y in range(CELL_H):
-            row = FIRST_ROW + team * CELL_H + y
-            packed = bytes(cell[y][x] << 4 | cell[y][x + 1] for x in range(0, CELL_W, 2))
-            o = row * SHEET_W // 2
-            sheet[o : o + 32] = packed
-            sheet[o + 32 : o + 64] = packed
-    space.put(assets[NAMES_ASSET], bytes(sheet))
+        if isinstance(text, bytes):
+            rows = [text[y * 64 : (y + 1) * 64] for y in range(CELL_H)]
+        else:
+            cell = render(text, font) if text else [[0] * CELL_W for _ in range(CELL_H)]
+            rows = [
+                2 * bytes(cell[y][x] << 4 | cell[y][x + 1] for x in range(0, CELL_W, 2))
+                for y in range(CELL_H)
+            ]
+        for y, packed in enumerate(rows):
+            o = (FIRST_ROW + team * CELL_H + y) * SHEET_W // 2
+            sheet[o : o + 64] = packed
+    if sheet != old:
+        space.put(assets[NAMES_ASSET], bytes(sheet))

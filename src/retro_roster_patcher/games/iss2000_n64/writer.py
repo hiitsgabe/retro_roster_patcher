@@ -27,24 +27,20 @@ _DONORS = base64.b64decode(
 )
 
 
-def donor_rows(image: bytes | bytearray) -> dict[tuple[int, int, int], tuple[bytes, int]]:
-    """Each formation's row and id as the cartridge's donor team has it, whatever `image`
-    (an earlier patch's, say) holds in the donor slots now."""
-    size = R.FORMATION_ROW + 1
-    return {
-        shape: (_DONORS[k * size : k * size + R.FORMATION_ROW], _DONORS[k * size + R.FORMATION_ROW])
-        for k, shape in enumerate(FORMATION_DONORS)
-    }
+#: Each formation's row and id as the cartridge's donor team has it: what `write_formation`
+#: copies, whatever an earlier patch left in the donor slots.
+DONORS: dict[tuple[int, int, int], tuple[bytes, int]] = {
+    shape: (
+        _DONORS[k * (R.FORMATION_ROW + 1) :][: R.FORMATION_ROW],
+        _DONORS[k * (R.FORMATION_ROW + 1) + R.FORMATION_ROW],
+    )
+    for k, shape in enumerate(FORMATION_DONORS)
+}
 
 
-def write_formation(
-    image: bytearray,
-    slot: int,
-    shape: tuple[int, int, int],
-    donors: dict[tuple[int, int, int], tuple[bytes, int]] | None = None,
-) -> None:
-    """Copy the donor team's formation row and id over the slot's."""
-    row, ident = (donors or donor_rows(image))[shape]
+def write_formation(image: bytearray, slot: int, shape: tuple[int, int, int]) -> None:
+    """Copy the cartridge's donor row and id for `shape` over the slot's."""
+    row, ident = DONORS[shape]
     dst = R.FORMATIONS + slot * R.FORMATION_ROW
     image[dst : dst + R.FORMATION_ROW] = row
     image[R.METADATA + slot * 6 + 5] = ident
@@ -104,16 +100,10 @@ def write_player(image: bytearray, slot: int, index: int, p: N64Player) -> None:
     image[o + R.POSITION] = p.position_bits
 
 
-def write_team(
-    image: bytearray,
-    slot: int,
-    team: N64Team,
-    donors: dict[tuple[int, int, int], tuple[bytes, int]] | None = None,
-) -> int:
-    """Write `team` over `slot`; returns how many players were written.
-    `donors` (`donor_rows` of the unpatched image) when writing several."""
+def write_team(image: bytearray, slot: int, team: N64Team) -> int:
+    """Write `team` over `slot`; returns how many players were written."""
     if team.formation is not None:
-        write_formation(image, slot, team.formation, donors)
+        write_formation(image, slot, team.formation)
     roles = [p.role for p in team.players[:11]]
     order = starting_order(image, slot, roles) + list(range(11, R.PLAYERS_PER_TEAM))
     for index, player in zip(order, team.players, strict=False):

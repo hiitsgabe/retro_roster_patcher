@@ -141,7 +141,10 @@ def blurb(lang: int, a: str, b: str, room: int, lead: str = "") -> str:
         (f"{a} take on {b} with everything still to play for. Can you lead your team to the win?",
          f"{a} take on {b}. Can you win it?", f"{a} v {b}")
         if lang == 0
-        else (f"{a} y {b} se lo juegan todo. Lleva a tu equipo a la victoria.", f"{a} contra {b}")
+        else (
+            f"{a} {_and(b)} {b} se lo juegan todo. Lleva a tu equipo a la victoria.",
+            f"{a} contra {b}",
+        )
     )  # fmt: skip
     text = ""
     for text in texts:
@@ -151,9 +154,18 @@ def blurb(lang: int, a: str, b: str, room: int, lead: str = "") -> str:
     return text
 
 
+def _and(b: str) -> str:
+    """Spanish "and" before `b`: "e" before an i sound (Francia e Italia), else "y"."""
+    return "e" if b.lower().startswith(("i", "hi")) else "y"
+
+
 def _put(image: bytearray, at: int, room: int, text: str) -> None:
-    data = encode(text) + END
-    image[at : at + room] = data[:room].ljust(room, b"\0")
+    """`text` and its end mark in `room` bytes, cut short (never inside a line break) when
+    it would not fit, the rest zero."""
+    data = encode(text)[: room - len(END)]
+    if data.endswith(b"\xff"):
+        data = data[:-1]
+    image[at : at + room] = (data + END).ljust(room, b"\0")
 
 
 def _text_hash(image: bytes | bytearray, k: int) -> str:

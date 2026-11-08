@@ -10,17 +10,16 @@ the lineup screen, the VS banner, the flags in the stands and the match
 scoreboard all draw.
 
 With the nation fill (`fill_slots`), today's national sides take the slots a
-league leaves. A nation on its own slot that still shows the cartridge's flag and
-kits keeps them and its name; one written anywhere else gets its name and the
-cartridge's flag entry and kit records from wherever the image still shows them
-(`RETAIL_LOOKS`), else ESPN's flag and colours. The scenarios follow their
+league leaves. A nation the cartridge has wears the cartridge's flag and kits
+(`retail`, packaged, so an earlier patch's image gives them back too) and, on
+its own slot, the cartridge's name; one written elsewhere gets its own name, and
+one the cartridge lacks ESPN's flag and colours. The scenarios follow their
 nations, or play patched teams once a nation is gone (`scenarios`).
 """
 
 from __future__ import annotations
 
 import array
-import hashlib
 from collections import Counter
 from copy import deepcopy
 from pathlib import Path
@@ -47,7 +46,7 @@ from ...sports.models import LeagueData
 from ...sports.nationals import cartridge_slot, cartridge_slot_map
 from ..iss_snes.patcher import ISSPatcher
 from ..iss_snes.scenarios import repoint
-from . import flags, kits, looks, names, scenarios, screens
+from . import flags, kits, looks, names, retail, scenarios, screens
 from . import rom as R
 from . import writer as W
 from .mapper import FORMATION_DONORS, N64StatMapper, N64Team
@@ -88,21 +87,6 @@ NATIONAL_ALIASES = {
     "U.A.E.": "United Arab Emirates",
     "Papua NG": "Papua New Guinea",
 }
-
-#: The first 8 hex digits of the SHA-1 of each nation's look on the cartridge (`_looks`):
-#: its flag's texture and palette, then its two kit records.
-RETAIL_LOOKS = (
-    "5dcf37ac37aad6093fd61e0d04dcbaf61f5847eabee246d02b75166b40949d7ad2fd9191b8d90142595eee67"
-    "05edf756db7c7b8ae81e83fecbabe58c3c1f405814763e2f795894dae8b2c27f7779c2880b4b7df159b2c3b8"
-    "6a5eeea299c901595664e69d9752b611432b213b7e85d5bed268e9865c340d36271ab328eece9d508565af2d"
-    "ca8a00f310680a92cf3745aa08a02f0ebdb1d7421094d8ed5025d41666a950ce0f1a6b48d285a8c3f911d647"
-    "da51cb0bc7e45b66908b5936677046cf8615a547bcee00b89389290b3e757b88f3d822653492994fbf57e967"
-    "d265bbe8e032630e326724342ebd14195555ea526a4902ac97ce5d842e0dc66997a8becf311d39b518e77b77"
-    "7769a07a9102b52b0804900bb3a8e1822faed6bf013411811cbf39ae47d2a454984f6beb4ba7d61b17a38150"
-    "88d98732e636f4c94e2c8d27ac736cd983ae38f2bbd0dfbc4721dec4da25c7b5551314392d41ae3aba8aed18"
-    "7f210bec93d6dd1306fd0f2a5310b5e0948741ed04cb83edf832a75e4b3d7fac6da7459b7e09c8864c54d823"
-    "2c224aa7"
-)
 
 
 @register(
@@ -286,63 +270,57 @@ class ISS2000Patcher(Patcher):
         if options.get("looks", True):
             teams = self._dress(teams)
 
-        # Before anything is written: which slot shows which nation's cartridge flag and kits.
-        shown = _shown(image)
-        found: dict[int, int] = {}
-        for at, nation in shown.items():
-            if nation not in found or at == nation:
-                found[nation] = at
-        # A nation on its own slot that still shows it keeps its name, flag and kits; one
-        # elsewhere takes the flag entry and kit records of the slot showing it.
-        own = {s for s, t in teams.items() if t.nation == s and shown.get(s) == s}
-        copies = {
-            s: found[t.nation]
-            for s, t in teams.items()
-            if s not in own and t.nation is not None and t.nation in found
-        }
-        looked = own | set(copies)
+        # Read before anything is written: the slots that still show a nation's cartridge flag.
+        flag_at = _flags_shown(image)
+        present = _present(image)
+        nations = {s: t.nation for s, t in teams.items() if t.nation is not None}
+        own = {s for s, n in nations.items() if s == n}
+        # A nation the cartridge has wears its cartridge kits and flag: the flag stays where
+        # the slot shows it, else it is drawn back from the packaged one.
+        kept = {s for s, n in nations.items() if flag_at.get(s) == n}
+        records = {s: (retail.kit(n, 0), retail.kit(n, 1)) for s, n in nations.items()}
         if kit_plan is not None:
-            kit_plan = self._kit_plan(rosters, given, looked)
+            kit_plan = self._kit_plan(rosters, given, set(records))
 
         space = R.AssetSpace(image)
-        donors = W.donor_rows(image)
         players = 0
         for i, (slot, team) in enumerate(sorted(teams.items())):
             if on_progress is not None:
                 on_progress(0.1 + 0.5 * i / max(len(teams), 1), f"Patching {team.name}...")
-            players += W.write_team(image, slot, team, donors)
+            players += W.write_team(image, slot, team)
 
         self.status("Writing team names...")
-        names.write(
-            image,
-            space,
-            {slot: _menu_name(team) for slot, team in teams.items() if slot not in own},
-        )
+        cells: dict[int, str | bytes] = {s: _menu_name(t) for s, t in teams.items()}
+        cells.update({s: retail.name(s) for s in own})
+        names.write(image, space, cells)
 
         names.write_regions(image, space, self._region_labels(teams))
         W.write_start_page(image, sorted(s for s, t in teams.items() if not t.national))
 
-        entries = {s: flags.entry(image, source) for s, source in copies.items()}
-        for slot, entry in entries.items():
-            flags.set_entry(image, slot, *entry)
         if options.get("logos", True):
             self.status("Drawing crests...")
             crests = {}
-            # Clubs first: a flag left without a texture of its own is drawn in the generic
-            # stripes, which suit a country's flag better than a crest.
-            for slot, team in sorted(teams.items(), key=lambda st: st[1].national):
-                png = None if slot in looked else self._logo(team)
-                if png is not None:
+            # Clubs first, then the cartridge's flags, then ESPN's: a flag left without a
+            # texture of its own is drawn in the generic stripes, which suit a country's flag
+            # better than a crest.
+            for slot, team in sorted(
+                teams.items(), key=lambda st: (st[1].national, st[1].nation is None)
+            ):
+                if slot in kept:
+                    continue
+                if slot in nations:
+                    crests[slot] = retail.flag(nations[slot])
+                elif (png := self._logo(team)) is not None:
                     crests[slot] = flags.draw(png, (255, 255, 255))
-            nations = [s for s in crests if teams[s].national]
-            flags.write(image, space, crests, set(teams) - looked, looked, nations)
+            drawn = [s for s in crests if teams[s].national and s not in nations]
+            flags.write(image, space, crests, set(teams) - kept, kept, drawn)
             self.status(f"Team crests drawn: {len(crests)}")
 
-        if kit_plan is not None and (kit_plan or copies):
+        if kit_plan or records:
             self.status("Colouring kits...")
-            kits.write(image, space, kit_plan, copies)
+            kits.write(image, space, kit_plan or {}, records)
 
-        self._scenarios(image, teams, shown, own)
+        self._scenarios(image, teams, present, own)
 
         if pictures:
             self.status("Drawing screen art...")
@@ -364,8 +342,8 @@ class ISS2000Patcher(Patcher):
         rosters: MappedRosters, given: Any, looked: set[int] | frozenset[int] = frozenset()
     ) -> dict[int, tuple[KitSpec | None, KitSpec | None]]:
         """(first, second) kit per mapped slot: `given[slot]` sides when the caller
-        sets them, else the team's default kits; a slot in `looked` (a nation in the
-        cartridge's kits) takes only the sides given."""
+        sets them, else the team's default kits; a slot in `looked` (a nation in its
+        cartridge kits) takes only the sides given."""
         overrides = given if isinstance(given, dict) else {}
         plan: dict[int, tuple[KitSpec | None, KitSpec | None]] = {}
         for slot, team in rosters.teams.items():
@@ -400,29 +378,29 @@ class ISS2000Patcher(Patcher):
         return labels
 
     def _scenarios(
-        self, image: bytearray, teams: dict[int, N64Team], shown: dict[int, int], own: set[int]
+        self, image: bytearray, teams: dict[int, N64Team], present: dict[int, int], own: set[int]
     ) -> None:
         """Point each scenario at where its nations live now: a nation written into a slot,
-        else a slot this patch left that still shows it. A scenario that lost a nation plays
-        the patched teams `repoint` picks."""
+        else a slot this patch left that still shows its cartridge flag or kits (`present`).
+        A scenario that lost a nation plays the patched teams `repoint` picks."""
         at = {t.nation: s for s, t in sorted(teams.items()) if t.nation is not None}
-        for slot, nation in shown.items():
+        for slot, nation in present.items():
             if slot not in teams:
                 at.setdefault(nation, slot)
         kept = {s for s in at.values() if s not in teams}
         wanted = [(at.get(a, -1), at.get(b, -1)) for a, b in scenarios.RETAIL]
+        # A lost nation is a "blank" slot: its scenario never keeps it, even once every pair
+        # of patched teams is played.
+        moved = repoint(wanted, set(teams), blank={-1}, kept=kept)
         pairs = [
-            old if -1 in pair else pair
-            for pair, old in zip(
-                repoint(wanted, set(teams), kept=kept), scenarios.RETAIL, strict=True
-            )
+            old if -1 in pair else pair for pair, old in zip(moved, scenarios.RETAIL, strict=True)
         ]
         label = {
             s: (TEAM_NAMES[s] if s in own else _menu_name(t), t.code or _menu_name(t)[:3].upper())
             for s, t in teams.items()
         }
         for s in kept:
-            name = TEAM_NAMES[shown[s]]
+            name = TEAM_NAMES[present[s]]
             label[s] = (name, name[:3].upper())
         scenarios.write(image, pairs, label)
 
@@ -453,36 +431,44 @@ class ISS2000Patcher(Patcher):
             return None
 
 
-def _looks(image: bytes | bytearray) -> list[str]:
-    """Each of the 100 nations' slots' look: the first 8 hex digits of the SHA-1 of its
-    flag's texture and palette, then its two kit records ("" for a flag entry that is
-    not one)."""
+def _prints(image: bytes | bytearray) -> list[tuple[str, str]]:
+    """Each of the 100 nations' slots' (flag, kits) fingerprint, as `retail` takes them
+    ("" for a flag entry that is not one)."""
     assets = R.assets(image)
     wanted = {asset for asset, _, _, _ in flags._BUNDLES} | {flags.PALETTE_ASSET}
     data = {k: R.read_asset(image, assets[k]) for k in wanted}
     stream = b"".join(R.read_asset(image, assets[k]) for k in kits.PACKS)
     out = []
     for team in range(R.NATIONAL_TEAMS):
+        recs = [stream[kits._record(team, side) :][: kits.SIZE] for side in (0, 1)]
         tex, block, idx = flags.entry(image, team)
         try:
             asset, off = flags.texture_place(tex)
         except ValueError:
-            out.append("")
+            out.append(("", retail.fingerprint(*recs)))
             continue
         p = flags.palette_place(block, idx)
-        h = hashlib.sha1(data[asset][off : off + flags.TEX_SIZE])
-        h.update(data[flags.PALETTE_ASSET][p : p + 32])
-        for side in (0, 1):
-            o = kits._record(team, side)
-            h.update(stream[o : o + kits.SIZE])
-        out.append(h.hexdigest()[:8])
+        flag = (data[asset][off : off + flags.TEX_SIZE], data[flags.PALETTE_ASSET][p : p + 32])
+        out.append((retail.fingerprint(*flag), retail.fingerprint(*recs)))
     return out
 
 
-def _shown(image: bytes | bytearray) -> dict[int, int]:
-    """{slot: nation} for each slot that shows a nation's cartridge flag and kits."""
-    retail = {RETAIL_LOOKS[8 * n : 8 * n + 8]: n for n in range(R.NATIONAL_TEAMS)}
-    return {s: retail[look] for s, look in enumerate(_looks(image)) if look in retail}
+def _flags_shown(image: bytes | bytearray) -> dict[int, int]:
+    """{slot: nation} for each slot that shows a nation's cartridge flag."""
+    known = retail.flag_prints()
+    return {s: known[f] for s, (f, _) in enumerate(_prints(image)) if f in known}
+
+
+def _present(image: bytes | bytearray) -> dict[int, int]:
+    """{slot: nation} for each slot that shows a nation's cartridge flag or kits."""
+    flags_, kits_ = retail.flag_prints(), retail.kit_prints()
+    out = {}
+    for s, (f, k) in enumerate(_prints(image)):
+        if k in kits_:
+            out[s] = kits_[k]
+        if f in flags_:
+            out[s] = flags_[f]
+    return out
 
 
 def _menu_name(team: N64Team) -> str:

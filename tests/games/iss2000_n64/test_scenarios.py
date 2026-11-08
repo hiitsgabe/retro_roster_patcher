@@ -189,6 +189,20 @@ def test_every_header_of_the_layouts_reads(lang):
         assert S.header(_text(image, lang, k), "Arsenal", "ARS", lang, room) is not None
 
 
+def test_a_text_too_long_for_its_room_still_ends_in_it():
+    image = bytearray(24)
+    S._put(image, 4, 12, "a v b|" * 10)
+    assert image[14:16] == S.END and image[:4] == bytes(4) and image[16:] == bytes(8)
+    S._put(image, 4, 12, "abcdefghi|x")  # cut inside the line break: no half of it is left
+    assert image[4:16] == S.encode("abcdefghi") + S.END + bytes(1)
+
+
+def test_spanish_joins_a_name_on_an_i_sound_with_e():
+    assert "Francia e Italia" in S.blurb(1, "Francia", "Italia", 200)
+    assert "Brasil e Hibernia" in S.blurb(1, "Brasil", "Hibernia", 200)
+    assert "Italia y Francia" in S.blurb(1, "Italia", "Francia", 200)
+
+
 def test_text_drops_what_the_code_lacks():
     assert S.decode(S.encode("Brighton & Hove: 1, 2? Ok!") + S.END) == (
         "Brighton and Hove: 1, 2? Ok"

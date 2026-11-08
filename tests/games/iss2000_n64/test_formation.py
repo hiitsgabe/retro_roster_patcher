@@ -330,7 +330,7 @@ def test_the_literal_rows_are_the_cartridges(retail):
 def test_the_packaged_donor_rows_are_the_cartridges(retail):
     for shape, donor in FORMATION_DONORS.items():
         row = retail[R.FORMATIONS + donor * R.FORMATION_ROW :][: R.FORMATION_ROW]
-        assert W.donor_rows(retail)[shape] == (row, retail[R.METADATA + donor * 6 + 5]), shape
+        assert W.DONORS[shape] == (row, retail[R.METADATA + donor * 6 + 5]), shape
 
 
 @real_rom

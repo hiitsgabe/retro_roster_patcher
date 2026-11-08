@@ -70,6 +70,13 @@ def test_the_fifa_ranking_snapshot_is_readable_as_package_data():
     assert len(doc["ranking"]) == 211
 
 
+def test_the_iss2000_retail_looks_are_readable_as_package_data():
+    import zlib
+
+    data = zlib.decompress(package_bytes("retro_roster_patcher.assets", "iss2000_retail.zlib"))
+    assert len(data) == 100 * (768 + 32 + 2 * 512 + 512)
+
+
 def _shipped_game_packages() -> set[str]:
     """Game ids implied by the subpackages actually present in the distribution.
 
