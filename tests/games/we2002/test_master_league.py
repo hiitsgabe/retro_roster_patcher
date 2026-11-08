@@ -260,18 +260,75 @@ def test_patch_points_the_mapped_club_at_its_squad_and_blanking_the_rest_leaves_
         assert _read(image, chunks) == mark * sum(size for _, size in chunks)
 
 
+def _with_links(tmp_path, links):
+    """A noise image whose clubs have `links` ({club: [(nz, g)] * 23}), and its writer."""
+    path = tmp_path / "links.bin"
+    image = bytearray(_noise())
+    for club, pairs in links.items():
+        raw = bytes(b for pair in pairs for b in pair)
+        pos = 0
+        for offset, size in rom_writer._link_chunks(club):
+            image[offset : offset + size] = raw[pos : pos + size]
+            pos += size
+    path.write_bytes(bytes(image))
+    return path, RomWriter(str(path), str(path))
+
+
+def _position(image, chunks):
+    return _read(image, chunks)[0] & 7
+
+
+def test_clubs_nobody_patched_do_not_field_players_of_a_patched_slot(tmp_path):
+    """LOMBARDIA (club 20) fielded Van Dijk: its links named places of national slot 13, which the
+    patch rewrote with Liverpool (issue #5). Those links now name non-national players no club
+    fields, of the same position."""
+    lombardia = [(13, 2), (13, 5), (4, 0)] + [(53, 24 + i) for i in range(20)]
+    path, writer = _with_links(tmp_path, {20: lombardia, 21: [(13, 7)] * 23})
+    before = path.read_bytes()
+    fielded = {
+        rom_writer._nc_index(nz, g)
+        for club in range(32)
+        for nz, g in _links(before, club)
+        if club != 13 and g > 22
+    }
+
+    moved = writer.relink_clubs(rewritten={13}, mapped={13})
+
+    image = path.read_bytes()
+    assert moved == 3 + 23
+    for club in range(32):
+        if club != 13:
+            assert not [link for link in _links(image, club) if link[0] == 13 and link[1] <= 22]
+    after = _links(image, 20)
+    assert after[2:] == lombardia[2:]  # Ireland's place and the non-nationals stay
+    targets = [rom_writer._nc_index(*link) for link in after[:2] + _links(image, 21)]
+    assert None not in targets and len(set(targets)) == len(targets) == 25
+    assert not set(targets) & fielded  # nobody fielded them before
+    for (nz, g), target in zip(lombardia[:2], targets, strict=False):
+        assert _position(image, rom_writer._carat_chunks(target)) == _position(
+            before, rom_writer._nat_carat_chunks(nz * 23 + g)
+        )
+    # The mapped club itself is the writer's (`write_team`), and the default squad never moves.
+    assert _read(image, _link_pieces([13]) + DEFAULT_SQUAD) == _read(
+        before, _link_pieces([13]) + DEFAULT_SQUAD
+    )
+
+
+def test_relinking_twice_changes_nothing_more(tmp_path):
+    path, writer = _with_links(tmp_path, {20: [(13, 2)] * 23})
+    writer.relink_clubs(rewritten={13}, mapped=set())
+    once = path.read_bytes()
+    assert writer.relink_clubs(rewritten={13}, mapped=set()) == 0
+    assert path.read_bytes() == once
+
+
 # --- the retail disc ----------------------------------------------------------------------
 
 # Moriero's `start_link`: the index of the first non-national player of each of the 120
 # nationalities. 0-53 are the national teams' (0 Ireland ... 53 Australia), 54-62 the all-star and
 # club teams, 63-94 the clubs (-1: no link names a nationality there), 95-119 25 more with players
 # but no national team. A 0 is no player at all, but for Ireland's first.
-START_LINK = (
-    0, 5, 9, 10, 51, 58, 100, 168, 173, 210, 211, 275, 276, 301, 304, 306, 311, 312, 0, 313, 0, 0,
-    314, 318, 321, 0, 325, 333, 343, 347, 349, 0, 350, 351, 0, 0, 0, 352, 0, 0, 353, 354, 0, 0, 390,
-    391, 394, 0, 428, 0, 0, 0, 0, 432, 0, 0, 0, 0, 0, 0, 0, 0, 0, *([-1] * 32), 434, 435, 436, 438,
-    440, 0, 442, 4, 0, 0, 443, 444, 0, 451, 456, 457, 458, 0, 0, 459, 0, 460, 0, 0, 0,
-)  # fmt: skip
+START_LINK = rom_writer._START_LINK
 _STARTS = sorted({s for nz, s in enumerate(START_LINK) if s > 0 or nz == 0})
 NC_COUNT = [
     0 if s < 0 or (s == 0 and nz) else min([t for t in _STARTS if t > s] + [462]) - s
@@ -330,3 +387,43 @@ def test_the_retail_links_are_nationality_then_index_for_all_32_clubs(disc):
 def test_club_9_fields_the_valencia_eleven_through_its_links(disc):
     links = _retail_links(disc, 9)[1]
     assert [_name(disc, nz, g) for nz, g in links[:11]] == [bytes.fromhex(h) for h in VALENCIA_XI]
+
+
+@pytest.mark.real_rom
+def test_a_league_patch_leaves_no_club_outside_it_fielding_its_players(disc, tmp_path, monkeypatch):
+    """Through `patch` on the retail disc: 20 clubs in slots 0-19; clubs 20-31 keep 23 retail
+    players each, none of them from a rewritten slot and none fielded twice."""
+    import os
+    from pathlib import Path
+
+    monkeypatch.setattr(patcher_module, "apply_ppf", lambda *args, **kwargs: "")
+    rom = Path(os.environ["RETRO_ROSTER_TEST_ROMS"]) / "we2002.bin"
+    teams = {
+        slot: WETeamRecord(name=f"Club {slot}", short_name="CLB", players=_squad())
+        for slot in range(20)
+    }
+    out = tmp_path / "out.bin"
+    WE2002Patcher(cache_dir=tmp_path / "cache").patch(
+        rom_path=rom,
+        output_path=out,
+        rosters=MappedRosters(game_id="we2002", teams=teams),
+        kits=False,
+        logos=False,
+        looks=False,
+    )
+    with out.open("rb") as handle:
+
+        def read(offset, size):
+            handle.seek(offset)
+            return handle.read(size)
+
+        links = {club: _retail_links(read, club)[1] for club in range(32)}
+        default = [
+            (raw[2 * i], raw[2 * i + 1]) for raw in [read(*DEFAULT_SQUAD[0])] for i in range(23)
+        ]
+    for club in range(20, 32):
+        assert all(_reaches(nz, g) for nz, g in links[club])
+        assert not [(nz, g) for nz, g in links[club] if g <= 22 and nz < 20], club
+    nc = [START_LINK[nz] + g - 23 for club in range(20, 32) for nz, g in links[club] if g > 22]
+    nc += [START_LINK[nz] + g - 23 for nz, g in default if g > 22]
+    assert len(nc) == len(set(nc))

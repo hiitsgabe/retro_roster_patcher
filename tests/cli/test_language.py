@@ -214,6 +214,9 @@ def we2002_run(tmp_path, monkeypatch):
         def write_nat_team(self, nat_index, team, players=None, include_flag=True):
             return len(players or [])
 
+        def relink_clubs(self, rewritten, mapped):
+            return 0
+
         def flush_tex_patches(self):
             return None
 

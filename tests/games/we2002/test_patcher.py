@@ -182,6 +182,9 @@ def _fake_writer_class(log, *, create_output=True):
             log.append(("write_nat_team", nat_index, team.name, len(players or []), include_flag))
             return min(len(players or []), 23)
 
+        def relink_clubs(self, rewritten, mapped):
+            return 0
+
         def flush_tex_patches(self):
             log.append(("flush_tex_patches",))
 

@@ -50,6 +50,9 @@ class RecordingWriter:
         self.log.append(("nat", nat_index, team.flag_style, team.flag_palette, team.logo_png))
         return len(players or [])
 
+    def relink_clubs(self, rewritten, mapped):
+        return 0
+
     def flush_tex_patches(self):
         self.log.append(("flush_tex",))
 

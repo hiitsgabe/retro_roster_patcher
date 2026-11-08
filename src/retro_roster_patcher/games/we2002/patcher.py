@@ -418,6 +418,10 @@ class WE2002Patcher(Patcher):
                     rom_path, rosters, slots, writer, blank_unused
                 )
 
+            # Before the writes, which it reads the rewritten places' positions under: no
+            # club outside the mapping keeps fielding a player of a slot written here.
+            writer.relink_clubs(set(slots), {slot for slot in slots if slot < MAX_ML_SLOTS})
+
             teams_patched = 0
             players_patched = 0
             for i, slot in enumerate(slots):

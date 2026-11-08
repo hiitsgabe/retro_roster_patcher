@@ -26,6 +26,7 @@ import os
 import shutil
 import struct
 import unicodedata
+from collections import Counter
 
 from ...core.kits import KitSpec
 from ...core.shirt_numbers import shirt_numbers
@@ -1611,6 +1612,42 @@ def _squad_links(slot_index: int) -> bytes:
     return bytes(b for place in range(_PLAYERS_PER_NAT) for b in (slot_index, place))
 
 
+# Moriero's `start_link`: the index of the first non-national ("nc") player of each of the 120
+# nationalities a link can name. 0-53 are the national teams' (0 Ireland ... 53 Australia), 54-62
+# the all-star and club teams, 63-94 the clubs (-1: no link names a nationality there), 95-119 25
+# more with players but no national team. A 0 is no player at all, but for Ireland's first.
+_START_LINK = (
+    0, 5, 9, 10, 51, 58, 100, 168, 173, 210, 211, 275, 276, 301, 304, 306, 311, 312, 0, 313, 0, 0,
+    314, 318, 321, 0, 325, 333, 343, 347, 349, 0, 350, 351, 0, 0, 0, 352, 0, 0, 353, 354, 0, 0, 390,
+    391, 394, 0, 428, 0, 0, 0, 0, 432, 0, 0, 0, 0, 0, 0, 0, 0, 0, *([-1] * 32), 434, 435, 436, 438,
+    440, 0, 442, 4, 0, 0, 443, 444, 0, 451, 456, 457, 458, 0, 0, 459, 0, 460, 0, 0, 0,
+)  # fmt: skip
+# The managed club's squad, 2 bytes before club 0's; never written.
+_OFS_LINK_DEFAULT = 2_012_680
+
+
+def _nc_links() -> dict[int, tuple[int, int]]:
+    """Each non-national player's link, by his index: (nationality, 23 + his place in it)."""
+    links = {}
+    for nz, first in enumerate(_START_LINK):
+        if first > 0 or (first == 0 and nz == 0):
+            end = min([s for s in _START_LINK if s > first] + [_GIOCATORI_NC])
+            links.update({i: (nz, 23 + i - first) for i in range(first, end)})
+    return links
+
+
+_NC_LINKS = _nc_links()
+
+
+def _nc_index(nz: int, g: int) -> int | None:
+    """The non-national player the link (nationality, index) names, or None when it names a
+    national place or nobody."""
+    if g <= 22 or nz >= len(_START_LINK) or _START_LINK[nz] < 0:
+        return None
+    index = _START_LINK[nz] + g - 23
+    return index if _NC_LINKS.get(index) == (nz, g) else None
+
+
 def _nat_numbers_chunks(nat_index: int) -> list[tuple[int, int]]:
     """The (offset, size) piece of national slot `nat_index`'s 16 shirt-number bytes. Anything but
     0-62 raises `ValueError`."""
@@ -2330,6 +2367,56 @@ class RomWriter:
         if self.write_kits:
             self._pending_tex_patches.append((63 + slot_index, team))
         return min(len(players), _PLAYERS_PER_NAT) if players is not None else 0
+
+    def relink_clubs(self, rewritten: set[int], mapped: set[int]) -> int:
+        """Stop the Master League clubs outside `mapped` fielding players of the national slots in
+        `rewritten` (issue #5: LOMBARDIA fielded Van Dijk once Liverpool took slot 13).
+
+        Call it before the team writes: it reads the positions the rewritten places hold. Each such
+        link is pointed at the non-national player of the same position whom the fewest clubs
+        outside `mapped` (and the managed club) field, the lowest index on a tie: a retail player
+        no club fields while there is one, since `write_team` takes every nc player away from a
+        mapped club. The mapped clubs' links are `write_team`'s and the managed club's are never
+        written. Returns how many links moved; 0 the second time.
+        """
+        if not os.path.exists(self.output_path):
+            return 0
+        with open(self.output_path, "r+b") as f:
+
+            def read(chunks: list[tuple[int, int]]) -> bytes:
+                out = b""
+                for offset, size in chunks:
+                    f.seek(offset)
+                    out += f.read(size)
+                return out
+
+            clubs = [club for club in range(_SQUADRE_ML) if club not in mapped]
+            links = {club: bytearray(read(_link_chunks(club))) for club in clubs}
+            fielded = Counter(
+                index
+                for raw in [*links.values(), read([(_OFS_LINK_DEFAULT, _LINK_SIZE)])]
+                for i in range(0, _LINK_SIZE, 2)
+                if (index := _nc_index(raw[i], raw[i + 1])) is not None
+            )
+            positions = {i: read(_carat_chunks(i))[0] & 7 for i in _NC_LINKS}
+            moved = 0
+            for club, raw in links.items():
+                hits = [
+                    i
+                    for i in range(0, _LINK_SIZE, 2)
+                    if raw[i] in rewritten and raw[i + 1] < _PLAYERS_PER_NAT
+                ]
+                for i in hits:
+                    place = raw[i] * _PLAYERS_PER_NAT + raw[i + 1]
+                    wanted = read(_nat_carat_chunks(place))[0] & 7
+                    pick = min(_NC_LINKS, key=lambda n: (positions[n] != wanted, fielded[n], n))
+                    fielded[pick] += 1
+                    raw[i : i + 2] = bytes(_NC_LINKS[pick])
+                    moved += 1
+                if hits:
+                    _write_chunks(f, bytes(raw), _link_chunks(club))
+            _sync(f)
+        return moved
 
     def _write_team_names(self, f, slot_index: int, team: WETeamRecord):
         """Write all 6 name variants + lowercase for an ML team slot.
