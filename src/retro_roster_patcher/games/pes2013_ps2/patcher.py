@@ -422,7 +422,9 @@ def cut_squad(
         for g in GROUP_ORDER[1:]
     ]
     turns = [line[k] for k in range(len(outfield)) for line in lines if k < len(line)]
-    return (players[:LINEUP_SIZE] + keepers + turns)[:size]
+    kept = (players[:LINEUP_SIZE] + keepers + turns)[:size]
+    # A keeper-heavy squad still fills `size`: the other keepers come last.
+    return kept + [p for p in bench if not any(p is q for q in kept)][: size - len(kept)]
 
 
 def seat_squad(players: list[PESPlayer], preset: bytes) -> list[PESPlayer]:

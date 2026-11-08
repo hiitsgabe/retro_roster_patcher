@@ -366,3 +366,14 @@ def test_a_national_squad_listed_by_line_keeps_attackers_on_its_bench(tmp_path):
         bench = [p.position for p in squad[11:]]
         assert bench.count("Goalkeeper") <= 2 and "Attacker" in bench, bench
     assert [p.position for p in cut_squad(record.players, 17)[11:]].count("Goalkeeper") == 1
+
+
+def test_a_keeper_heavy_squad_is_cut_to_its_full_size():
+    eleven = [_p("XI GK", "Goalkeeper")] + [_p(f"XI {k}", "Defender") for k in range(10)]
+    rest = [_p(f"GK {k}", "Goalkeeper") for k in range(5)] + [
+        _p(f"MF {k}", "Midfielder") for k in range(10)
+    ]
+    cut = cut_squad(eleven + rest, 23)
+    assert len(cut) == 23 and cut[:11] == eleven
+    assert [p.display_name for p in cut[11:13]] == ["GK 0", "MF 0"]
+    assert sum(p.position == "Goalkeeper" for p in cut) == 3  # the spare, then two to fill
