@@ -217,6 +217,11 @@ class ISSTeamRecord:
     logo_url: str = ""
     #: Set by `looks.dress`; None leaves the cartridge's palettes alone.
     look: ISSLook | None = None
+    #: A national team's own slot on the cartridge (`TEAM_ENUM_ORDER`), whose
+    #: retail flag and kit it wears wherever it is written; on that slot it
+    #: also keeps the cartridge's name. None for a club or a nation the
+    #: cartridge lacks.
+    nation: int | None = None
 
 
 @dataclass

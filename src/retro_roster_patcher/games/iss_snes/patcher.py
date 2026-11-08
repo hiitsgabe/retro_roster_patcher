@@ -46,10 +46,12 @@ from ...core.models import (
 )
 from ...core.patcher import Patcher
 from ...core.registry import register
+from ...core.text import to_ascii
 from ...sports import _http
 from ...sports.espn import EspnClient
 from ...sports.lineup import apply_lineup
 from ...sports.models import LeagueData, Team, TeamRoster
+from ...sports.nationals import NATIONAL_LEAGUE
 from . import kits, looks, screens
 from .models import (
     PLAYERS_PER_TEAM,
@@ -77,6 +79,25 @@ GK_KIT = ((0, 128, 0), (0, 0, 0))
 
 #: What `patch(blank_unused=True)` writes over every player of an unmapped slot.
 _BLANK_SQUAD = [ISSPlayerRecord(name="")] * PLAYERS_PER_TEAM
+
+#: The cartridge's spelling of a nation -> ESPN's (`national_slot_map`, and the
+#: ranked fill's name match).
+NATIONAL_ALIASES = {
+    "Holland": "Netherlands",
+    "Switz": "Switzerland",
+    "Ireland": "Republic of Ireland",
+    "U.S.A.": "United States",
+    "S.Korea": "South Korea",
+}
+
+
+def _own_slot(team: Team) -> int | None:
+    """The slot the cartridge holds national team `team` in, by name; None for
+    a nation it lacks. Slot 26, the Super Star team, is nobody's."""
+    for slot, name in enumerate(TEAM_ENUM_ORDER[: kits.TEMPLATES]):
+        if to_ascii(NATIONAL_ALIASES.get(name, name)).upper() == to_ascii(team.name).upper():
+            return slot
+    return None
 
 
 def _parse_hex_colour(value: str) -> tuple[int, int, int] | None:
@@ -137,6 +158,26 @@ class ISSPatcher(Patcher):
     #: nearest the club's (`stat_mapper.FORMATION_DONORS`) and the shape in team select's label.
     writes_formation: bool = True
     formations: tuple[str, ...] = tuple(FORMATION_DONORS)
+
+    #: `sports.nationals.fetch_top_nations` fills the slots a league leaves
+    #: (`fill_slots`) with today's best-ranked national teams. A nation on its
+    #: own slot keeps the cartridge's name, flag and kit; one written elsewhere
+    #: gets its name, its retail flag and kit (`kits.retail_flag`, template
+    #: kits) when the cartridge has it, else ESPN's flag and colours.
+    supports_nation_fill: bool = True
+
+    def fill_slots(self, rom_path: Path) -> list[int]:
+        """Every slot on team select, 0-25: not 26, the Super Star team."""
+        return list(range(kits.TEMPLATES))
+
+    def national_slot_map(self, rom_path: Path, data: LeagueData) -> list[SlotMapping]:
+        """Pair the cartridge's 26 nations with `data`'s national teams by name
+        (`NATIONAL_ALIASES` for the cartridge's spellings)."""
+        found = {_own_slot(r.team): r.team for r in data.teams}
+        return [
+            SlotMapping(slot_index=slot, team_id=team.id, team_name=team.name)
+            for slot, team in sorted((s, t) for s, t in found.items() if s is not None)
+        ]
 
     def __init__(
         self,
@@ -310,6 +351,10 @@ class ISSPatcher(Patcher):
             self._apply_colours(record, roster.team)
             record.team_id = roster.team.id
             record.logo_url = roster.team.logo_url
+            if data.league.id == NATIONAL_LEAGUE:
+                record.nation = _own_slot(roster.team)
+                if record.nation == entry.slot_index:
+                    record.kit_gk = ()  # the cartridge's own keeper kit
             teams[entry.slot_index] = record
         return MappedRosters(game_id=self.game_id, teams=teams)
 
@@ -369,13 +414,14 @@ class ISSPatcher(Patcher):
         plans = None if given is False else self._kit_plans(image, rosters, slots, given)
         blank = bool(options.get("blank_unused", False))
         unused = [s for s in range(TOTAL_TEAMS) if s not in slots] if blank else []
-        flags, fallbacks = self._flags(rosters, slots, logos=options.get("logos", True))
+        flags, fallbacks = self._flags(image, rosters, slots, logos=options.get("logos", True))
         dress = bool(options.get("looks", True))
         if dress:
             rosters = self._dress(rosters, slots)
 
         patched_names: dict[int, str] = {}
         patched_tile_names: dict[int, str] = {}
+        described: dict[int, str] = {}
         shirts: dict[int, Shirts] = {}
         pins: dict[int, Pins] = {}
         teams_patched = 0
@@ -427,9 +473,15 @@ class ISSPatcher(Patcher):
                             writer.write_chest(slot, home.chest)
                             writer.write_clash(slot, home.clash)
                             pins[slot] = home.pins
+                    if record.nation is not None and not _chosen(given, slot):
+                        # Its retail flag numbers its retail kit's shirts as it is.
+                        del shirts[slot]
 
-                    patched_names[slot] = record.name
-                    patched_tile_names[slot] = record.short_name
+                    described[slot] = record.name
+                    # A nation on its own slot keeps the cartridge's name.
+                    if record.nation != slot:
+                        patched_names[slot] = record.name
+                        patched_tile_names[slot] = record.short_name
                     # Unconditional: the name, the kit and the description land
                     # whether or not a squad was supplied.
                     teams_patched += 1
@@ -439,14 +491,14 @@ class ISSPatcher(Patcher):
 
                 for slot in unused:
                     writer.write_player_names(slot, _BLANK_SQUAD)
-                    patched_names[slot] = patched_tile_names[slot] = ""
+                    patched_names[slot] = patched_tile_names[slot] = described[slot] = ""
                 if unused:
                     self.status(f"Unused slots blanked: {len(unused)}")
 
                 if on_progress is not None:
                     on_progress(0.80, "Writing team names...")
                 writer.write_team_name_texts(patched_names)
-                writer.write_team_descriptions(patched_names)
+                writer.write_team_descriptions(described)
 
                 if on_progress is not None:
                     on_progress(0.85, "Writing in-game name tiles...")
@@ -592,9 +644,12 @@ class ISSPatcher(Patcher):
             raise CapabilityError(f"slot {slot} {which} kit: {exc}") from exc
 
     def _flags(
-        self, rosters: MappedRosters, slots: list[int], *, logos: bool
+        self, image: bytes, rosters: MappedRosters, slots: list[int], *, logos: bool
     ) -> tuple[dict[int, Flag], dict[int, Flag | None]]:
         """Each slot's flag, and for a crest what it falls back to.
+
+        A nation the cartridge has wears its retail flag (`kits.retail_flag`),
+        which never gives way.
 
         A crest comes from `assets_dir/logos/<team_id>.png`, else the provider's
         logo (downloaded once into `cache_dir/logos`). A team without one, or
@@ -606,6 +661,9 @@ class ISSPatcher(Patcher):
         fallbacks: dict[int, Flag | None] = {}
         for slot in slots:
             record: ISSTeamRecord = rosters.teams[slot]
+            if record.nation is not None:
+                flags[slot] = kits.retail_flag(image, record.nation)
+                continue
             band = two_band_flag(*record.flag_colors[:2]) if record.flag_colors else None
             crest = None
             if logos:
@@ -697,9 +755,17 @@ class ISSPatcher(Patcher):
             record.flag_colors = [primary, alternate if alternate is not None else primary]
 
 
-def _default_kit(record: ISSTeamRecord, side: str) -> KitSpec | None:
-    """`record`'s kit for `side` when the `kits` option names none: its spec,
-    else a plain kit in its colours (shirt, shorts, socks), else None."""
+def _chosen(given: Any, slot: int) -> bool:
+    """Whether the `kits` option names a kit for `slot`."""
+    return isinstance(given, dict) and bool(given.get(slot) or given.get(str(slot)))
+
+
+def _default_kit(record: ISSTeamRecord, side: str) -> KitSpec | int | None:
+    """`record`'s kit for `side` when the `kits` option names none: a nation's
+    own (template `record.nation`), else its spec, else a plain kit in its
+    colours (shirt, shorts, socks), else None."""
+    if record.nation is not None:
+        return record.nation
     spec: KitSpec | None = getattr(record, f"kit_{side}_spec")
     colours: tuple[tuple[int, int, int], ...] = getattr(record, f"kit_{side}")
     if spec is None and colours:

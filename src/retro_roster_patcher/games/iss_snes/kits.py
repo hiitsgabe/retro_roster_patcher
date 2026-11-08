@@ -29,16 +29,20 @@ from typing import Any
 
 from ...core.errors import CapabilityError
 from ...core.kits import KitSpec, contrast, kit_from_image
+from .konami import decompress
+from .models import Flag
 from .rom_writer import (
     _DISPLACEMENT_PATCH_BYTE,
     _DISPLACEMENT_PATCH_POINTS,
     _OFS_CHEST_PTRS,
+    _OFS_FLAG_TILE_PTRS,
     _OFS_PREDOMINANT_COLOR,
     BLANK_DESIGN,
     CHEST_POSES,
     ISSRomWriter,
     Pins,
     _bgr555_to_rgb,
+    _half_rows,
     _kit_offsets,
     _rgb_to_predominant,
     design_pointers,
@@ -128,6 +132,42 @@ def chest(rom: bytes, slot: int) -> bytes:
         rom[at : at + 3]
         for at in (_OFS_CHEST_PTRS + (pose * 28 + slot) * 3 for pose in range(CHEST_POSES))
     )
+
+
+#: The retail cartridge's 26 national flags, 96 bytes each in slot order: 16
+#: rows of 24 pixels, 2 bits a pixel (an index into entries 12-15), four to a
+#: byte from the high bits; read once from the USA cartridge. See `retail_flag`.
+_RETAIL_FLAGS = zlib.decompress(
+    base64.b64decode(
+        "eNrVlr9P20AUxx9GpSAQUquyMAEjVPLAHxD+BFT1CCAxMADCDJlQJBY8disdErUd+mMIkEORN8SCAhMSYmAhW6Qs"
+        "LEzAEDkI83rfu0Q0gI2l1gNfWR+9vHvv67tLcraUURIxxJGSklmIJJns/MNERj1fwa6P4Jvf4PA8OPIBfPuFWgp3"
+        "yj9LKfMP1mIycXqLKHfkmRBpuVYQYrY0tSPERU5dCGZLSKYlCoRTQvEaWkzGjOpK02UcjJtxbltKsBWkmeuFiixz"
+        "sDSzwMF+btHz6ruF4kwmyMv8IpOa+wbRwKacILIKjooHJ6d+ERU7JqeJ3r2aWKa/JUT5Lkkmvf8v3T/p/X/p50Or"
+        "ytF/h0zjAR3vRg1kmBtP0Yw+7mq6QfiFRvGuDF574Mk4eNwJXmjWxsDLz+EOZhVXmkcp8FDzsm11UZL/oP+3/2G9"
+        "vo2qWi940HlPk8FotEPbYUSWC9o+wkZGfbA57ZPFuQq7Nq+uwnBujn2V+c4u2ZUlv1VpupoOFOO58PhJGrWHFCLs"
+        "QRSDdbC+BX7bBH9onq/o/M/nHLLZrLpLtVpVM4kTm1mZmceJcUpgfcmRKMVP0tU8AK0amGKw19fcA/vfg319IQ6K"
+        "za+hm2hIvRUQfVKXa6lg5PWpirtTtypP6wGKPF0tPdApomt0G11dG/dd2sG4af0Bepta1w=="
+    )
+)
+
+
+def retail_flag(rom: bytes, n: int) -> Flag:
+    """Nation `n`'s flag as the retail cartridge has it: `rom`'s own when it was
+    never patched, else `_RETAIL_FLAGS` in the colours `retail` gives back, so
+    a nation keeps its flag wherever a patch put it and whatever stood in its
+    slot."""
+    words = struct.unpack_from("<4H", retail(rom), ISSRomWriter._flag_colour_offset(n))
+    colours = [_bgr555_to_rgb(w) for w in words]
+    if rom[_DISPLACEMENT_PATCH_POINTS[0]] != _DISPLACEMENT_PATCH_BYTE:
+        rows = []
+        for k in (0, 2):
+            at = 0x40000 + int.from_bytes(rom[_OFS_FLAG_TILE_PTRS + 4 * n + k :][:2], "little")
+            size = int.from_bytes(rom[at : at + 2], "little") & 0x7FFF
+            rows += _half_rows(decompress(rom[at : at + size]))
+        return Flag(rows, colours)
+    packed = _RETAIL_FLAGS[96 * n : 96 * (n + 1)]
+    pixels = [b >> s & 3 for b in packed for s in (6, 4, 2, 0)]
+    return Flag([pixels[24 * r : 24 * (r + 1)] for r in range(16)], colours)
 
 
 def retail(rom: bytes) -> bytes:
