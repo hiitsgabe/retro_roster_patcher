@@ -428,6 +428,13 @@ def _atlas_files(logo_styles=()):
     return blocks
 
 
+def _stadium_blocks():
+    """A stadium file's six flag pages, in its record order (`fa._STADIUM_RUN`), with the same
+    art as `_atlas_files` at those places."""
+    art = {(x, y): block for x, y, _w, _h, block in _atlas_files()}
+    return [(x, y, 32, 128, art[(x, y)]) for x, y in fa._STADIUM_RUN]
+
+
 def _build_disc(tmp_path, files, table):
     """`files`: name -> (lba, data) under /BIN; `table`: [(lba, addr, sectors)] in the EXE."""
     path = tmp_path / "disc.bin"
@@ -489,8 +496,9 @@ def _logo(fill, *, noisy=False):
 def test_logos_land_in_every_copy_and_a_file_grows_into_its_free_sectors(tmp_path):
     datsel = _data_file(_atlas_files())
     datsel3 = _data_file(_atlas_files()[4:])  # the region-A blocks only
-    # Style 36's cells: big in (768,256), mini in (800,256), medium in (800,384).
-    gdc = _data_file(_atlas_files()[4:8], base=0x800C8000)
+    # Style 36's cells: big in (768,256), mini in (800,256), medium in (800,384); a stadium file
+    # carries the big and mini pages.
+    gdc = _data_file(_stadium_blocks(), base=0x800C8000)
     files = {"DATSEL.BIN": (100, datsel), "DATSEL3.BIN": (300, datsel3), "GDC_AD.BIN": (400, gdc)}
     table = [(100, BASE, (len(datsel) + USER - 1) // USER), (999, 0x800C8000, 50)]
     path = _build_disc(tmp_path, files, table)
@@ -513,7 +521,8 @@ def test_logos_land_in_every_copy_and_a_file_grows_into_its_free_sectors(tmp_pat
                 rec.x, rec.y, rec.w, rec.h, lz_decompress(data, rec.ptr - parsed.base)[0]
             )
         assert vram.pixels(big_rect(36)) == _logo(5).big, name
-        assert vram.pixels(medium_rect(36)) == _logo(5).medium, name
+        if not name.startswith("GDC_"):  # a stadium file has no medium (grid) page
+            assert vram.pixels(medium_rect(36)) == _logo(5).medium, name
         assert vram.pixels(mini_rect(36)) == _logo(5).mini, name
     # An untouched block is byte-identical to what it was.
     before = parse_data_file(datsel, BASE).lists[0][0]
@@ -558,7 +567,7 @@ def test_a_file_the_game_reads_by_an_unknown_count_is_not_grown(tmp_path):
 
 def test_a_stadium_file_grows_up_to_the_stadium_slots_count(tmp_path):
     datsel = _data_file(_atlas_files())
-    gdc = _data_file(_atlas_files()[4:6], base=0x800C8000)
+    gdc = _data_file(_stadium_blocks(), base=0x800C8000)
     path = _build_disc(
         tmp_path,
         {"DATSEL.BIN": (100, datsel), "GDC_AD.BIN": (400, gdc)},
@@ -578,11 +587,10 @@ def test_growth_stops_at_the_next_file(tmp_path):
     assert any("DATSEL.BIN: needs" in line for line in report.skipped)
 
 
-def test_a_block_whose_content_differs_from_the_atlas_is_left_alone(tmp_path):
+def test_a_stadium_file_without_the_run_of_flag_pages_is_left_alone(tmp_path):
+    """Like GDC_BN: art at the atlas's places, but not the six flag pages in their order."""
     datsel = _data_file(_atlas_files())
-    other = list(_atlas_files()[4:6])
-    other[0] = (768, 256, 32, 128, _block(999, 32, 128))  # same place, different art
-    gdc = _data_file(other, base=0x800C8000)
+    gdc = _data_file(_atlas_files()[4:8], base=0x800C8000)
     path = _build_disc(
         tmp_path, {"DATSEL.BIN": (100, datsel), "GDC_AD.BIN": (400, gdc)}, [(100, BASE, 200)]
     )
@@ -624,12 +632,36 @@ def test_nothing_is_written_when_no_block_changes(tmp_path):
     assert path.read_bytes() == before
 
 
+def test_a_stadium_copy_is_found_by_place_whatever_an_earlier_patch_drew_there(tmp_path):
+    """After a logo patch the stadium pages hold its crests on white, never DATSEL's content:
+    they are still repainted, and only where this patch's styles lie."""
+    datsel = _data_file(_atlas_files())
+    earlier = [(x, y, w, h, _block(x + y + 5, w, h)) for x, y, w, h, _ in _stadium_blocks()]
+    gdc = _data_file(earlier, base=0x800C8000)
+    files = {"DATSEL.BIN": (100, datsel), "GDC_AD.BIN": (400, gdc)}
+    path = _build_disc(tmp_path, files, [(100, BASE, 200), (999, 0x800C8000, 50)])
+    stadium = _logo(7)
+    report = patch_flag_atlas(str(path), {36: _logo(5)}, {36: stadium})
+    assert "GDC_AD.BIN" in report.files
+    with open(path, "rb") as f:
+        entry = fa._disc_files(f)["GDC_AD.BIN"]
+    data = _read_file(path, entry.lba, entry.size)
+    parsed = parse_data_file(data, infer_base(data))
+    before, after = Vram(), Vram()
+    for (x, y, w, h, block), rec in zip(earlier, fa._stadium_copies(parsed), strict=True):
+        before.put_block(x, y, w, h, block)
+        after.put_block(x, y, w, h, lz_decompress(data, rec.ptr - parsed.base)[0])
+    assert after.pixels(big_rect(36)) == stadium.big
+    assert after.pixels(mini_rect(36)) == stadium.mini
+    assert after.pixels(big_rect(37)) == before.pixels(big_rect(37))
+
+
 def test_the_stadium_files_get_their_own_rendering_of_the_logo(tmp_path):
     """The menu copies take `logos`, the GDC_ copies `stadium` (the logo on
     white): two edits for one original block, each landing in its own files."""
     datsel = _data_file(_atlas_files())
     datsel3 = _data_file(_atlas_files()[4:])
-    gdc = _data_file(_atlas_files()[4:8], base=0x800C8000)
+    gdc = _data_file(_stadium_blocks(), base=0x800C8000)
     files = {"DATSEL.BIN": (100, datsel), "DATSEL3.BIN": (300, datsel3), "GDC_AD.BIN": (400, gdc)}
     table = [(100, BASE, (len(datsel) + USER - 1) // USER), (999, 0x800C8000, 50)]
     path = _build_disc(tmp_path, files, table)
@@ -651,3 +683,31 @@ def test_the_stadium_files_get_their_own_rendering_of_the_logo(tmp_path):
             )
         assert vram.pixels(big_rect(36)) == expected.big, name
         assert vram.pixels(mini_rect(36)) == expected.mini, name
+
+
+@pytest.mark.real_rom
+def test_a_stadium_file_s_atlas_copies_are_its_run_of_six_flag_pages(disc_path):
+    """The `GDC_*` files carry the big and mini flag pages as six records in a row; other records
+    at the same places hold other art (and `GDC_BN` has no flag copy at all). On the retail disc
+    the run is exactly the records whose content is `DATSEL.BIN`'s."""
+    from retro_roster_patcher.games.we2002 import flag_atlas as A
+
+    source, _ = A.read_data_file(disc_path, "DATSEL.BIN")
+    menu = {
+        (r.x, r.y, r.w, r.h): A.lz_decompress(source.data, r.ptr - source.base)[0]
+        for r in A._atlas_blocks(source)
+    }
+    with open(disc_path, "rb") as f:
+        names = [n for n in A._disc_files(f) if n.startswith("GDC_")]
+    assert len(names) == 34
+    for name in names:
+        parsed, _ = A.read_data_file(disc_path, name)
+        same = [
+            r
+            for r in parsed.records()
+            if r.kind & 0xFF == A.KIND_IMAGE
+            and menu.get((r.x, r.y, r.w, r.h))
+            == A.lz_decompress(parsed.data, r.ptr - parsed.base)[0]
+        ]
+        assert A._stadium_copies(parsed) == same, name
+        assert len(same) == (0 if name == "GDC_BN.BIN" else 6), name

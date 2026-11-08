@@ -333,6 +333,22 @@ def test_nations_wear_their_own_flags_over_a_plain_patch_and_a_repatch_changes_n
     assert read_styles(str(filled), [nations.flag(5).style])[nations.flag(5).style] == (
         nations.bitmaps(nations.flag(5).style)
     )
+    # The match (stadium) copies too: an earlier logo patch left its crests on white there, which
+    # a copy matched by DATSEL's content never found.
+    from retro_roster_patcher.games.we2002.logo_render import render_logos
+
+    spain = nations.flag(5).style
+    for gdc in ("GDC_AD.BIN", "GDC_FN.BIN"):
+        on_pitch = read_styles(str(filled), [spain, 2], gdc)
+        assert (on_pitch[spain].big, on_pitch[spain].mini) == (
+            nations.bitmaps(spain).big,
+            nations.bitmaps(spain).mini,
+        ), gdc
+        assert on_pitch[2].big == nations.bitmaps(2).big, gdc
+        club = _flag(filled, 0).style
+        stadium = render_logos(_png((40, 0, 200)))[1]
+        drawn = read_styles(str(filled), [club], gdc)[club]
+        assert (drawn.big, drawn.mini) == (stadium.big, stadium.mini), gdc
     # Croatia, untouched at home, keeps its disc flag but gets its name: the translation the
     # patch applies renames some nations' slots (Iran's to "India").
     assert _read(filled, W._nat_kanji_chunks(22)).startswith("ＣＲＯ".encode("shift_jis"))

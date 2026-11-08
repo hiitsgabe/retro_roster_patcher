@@ -32,7 +32,7 @@ well as in the ISO directory.
 from __future__ import annotations
 
 import struct
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 
 from ...core.errors import RomError
@@ -683,6 +683,22 @@ def _entries_by_address(exe: bytes, addr: int) -> list[tuple[int, int]]:
 _GDC_LOAD_ADDRESS = 0x800C8000
 
 
+#: Where a stadium file's copies of the big and mini flag pages go, in its record order.
+_STADIUM_RUN = ((832, 256), (864, 256), (832, 384), (864, 384), (768, 256), (800, 256))
+
+
+def _stadium_copies(parsed: DataFile) -> list[Record]:
+    """A stadium file's (`GDC_*`) copies of the flag pages: the run of six 32x128 records at
+    `_STADIUM_RUN`. Other records at those places hold other art, and one file (`GDC_BN`) has
+    no copy at all: none of them is told by its content, which a logo patch changes."""
+    images = [r for r in parsed.records() if r.kind & 0xFF == KIND_IMAGE]
+    for i in range(len(images) - len(_STADIUM_RUN) + 1):
+        run = images[i : i + len(_STADIUM_RUN)]
+        if [(r.x, r.y, r.w, r.h) for r in run] == [(x, y, 32, 128) for x, y in _STADIUM_RUN]:
+            return run
+    return []
+
+
 def _atlas_blocks(parsed: DataFile) -> list[Record]:
     """The image records that lie inside the two atlas regions."""
     region_a = (768, 256, 128, 256)
@@ -741,8 +757,13 @@ def rewrite_blocks(
     image_path: str,
     block_edits: list[BlockEdit],
     raw_edits: list[RawEdit] = (),  # type: ignore[assignment]
+    stadium: Callable[[Record, bytes], bytes] | None = None,
 ) -> AtlasReport:
     """Apply block and raw-record edits to every 2D data file on the disc.
+
+    `stadium`, when given, rewrites each stadium file's flag-page copies
+    (`_stadium_copies`): it gets the record and its decoded block, and returns the
+    block to write.
 
     A file whose re-encoded blocks no longer fit grows into the free sectors
     after it, with its ISO directory record and its sector count in the main
@@ -750,7 +771,7 @@ def rewrite_blocks(
     reported and left alone.
     """
     report = AtlasReport()
-    if not block_edits and not raw_edits:
+    if not block_edits and not raw_edits and stadium is None:
         return report
     by_original: dict[bytes, list[BlockEdit]] = {}
     for e in block_edits:
@@ -762,6 +783,8 @@ def rewrite_blocks(
     for e in block_edits:
         for name in e.files:
             (prefixes if name.endswith("_") else wanted_files).add(name)
+    if stadium is not None:
+        prefixes.update(ATLAS_FILE_PREFIXES)
     raw_by_file: dict[str, list[RawEdit]] = {}
     for r in raw_edits:
         raw_by_file.setdefault(r.file, []).append(r)
@@ -806,6 +829,13 @@ def rewrite_blocks(
                     )
                 if edit is not None and _names_file(edit, entry.name):
                     replacements[off] = edit.replacement
+            if stadium is not None and entry.name.startswith(ATLAS_FILE_PREFIXES):
+                for rec in _stadium_copies(parsed):
+                    off = rec.ptr - base
+                    raw, _ = lz_decompress(data, off)
+                    painted = stadium(rec, raw)
+                    if painted != raw:
+                        replacements[off] = lz_compress(painted)
             raw_here = raw_by_file.get(entry.name, [])
             if not replacements and not raw_here:
                 continue
@@ -861,20 +891,25 @@ def read_data_file(image_path: str, name: str) -> tuple[DataFile, DiscFile]:
     return parse_data_file(data, infer_base(data)), entry
 
 
-def _source_atlas(image_path: str) -> tuple[DataFile, Vram]:
-    """`SOURCE_FILE` parsed, and its atlas blocks decoded into a VRAM model."""
-    parsed, _entry = read_data_file(image_path, SOURCE_FILE)
+def _source_atlas(image_path: str, name: str = SOURCE_FILE) -> tuple[DataFile, Vram]:
+    """`name` parsed, and its atlas blocks (a stadium file's flag-page copies) decoded into a
+    VRAM model."""
+    parsed, _entry = read_data_file(image_path, name)
     vram = Vram()
-    for rec in _atlas_blocks(parsed):
+    blocks = _stadium_copies(parsed) if name.startswith(ATLAS_FILE_PREFIXES) else None
+    for rec in _atlas_blocks(parsed) if blocks is None else blocks:
         raw, _ = lz_decompress(parsed.data, rec.ptr - parsed.base)
         vram.put_block(rec.x, rec.y, rec.w, rec.h, raw)
     return parsed, vram
 
 
-def read_styles(image_path: str, styles: Iterable[int]) -> dict[int, LogoImages]:
-    """The three bitmaps each of `styles` draws, as the disc's atlas holds them now (the
-    palette is left empty: a style is a shape, each team's CLUT colours it)."""
-    _parsed, vram = _source_atlas(image_path)
+def read_styles(
+    image_path: str, styles: Iterable[int], name: str = SOURCE_FILE
+) -> dict[int, LogoImages]:
+    """The three bitmaps each of `styles` draws, as the disc's atlas in `name` holds them now
+    (the palette is left empty: a style is a shape, each team's CLUT colours it). A stadium
+    file holds the big and mini ones only."""
+    _parsed, vram = _source_atlas(image_path, name)
     return {s: LogoImages([], *(vram.pixels(r) for r in style_rects(s))) for s in styles}
 
 
@@ -889,7 +924,9 @@ def patch_flag_atlas(
     original content it recognises, in every 2D data file that carries a copy;
     see `rewrite_blocks` for how a file that grows is handled. `stadium`, when
     given, is what the stadium files (`GDC_*`, the flags a match draws) get
-    instead of `logos`: the same logos on a white ground.
+    instead of `logos`: the same logos on a white ground. The stadium files'
+    copies are found by place (`_stadium_copies`), not by content: after a logo
+    patch they hold its crests on white, which `DATSEL.BIN` never has.
     """
     source_parsed, original = _source_atlas(image_path)
 
@@ -905,20 +942,30 @@ def patch_flag_atlas(
             touched += [_hw_rect(big), _hw_rect(medium), _hw_rect(mini)]
         return painted, touched
 
-    targets: list[tuple[Mapping[int, LogoImages], tuple[str, ...]]] = (
-        [(logos, ATLAS_FILES + ATLAS_FILE_PREFIXES)]
-        if stadium is None
-        else [(logos, ATLAS_FILES), (stadium, ATLAS_FILE_PREFIXES)]
-    )
     edits: list[BlockEdit] = []
-    for images_by_style, files in targets:
-        painted, touched = paint(images_by_style)
-        for rec in _atlas_blocks(source_parsed):
-            r = (rec.x, rec.y, rec.w, rec.h)
-            if not any(_overlaps(r, t) for t in touched):
+    painted, touched = paint(logos)
+    for rec in _atlas_blocks(source_parsed):
+        r = (rec.x, rec.y, rec.w, rec.h)
+        if not any(_overlaps(r, t) for t in touched):
+            continue
+        before = original.get_block(rec.x, rec.y, rec.w, rec.h)
+        after = painted.get_block(rec.x, rec.y, rec.w, rec.h)
+        if before != after:
+            edits.append(BlockEdit(before, lz_compress(after), ATLAS_FILES))
+
+    on_pitch, pitch_rects = paint(logos if stadium is None else stadium)
+
+    def stadium_copy(rec: Record, raw: bytes) -> bytes:
+        """`raw` with the painted styles' halfwords copied in where they cross `rec`."""
+        out = bytearray(raw)
+        for x, y, w, h in pitch_rects:
+            x0, x1 = max(x, rec.x), min(x + w, rec.x + rec.w)
+            if x1 <= x0:
                 continue
-            before = original.get_block(rec.x, rec.y, rec.w, rec.h)
-            after = painted.get_block(rec.x, rec.y, rec.w, rec.h)
-            if before != after:
-                edits.append(BlockEdit(before, lz_compress(after), files))
-    return rewrite_blocks(image_path, edits)
+            for row in range(max(y, rec.y), min(y + h, rec.y + rec.h)):
+                src = (row * VRAM_W + x0) * 2
+                dst = ((row - rec.y) * rec.w + x0 - rec.x) * 2
+                out[dst : dst + (x1 - x0) * 2] = on_pitch.data[src : src + (x1 - x0) * 2]
+        return bytes(out)
+
+    return rewrite_blocks(image_path, edits, stadium=stadium_copy if pitch_rects else None)
