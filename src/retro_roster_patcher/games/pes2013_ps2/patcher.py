@@ -27,8 +27,10 @@ from __future__ import annotations
 import base64
 import hashlib
 from collections import Counter
+from collections.abc import Callable
 from copy import deepcopy
 from dataclasses import dataclass, replace
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -54,7 +56,18 @@ from ...sports.lineup import lineup_role as lineup_role_name
 from ...sports.models import LeagueData, Player, Team, TeamRoster
 from . import kit_textures, looks
 from .formations import FORMATIONS, PRESETS, pick_preset, seats
-from .kits import AWAY, HOME, apply_spec, retail_national
+from .kits import (
+    AWAY,
+    GK_AWAY,
+    GK_HOME,
+    HOME,
+    NEUTRAL_AWAY,
+    NEUTRAL_HOME,
+    apply_colours,
+    apply_spec,
+    keeper_spec,
+    retail_national,
+)
 from .models import (
     CLUB_COUNT,
     CLUB_SQUAD_SIZE,
@@ -92,6 +105,8 @@ GROUP_ORDER = ("Goalkeeper", "Defender", "Midfielder", "Attacker")
 DEFAULT_SHAPE = {"Defender": 4, "Midfielder": 4, "Attacker": 2}
 #: Squad places that are the club's lineup.
 LINEUP_SIZE = 11
+#: The fewest players the national fill cuts a squad to (the eleven and two substitutes).
+MIN_SQUAD = 13
 #: A 1x1 fully transparent PNG: what a blanked icon is painted with.
 BLANK_PNG = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNgYGBgAAAABQABeqhXUAAAAABJRU5ErkJggg=="
@@ -388,6 +403,27 @@ def seat_eleven(starters: list[PESPlayer], preset: bytes) -> list[PESPlayer | No
     return placed
 
 
+def cut_squad(
+    players: list[Any], size: int, group: Callable[[Any], str] = lambda p: p.position
+) -> list[Any]:
+    """`players` cut to `size`: the eleven, one spare keeper, then the outfield bench taking
+    a defender, a midfielder and an attacker in turn, each line in the order given. The
+    provider lists a squad by line, keepers first, so a plain cut would keep a bench of
+    keepers and defenders. `group` gives a player's group (`GROUP_ORDER`; any other reads
+    as a midfielder)."""
+    if len(players) <= size:
+        return players
+    bench = players[LINEUP_SIZE:]
+    keepers = [p for p in bench if group(p) == "Goalkeeper"][:1]
+    outfield = [p for p in bench if group(p) != "Goalkeeper"]
+    lines = [
+        [p for p in outfield if (group(p) if group(p) in GROUP_ORDER else "Midfielder") == g]
+        for g in GROUP_ORDER[1:]
+    ]
+    turns = [line[k] for k in range(len(outfield)) for line in lines if k < len(line)]
+    return (players[:LINEUP_SIZE] + keepers + turns)[:size]
+
+
 def seat_squad(players: list[PESPlayer], preset: bytes) -> list[PESPlayer]:
     """`players` with the starters in the order of the preset's places (the national squads'
     rows are their places), then everyone else as they were."""
@@ -558,7 +594,12 @@ class PES2013PS2Patcher(Patcher):
         return out
 
     def fill_slots(self, rom_path: Path) -> list[int]:
-        """The 60 nations' rows, 1000-1059; the Classic rows 1060-1066 are left."""
+        """The 60 nations' rows, 1000-1059; the Classic rows 1060-1066 are left. None, with a
+        status line, on an image whose nationality table is not found: a moved nation would
+        wear the row owner's name and flag."""
+        if not self._nationalities(rom_path):
+            self.status("No nationality table on this disc: national teams are not filled")
+            return []
         return list(range(NATIONAL_SLOT_BASE, NATIONAL_SLOT_BASE + NATION_ROWS))
 
     def own_national_slot(self, rom_path: Path, team: Team) -> int | None:
@@ -680,6 +721,10 @@ class PES2013PS2Patcher(Patcher):
                 # The keeper first, then ten outfielders: the formation cuts them into its lines
                 # by index, in the order given (the editor's, or the depth order of the suggestion).
                 players, starting = eleven_first(players, lineup)
+            if national and not order_as_given:
+                # The bench by line, keepers first, would lose the attackers to the cut.
+                group = partial(lineup_group, lineup=lineup)
+                players = cut_squad(players, NATIONAL_SQUAD_SIZE, group)
             home_kit, away_kit = default_kits(roster.team)
             teams[entry.slot_index] = PESTeamRecord(
                 # The game's own names are upper case throughout.
@@ -776,9 +821,13 @@ class PES2013PS2Patcher(Patcher):
                 players_patched += len(assignments)
             if on_progress is not None:
                 on_progress(0.8, "Compressing player tables...")
-            written, blocks = self._fit_player_tables(
+            written, blocks, dropped = self._fit_player_tables(
                 writer, tables, rosters, slots, national_slots, disc, originals
             )
+            for slot in dropped:  # left as the disc had them: no name, kit or formation either
+                national_slots.remove(slot)
+                presets.pop(slot, None)
+                del rosters.teams[slot]
             players_patched += written
             for index, t in tables.items():
                 writer.write_player_tables(index, t, blocks[index])
@@ -917,10 +966,11 @@ class PES2013PS2Patcher(Patcher):
         national_slots: list[int],
         disc: _Disc,
         originals: dict[int, bytes],
-    ) -> tuple[int, dict[int, bytes]]:
+    ) -> tuple[int, dict[int, bytes], list[int]]:
         """Keep the national rows apart from the patched clubs (`_unshare`), write the
         national squads and deflate both player entries into their room; returns
-        national players written and the built entries.
+        national players written, the built entries and the national slots left out
+        (`_write_nationals`).
 
         Real names compress worse than the disc's, so a full patch outgrows
         the room. What gives, in order: the records no squad points at are
@@ -934,8 +984,9 @@ class PES2013PS2Patcher(Patcher):
         while True:
             copied, short = self._unshare(tables, originals, clubs, copy_limit)
             written = pool_used = 0
+            dropped: list[int] = []
             if national_slots:
-                written, pool_used = self._write_nationals(
+                written, pool_used, dropped = self._write_nationals(
                     tables, rosters, national_slots, disc, limit
                 )
             blocks = {index: t.build() for index, t in tables.items()}
@@ -947,7 +998,7 @@ class PES2013PS2Patcher(Patcher):
                 self.status(f"{blanked} records no squad uses blanked to make room")
             if over <= 0:
                 self._report_short(writer, short, national_slots)
-                return written, blocks
+                return written, blocks, dropped
             if pool_used:
                 limit = int(pool_used * 0.8)
                 self.status(
@@ -1077,7 +1128,7 @@ class PES2013PS2Patcher(Patcher):
         slots: list[int],
         disc: _Disc,
         pool_limit: int | None = None,
-    ) -> tuple[int, int]:
+    ) -> tuple[int, int, list[int]]:
         """Give each national row its new squad without touching a club.
 
         A national squad shares records with the clubs its players play for,
@@ -1089,10 +1140,12 @@ class PES2013PS2Patcher(Patcher):
         its squad does not fill are left empty (the game plays a short squad).
         The disc has too few such records for 60 squads of 23, so when the
         rows ask for more than there are, every squad is cut to the same
-        size, the eleven and the first of the bench kept, with a status line.
+        size (`cut_squad`), with a status line; never below `MIN_SQUAD`: the
+        lowest-ranked nations (the last in the mapping) are left out instead.
         Each record taken over gets the player's position. A team with a
         formation lists its eleven in the order of the preset's places (the
-        row is the places). Returns players written and pool records used.
+        row is the places). Returns players written, pool records used and the
+        slots left out.
         """
         primary = tables[PLAYER_ENTRIES[0]]
         club_used = primary.club_referenced()
@@ -1111,16 +1164,26 @@ class PES2013PS2Patcher(Patcher):
                 for idx in primary.national_squad(slot - NATIONAL_SLOT_BASE)
                 if 0 < idx < primary.player_count and idx not in club_used
             ]
-        supply = sum(len(t) for t in takes.values()) + len(pool)
-        cap = next(
-            size
-            for size in range(NATIONAL_SQUAD_SIZE, -1, -1)
-            if sum(min(size, len(squad)) for squad in squads.values()) <= supply
-        )
+        dropped: list[int] = []
+        while True:
+            supply = sum(len(takes[s]) for s in order) + len(pool)
+            cap = next(
+                size
+                for size in range(NATIONAL_SQUAD_SIZE, -1, -1)
+                if sum(min(size, len(squads[s])) for s in order) <= supply
+            )
+            if cap >= MIN_SQUAD or cap >= max((len(squads[s]) for s in order), default=0):
+                break
+            dropped.insert(0, order.pop())
+        if dropped:
+            self.status(
+                f"Too few free records for squads of {MIN_SQUAD}: "
+                f"{', '.join(rosters.teams[s].name for s in dropped)} left as the disc had them"
+            )
         spare = [idx for slot in order for idx in takes[slot][min(cap, len(squads[slot])) :]]
         written = pool_used = 0
         for slot in order:
-            record, squad = rosters.teams[slot], squads[slot][:cap]
+            record, squad = rosters.teams[slot], cut_squad(squads[slot], cap)
             take = takes[slot][: len(squad)]
             while len(take) < len(squad) and (spare or pool):
                 if spare:
@@ -1141,11 +1204,11 @@ class PES2013PS2Patcher(Patcher):
                 self.status(
                     f"{record.name}: {len(squad) - len(take)} players left out, no free records"
                 )
-        if cap < max((len(squad) for squad in squads.values()), default=0):
+        if cap < max((len(squads[s]) for s in order), default=0):
             self.status(
                 f"National squads cut to {cap} players: the disc has no more free records for them"
             )
-        return written, pool_used
+        return written, pool_used, dropped
 
     def _blank_unused(
         self,
@@ -1302,8 +1365,9 @@ class PES2013PS2Patcher(Patcher):
 
         A nation wears its own kits whatever `given` says, unless the dict names
         its slot: at home the disc's (`("retail", None, None)`, packaged, so an
-        earlier patch's are undone), in a row not its own its default ones, never
-        the row owner's.
+        earlier patch's are undone), in a row not its own its default ones (neutral
+        ones, `NEUTRAL_HOME`/`NEUTRAL_AWAY`, when the provider has no colours) and
+        keeper kits apart from both (`("keeper", KitSpec, None)`), never the row owner's.
         """
         overrides = given if isinstance(given, dict) else {}
         resolved: dict[int, dict[int, Any]] = {}
@@ -1315,9 +1379,15 @@ class PES2013PS2Patcher(Patcher):
             if given is False and record.nation is None:
                 continue
             entry: dict[int, Any] = {}
+            home, away = record.kit_home, record.kit_away
+            if record.nation is not None:  # a nation in another nation's row
+                home, away = home or NEUTRAL_HOME, away or NEUTRAL_AWAY
+                keeper = keeper_spec(home.shirt, away.shirt)
+                entry[GK_HOME] = ("keeper", keeper, None)
+                entry[GK_AWAY] = ("keeper", keeper_spec(home.shirt, away.shirt, keeper.shirt), None)
             for which, side, default in (
-                (HOME, "home", record.kit_home),
-                (AWAY, "away", record.kit_away),
+                (HOME, "home", home),
+                (AWAY, "away", away),
             ):
                 value = chosen.get(side)
                 try:
@@ -1357,6 +1427,7 @@ class PES2013PS2Patcher(Patcher):
         table = writer.reader.kits()
         licensed = kit_textures.licensed_slots(writer.reader)
         written = textures = 0
+        licensed_keepers: list[str] = []
         for slot in slots:
             if slot not in choices:
                 continue
@@ -1376,6 +1447,15 @@ class PES2013PS2Patcher(Patcher):
                         rows[row] = disc
                         written += 1
                     continue
+                if kind == "keeper":
+                    # A licensed keeper kit is what keeps the team's texture rank, so it
+                    # stays; a parametric one takes the colours, its keeper model kept.
+                    if kits[which].parametric:
+                        apply_colours(kits[which], value)
+                        written += 1
+                    elif record.name not in licensed_keepers:
+                        licensed_keepers.append(record.name)
+                    continue
                 spec = value
                 if kind == "texture":
                     if slot in licensed:
@@ -1390,6 +1470,11 @@ class PES2013PS2Patcher(Patcher):
             writer.write_kits(table)
         if written or textures:
             self.status(f"Kits written: {written}, kit textures painted: {textures}")
+        if licensed_keepers:
+            self.status(
+                "Keeper kits kept, licensed textures of the row's own nation: "
+                + ", ".join(licensed_keepers)
+            )
 
     def _logo_override(self, record: PESTeamRecord) -> Path | None:
         if self.assets_dir is None or record.team_id is None:

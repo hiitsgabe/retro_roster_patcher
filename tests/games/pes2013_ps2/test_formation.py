@@ -744,7 +744,11 @@ def test_an_edited_order_with_an_edited_formation_cuts_the_lines_by_index(tmp_pa
     assert on[1:4] == ["CB"] * 3 and "CB" in on[4:8] and on[8:].count("CM") == 1
 
 
-def test_a_second_club_and_a_national_team_are_written_in_one_pass(tmp_path, iso, monkeypatch):
+def test_a_second_club_and_a_national_team_are_written_in_one_pass(tmp_path, monkeypatch):
+    # Free records enough for a whole national squad (the fill cuts none below 13).
+    iso = tmp_path / "pes.iso"
+    names = [(f"PLAYER {i}", f"P{i}") for i in range(70)]
+    fixture.write_iso(iso, player_entry=fixture.build_player_entry(names=names))
     writes = []
     original = RomWriter.write_formations
     monkeypatch.setattr(

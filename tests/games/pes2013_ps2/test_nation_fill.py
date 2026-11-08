@@ -22,8 +22,9 @@ from retro_roster_patcher.games.pes2013_ps2.models import (
     DATABASE_OVERLAY_ENGLISH,
     NATIONAL_SLOT_BASE,
     PLAYER_ENTRIES,
+    PESPlayer,
 )
-from retro_roster_patcher.games.pes2013_ps2.patcher import PES2013PS2Patcher
+from retro_roster_patcher.games.pes2013_ps2.patcher import PES2013PS2Patcher, cut_squad
 from retro_roster_patcher.games.pes2013_ps2.rom_reader import RomReader
 from retro_roster_patcher.sports.models import League, LeagueData, Player, Team, TeamRoster
 from tests.fixtures import synthetic_pes2013_iso as fixture
@@ -192,9 +193,48 @@ def test_a_moved_nation_brings_its_kit_with_kits_off_and_a_home_one_gets_the_dis
     assert [k.build() for k in moved] != [k.build() for k in disc_kits]
 
 
+def test_a_moved_nation_brings_keeper_kits_of_its_own_and_neutral_kits_without_colours(
+    iso, tmp_path
+):
+    """The fixture's national row 0 has parametric kits, its keepers' lime: a moved nation
+    gets keeper kits in other colours (the keeper model kept), and one ESPN gives no colours
+    plain white and black kits, never the row owner's."""
+    before = _reader(iso).kits().nationals[0]
+    out, _ = _patch(tmp_path, iso, [(0, MOVED.team.id)], kits=False)
+    kits = _reader(out).kits().nationals[0]
+    for k in (pes_kits.GK_HOME, pes_kits.GK_AWAY):
+        assert kits[k].rgb(pes_kits.SHIRT) != before[k].rgb(pes_kits.SHIRT)
+        assert kits[k].params == before[k].params
+    assert kits[pes_kits.GK_HOME].rgb(pes_kits.SHIRT) != kits[pes_kits.GK_AWAY].rgb(pes_kits.SHIRT)
+    bare = _nation(471, "Nationality 71", "X71")
+    bare.team.color = bare.team.alternate_color = ""
+    statuses: list[str] = []
+    patcher = PES2013PS2Patcher(tmp_path, on_status=statuses.append)
+    data = LeagueData(league=NATIONS.league, teams=[bare])
+    rosters = patcher.map_rosters(data, [SlotMapping(slot_index=NATIONAL_SLOT_BASE, team_id=471)])
+    out = tmp_path / "bare.iso"
+    patcher.patch(rom_path=iso, output_path=out, rosters=rosters, logos=False, kits=False)
+    kits = _reader(out).kits().nationals[0]
+    assert kits[pes_kits.HOME].rgb(pes_kits.SHIRT) == (255, 255, 255)
+    assert kits[pes_kits.AWAY].rgb(pes_kits.SHIRT) == (0, 0, 0)
+
+
+def test_the_fill_is_not_offered_on_a_disc_without_a_nationality_table(tmp_path):
+    iso = tmp_path / "bare.iso"
+    overlays = {
+        DATABASE_OVERLAY_ENGLISH: fixture.build_overlay("u", nationalities=False),
+        5: fixture.build_overlay("b", nationalities=False),
+    }
+    fixture.write_iso(iso, overlays=overlays)
+    statuses: list[str] = []
+    patcher = PES2013PS2Patcher(tmp_path, on_status=statuses.append)
+    assert patcher.fill_slots(iso) == []
+    assert any("nationality table" in s for s in statuses), statuses
+
+
 def test_blanking_a_moved_row_leaves_the_nationality_names_alone(iso, tmp_path):
     moved, _ = _patch(tmp_path, iso, [(5, MOVED.team.id)], "moved.iso")
-    out, _ = _patch(tmp_path, moved, [(6, 406)], blank_unused=True)
+    out, _ = _patch(tmp_path, moved, [(0, 400)], blank_unused=True)
     reader = _reader(out)
     for overlay in OVERLAYS:
         teams = reader.overlay_teams(overlay)
@@ -275,3 +315,54 @@ def test_on_the_disc_the_top_nations_find_their_rows(disc, tmp_path):
         "Morocco": None,
         "Solomon Islands": None,
     }
+
+
+def _p(name: str, group: str) -> PESPlayer:
+    return PESPlayer(display_name=name, shirt_name=name, position=group)
+
+
+@pytest.mark.parametrize(
+    "bench",
+    [
+        # As ESPN lists England, France and Brazil: keepers, then defenders, midfielders, forwards.
+        "GK GK DF DF DF DF DF MF MF MF FW FW",
+        "GK GK DF DF DF MF MF MF MF FW",
+        "GK GK DF DF DF DF MF MF FW FW FW",
+    ],
+)
+def test_a_squad_cut_to_17_keeps_one_spare_keeper_and_a_bench_of_every_line(bench):
+    groups = {"GK": "Goalkeeper", "DF": "Defender", "MF": "Midfielder", "FW": "Attacker"}
+    eleven = [_p("XI GK", "Goalkeeper")] + [_p(f"XI {k}", "Defender") for k in range(10)]
+    rest = [_p(f"{code} {k}", groups[code]) for k, code in enumerate(bench.split())]
+    cut = cut_squad(eleven + rest, 17)
+    assert cut[:11] == eleven and len(cut) == 17
+    on_bench = [p.position for p in cut[11:]]
+    assert on_bench.count("Goalkeeper") == 1 and on_bench[0] == "Goalkeeper"
+    assert {"Defender", "Midfielder", "Attacker"} <= set(on_bench)
+    # Each line keeps the provider's order.
+    assert [p.display_name for p in cut[11:] if p.position == "Defender"] == [
+        p.display_name for p in rest if p.position == "Defender"
+    ][: on_bench.count("Defender")]
+    assert cut_squad(eleven + rest[:3], 17) == eleven + rest[:3]  # short enough: untouched
+
+
+def test_a_national_squad_listed_by_line_keeps_attackers_on_its_bench(tmp_path):
+    """ESPN lists a squad of 25 by line, keepers first (England, France, Brazil): the 23 the
+    row takes, and the 17 the fill cuts them to, keep an attacker on the bench and at most
+    two spare keepers."""
+    lines = ["Goalkeeper"] * 3 + ["Defender"] * 9 + ["Midfielder"] * 9 + ["Forward"] * 4
+    team = TeamRoster(
+        team=Team(id=480, name="Nation 8", code="N08"),
+        players=[
+            Player(id=8000 + k, name=f"P{k}", first_name="P", last_name=f"P{k}", position=g)
+            for k, g in enumerate(lines)
+        ],
+    )
+    patcher = PES2013PS2Patcher(tmp_path)
+    team.players = patcher.suggest_squad_order(team)
+    data = LeagueData(league=NATIONS.league, teams=[team])
+    record = patcher.map_rosters(data, [SlotMapping(slot_index=1008, team_id=480)]).teams[1008]
+    for squad in (record.players, cut_squad(record.players, 17)):
+        bench = [p.position for p in squad[11:]]
+        assert bench.count("Goalkeeper") <= 2 and "Attacker" in bench, bench
+    assert [p.position for p in cut_squad(record.players, 17)[11:]].count("Goalkeeper") == 1

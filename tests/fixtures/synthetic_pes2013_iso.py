@@ -192,7 +192,10 @@ def build_formation_entry() -> bytes:
 
 
 def build_overlay(
-    lang: str, names: list[str] | None = None, codes: list[str] | None = None
+    lang: str,
+    names: list[str] | None = None,
+    codes: list[str] | None = None,
+    nationalities: bool = True,
 ) -> bytes:
     """A `database_<lang>.ovl`: header, strings, the team table, then the nationality table
     (`nationality`): 144 name/code pointer pairs, as on the disc, after the team table as in
@@ -229,7 +232,7 @@ def build_overlay(
     nat_strings_off = table_off + len(entries) + 16
     nat_strings = bytearray()
     nat_pointers = []
-    for name, code in nationality(lang):
+    for name, code in nationality(lang) if nationalities else []:
         name_off = nat_strings_off + len(nat_strings)
         nat_strings += name.encode("utf-8") + b"\0"
         nat_strings += b"\0" * (-len(nat_strings) % 8)

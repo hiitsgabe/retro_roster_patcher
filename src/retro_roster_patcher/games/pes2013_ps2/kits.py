@@ -114,6 +114,12 @@ SLEEVED = {"sleeves", "halves", "sash", "chevron"}
 
 def apply_spec(kit: Kit, spec: KitSpec) -> None:
     """Write a `KitSpec` into a kit and have the game draw it from the colours."""
+    apply_colours(kit, spec)
+    kit.make_parametric()
+
+
+def apply_colours(kit: Kit, spec: KitSpec) -> None:
+    """Write a `KitSpec`'s colours into a kit, its parameters (a keeper's model) left alone."""
     for slot in (SHIRT, STRIPES, PANELS, *SHIRT_DETAIL):
         kit.set_rgb(slot, spec.shirt)
     if spec.pattern in STRIPED:
@@ -127,7 +133,45 @@ def apply_spec(kit: Kit, spec: KitSpec) -> None:
     number = contrast(spec.shirt)
     for slot in NAME_COLOUR:
         kit.set_rgb(slot, number)
-    kit.make_parametric()
+
+
+#: Kits for a team the provider gives no colours: never the kits of the slot's owner.
+NEUTRAL_HOME = KitSpec(
+    shirt=(255, 255, 255),
+    secondary=(0, 0, 0),
+    pattern="plain",
+    shorts=(0, 0, 0),
+    socks=(255, 255, 255),
+)
+NEUTRAL_AWAY = KitSpec(
+    shirt=(0, 0, 0),
+    secondary=(255, 255, 255),
+    pattern="plain",
+    shorts=(255, 255, 255),
+    socks=(0, 0, 0),
+)
+#: The colours a keeper's kit is picked from.
+KEEPER_COLOURS: tuple[RGB, ...] = (
+    (40, 160, 60),
+    (240, 200, 0),
+    (30, 30, 30),
+    (230, 90, 0),
+    (120, 120, 120),
+    (150, 40, 160),
+)
+
+
+def keeper_spec(*shirts: RGB) -> KitSpec:
+    """A plain keeper's kit in the colour of `KEEPER_COLOURS` farthest from every shirt given."""
+    colour = max(
+        KEEPER_COLOURS,
+        key=lambda c: min(
+            sum((a - b) ** 2 for a, b in zip(c, shirt, strict=True)) for shirt in shirts
+        ),
+    )
+    return KitSpec(
+        shirt=colour, secondary=contrast(colour), pattern="plain", shorts=colour, socks=colour
+    )
 
 
 @dataclass

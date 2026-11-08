@@ -739,13 +739,21 @@ def test_places_a_row_written_anew_loses_are_not_reported(tmp_path):
     assert not any("fewer than 11" in s for s in statuses), statuses
 
 
-def test_squads_asking_for_more_records_than_the_disc_has_are_cut_to_one_size(iso, tmp_path):
-    """Rows 0 and 1 have three records of their own between them (34-36) and the pool three
-    more (37-39): two squads of five come out as two of three, today's players only."""
+def _nation_of(team_id, name, code, size):
+    groups = ["Goalkeeper"] + ["Defender", "Midfielder", "Forward"] * 9
+    return roster(team_id, name, code, [(f"{code} {k}", groups[k], k + 1) for k in range(size)])
+
+
+def _two_nations(tmp_path, iso, size):
     statuses: list[str] = []
     patcher = PES2013PS2Patcher(tmp_path, on_status=statuses.append)
-    other = roster(303, "Nation One", "N01", [(f"Other {k}", "Defender", k) for k in range(5)])
-    data = LeagueData(league=NATIONS.league, teams=[NATIONS.teams[0], other])
+    data = LeagueData(
+        league=NATIONS.league,
+        teams=[
+            _nation_of(300, "Nation Zero", "N00", size),
+            _nation_of(303, "Nation One", "N01", size),
+        ],
+    )
     rosters = patcher.map_rosters(
         data,
         [
@@ -757,12 +765,33 @@ def test_squads_asking_for_more_records_than_the_disc_has_are_cut_to_one_size(is
     patcher.patch(rom_path=iso, output_path=out, rosters=rosters, logos=False)
     reader = RomReader(str(out))
     reader.load()
+    return reader, statuses
+
+
+def test_squads_asking_for_more_records_than_the_disc_has_are_cut_to_one_size(tmp_path):
+    """Rows 0 and 1 have three records of their own between them (34-36) and the pool 33 more
+    (37-69): two squads of 23 come out as two of 18, today's players only."""
+    iso = tmp_path / "pes.iso"
+    names = [(f"PLAYER {i}", f"P{i}") for i in range(70)]
+    fixture.write_iso(iso, player_entry=fixture.build_player_entry(names=names))
+    reader, statuses = _two_nations(tmp_path, iso, 25)
     tables = reader.player_tables(PLAYER_ENTRIES[0])
     rows = [[i for i in tables.national_squad(r) if i] for r in (0, 1)]
-    assert [len(r) for r in rows] == [3, 3] and not set(rows[0]) & set(rows[1])
-    assert set(rows[0] + rows[1]) == {34, 35, 36, 37, 38, 39}
-    assert [_name(tables, i) for i in rows[0]] == ["ALISSON BECKER", "M. CORRÊA", "BRUNO GUIMARÃES"]
-    assert any("cut to 3" in s for s in statuses), statuses
+    assert [len(r) for r in rows] == [18, 18] and not set(rows[0]) & set(rows[1])
+    assert set(rows[0] + rows[1]) == set(range(34, 70))
+    assert [_name(tables, i) for i in rows[0][:2]] == ["N00 0", "N00 1"]
+    assert any("cut to 18" in s for s in statuses), statuses
+
+
+def test_squads_that_would_be_cut_below_13_leave_the_last_nations_out(iso, tmp_path):
+    """Six records for two squads of 14: one squad of six would not play, so the last
+    nation is left as the disc had it, then the first too."""
+    before = RomReader(str(iso))
+    before.load()
+    reader, statuses = _two_nations(tmp_path, iso, 14)
+    tables = reader.player_tables(PLAYER_ENTRIES[0])
+    assert tables.parts[1] == before.player_tables(PLAYER_ENTRIES[0]).parts[1]
+    assert any("NATION ZERO, NATION ONE left as the disc had them" in s for s in statuses)
 
 
 def test_a_mapping_outside_both_ranges_is_refused(tmp_path):
