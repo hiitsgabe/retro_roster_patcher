@@ -46,12 +46,11 @@ from ...core.models import (
 )
 from ...core.patcher import Patcher
 from ...core.registry import register
-from ...core.text import to_ascii
 from ...sports import _http
 from ...sports.espn import EspnClient
 from ...sports.lineup import apply_lineup
 from ...sports.models import LeagueData, Team, TeamRoster
-from ...sports.nationals import NATIONAL_LEAGUE
+from ...sports.nationals import NATIONAL_LEAGUE, cartridge_slot, cartridge_slot_map
 from . import kits, looks, screens
 from .models import (
     PLAYERS_PER_TEAM,
@@ -89,15 +88,8 @@ NATIONAL_ALIASES = {
     "U.S.A.": "United States",
     "S.Korea": "South Korea",
 }
-
-
-def _own_slot(team: Team) -> int | None:
-    """The slot the cartridge holds national team `team` in, by name; None for
-    a nation it lacks. Slot 26, the Super Star team, is nobody's."""
-    for slot, name in enumerate(TEAM_ENUM_ORDER[: kits.TEMPLATES]):
-        if to_ascii(NATIONAL_ALIASES.get(name, name)).upper() == to_ascii(team.name).upper():
-            return slot
-    return None
+#: The 26 nations' names; slot 26, the Super Star team, is nobody's.
+NATIONS = TEAM_ENUM_ORDER[: kits.TEMPLATES]
 
 
 def _parse_hex_colour(value: str) -> tuple[int, int, int] | None:
@@ -173,11 +165,7 @@ class ISSPatcher(Patcher):
     def national_slot_map(self, rom_path: Path, data: LeagueData) -> list[SlotMapping]:
         """Pair the cartridge's 26 nations with `data`'s national teams by name
         (`NATIONAL_ALIASES` for the cartridge's spellings)."""
-        found = {_own_slot(r.team): r.team for r in data.teams}
-        return [
-            SlotMapping(slot_index=slot, team_id=team.id, team_name=team.name)
-            for slot, team in sorted((s, t) for s, t in found.items() if s is not None)
-        ]
+        return cartridge_slot_map(NATIONS, NATIONAL_ALIASES, data)
 
     def __init__(
         self,
@@ -352,7 +340,7 @@ class ISSPatcher(Patcher):
             record.team_id = roster.team.id
             record.logo_url = roster.team.logo_url
             if data.league.id == NATIONAL_LEAGUE:
-                record.nation = _own_slot(roster.team)
+                record.nation = cartridge_slot(NATIONS, NATIONAL_ALIASES, roster.team)
                 if record.nation == entry.slot_index:
                     record.kit_gk = ()  # the cartridge's own keeper kit
             teams[entry.slot_index] = record

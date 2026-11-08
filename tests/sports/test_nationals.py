@@ -9,9 +9,11 @@ import pytest
 from retro_roster_patcher.core.errors import ApiError, CapabilityError
 from retro_roster_patcher.core.models import MappedRosters, PatchResult, RomInfo, SlotMapping
 from retro_roster_patcher.core.patcher import Patcher
-from retro_roster_patcher.sports.models import League, Player, Team
+from retro_roster_patcher.sports.models import League, LeagueData, Player, Team, TeamRoster
 from retro_roster_patcher.sports.nationals import (
     RankedNation,
+    cartridge_slot,
+    cartridge_slot_map,
     fetch_top_nations,
     fifa_ranking,
     ranked_slot_map,
@@ -343,3 +345,32 @@ def test_the_own_slot_defaults_to_the_national_slot_map(tmp_path):
     patcher = SlotMapPatcher(tmp_path, {})
     assert patcher.own_national_slot(Path("rom.bin"), ENG) == 7
     assert patcher.own_national_slot(Path("rom.bin"), SPAIN) is None
+
+
+# --- a nation's slot on the cartridge ----------------------------------------
+
+
+CARTRIDGE = ("Italy", "Holland", "S.Korea", "Turkey")
+ALIASES = {"Holland": "Netherlands", "S.Korea": "South Korea", "Turkey": "Turkiye"}
+
+
+def test_a_nation_s_cartridge_slot_is_found_by_name_through_the_aliases():
+    assert cartridge_slot(CARTRIDGE, ALIASES, team(1, "Italy")) == 0
+    assert cartridge_slot(CARTRIDGE, ALIASES, team(2, "Netherlands")) == 1
+    assert cartridge_slot(CARTRIDGE, ALIASES, team(3, "Türkiye")) == 3
+    assert cartridge_slot(CARTRIDGE, ALIASES, team(4, "Holland")) is None  # ESPN's names only
+    assert cartridge_slot(CARTRIDGE, ALIASES, team(5, "Senegal")) is None
+
+
+def test_the_cartridge_slot_map_pairs_each_slot_with_its_nation_in_slot_order():
+    data = LeagueData(
+        league=League(id=2021, name=""),
+        teams=[
+            TeamRoster(team=t)
+            for t in (team(9, "South Korea"), team(8, "Italy"), team(7, "Senegal"))
+        ],
+    )
+    assert cartridge_slot_map(CARTRIDGE, ALIASES, data) == [
+        SlotMapping(slot_index=0, team_id=8, team_name="Italy"),
+        SlotMapping(slot_index=2, team_id=9, team_name="South Korea"),
+    ]

@@ -33,7 +33,7 @@ from ..core.text import to_ascii
 from . import _http
 from .fotmob import API_URL
 from .lineup import apply_lineup
-from .models import LeagueData, Team, TeamRoster
+from .models import League, LeagueData, Team, TeamRoster
 
 if TYPE_CHECKING:
     from ..core.patcher import Patcher
@@ -132,6 +132,28 @@ def _ranked_teams(
         if team is not None and team not in out:
             out.append(team)
     return out
+
+
+def cartridge_slot_map(
+    names: Sequence[str], aliases: Mapping[str, str], data: LeagueData
+) -> list[SlotMapping]:
+    """A game's `national_slot_map`: each slot whose cartridge name (`names[slot]`,
+    `aliases` turning the cartridge's spelling into ESPN's) is one of `data`'s
+    national teams, paired with it, in slot order."""
+    by_name = {_key(r.team.name): r.team for r in data.teams}
+    out = []
+    for slot, name in enumerate(names):
+        team = by_name.get(_key(aliases.get(name, name)))
+        if team is not None:
+            out.append(SlotMapping(slot_index=slot, team_id=team.id, team_name=team.name))
+    return out
+
+
+def cartridge_slot(names: Sequence[str], aliases: Mapping[str, str], team: Team) -> int | None:
+    """The slot `cartridge_slot_map` gives national team `team`, or None for a nation
+    the cartridge lacks."""
+    data = LeagueData(league=League(id=NATIONAL_LEAGUE, name=""), teams=[TeamRoster(team=team)])
+    return next((m.slot_index for m in cartridge_slot_map(names, aliases, data)), None)
 
 
 def ranked_slot_map(

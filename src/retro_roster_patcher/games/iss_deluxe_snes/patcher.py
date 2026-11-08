@@ -46,12 +46,12 @@ from ...core.models import (
 )
 from ...core.patcher import Patcher
 from ...core.registry import register
-from ...core.text import to_ascii
 from ...formats.snes import fix_checksum
 from ...sports import _http
 from ...sports.espn import EspnClient
 from ...sports.lineup import lineup_role, nearest_shape, parse_shape, seat_line, team_formation
-from ...sports.models import LeagueData, Player, Team, TeamRoster
+from ...sports.models import LeagueData, Player, TeamRoster
+from ...sports.nationals import cartridge_slot, cartridge_slot_map
 from ..iss2000_n64.mapper import GROUPS, N64StatMapper, _place, group_of, parse_formation
 from ..iss2000_n64.patcher import NATIONAL_ALIASES, NATIONAL_LEAGUE
 from ..iss_snes.models import Flag, ISSLook
@@ -266,11 +266,7 @@ class ISSDeluxePatcher(Patcher):
     def national_slot_map(self, rom_path: Path, data: LeagueData) -> list[SlotMapping]:
         """Pair the cartridge's 36 nations with `data`'s national teams by name
         (`iss2000_n64`'s `NATIONAL_ALIASES` for the cartridge's spellings)."""
-        found = {_own_slot(r.team): r.team for r in data.teams}
-        return [
-            SlotMapping(slot_index=slot, team_id=team.id, team_name=team.name)
-            for slot, team in sorted((s, t) for s, t in found.items() if s is not None)
-        ]
+        return cartridge_slot_map(R.TEAMS, NATIONAL_ALIASES, data)
 
     # --- mapping ---------------------------------------------------------------
 
@@ -312,7 +308,7 @@ class ISSDeluxePatcher(Patcher):
                 )
             team = self._map_team(roster, pcts, order_as_given)
             if data.league.id == NATIONAL_LEAGUE:
-                team.nation = _own_slot(roster.team)
+                team.nation = cartridge_slot(R.TEAMS, NATIONAL_ALIASES, roster.team)
                 team.national = team.nation == entry.slot_index
             else:
                 team.league = data.league.name
@@ -548,15 +544,6 @@ class ISSDeluxePatcher(Patcher):
             raise CapabilityError("Kit previews need Pillow (the images extra)") from exc
         except (ValueError, TypeError, KeyError, OSError) as exc:
             raise CapabilityError(f"slot {slot} {which} kit: {exc}") from exc
-
-
-def _own_slot(team: Team) -> int | None:
-    """The slot the cartridge holds national team `team` in, by name; None for a nation it
-    lacks."""
-    for slot, name in enumerate(R.TEAMS):
-        if to_ascii(NATIONAL_ALIASES.get(name, name)).upper() == to_ascii(team.name).upper():
-            return slot
-    return None
 
 
 def _kit_plans(
