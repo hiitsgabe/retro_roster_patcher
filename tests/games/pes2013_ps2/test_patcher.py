@@ -697,7 +697,46 @@ def test_a_shared_place_with_no_free_record_left_is_blanked(tmp_path):
     tables = reader.player_tables(PLAYER_ENTRIES[0])
     assert tables.national_squad(0)[:6] == [37, 34, 35, 36, 0, 0]
     assert _name(tables, 37) == "PLAYER 1"
-    assert any("2 national places" in s for s in statuses), statuses
+    assert any("2 places of 1 national teams" in s for s in statuses), statuses
+    assert any("fewer than 11 players: NATION 0 (4)" in s for s in statuses), statuses
+
+
+def test_rows_short_of_copies_each_keep_their_first_places(tmp_path):
+    """Rows 0 and 1 share records 1-3 and 4-6 with club 0, and two records are free (37,
+    38): each row keeps a copy of its first place, not row 0 two of its three."""
+    names = [(f"PLAYER {i}", f"P{i}") for i in range(fixture.PLAYER_COUNT)]
+    names[36] = names[39] = ("", "")  # 36 belongs to no row here: only 37 and 38 are free
+    iso = tmp_path / "pes.iso"
+    entry = fixture.build_player_entry(names=names, nationals={0: [1, 2, 3, 34], 1: [4, 5, 6, 35]})
+    fixture.write_iso(iso, player_entry=entry)
+    patcher = PES2013PS2Patcher(tmp_path)
+    rosters = patcher.map_rosters(LEAGUE, [SlotMapping(slot_index=0, team_id=10)])
+    out = tmp_path / "out.iso"
+    patcher.patch(rom_path=iso, output_path=out, rosters=rosters, logos=False)
+    reader = RomReader(str(out))
+    reader.load()
+    tables = reader.player_tables(PLAYER_ENTRIES[0])
+    assert tables.national_squad(0)[:3] == [37, 34, 0] and _name(tables, 37) == "PLAYER 1"
+    assert tables.national_squad(1)[:3] == [38, 35, 0] and _name(tables, 38) == "PLAYER 4"
+
+
+def test_places_a_row_written_anew_loses_are_not_reported(tmp_path):
+    names = [(f"PLAYER {i}", f"P{i}") for i in range(fixture.PLAYER_COUNT)]
+    names[38] = names[39] = ("", "")
+    iso = tmp_path / "pes.iso"
+    fixture.write_iso(iso, player_entry=fixture.build_player_entry(names=names))
+    statuses: list[str] = []
+    patcher = PES2013PS2Patcher(tmp_path, on_status=statuses.append)
+    clubs = patcher.map_rosters(LEAGUE, [SlotMapping(slot_index=0, team_id=10)])
+    nations = patcher.map_rosters(
+        NATIONS, [SlotMapping(slot_index=NATIONAL_SLOT_BASE, team_id=300)]
+    )
+    patcher.patch(
+        rom_path=iso, output_path=tmp_path / "out.iso", rosters=clubs.merge(nations), logos=False
+    )
+    # Row 0 loses two shared places for want of free records, but the nation is written anew.
+    assert not any("national" in s and ("empty" in s or "blanked" in s) for s in statuses)
+    assert not any("fewer than 11" in s for s in statuses), statuses
 
 
 def test_squads_asking_for_more_records_than_the_disc_has_are_cut_to_one_size(iso, tmp_path):
@@ -1525,9 +1564,23 @@ def test_on_the_disc_a_premier_league_patch_leaves_every_nation_its_2012_players
     for t in tables.values():
         for i in {i for club in clubs for i in t.club_squad(club) if 0 < i < t.player_count}:
             RomWriter.set_player_names(t, i, "NEW PLAYER", "NEW")
-    assert PES2013PS2Patcher._unshare(tables, originals, clubs) == (126, 0)
-    writer = RomWriter(str(disc), str(disc))  # read only: its room
-    assert writer.reader.load()
+    assert PES2013PS2Patcher._unshare(tables, originals, clubs) == (126, {})
     for index, t in tables.items():
         assert rows(t) == before[index]
-        assert len(t.build()) <= writer.room(TEXT_AFS, index)
+        assert len(t.build()) <= reader.room(TEXT_AFS, index)  # read only, no writer
+
+
+@pytest.mark.real_rom
+def test_on_the_disc_five_leagues_leave_every_national_row_an_eleven(disc):
+    """Clubs 0-97 (the five league groups) share 336 records with the national rows, and the
+    disc has 150 free: each row is copied enough to keep eleven players before any bench."""
+    reader = RomReader(str(disc))
+    assert reader.load()
+    tables = {index: reader.player_tables(index) for index in PLAYER_ENTRIES}
+    originals = {index: t.players for index, t in tables.items()}
+    copied, short = PES2013PS2Patcher._unshare(tables, originals, list(range(98)))
+    assert copied == 150 and short
+    for t in tables.values():
+        sizes = [sum(1 for i in t.national_squad(r) if i) for r in range(67)]
+        assert min(sizes) >= 11, sizes
+    assert all(players >= 11 for _, players in short.values())

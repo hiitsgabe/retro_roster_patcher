@@ -383,15 +383,8 @@ class RomWriter:
     # -- archive plumbing ----------------------------------------------------
 
     def room(self, afs_name: str, index: int) -> int:
-        """Bytes a rebuilt entry may take: the game reads whole sectors, so a
-        block may run a little past the entry's size into the padding before
-        the next entry (checked on the real disc); the size field itself is
-        never changed."""
-        extent = self.reader.extent(afs_name)
-        entries = self.reader.entries(afs_name)
-        entry = entries[index]
-        following = [e.offset for e in entries if e.offset > entry.offset]
-        return (min(following) if following else extent.size) - entry.offset
+        """`RomReader.room` of the output image."""
+        return self.reader.room(afs_name, index)
 
     def _write_entry(self, afs_name: str, index: int, block: bytes) -> None:
         """Put `block` where the entry sits, zero-padded to the entry's size.

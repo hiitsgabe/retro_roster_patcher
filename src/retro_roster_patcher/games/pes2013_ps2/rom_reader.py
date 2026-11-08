@@ -248,6 +248,16 @@ class RomReader:
             raise RomError(f"{afs_name} has no entry {index}")
         return entries[index]
 
+    def room(self, afs_name: str, index: int) -> int:
+        """Bytes a rebuilt entry may take: the game reads whole sectors, so a
+        block may run a little past the entry's size into the padding before
+        the next entry (checked on the real disc); the size field itself is
+        never changed."""
+        entries = self.entries(afs_name)
+        entry = entries[index]
+        following = [e.offset for e in entries if e.offset > entry.offset]
+        return (min(following) if following else self.extent(afs_name).size) - entry.offset
+
     def read(self, afs_name: str, index: int) -> bytes:
         with open(self.iso_path, "rb") as f:
             return read_entry(f, self.extent(afs_name).offset, self.entry(afs_name, index))

@@ -74,10 +74,13 @@ def table(parts: list[bytes]) -> bytes:
 
 
 def build_player_entry(
-    names: list[tuple[str, str]] | None = None, looks: dict[int, bytes] | None = None
+    names: list[tuple[str, str]] | None = None,
+    looks: dict[int, bytes] | None = None,
+    nationals: dict[int, list[int]] | None = None,
 ) -> bytes:
     """Entry 46/47: players, national squads, club squads, order, numbers, extra.
-    `looks` gives chosen records a look region of their own (see `player_record`)."""
+    `looks` gives chosen records a look region of their own (see `player_record`);
+    `nationals` replaces the national rows (row -> records; row 0 by default)."""
     names = names or [(f"PLAYER {i}", f"P{i}") for i in range(PLAYER_COUNT)]
     players = b""
     for i, (display, shirt) in enumerate(names):
@@ -94,13 +97,14 @@ def build_player_entry(
     # National row 0 ("NATION 0") shares players 1..3 with club 0 and owns
     # players 34..36 (keeper, defender, attacker) that no club points at;
     # players 37..39 belong to nobody.
-    nationals = bytearray(NATIONAL_COUNT * NATIONAL_SQUAD_SIZE * 2)
-    for slot, idx in enumerate(NATIONAL_ROW_0):
-        struct.pack_into("<H", nationals, slot * 2, idx)
+    rows = bytearray(NATIONAL_COUNT * NATIONAL_SQUAD_SIZE * 2)
+    for row, records in (nationals or {0: NATIONAL_ROW_0}).items():
+        for slot, idx in enumerate(records):
+            struct.pack_into("<H", rows, (row * NATIONAL_SQUAD_SIZE + slot) * 2, idx)
     order = bytes(NATIONAL_COUNT * NATIONAL_SQUAD_SIZE)
     parts = [
         block(players, compress=True),
-        block(bytes(nationals), compress=True),
+        block(bytes(rows), compress=True),
         block(bytes(squads), compress=True),
         block(order, compress=True),
         block(bytes(numbers), compress=True),

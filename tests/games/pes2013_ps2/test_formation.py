@@ -955,12 +955,11 @@ def test_the_fixtures_record_is_the_discs_and_the_433_preset_is_what_the_patch_w
 
 @pytest.mark.real_rom
 def test_a_preset_in_every_record_still_fits_the_entrys_room(disc):
-    writer = RomWriter(str(disc), str(disc))
-    assert writer.reader.load()
-    table = writer.reader.formations()
+    reader = _read(disc)  # read only: no writer is ever pointed at the retail image
+    table = reader.formations()
     for team in range(FORMATION_TEAMS):
         table.set(team, PRESETS[EDITOR_ORDER[team % 12]])
-    assert len(table.build()) <= writer.room(TEXT_AFS, FORMATION_ENTRY)
+    assert len(table.build()) <= reader.room(TEXT_AFS, FORMATION_ENTRY)
 
 
 @pytest.mark.real_rom

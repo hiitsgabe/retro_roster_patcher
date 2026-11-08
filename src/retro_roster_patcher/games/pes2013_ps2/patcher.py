@@ -932,7 +932,7 @@ class PES2013PS2Patcher(Patcher):
         limit: int | None = None
         copy_limit: int | None = None
         while True:
-            copied, lost = self._unshare(tables, originals, clubs, copy_limit)
+            copied, short = self._unshare(tables, originals, clubs, copy_limit)
             written = pool_used = 0
             if national_slots:
                 written, pool_used = self._write_nationals(
@@ -946,11 +946,7 @@ class PES2013PS2Patcher(Patcher):
                 over = max(len(b) - writer.room(TEXT_AFS, index) for index, b in blocks.items())
                 self.status(f"{blanked} records no squad uses blanked to make room")
             if over <= 0:
-                if lost:
-                    self.status(
-                        f"{lost} national places shared with the patched clubs blanked: "
-                        "no free record left to copy their players into"
-                    )
+                self._report_short(writer, short, national_slots)
                 return written, blocks
             if pool_used:
                 limit = int(pool_used * 0.8)
@@ -971,13 +967,34 @@ class PES2013PS2Patcher(Patcher):
             for index, t in tables.items():
                 t.parts = list(snapshot[index])
 
+    def _report_short(
+        self, writer: RomWriter, short: dict[int, tuple[int, int]], national_slots: list[int]
+    ) -> None:
+        """Status lines for the national places `_unshare` had no copy for, in the rows this
+        patch does not write anew, naming each row left without a full eleven."""
+        left = {r: v for r, v in short.items() if NATIONAL_SLOT_BASE + r not in national_slots}
+        if not left:
+            return
+        self.status(
+            f"{sum(lost for lost, _ in left.values())} places of {len(left)} national teams "
+            "left empty: no free record to copy the players the patched clubs shared"
+        )
+        names = writer.reader.overlay_teams(DATABASE_OVERLAY_ENGLISH).nationals
+        under = [
+            f"{names[r][0].text if r in names else f'row {r}'} ({players})"
+            for r, (_, players) in sorted(left.items())
+            if players < LINEUP_SIZE
+        ]
+        if under:
+            self.status(f"National teams left with fewer than 11 players: {', '.join(under)}")
+
     @staticmethod
     def _unshare(
         tables: dict[int, PlayerTables],
         originals: dict[int, bytes],
         clubs: list[int],
         limit: int | None = None,
-    ) -> tuple[int, int]:
+    ) -> tuple[int, dict[int, tuple[int, int]]]:
         """Give the national rows their own copy of each record they share with the patched
         `clubs`, so a nation keeps its player when the club's record takes another.
 
@@ -985,40 +1002,58 @@ class PES2013PS2Patcher(Patcher):
         the club's new player. So each such record's disc bytes (`originals`, every entry's
         player part before the patch) go to a free record (`PlayerTables.free_records`, at
         most `limit` of them) and every national row pointing at it points at the copy, on
-        the same place. A shared place left without a copy leaves its row, the places after
-        it moving up with their shirt numbers. Rows sharing nothing are left as they are.
-        Returns (records copied, places left out).
+        the same place. The copies go first to what each row needs to keep eleven players,
+        then round the rows place by place (every row's first shared place, then every row's
+        second, ...), so when they run out no row is emptied before another keeps its bench.
+        A shared place left without a copy leaves its
+        row, the places after it moving up with their shirt numbers. Rows sharing nothing
+        are left as they are. Returns the records copied, and for each row that lost places
+        (places lost, players left).
         """
         primary = tables[PLAYER_ENTRIES[0]]
         patched = {
             i for club in clubs for i in primary.club_squad(club) if 0 < i < primary.player_count
         }
         rows = [r for r in range(NATIONAL_COUNT) if patched.intersection(primary.national_squad(r))]
+        squads = {r: [i for i in primary.national_squad(r) if i in patched] for r in rows}
+        # Enough copies for every row to keep eleven players first, then the rest place by place.
+        own = {r: sum(1 for i in primary.national_squad(r) if i) - len(squads[r]) for r in rows}
+        need = {r: min(len(squads[r]), max(0, LINEUP_SIZE - own[r])) for r in rows}
         shared = list(
-            dict.fromkeys(i for r in rows for i in primary.national_squad(r) if i in patched)
+            dict.fromkeys(
+                [squads[r][k] for k in range(LINEUP_SIZE) for r in rows if k < need[r]]
+                + [
+                    squads[r][k]
+                    for k in range(NATIONAL_SQUAD_SIZE)
+                    for r in rows
+                    if k < len(squads[r])
+                ]
+            )
         )
         if not shared:
-            return 0, 0
+            return 0, {}
         pool = primary.free_records()
         copies = dict(zip(shared, pool[:limit] if limit is not None else pool, strict=False))
-        lost = 0
+        short: dict[int, tuple[int, int]] = {}
         for index, t in tables.items():
             for old, new in copies.items():
                 t.set_record(new, originals[index][old * PLAYER_RECORD_SIZE :][:PLAYER_RECORD_SIZE])
             for row in rows:
                 numbers = t.national_numbers(row)
+                squad = t.national_squad(row)
                 kept = [
                     (copies.get(i, i), numbers[k])
-                    for k, i in enumerate(t.national_squad(row))
+                    for k, i in enumerate(squad)
                     if i not in patched or i in copies
                 ]
-                if index == PLAYER_ENTRIES[0]:
-                    lost += NATIONAL_SQUAD_SIZE - len(kept)
+                lost = len(squad) - len(kept)
+                if lost:
+                    short[row] = (lost, sum(1 for i, _ in kept if i))
                 gap = NATIONAL_SQUAD_SIZE - len(kept)
                 t.set_national_squad(
                     row, [i for i, _ in kept] + [0] * gap, bytes(n for _, n in kept) + bytes(gap)
                 )
-        return len(copies), lost
+        return len(copies), short
 
     @staticmethod
     def _blank_free_records(tables: dict[int, PlayerTables]) -> int:
