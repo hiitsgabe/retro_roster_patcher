@@ -472,6 +472,12 @@ class WE2002Patcher(Patcher):
             # Before the writes, which it reads the rewritten places' positions under: no
             # club outside the mapping keeps fielding a player of a slot written here.
             writer.relink_clubs(set(slots), set(clubs))
+            reused = getattr(writer, "relink_reused", 0)
+            if reused:
+                self.status(
+                    f"{reused} Master League places reuse a player another club fields: the "
+                    f"league and the nations left too few free"
+                )
 
             teams_patched = 0
             players_patched = 0

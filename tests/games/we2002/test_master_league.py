@@ -427,3 +427,56 @@ def test_a_league_patch_leaves_no_club_outside_it_fielding_its_players(disc, tmp
     nc = [START_LINK[nz] + g - 23 for club in range(20, 32) for nz, g in links[club] if g > 22]
     nc += [START_LINK[nz] + g - 23 for nz, g in default if g > 22]
     assert len(nc) == len(set(nc))
+
+
+@pytest.mark.real_rom
+@pytest.mark.parametrize("clubs", [12, 10])
+def test_a_small_league_with_the_fill_reuses_a_player_only_once_nobody_is_left(
+    disc_path, tmp_path, clubs
+):
+    """12 or 10 clubs and the fill rewrite every nation's slot: the leftover clubs need more
+    players than the mapped clubs free. Nobody is fielded twice while a player nobody fields
+    is left, whatever his position, and the writer counts the places that reuse one."""
+    import shutil
+
+    image = tmp_path / "small.bin"
+    shutil.copyfile(disc_path, image)
+    writer = RomWriter(str(image), str(image))
+    fill = set(range(clubs, 54)) - {35, 36, 39, 47}
+    writer.relink_clubs(set(range(clubs)) | fill, set(range(clubs)))
+    data = image.read_bytes()
+    links = [link for club in range(clubs, 32) for link in _links(data, club)]
+    default = [(data[o + 2 * i], data[o + 2 * i + 1]) for o, _ in DEFAULT_SQUAD for i in range(23)]
+    assert not [(nz, g) for nz, g in links if g <= 22 and (nz < clubs or nz in fill)]
+    fielded = [START_LINK[nz] + g - 23 for nz, g in links + default if g > 22]
+    twice = len(fielded) - len(set(fielded))
+    nobody = 462 - len(set(fielded))
+    assert twice == 0 or nobody == 0
+    assert writer.relink_reused == twice
+    if clubs == 10:
+        assert twice > 0
+
+
+def test_patch_says_when_master_league_places_reuse_a_player(tmp_path, monkeypatch):
+    lines = []
+
+    class Writer(RomWriter):
+        def relink_clubs(self, rewritten, mapped):
+            self.relink_reused = 7
+            return 0
+
+    monkeypatch.setattr(patcher_module, "RomWriter", Writer)
+    monkeypatch.setattr(patcher_module, "apply_ppf", lambda *args, **kwargs: "")
+    rom = tmp_path / "in.bin"
+    with rom.open("wb") as handle:
+        handle.write(b"\x00" + b"\xff" * 10 + b"\x00")
+        handle.truncate(100 * 1024 * 1024)
+    WE2002Patcher(cache_dir=tmp_path / "cache", on_status=lines.append).patch(
+        rom_path=rom,
+        output_path=tmp_path / "out.bin",
+        rosters=MappedRosters(game_id="we2002", teams={2: _team()}),
+        kits=False,
+        logos=False,
+        looks=False,
+    )
+    assert any("7 Master League places" in line for line in lines)

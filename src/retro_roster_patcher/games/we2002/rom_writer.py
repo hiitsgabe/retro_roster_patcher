@@ -2315,6 +2315,8 @@ class RomWriter:
         # Queued style -> logo bitmaps for the flag atlas
         self._pending_logos: dict[int, LogoImages] = {}
         self._pending_stadium: dict[int, LogoImages] = {}
+        # Master League places `relink_clubs` had to give a player another club fields.
+        self.relink_reused = 0
 
     def write_team(
         self,
@@ -2376,12 +2378,14 @@ class RomWriter:
         `rewritten` (issue #5: LOMBARDIA fielded Van Dijk once Liverpool took slot 13).
 
         Call it before the team writes: it reads the positions the rewritten places hold. Each such
-        link is pointed at the non-national player of the same position whom the fewest clubs
-        outside `mapped` (and the managed club) field, the lowest index on a tie: a retail player
-        no club fields while there is one, since `write_team` takes every nc player away from a
-        mapped club. The mapped clubs' links are `write_team`'s and the managed club's are never
-        written. Returns how many links moved; 0 the second time.
+        link is pointed at a non-national player no club outside `mapped` (nor the managed club)
+        fields, of the same position when one is left, the lowest index on a tie; `write_team`
+        takes every nc player away from a mapped club. Only once nobody is left (a small league
+        with the fill) does a link reuse the least-fielded player of its position; those places
+        are counted in `relink_reused`. The mapped clubs' links are `write_team`'s and the
+        managed club's are never written. Returns how many links moved; 0 the second time.
         """
+        self.relink_reused = 0
         if not os.path.exists(self.output_path):
             return 0
         with open(self.output_path, "r+b") as f:
@@ -2412,7 +2416,11 @@ class RomWriter:
                 for i in hits:
                     place = raw[i] * _PLAYERS_PER_NAT + raw[i + 1]
                     wanted = read(_nat_carat_chunks(place))[0] & 7
-                    pick = min(_NC_LINKS, key=lambda n: (positions[n] != wanted, fielded[n], n))
+                    pick = min(
+                        _NC_LINKS,
+                        key=lambda n: (fielded[n] > 0, positions[n] != wanted, fielded[n], n),
+                    )
+                    self.relink_reused += fielded[pick] > 0
                     fielded[pick] += 1
                     raw[i : i + 2] = bytes(_NC_LINKS[pick])
                     moved += 1
