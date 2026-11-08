@@ -324,6 +324,8 @@ def made(cartridge_rom, tmp_path_factory):
         if name == "plain then fill":  # kits=False: a nation's own kits still come with it
             fill = _mapped(patcher, range(20), {NORWAY: "England", QATAR: "Qatar"})
             return make(name, get("plain")[0], fill, kits=False)
+        if name == "filled, no logos":
+            return make(name, cartridge_rom, _mapped(patcher, CLUBS, FILL), logos=False)
         if name == "arsenal":  # a club on England's slot, its name only
             return make(name, cartridge_rom, _clubs(patcher, [ENGLAND]), logos=False, kits=False)
         if name == "england home":
@@ -445,6 +447,14 @@ def test_a_fill_over_a_plain_league_gives_the_nations_their_cartridge_looks_back
     assert _flag(image, QATAR) == _flag(retail, QATAR)
     assert _kit(image, QATAR) == _kit(retail, QATAR)
     assert _name(image, QATAR) == _name(retail, QATAR)
+
+
+@real_rom
+def test_without_logos_a_moved_nation_still_wears_its_cartridge_flag(made, retail):  # noqa: F811
+    _, image = made("filled, no logos")
+    assert _flag(image, NORWAY) == _flag(retail, ENGLAND)
+    assert _flag(image, ICELAND) == _flag(retail, ICELAND)  # Senegal: no ESPN flag drawn
+    assert _flag(image, ENGLAND) == _flag(retail, ENGLAND)  # the club keeps the slot's flag
 
 
 @real_rom

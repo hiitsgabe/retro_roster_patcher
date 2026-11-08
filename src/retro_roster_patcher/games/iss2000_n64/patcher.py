@@ -297,24 +297,29 @@ class ISS2000Patcher(Patcher):
         names.write_regions(image, space, self._region_labels(teams))
         W.write_start_page(image, sorted(s for s, t in teams.items() if not t.national))
 
-        if options.get("logos", True):
-            self.status("Drawing crests...")
-            crests = {}
-            # Clubs first, then the cartridge's flags, then ESPN's: a flag left without a
-            # texture of its own is drawn in the generic stripes, which suit a country's flag
-            # better than a crest.
-            for slot, team in sorted(
-                teams.items(), key=lambda st: (st[1].national, st[1].nation is None)
-            ):
-                if slot in kept:
-                    continue
-                if slot in nations:
-                    crests[slot] = retail.flag(nations[slot])
-                elif (png := self._logo(team)) is not None:
-                    crests[slot] = flags.draw(png, (255, 255, 255))
+        # A nation the cartridge has always wears its cartridge flag; `logos` only decides
+        # whether clubs and the nations it lacks get theirs drawn.
+        logos = options.get("logos", True)
+        self.status("Drawing crests..." if logos else "Drawing flags...")
+        crests = {}
+        # Clubs first, then the cartridge's flags, then ESPN's: a flag left without a texture
+        # of its own is drawn in the generic stripes, which suit a country's flag better than
+        # a crest.
+        for slot, team in sorted(
+            teams.items(), key=lambda st: (st[1].national, st[1].nation is None)
+        ):
+            if slot in kept:
+                continue
+            if slot in nations:
+                crests[slot] = retail.flag(nations[slot])
+            elif logos and (png := self._logo(team)) is not None:
+                crests[slot] = flags.draw(png, (255, 255, 255))
+        if crests:
             drawn = [s for s in crests if teams[s].national and s not in nations]
-            flags.write(image, space, crests, set(teams) - kept, kept, drawn)
-            self.status(f"Team crests drawn: {len(crests)}")
+            # Without logos the clubs keep the flags they have, textures included.
+            patched = set(teams) - kept if logos else set(crests)
+            flags.write(image, space, crests, patched, kept, drawn)
+        self.status(f"Team crests drawn: {len(crests)}")
 
         if kit_plan or records:
             self.status("Colouring kits...")
