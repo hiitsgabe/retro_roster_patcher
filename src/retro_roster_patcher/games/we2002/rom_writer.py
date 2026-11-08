@@ -1439,7 +1439,8 @@ def _build_flag_data(team: "WETeamRecord") -> tuple[int, bytes]:
         primary = _rgb_to_ps1_color(*team.kit_home)
         secondary = _rgb_to_ps1_color(*team.kit_away)
         palette = [primary] * 8 + [secondary] * 8
-    color_data = struct.pack("<" + "H" * 16, *palette)
+    # The 16th halfword is the next slot's index 0, which draws see-through: never a colour.
+    color_data = struct.pack("<" + "H" * 16, *palette[:15], 0)
     return style, color_data
 
 

@@ -14,7 +14,10 @@ the club fields and not how many it was handed; and `write_flag` gives every
 slot a style byte while giving two of the thirty-two no palette at all.
 """
 
+import struct
 from types import SimpleNamespace
+
+import pytest
 
 from retro_roster_patcher.games.we2002.models import WELook, WEPlayerRecord, WETeamRecord
 from retro_roster_patcher.games.we2002.rom_writer import (
@@ -177,6 +180,22 @@ def test_a_slot_with_a_colour_offset_gets_a_style_byte_and_a_palette(tmp_path):
     ((offset, size),) = _ML_COLOR_OFFSETS[4]
     assert size == 32
     assert data[offset : offset + size] == colour
+
+
+@pytest.mark.parametrize("palette", [None, [(200, 100, 50)] * 16], ids=["stripes", "palette"])
+def test_a_flag_never_paints_the_next_slot_s_see_through_index(palette):
+    """A colour entry's 16th halfword is the next slot's index 0, which draws see-through: the
+    striped fallback wrote its second colour there, over the edge of Australia's flag when
+    Ivory Coast in slot 52 got stripes."""
+    team = _team()
+    team.kit_home, team.kit_away = (200, 0, 0), (0, 0, 200)
+    team.flag_palette = palette
+    team.flag_style = 7 if palette else None
+    _style, colour = _build_flag_data(team)
+    halfwords = struct.unpack("<16H", colour)
+    assert halfwords[15] == 0
+    if palette is None:
+        assert len(set(halfwords[:8])) == 1 and len(set(halfwords[8:15])) == 1
 
 
 def test_a_slot_with_no_colour_offset_gets_the_style_byte_and_no_palette(tmp_path):
