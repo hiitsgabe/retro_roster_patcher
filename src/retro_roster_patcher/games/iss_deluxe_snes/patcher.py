@@ -51,7 +51,7 @@ from ...formats.snes import fix_checksum
 from ...sports import _http
 from ...sports.espn import EspnClient
 from ...sports.lineup import lineup_role, nearest_shape, parse_shape, seat_line, team_formation
-from ...sports.models import LeagueData, Player, TeamRoster
+from ...sports.models import LeagueData, Player, Team, TeamRoster
 from ..iss2000_n64.mapper import GROUPS, N64StatMapper, _place, group_of, parse_formation
 from ..iss2000_n64.patcher import NATIONAL_ALIASES, NATIONAL_LEAGUE
 from ..iss_snes.models import Flag, ISSLook
@@ -127,7 +127,10 @@ class DeluxeTeam:
     label: str = ""  # the scoreboard name (`names.fit`)
     full_name: str = ""
     league: str = ""
-    national: bool = False  # a nation's own squad: it keeps its name, flag and kits
+    national: bool = False  # a nation on its own slot: it keeps its name, flag and kits
+    #: A national team's own slot on the cartridge, whose retail flag and kits it wears on
+    #: another slot; None for a club or a nation the cartridge lacks.
+    nation: int | None = None
     #: Set by `looks.dress`; None leaves the cartridge's looks alone.
     look: ISSLook | None = None
     #: The club's formation (`team_formation`: `extra["formation"]`, else its lineup's shape,
@@ -159,6 +162,12 @@ class ISSDeluxePatcher(Patcher):
     #: club takes with today's national squads (`national_slot_map`).
     supports_nationals: bool = True
     national_slot_base: int | None = 0
+    #: `sports.nationals.fetch_top_nations` fills the slots a league leaves (`fill_slots`)
+    #: with today's best-ranked national teams. A nation on its own slot is `national`; one
+    #: written elsewhere goes the clubs' way (scoreboard name, big name, flag) in its own
+    #: retail flag and kits when the cartridge has it (`kits.retail`), else ESPN's flag and
+    #: colours, and stays off the league's pages.
+    supports_nation_fill: bool = True
     #: The order a caller should fill slots in (`rom.SLOT_ORDER`): the stadium
     #: select shows eight nations' names, so their slots go last.
     slot_order: tuple[int, ...] = R.SLOT_ORDER
@@ -250,16 +259,18 @@ class ISSDeluxePatcher(Patcher):
             path=str(rom_path), size=size, game_id=self.game_id, is_valid=valid, slots=slots
         )
 
+    def fill_slots(self, rom_path: Path) -> list[int]:
+        """All 36 slots, in the order clubs take them (`slot_order`)."""
+        return list(self.slot_order)
+
     def national_slot_map(self, rom_path: Path, data: LeagueData) -> list[SlotMapping]:
         """Pair the cartridge's 36 nations with `data`'s national teams by name
         (`iss2000_n64`'s `NATIONAL_ALIASES` for the cartridge's spellings)."""
-        by_name = {to_ascii(r.team.name).upper(): r.team for r in data.teams}
-        out = []
-        for slot, name in enumerate(R.TEAMS):
-            team = by_name.get(to_ascii(NATIONAL_ALIASES.get(name, name)).upper())
-            if team is not None:
-                out.append(SlotMapping(slot_index=slot, team_id=team.id, team_name=team.name))
-        return out
+        found = {_own_slot(r.team): r.team for r in data.teams}
+        return [
+            SlotMapping(slot_index=slot, team_id=team.id, team_name=team.name)
+            for slot, team in sorted((s, t) for s, t in found.items() if s is not None)
+        ]
 
     # --- mapping ---------------------------------------------------------------
 
@@ -300,8 +311,11 @@ class ISSDeluxePatcher(Patcher):
                     "which is not in the fetched league data"
                 )
             team = self._map_team(roster, pcts, order_as_given)
-            team.national = data.league.id == NATIONAL_LEAGUE
-            team.league = "" if team.national else data.league.name
+            if data.league.id == NATIONAL_LEAGUE:
+                team.nation = _own_slot(roster.team)
+                team.national = team.nation == entry.slot_index
+            else:
+                team.league = data.league.name
             teams[entry.slot_index] = team
         return MappedRosters(game_id=self.game_id, teams=teams)
 
@@ -384,12 +398,14 @@ class ISSDeluxePatcher(Patcher):
         with as_rom_error(rom_path):
             image = bytearray(self._image(rom_path))
         teams: dict[int, DeluxeTeam] = {int(s): t for s, t in rosters.teams.items()}
-        # A nation's own squad keeps its name, flag and kits.
+        # A nation on its own slot keeps its name, flag and kits.
         clubs = {s: t for s, t in teams.items() if not t.national}
-        # Templates read off the input, before any slot changes.
+        # Templates read off the input, before any slot changes; a nation's own off the retail
+        # cartridge, whatever a patch wrote over its slot.
+        retail = kits.retail(image)
         given = options.get("kits", True)
-        plans = {} if given is False else _kit_plans(image, clubs, given)
-        crests, fallbacks = self._flags(clubs, logos=options.get("logos", True))
+        plans = {} if given is False else _kit_plans(image, retail, clubs, given)
+        crests, fallbacks = self._flags(retail, clubs, logos=options.get("logos", True))
         if options.get("looks", True):
             teams = self._dress(teams)
             looks.write_records(image)
@@ -423,7 +439,12 @@ class ISSDeluxePatcher(Patcher):
                 self.status(f"{teams[slot].name}: big name shortened to {drawn} to fit")
         leagues = Counter(t.league for t in clubs.values() if t.league)
         league = leagues.most_common(1)[0][0] if leagues else ""
-        pages.write(image, list(clubs), league)
+        pages.write(
+            image,
+            [s for s, t in clubs.items() if t.league],
+            league,
+            [s for s, t in teams.items() if not t.league],
+        )
         pins = {slot: home.pins for slot, (home, _) in plans.items() if home is not None}
         for slot, note in flags.write(image, crests, fallbacks, pins, unused).items():
             name = teams[slot].name if slot in teams else R.TEAMS_ALL[slot]
@@ -460,15 +481,19 @@ class ISSDeluxePatcher(Patcher):
             return screens.export(self._image(rom_path), Path(out_dir))
 
     def _flags(
-        self, teams: dict[int, DeluxeTeam], *, logos: bool
+        self, retail: bytes, teams: dict[int, DeluxeTeam], *, logos: bool
     ) -> tuple[dict[int, Flag], dict[int, Flag]]:
         """Each club's flag: its crest (`assets_dir/logos/<team_id>.png`, else
         the provider's logo), falling back to a two-band flag in its colours;
         the two-band flag outright without a crest. A team with neither keeps
-        the cartridge's flag."""
+        the cartridge's flag. A nation the cartridge has wears its own, read off
+        `retail` (`kits.retail`)."""
         out: dict[int, Flag] = {}
         fallbacks: dict[int, Flag] = {}
         for slot, team in sorted(teams.items()):
+            if team.nation is not None:
+                out[slot] = flags.read(retail, team.nation)
+                continue
             primary, alternate = (_parse_hex_colour(c) for c in team.colours)
             band = two_band_flag(primary, alternate or primary) if primary is not None else None
             crest = None
@@ -525,12 +550,22 @@ class ISSDeluxePatcher(Patcher):
             raise CapabilityError(f"slot {slot} {which} kit: {exc}") from exc
 
 
+def _own_slot(team: Team) -> int | None:
+    """The slot the cartridge holds national team `team` in, by name; None for a nation it
+    lacks."""
+    for slot, name in enumerate(R.TEAMS):
+        if to_ascii(NATIONAL_ALIASES.get(name, name)).upper() == to_ascii(team.name).upper():
+            return slot
+    return None
+
+
 def _kit_plans(
-    image: bytes | bytearray, teams: dict[int, DeluxeTeam], given: Any
+    image: bytes | bytearray, retail: bytes, teams: dict[int, DeluxeTeam], given: Any
 ) -> dict[int, tuple[kits.Kit | None, kits.Kit | None]]:
     """Every mapped slot's (first, second) kit: `given[slot][side]` (a KIT as
-    `kits.parse` reads it) when the `kits` option sets it, else the club's
-    default kit; None keeps the cartridge's."""
+    `kits.parse` reads it) when the `kits` option sets it, else a nation's own
+    (its template, read off `retail`), else the club's default kit; None keeps
+    the cartridge's."""
     overrides = given if isinstance(given, dict) else {}
     plans: dict[int, tuple[kits.Kit | None, kits.Kit | None]] = {}
     for slot, team in teams.items():
@@ -539,6 +574,9 @@ def _kit_plans(
         for kit, (side, default) in enumerate((("home", team.kit_home), ("away", team.kit_away))):
             value = chosen.get(side)
             try:
+                if value is None and team.nation is not None:
+                    sides.append(kits.resolve(retail, team.nation, kit))
+                    continue
                 choice = kits.parse(value) if value is not None else default
                 sides.append(None if choice is None else kits.resolve(image, choice, kit))
             except (CapabilityError, ValueError, TypeError, KeyError, OSError) as exc:

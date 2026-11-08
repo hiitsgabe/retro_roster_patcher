@@ -10,7 +10,8 @@
   byte + 0x10E). The tiles are a Konami stream at $9E:EC78 that the template
   at $82:8EE0 loads to VRAM $4E00, 62 tiles (bytes 0xB2-0xEF): EUROPE and
   its digits, ASIA-AFRICA, N.S.AMERICA, ALLSTAR.
-* A page with a club is labelled with its league (`label`), in the label
+* A page with a club, and none of the national teams the patch wrote, is
+  labelled with its league (`label`), in the label
   font (`GLYPHS`, the cartridge's letters and the rest drawn to match); the
   others keep their own while the tiles fit. The cartridge's labels take all
   62 (the four EUROPE pages share ten), so the league's fits beside them only
@@ -23,6 +24,7 @@
 from __future__ import annotations
 
 import struct
+from collections.abc import Iterable
 
 from ...core.text import to_ascii
 from ..iss_snes.konami import compress_large, decompress
@@ -214,17 +216,22 @@ def order(image: bytes | bytearray) -> list[int]:
     return [b // 2 for b in image[ORDER : ORDER + NATIONS]]
 
 
-def write(image: bytearray, clubs: list[int], league: str) -> None:
+def write(image: bytearray, clubs: list[int], league: str, nations: Iterable[int] = ()) -> None:
     """Put `clubs` (team ids, in mapping order) on the first pages and label
-    those pages `label(league)`; with no league the labels stay."""
+    those pages `label(league)`; with no league the labels stay. A page that
+    also holds one of `nations` (the national teams the patch wrote) is not the
+    league's."""
+    nations = set(nations)
     teams = [*clubs, *(t for t in order(image) if t not in clubs)][:NATIONS]
     image[ORDER : ORDER + NATIONS] = bytes(2 * t for t in teams)
     text = label(league)
     tiles = [_tiles_of(image, p) for p in range(PAGES)]
     if text:
         held = [
-            any(t in clubs for t in teams[p * PER_PAGE : (p + 1) * PER_PAGE])
-            for p in range(NATIONS // PER_PAGE)
+            any(t in clubs for t in page) and not any(t in nations for t in page)
+            for page in (
+                teams[p * PER_PAGE : (p + 1) * PER_PAGE] for p in range(NATIONS // PER_PAGE)
+            )
         ]
         for p, h in enumerate(held):
             if h:

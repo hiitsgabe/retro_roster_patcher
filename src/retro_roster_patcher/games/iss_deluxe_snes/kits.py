@@ -36,8 +36,10 @@ it, design and flag colours included.
 
 from __future__ import annotations
 
+import base64
 import io
 import struct
+import zlib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -111,6 +113,74 @@ def palette_at(image: bytes | bytearray, team: int, kit: int) -> int:
     """Where `team`'s palette for `kit` (0 first, 1 second) starts: its header."""
     table = (FIRST, SECOND)[kit]
     return BANK_89 + (struct.unpack_from("<H", image, table + 2 * team)[0] & 0x7FFF)
+
+
+def _fields(image: bytes | bytearray, team: int) -> list[tuple[int, int]]:
+    """(file offset, size) of what a template reads of `team`, and the flag
+    `flags.read` reads: both kits' colours, the numbers, the chest design, the
+    clash class, the photo's shirt design and trim pointer, the flag's colours
+    and its halves' pointers. The pointer tables that place the colours are
+    never written, so `image` finds them whether patched or not."""
+    return [
+        (palette_at(image, team, 0) + 16, 2 * KIT_WORDS),
+        (palette_at(image, team, 1) + 16, 2 * KIT_WORDS),
+        (NUMBERS + 2 * team, 2),
+        (CHEST + 2 * team, 2),
+        (CLASH + team, 1),
+        (LAYOUT + team, 1),
+        (TRIM + 2 * team, 2),
+        (F.colour_at(image, team) + 2, 8),
+        (F.POINTERS + 4 * team, 4),
+    ]
+
+
+#: The retail cartridge's `_fields` of the 36 nations, 52 bytes each in team
+#: order, and the flags' bank; read once from the USA cartridge. See `retail`.
+_RETAIL = zlib.decompress(
+    base64.b64decode(
+        "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"
+    )
+)
+_RETAIL_BANK = 0xA7
+
+
+def retail(image: bytes | bytearray) -> bytes:
+    """`image` itself when it was never patched; for one `flags.write` moved
+    (its flags in bank $AF) a copy with the 36 nations' kits and flags put back
+    as the retail cartridge has them (`_RETAIL`; the retail flags stay in bank
+    $A7), so template n and `flags.read(retail(image), n)` are nation n's
+    whatever a patch wrote over its slot."""
+    if image[F.TEMPLATES[0][0] + 6] != F.BANK_AF:
+        return bytes(image)
+    out = bytearray(image)
+    record = iter(_RETAIL)
+    for team in range(TEMPLATES):
+        for at, n in _fields(out, team):
+            out[at : at + n] = bytes(next(record) for _ in range(n))
+    for at, entries in F.TEMPLATES:
+        for k in range(entries):
+            out[at + 2 + 5 * k + 4] = _RETAIL_BANK
+    return bytes(out)
 
 
 def _words(image: bytes | bytearray, at: int, n: int) -> list[int]:
