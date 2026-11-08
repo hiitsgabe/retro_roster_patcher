@@ -219,8 +219,8 @@ def order(image: bytes | bytearray) -> list[int]:
 def write(image: bytearray, clubs: list[int], league: str, nations: Iterable[int] = ()) -> None:
     """Put `clubs` (team ids, in mapping order) on the first pages and label
     those pages `label(league)`; with no league the labels stay. A page that
-    also holds one of `nations` (the national teams the patch wrote) is not the
-    league's."""
+    also holds one of `nations` is not the league's, and one an earlier patch
+    labelled with the league that no longer is reads `OTHERS`."""
     nations = set(nations)
     teams = [*clubs, *(t for t in order(image) if t not in clubs)][:NATIONS]
     image[ORDER : ORDER + NATIONS] = bytes(2 * t for t in teams)
@@ -236,6 +236,8 @@ def write(image: bytearray, clubs: list[int], league: str, nations: Iterable[int
         for p, h in enumerate(held):
             if h:
                 tiles[p] = _drawn(text)
+            elif tiles[p] == _drawn(text):  # labelled by an earlier patch
+                tiles[p] = _drawn(OTHERS)
         if len({t for page in tiles for t in page if any(t)}) > LAST_BYTE - FIRST_BYTE + 1:
             for p, h in enumerate(held):
                 if not h:

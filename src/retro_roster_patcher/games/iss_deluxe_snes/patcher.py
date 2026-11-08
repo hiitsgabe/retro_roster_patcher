@@ -27,7 +27,7 @@ from __future__ import annotations
 from collections import Counter
 from collections.abc import Sequence
 from copy import deepcopy
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -394,7 +394,12 @@ class ISSDeluxePatcher(Patcher):
         with as_rom_error(rom_path):
             image = bytearray(self._image(rom_path))
         teams: dict[int, DeluxeTeam] = {int(s): t for s, t in rosters.teams.items()}
-        # A nation on its own slot keeps its name, flag and kits.
+        # A nation on its own slot keeps its name, flag and kits while the slot still holds
+        # them; one an earlier patch wrote over is written like a nation on another slot.
+        teams = {
+            s: replace(t, national=False) if t.national and not kits.untouched(image, s) else t
+            for s, t in teams.items()
+        }
         clubs = {s: t for s, t in teams.items() if not t.national}
         # Templates read off the input, before any slot changes; a nation's own off the retail
         # cartridge, whatever a patch wrote over its slot.
@@ -435,14 +440,18 @@ class ISSDeluxePatcher(Patcher):
                 self.status(f"{teams[slot].name}: big name shortened to {drawn} to fit")
         leagues = Counter(t.league for t in clubs.values() if t.league)
         league = leagues.most_common(1)[0][0] if leagues else ""
-        pages.write(
-            image,
-            [s for s, t in clubs.items() if t.league],
-            league,
-            [s for s, t in teams.items() if not t.league],
+        # With nations in the patch, every slot that is not a league club is a nation, the
+        # cartridge's the fill left too: none of them shares a page labelled with the league.
+        in_league = [s for s, t in clubs.items() if t.league]
+        nations = (
+            [s for s in range(len(R.TEAMS)) if s not in in_league]
+            if any(not t.league for t in teams.values())
+            else []
         )
+        pages.write(image, in_league, league, nations)
         pins = {slot: home.pins for slot, (home, _) in plans.items() if home is not None}
-        for slot, note in flags.write(image, crests, fallbacks, pins, unused).items():
+        own = frozenset(s for s, t in clubs.items() if t.nation is not None)
+        for slot, note in flags.write(image, crests, fallbacks, pins, unused, own).items():
             name = teams[slot].name if slot in teams else R.TEAMS_ALL[slot]
             self.status(f"{name}: flag {note}")
         if pictures:

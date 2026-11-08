@@ -7,9 +7,7 @@ each and ALLSTAR 12, the 62 that VRAM holds.
 
 from __future__ import annotations
 
-import os
 import struct
-from pathlib import Path
 
 import pytest
 
@@ -60,16 +58,18 @@ def test_19_clubs_or_more_leave_the_nation_pages_their_own_labels():
     assert _labels(image) == [pages._drawn("BRASILEIRAO")] * 4 + before[4:]
 
 
+def test_a_page_the_league_no_longer_holds_loses_its_label():
+    image = _cartridge()
+    pages.write(image, list(R.SLOT_ORDER[:20]), LEAGUE)
+    pages.write(image, list(R.SLOT_ORDER[:18]), LEAGUE)
+    league, nations = pages._drawn("BRASILEIRAO"), pages._drawn("NATIONS")
+    assert _labels(image)[:4] == [league] * 3 + [nations]
+
+
 @pytest.mark.real_rom
-@pytest.mark.skipif(
-    not os.environ.get("RETRO_ROSTER_TEST_ROMS"),
-    reason="set RETRO_ROSTER_TEST_ROMS to a directory holding iss_deluxe.sfc",
-)
 @pytest.mark.parametrize("count", [1, 18])
-def test_a_league_of_fewer_than_19_clubs_patches_the_cartridge(tmp_path, count):
-    rom = Path(os.environ["RETRO_ROSTER_TEST_ROMS"]) / "iss_deluxe.sfc"
-    if not rom.exists():
-        pytest.fail(f"RETRO_ROSTER_TEST_ROMS is set but {rom} is missing")
+def test_a_league_of_fewer_than_19_clubs_patches_the_cartridge(tmp_path, deluxe_rom, count):
+    rom = deluxe_rom
     groups = ["Goalkeeper"] * 2 + ["Defender", "Midfielder", "Attacker"] * 6
     teams = [
         TeamRoster(

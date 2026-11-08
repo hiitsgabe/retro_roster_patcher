@@ -8,7 +8,6 @@ cartridge are gated on RETRO_ROSTER_TEST_ROMS (a directory holding iss-deluxe.sf
 
 from __future__ import annotations
 
-import os
 import struct
 from pathlib import Path
 
@@ -139,20 +138,12 @@ def roles_of(names: list[str]) -> list[str]:
     return [n.rstrip("0123456789") for n in names]
 
 
-def real_rom(test):
-    gated = pytest.mark.skipif(
-        not os.environ.get("RETRO_ROSTER_TEST_ROMS"),
-        reason="set RETRO_ROSTER_TEST_ROMS to a directory holding iss-deluxe.sfc",
-    )
-    return pytest.mark.real_rom(gated(test))
+real_rom = pytest.mark.real_rom
 
 
 @pytest.fixture
-def retail() -> bytes:
-    rom = Path(os.environ["RETRO_ROSTER_TEST_ROMS"]) / "iss-deluxe.sfc"
-    if not rom.exists():
-        pytest.fail(f"RETRO_ROSTER_TEST_ROMS is set but {rom} is missing")
-    data = rom.read_bytes()
+def retail(deluxe_rom: Path) -> bytes:
+    data = deluxe_rom.read_bytes()
     assert R.is_deluxe(data)
     return data
 

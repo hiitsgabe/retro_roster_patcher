@@ -11,7 +11,6 @@ iss-deluxe.sfc).
 from __future__ import annotations
 
 import io
-import os
 from pathlib import Path
 
 import pytest
@@ -23,7 +22,7 @@ from retro_roster_patcher.games.iss_deluxe_snes.patcher import ISSDeluxePatcher
 from retro_roster_patcher.sports.models import League, LeagueData, Player, Team, TeamRoster
 from tests.games.iss_deluxe_snes.test_pages import _cartridge, _labels
 
-ITALY, ENGLAND, SPAIN, FRANCE, TURKEY, CAMEROON = 0, 2, 4, 9, 26, 28
+ITALY, ENGLAND, SPAIN, FRANCE, CROATIA, TURKEY, CAMEROON = 0, 2, 4, 9, 17, 26, 28
 LEAGUE = League(id=2001, name="English Premier League")
 NATIONS = League(id=2021, name="International Friendlies")
 GROUPS = ["Goalkeeper"] * 2 + ["Defender", "Midfielder", "Attacker"] * 6
@@ -100,13 +99,8 @@ def _png() -> bytes:
 
 
 @pytest.fixture
-def rom() -> Path:
-    if not os.environ.get("RETRO_ROSTER_TEST_ROMS"):
-        pytest.skip("set RETRO_ROSTER_TEST_ROMS to a directory holding iss-deluxe.sfc")
-    path = Path(os.environ["RETRO_ROSTER_TEST_ROMS"]) / "iss-deluxe.sfc"
-    if not path.exists():
-        pytest.fail(f"RETRO_ROSTER_TEST_ROMS is set but {path} is missing")
-    return path
+def rom(deluxe_rom: Path) -> Path:
+    return deluxe_rom
 
 
 @pytest.fixture
@@ -167,28 +161,95 @@ def test_a_nation_whose_slot_a_club_took_wears_its_own_name_flag_and_kit(patcher
     assert names.read(image, CAMEROON) == names.render(names.fit("Senegal", "Senegal"))
 
 
-@pytest.mark.real_rom
-def test_no_nation_stands_on_a_page_labelled_with_the_league(patcher, rom, tmp_path):
-    image = _patch(patcher, rom, tmp_path / "out.sfc", _rosters(patcher))
+def _league_pages_hold_only(image, clubs) -> None:
+    """Every page labelled with the league holds only `clubs`."""
     league = pages._drawn(pages.label(LEAGUE.name))
     order, labels = pages.order(image), _labels(image)
     for p in range(6):
         if labels[p] == league:
-            assert all(t not in (SPAIN, TURKEY, CAMEROON) for t in order[6 * p : 6 * p + 6])
-            assert all(t in R.SLOT_ORDER[:20] for t in order[6 * p : 6 * p + 6])
-    assert labels[:3] == [league] * 3
+            assert set(order[6 * p : 6 * p + 6]) <= set(clubs), p
+
+
+def _league(patcher, count):
+    clubs = [roster(100 + k, f"Club {k}") for k in range(count)]
+    return patcher.map_rosters(
+        LeagueData(league=LEAGUE, teams=clubs),
+        [SlotMapping(slot_index=s, team_id=100 + k) for k, s in enumerate(R.SLOT_ORDER[:count])],
+    )
+
+
+@pytest.mark.real_rom
+def test_no_nation_stands_on_a_page_labelled_with_the_league(patcher, rom, tmp_path):
+    image = _patch(patcher, rom, tmp_path / "out.sfc", _rosters(patcher))
+    _league_pages_hold_only(image, R.SLOT_ORDER[:20])
+    assert _labels(image)[:3] == [pages._drawn(pages.label(LEAGUE.name))] * 3
+
+
+@pytest.mark.real_rom
+def test_a_page_an_earlier_patch_labelled_with_the_league_loses_the_label(patcher, rom, tmp_path):
+    """The league alone labels page 4 (two clubs and four nations); the fill on that
+    image leaves page 4 to the nations, so the label goes."""
+    plain = tmp_path / "plain.sfc"
+    _patch(patcher, rom, plain, _league(patcher, 20))
+    assert _labels(plain.read_bytes())[3] == pages._drawn(pages.label(LEAGUE.name))
+    image = _patch(patcher, plain, tmp_path / "fill.sfc", _rosters(patcher))
+    _league_pages_hold_only(image, R.SLOT_ORDER[:20])
+    assert _labels(image)[3] == pages._drawn(pages.OTHERS)
+
+
+@pytest.mark.real_rom
+def test_a_short_fill_leaves_no_cartridge_nation_on_a_league_page(patcher, rom, tmp_path):
+    """One nation (Brazil, page 6) for 16 free slots: page 4's two clubs share it
+    with England, Germany, Italy and Spain, still the cartridge's, so it is not the
+    league's."""
+    nations = LeagueData(league=NATIONS, teams=[roster(1, "Brazil")])
+    rosters = _league(patcher, 20).merge(
+        patcher.map_rosters(nations, [SlotMapping(slot_index=30, team_id=1)])
+    )
+    image = _patch(patcher, rom, tmp_path / "out.sfc", rosters)
+    _league_pages_hold_only(image, R.SLOT_ORDER[:20])
+
+
+@pytest.mark.real_rom
+def test_a_nation_back_on_a_slot_an_earlier_patch_gave_a_club_writes_its_own(
+    patcher, rom, tmp_path
+):
+    """20 clubs, then 18 and the fill: Croatia's own slot 17 still holds a club from
+    the first patch, so Croatia writes its own name, big name, flag and kits there."""
+    retail = rom.read_bytes()
+    first = tmp_path / "first.sfc"
+    _patch(patcher, rom, first, _league(patcher, 20))
+    nations = LeagueData(league=NATIONS, teams=[roster(1, "Croatia")])
+    rosters = _league(patcher, 18).merge(
+        patcher.map_rosters(nations, [SlotMapping(slot_index=CROATIA, team_id=1)])
+    )
+    image = _patch(patcher, first, tmp_path / "second.sfc", rosters)
+    assert names.read(image, CROATIA) == names.render(names.fit("Croatia", "Croatia"))
+    assert bignames.read(image)[CROATIA] == bignames.sprites("CROATIA")
+    assert _shown(image, CROATIA) == _shown(retail, CROATIA)
+    for kit in (0, 1):
+        assert kits.resolve(image, CROATIA, kit).words == kits.resolve(retail, CROATIA, kit).words
+
+
+@pytest.mark.real_rom
+def test_the_packaged_kits_and_flags_are_the_cartridge_s(patcher, rom, tmp_path):
+    retail = rom.read_bytes()
+    restored = kits.retail(_patch(patcher, rom, tmp_path / "out.sfc", _rosters(patcher)))
+    for team in range(kits.TEMPLATES):
+        for at, n in kits._fields(retail, team):
+            assert restored[at : at + n] == retail[at : at + n], (team, at)
+        assert flags.read(restored, team) == flags.read(retail, team), team
 
 
 @pytest.mark.real_rom
 def test_re_patching_with_the_fill_gives_the_same_image(patcher, rom, tmp_path):
     """France's own slot holds a club after the first patch: the second still
-    finds France's retail flag and kits, so a third changes nothing."""
+    finds France's retail flag and kits, and changes nothing."""
     retail = rom.read_bytes()
     rosters = _rosters(patcher)
-    a, b, c = (tmp_path / f"{x}.sfc" for x in "abc")
-    _patch(patcher, rom, a, rosters)
+    a, b = tmp_path / "a.sfc", tmp_path / "b.sfc"
+    first = _patch(patcher, rom, a, rosters)
     second = _patch(patcher, a, b, rosters)
-    assert _patch(patcher, b, c, rosters) == second
+    assert second == first
     assert _shown(second, TURKEY) == _shown(retail, FRANCE)
     assert kits.resolve(second, TURKEY, 0).words == kits.resolve(retail, FRANCE, 0).words
-    assert kits.retail(retail) == retail

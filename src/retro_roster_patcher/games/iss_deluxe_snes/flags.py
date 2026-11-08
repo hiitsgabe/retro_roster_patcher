@@ -67,9 +67,11 @@ def colours(image: bytes | bytearray, team: int) -> list[RGB]:
     return [_rgb(w) for w in struct.unpack_from("<4H", image, colour_at(image, team) + 2)]
 
 
-def write_colours(image: bytearray, team: int, entries: list[RGB]) -> None:
-    """Entries 13-15 (`entries[1:]`); the header and entry 12 stay."""
-    struct.pack_into("<3H", image, colour_at(image, team) + 4, *map(_word, entries[1:4]))
+def write_colours(image: bytearray, team: int, entries: list[RGB], first: int = 1) -> None:
+    """Entries 12 + `first` to 15 (`entries[first:]`): 13-15 by default, so the
+    header and entry 12 stay."""
+    at = colour_at(image, team) + 2 + 2 * first
+    struct.pack_into(f"<{4 - first}H", image, at, *map(_word, entries[first:4]))
 
 
 def _bank(image: bytes | bytearray) -> int:
@@ -137,15 +139,10 @@ def three_colours(flag: Flag) -> Flag:
         left = Counter(where[v] for v in where for _ in range(counts[v]))
 
         def cost(v: int, left: Counter[int] = left) -> int:
-            return left[v] * min(
-                _distance(flag.colours[v], flag.colours[o]) for o in left if o != v
-            )
+            return left[v] * min(_gap(flag, v, o) for o in left if o != v)
 
         rare = min(left, key=lambda v: (cost(v), v))
-        near = min(
-            (v for v in left if v != rare),
-            key=lambda v: _distance(flag.colours[v], flag.colours[rare]),
-        )
+        near = min((v for v in left if v != rare), key=lambda v: _gap(flag, v, rare))
         where = {k: near if w == rare else w for k, w in where.items()}
     kept = sorted(set(where.values()))
     best: Flag | None = None
@@ -184,6 +181,7 @@ def write(
     fallbacks: dict[int, Flag],
     pins: dict[int, dict[int, tuple[RGB, int]]] | None = None,
     blank: list[int] | None = None,
+    whole: frozenset[int] = frozenset(),
 ) -> dict[int, str]:
     """Give each team in `flags` its flag (`three_colours` first) and its
     colours; every other team keeps its own blobs. When the rooms are full the
@@ -191,8 +189,9 @@ def write(
     two-band flag). Then a team in `pins` has its entries 13-15 reordered
     (`iss_snes`'s `_pinned`) so its chest design shows the colours it asks
     for, unless that no longer fits. A team in `blank` gets a transparent
-    flag. Returns what gave way, {team: note}."""
-    chosen = {t: three_colours(f) for t, f in flags.items()}
+    flag. A team in `whole` (a nation's own retail flag) gets its flag as given,
+    entry 12 too, and never gives way. Returns what gave way, {team: note}."""
+    chosen = {t: f if t in whole else three_colours(f) for t, f in flags.items()}
     current = {t: tuple(_halves(image, t)) for t in range(TEAMS)}
     clear = compress(bytes(96))
     for t in blank or []:
@@ -217,7 +216,7 @@ def write(
                 spot[0] += len(blob)
         return where
 
-    stuck: set[int] = set()
+    stuck: set[int] = set(whole)
     while (where := layout()) is None:
         crests = [t for t in sorted(chosen, key=lambda t: -sum(map(len, of(t)))) if t not in stuck]
         if not crests:
@@ -259,7 +258,7 @@ def write(
     for team, note in _ram_cells(image, [of(t) for t in range(TEAMS)], where, set(chosen)).items():
         notes.setdefault(team, note)
     for team, flag in chosen.items():
-        write_colours(image, team, flag.colours)
+        write_colours(image, team, flag.colours, 0 if team in whole else 1)
     return notes
 
 

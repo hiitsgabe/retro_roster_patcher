@@ -183,6 +183,17 @@ def retail(image: bytes | bytearray) -> bytes:
     return bytes(out)
 
 
+def untouched(image: bytes | bytearray, team: int) -> bool:
+    """Whether `team`'s slot still holds the nation as the retail cartridge has it:
+    both kits and its flag are the retail ones. False once a patch wrote another
+    team there."""
+    own = retail(image)
+    return own == bytes(image) or (
+        all(resolve(image, team, k) == resolve(own, team, k) for k in (0, 1))
+        and F.read(image, team) == F.read(own, team)
+    )
+
+
 def _words(image: bytes | bytearray, at: int, n: int) -> list[int]:
     return list(struct.unpack_from(f"<{n}H", image, at))
 
