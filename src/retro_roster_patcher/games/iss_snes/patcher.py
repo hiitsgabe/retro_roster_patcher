@@ -487,6 +487,7 @@ class ISSPatcher(Patcher):
                     on_progress(0.80, "Writing team names...")
                 writer.write_team_name_texts(patched_names)
                 writer.write_team_descriptions(described)
+                writer.write_scenarios({slot: rosters.teams[slot].name for slot in slots})
 
                 if on_progress is not None:
                     on_progress(0.85, "Writing in-game name tiles...")

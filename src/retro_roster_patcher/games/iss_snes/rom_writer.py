@@ -64,6 +64,7 @@ from typing import IO
 
 from ...core.errors import RomError
 from ...core.text import to_ascii as _to_ascii
+from . import scenarios
 from .konami import compress, decompress
 from .looks import BROWN, DARK, HAIR, LIGHT, SKIN_RAMPS, TAN
 from .models import (
@@ -1060,6 +1061,8 @@ def _min_patchable_size() -> int:
         _NAME_TILES_DISPLACED_END,
         _FORMATION_RECORDS_END,
         _OFS_DESC_PTRS + TOTAL_TEAMS * 2,
+        _OFS_DESC_PTRS + (scenarios.FIRST_TEXT + scenarios.COUNT) * 2,
+        scenarios.PAIRS + 2 * scenarios.COUNT,
         _DESC_BANK_BASE + (0xFFFF - _DESC_BANK_SNES_BASE) + 1,
         _OFS_TEAM_NAME_TEXT_PTRS + TOTAL_TEAMS * 2,
         _MAX_NAME_TEXT_ADDR,
@@ -1787,6 +1790,30 @@ class ISSRomWriter:
 
             self._seek(desc_start)
             self._file.write(text.encode("ascii", errors="replace"))
+
+    def write_scenarios(self, names: dict[int, str]) -> None:
+        """Point each scenario at slots `names` holds ({slot: team name}, every slot the patch
+        wrote a team into) as `scenarios.repoint` pairs them, and rewrite in place, to its 0xFF,
+        the blurb of each scenario whose two slots it holds. A pair table that is not slot ids
+        is left alone."""
+        self._seek(scenarios.PAIRS)
+        raw = self._file.read(2 * scenarios.COUNT)
+        if len(raw) < 2 * scenarios.COUNT or any(b % 2 or b // 2 >= TOTAL_TEAMS for b in raw):
+            return
+        pairs = scenarios.repoint(
+            [(raw[k] // 2, raw[k + 1] // 2) for k in range(0, len(raw), 2)], names
+        )
+        self._seek(scenarios.PAIRS)
+        self._file.write(bytes(2 * s for pair in pairs for s in pair))
+        for k, (a, b) in enumerate(pairs):
+            at = self._description_block(scenarios.FIRST_TEXT + k)
+            if at is None or a not in names or b not in names:
+                continue
+            self._seek(at)
+            length = self._file.read(256).find(0xFF)
+            if length > 0:
+                self._seek(at)
+                self._file.write(scenarios.blurb(names[a], names[b], length))
 
     def finalize(self) -> None:
         if self._f is not None:

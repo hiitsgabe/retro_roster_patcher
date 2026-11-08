@@ -514,6 +514,26 @@ def desc_block(team: int) -> bytes:
     return bytes(block)
 
 
+#: Scenario mode, as on the cartridge: nine pairs of slot ids, doubled, at `OFS_SCENARIO_PAIRS`,
+#: and each scenario's ASCII blurb (0xFD a line break, 0xFF the end) pointed at by description
+#: entries 27-35, from `SCENARIO_TEXT_BASE` on, each as long as the cartridge's.
+OFS_SCENARIO_PAIRS = 0x9CAE
+SCENARIO_PAIRS = ((19, 22), (1, 23), (25, 3), (5, 2), (16, 0), (2, 19), (18, 15), (22, 20), (16, 7))
+SCENARIO_TEXT_BASE = 0x114AE
+SCENARIO_LENGTHS = (79, 100, 129, 99, 145, 122, 175, 134, 129)
+
+
+def scenario_text(k: int) -> bytes:
+    """Scenario `k`'s blurb, naming both its nations, its terminator included."""
+    a, b = (TEAM_ENUM_ORDER[s] for s in SCENARIO_PAIRS[k])
+    head = f"The {a} side is down to ten men against {b}.".encode("ascii")
+    return (head + b"\xfd" + b"Can they hold on?").ljust(SCENARIO_LENGTHS[k], b" ") + b"\xff"
+
+
+def scenario_offset(k: int) -> int:
+    return SCENARIO_TEXT_BASE + sum(SCENARIO_LENGTHS[:k]) + k
+
+
 def desc_text_start(team: int) -> int:
     """File offset of the first description byte, past the 0xFD control byte."""
     return desc_offset(team) + len(DESC_HEADER)
@@ -733,6 +753,12 @@ def build_iss_rom(
     for team in range(TOTAL_TEAMS):
         put(OFS_DESC_PTRS + team * 2, struct.pack("<H", desc_snes_pointer(team)))
         put(desc_offset(team), desc_block(team))
+    # -- scenario mode: the pairs, then the blurbs behind description entries 27-35
+    put(OFS_SCENARIO_PAIRS, bytes(2 * s for pair in SCENARIO_PAIRS for s in pair))
+    for k in range(len(SCENARIO_PAIRS)):
+        at = scenario_offset(k)
+        put(OFS_DESC_PTRS + (TOTAL_TEAMS + k) * 2, struct.pack("<H", 0x8000 + at - DESC_BANK_BASE))
+        put(at, scenario_text(k))
     if break_desc_bank:
         # A pointer below $8000 is not a bank-$02 address at all.
         put(OFS_DESC_PTRS + 7 * 2, struct.pack("<H", 0x4000))
