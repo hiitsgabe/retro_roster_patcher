@@ -18,7 +18,7 @@ from __future__ import annotations
 import json
 import sys
 from collections import Counter
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date
 from functools import cache
@@ -163,12 +163,15 @@ def ranked_slot_map(
     own_slot: Callable[[Team], int | None],
     *,
     aliases: Mapping[str, str] | None = None,
+    home_only: Collection[int] = (),
 ) -> list[SlotMapping]:
     """Map the best-ranked ESPN teams onto `free_slots`, one each, until the slots run out.
 
     A nation whose `own_slot` (its slot on the cartridge) is free takes it; the
     others fill the slots left, in `free_slots`' order. Ranked sides ESPN does
     not have are skipped. `aliases` maps another spelling of a name to ESPN's.
+    A slot in `home_only` takes its own nation only, never a moved one (a slot
+    where any other nation's flag would draw wrong).
     """
     chosen = _ranked_teams(ranking, espn_teams, aliases or {})[: len(free_slots)]
     placed: dict[int, Team] = {}
@@ -179,7 +182,7 @@ def ranked_slot_map(
             placed[slot] = team
         else:
             moved.append(team)
-    rest = [s for s in free_slots if s not in placed]
+    rest = [s for s in free_slots if s not in placed and s not in home_only]
     placed.update(zip(rest, moved, strict=False))
     return [
         SlotMapping(slot_index=slot, team_id=team.id, team_name=team.name)
@@ -249,5 +252,6 @@ def fetch_top_nations(
         free,
         lambda t: patcher.own_national_slot(rom, t),
         aliases=aliases,
+        home_only=patcher.home_only_slots(rom),
     )
     return LeagueData(league=league, teams=rosters), mapping

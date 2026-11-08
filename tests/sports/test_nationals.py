@@ -145,6 +145,22 @@ def test_two_nations_claiming_one_own_slot_never_map_it_twice():
     assert slots(mapping) == {5: SPAIN.id, 6: FRANCE.id}
 
 
+def test_a_home_only_slot_takes_its_own_nation_and_never_a_moved_one():
+    # 21 is home-only: France (own 21) takes it; Argentina, moved, skips it for 23.
+    own = {FRANCE.id: 21}.get
+    mapping = ranked_slot_map(
+        RANKING[:3], [SPAIN, FRANCE, ARG], [20, 21, 22, 23], lambda t: own(t.id), home_only=[21, 22]
+    )
+    assert slots(mapping) == {21: FRANCE.id, 20: SPAIN.id, 23: ARG.id}
+
+
+def test_a_home_only_slot_nobody_owns_stays_empty_and_its_mover_is_dropped():
+    mapping = ranked_slot_map(
+        RANKING[:2], [SPAIN, FRANCE], [20, 21], lambda t: None, home_only=[21]
+    )
+    assert slots(mapping) == {20: SPAIN.id}
+
+
 def test_teams_match_by_name_then_by_code_then_by_alias_and_the_rest_are_skipped():
     ranking = [
         RankedNation(1, "IR Iran", "IRN"),  # code
@@ -209,6 +225,7 @@ class FillPatcher(Patcher):
         self.api = FakeApi(squads, **api)
         self._transport = fotmob_transport([{"name": n.name, "rank": n.rank} for n in ranking])
         self.own = own or {}
+        self.home_only: list[int] = []
         self.lines: list[str] = []
         self.on_status = self.lines.append
 
@@ -217,6 +234,9 @@ class FillPatcher(Patcher):
 
     def own_national_slot(self, rom_path, team):
         return self.own.get(team.id)
+
+    def home_only_slots(self, rom_path):
+        return self.home_only
 
     def suggest_squad_order(self, team_roster):
         return list(reversed(team_roster.players))
@@ -260,6 +280,14 @@ def test_an_empty_or_failed_squad_drops_the_nation_and_the_next_one_takes_the_sl
     assert len(skipped) == 2
     assert "France" in skipped[0] and "Argentina" in skipped[1] and "HTTP 500" in skipped[1]
     assert progress[0] == "National squads 1/3: Spain"
+
+
+def test_the_patcher_s_home_only_slots_reach_the_mapping(tmp_path):
+    squads = {t.id: squad(100 * t.id) for t in (SPAIN, FRANCE, ARG, ENG, BRA)}
+    patcher = FillPatcher(tmp_path, squads, own={FRANCE.id: 22})
+    patcher.home_only = [22, 23]
+    _data, mapping = fetch_top_nations(patcher, Path("rom.bin"), 2026, taken=())
+    assert slots(mapping) == {22: FRANCE.id, 20: SPAIN.id, 21: ARG.id}
 
 
 def test_squads_get_their_lineup_and_the_game_s_order(tmp_path):
@@ -325,6 +353,7 @@ class PlainPatcher(FillPatcher):
     supports_nation_fill = False
     fill_slots = Patcher.fill_slots  # type: ignore[assignment]
     own_national_slot = Patcher.own_national_slot  # type: ignore[assignment]
+    home_only_slots = Patcher.home_only_slots  # type: ignore[assignment]
 
 
 class SlotMapPatcher(PlainPatcher):
@@ -339,6 +368,7 @@ def test_the_base_patcher_fills_nothing_and_owns_no_slot(tmp_path):
     patcher = PlainPatcher(tmp_path, {})
     assert patcher.fill_slots(Path("rom.bin")) == []
     assert patcher.own_national_slot(Path("rom.bin"), ENG) is None
+    assert patcher.home_only_slots(Path("rom.bin")) == []
 
 
 def test_the_own_slot_defaults_to_the_national_slot_map(tmp_path):

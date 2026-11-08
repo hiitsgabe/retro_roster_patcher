@@ -165,6 +165,11 @@ class Patcher(ABC):
         """The slots a nation fill may use, in the order it fills them. None by default."""
         return []
 
+    def home_only_slots(self, rom_path: Path) -> list[int]:
+        """The `fill_slots` only their own nation may take (`ranked_slot_map`'s
+        `home_only`): a moved nation's flag would draw wrong there. None by default."""
+        return []
+
     def own_national_slot(self, rom_path: Path, team: Team) -> int | None:
         """The slot the ROM holds national team `team` in, or None.
 
