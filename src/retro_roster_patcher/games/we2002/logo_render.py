@@ -14,6 +14,12 @@ BIG = (64, 28)
 MEDIUM = (24, 16)
 MINI = (24, 8)
 COLOURS = 15
+#: A pixel at least this opaque after the downsize is ink. 128 dropped most of
+#: a thin-stroke crest (Liverpool, Forest, Spurs) at 24x16 (issue #4).
+INK_ALPHA = 40
+#: Ink darker than this (mean luma) disappears on the navy grid and VS banner,
+#: so the menu rendering outlines it in white.
+DARK_LUMA = 50
 
 
 WHITE = (255, 255, 255)
@@ -37,7 +43,9 @@ def render_logos(png: bytes) -> tuple[LogoImages, LogoImages]:
     distortion, centred on a transparent background. One palette serves all
     three sizes because the game draws them through the same CLUT; it is
     quantised from the two larger renders, and every pixel of each render is
-    then snapped to its nearest entry. Transparent pixels become index 0.
+    then snapped to its nearest entry. Transparent pixels become index 0. A dark
+    logo (Spurs' navy) gets a 1-pixel white outline in the menu rendering, which
+    the game draws on navy.
     """
     from PIL import Image
 
@@ -52,7 +60,9 @@ def render_logos(png: bytes) -> tuple[LogoImages, LogoImages]:
         inner = (max(1, round(source.width * scale)), max(1, round(source.height * scale)))
         canvas = Image.new("RGBA", size, (0, 0, 0, 0))
         resized = source.resize(inner, Image.Resampling.LANCZOS)
-        canvas.paste(resized, ((w - inner[0]) // 2, (h - inner[1]) // 2), resized)
+        # A plain paste: the canvas is empty, and pasting through the logo's own
+        # alpha as the mask squared it (a half-covered stroke pixel became a quarter).
+        canvas.paste(resized, ((w - inner[0]) // 2, (h - inner[1]) // 2))
         return canvas
 
     big, medium, mini = fit(BIG), fit(MEDIUM), fit(MINI)
@@ -61,8 +71,11 @@ def render_logos(png: bytes) -> tuple[LogoImages, LogoImages]:
     for img in (big, medium):
         raw = img.tobytes()
         for i in range(0, len(raw), 4):
-            if raw[i + 3] >= 128:
+            if raw[i + 3] >= INK_ALPHA:
                 opaque.append((raw[i], raw[i + 1], raw[i + 2]))
+    dark = bool(opaque) and sum(
+        0.299 * r + 0.587 * g + 0.114 * b for r, g, b in opaque
+    ) < DARK_LUMA * len(opaque)
     if not opaque:
         opaque = [(0, 0, 0)]
     strip = Image.new("RGB", (len(opaque), 1))
@@ -86,12 +99,37 @@ def render_logos(png: bytes) -> tuple[LogoImages, LogoImages]:
         alpha = img.getchannel("A").tobytes()
         w, h = img.size
         return [
-            [ground if alpha[y * w + x] < 128 else (idx[y * w + x] % COLOURS) + 1 for x in range(w)]
+            [
+                ground if alpha[y * w + x] < INK_ALPHA else (idx[y * w + x] % COLOURS) + 1
+                for x in range(w)
+            ]
             for y in range(h)
         ]
 
+    def outlined(rows: list[list[int]]) -> list[list[int]]:
+        """`rows` with every see-through pixel next to the ink turned white."""
+        if not dark:
+            return rows
+        h, w = len(rows), len(rows[0])
+        return [
+            [
+                COLOURS
+                if v == 0
+                and any(
+                    0 <= x + dx < w and 0 <= y + dy < h and rows[y + dy][x + dx]
+                    for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1))
+                )
+                else v
+                for x, v in enumerate(row)
+            ]
+            for y, row in enumerate(rows)
+        ]
+
     menu = LogoImages(
-        palette=palette, big=indices(big, 0), medium=indices(medium, 0), mini=indices(mini, 0)
+        palette=palette,
+        big=outlined(indices(big, 0)),
+        medium=outlined(indices(medium, 0)),
+        mini=outlined(indices(mini, 0)),
     )
     stadium = LogoImages(
         palette=palette,
