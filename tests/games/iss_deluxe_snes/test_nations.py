@@ -22,7 +22,7 @@ from retro_roster_patcher.games.iss_deluxe_snes.patcher import ISSDeluxePatcher
 from retro_roster_patcher.sports.models import League, LeagueData, Player, Team, TeamRoster
 from tests.games.iss_deluxe_snes.test_pages import _cartridge, _labels
 
-ITALY, ENGLAND, SPAIN, FRANCE, CROATIA, TURKEY, CAMEROON = 0, 2, 4, 9, 17, 26, 28
+ITALY, ENGLAND, SPAIN, FRANCE, CROATIA, TURKEY, CAMEROON, MEXICO = 0, 2, 4, 9, 17, 26, 28, 33
 LEAGUE = League(id=2001, name="English Premier League")
 NATIONS = League(id=2021, name="International Friendlies")
 GROUPS = ["Goalkeeper"] * 2 + ["Defender", "Midfielder", "Attacker"] * 6
@@ -253,3 +253,25 @@ def test_re_patching_with_the_fill_gives_the_same_image(patcher, rom, tmp_path):
     assert second == first
     assert _shown(second, TURKEY) == _shown(retail, FRANCE)
     assert kits.resolve(second, TURKEY, 0).words == kits.resolve(retail, FRANCE, 0).words
+
+
+@pytest.mark.real_rom
+@pytest.mark.parametrize(
+    ("given", "numbers"),
+    [(True, CROATIA), (False, MEXICO), ({MEXICO: {"home": {"template": ENGLAND}}}, MEXICO)],
+)
+def test_a_moved_nation_numbers_the_shirts_only_of_its_own_kit(
+    patcher, rom, tmp_path, given, numbers
+):
+    """Croatia on Mexico's slot: flag entry 12, the colour of the numbers of a kit whose number
+    byte is 0 (Croatia's and Mexico's both are), is Croatia's only while the slot wears Croatia's
+    kit; with `kits=False` or a template of another team the slot keeps Mexico's."""
+    retail = rom.read_bytes()
+    rosters = patcher.map_rosters(
+        LeagueData(league=NATIONS, teams=[roster(1, "Croatia")]),
+        [SlotMapping(slot_index=MEXICO, team_id=1)],
+    )
+    out = tmp_path / "out.sfc"
+    patcher.patch(rom_path=rom, output_path=out, rosters=rosters, looks=False, kits=given)
+    image = out.read_bytes()
+    assert flags.colours(image, MEXICO)[0] == flags.colours(retail, numbers)[0]

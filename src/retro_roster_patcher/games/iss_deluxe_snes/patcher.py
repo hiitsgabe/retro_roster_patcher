@@ -55,7 +55,7 @@ from ...sports.nationals import cartridge_slot, cartridge_slot_map
 from ..iss2000_n64.mapper import GROUPS, N64StatMapper, _place, group_of, parse_formation
 from ..iss2000_n64.patcher import NATIONAL_ALIASES, NATIONAL_LEAGUE
 from ..iss_snes.models import Flag, ISSLook
-from ..iss_snes.patcher import ISSPatcher, _parse_hex_colour
+from ..iss_snes.patcher import ISSPatcher, _chosen, _parse_hex_colour
 from ..iss_snes.rom_writer import two_band_flag
 from ..iss_snes.stat_mapper import ISSStatMapper
 from . import bignames, flags, kits, looks, names, pages, scenarios, screens
@@ -452,7 +452,13 @@ class ISSDeluxePatcher(Patcher):
         # A nation on its own slot keeps the cartridge's name; every other team shows its own.
         scenarios.write(image, {s: R.TEAMS[s] if t.national else t.name for s, t in teams.items()})
         pins = {slot: home.pins for slot, (home, _) in plans.items() if home is not None}
-        own = frozenset(s for s, t in clubs.items() if t.nation is not None)
+        # A nation's retail flag goes whole, entry 12 (its numbers' colour) too, only on a slot
+        # that wears the nation's own kit; any other slot keeps its entry 12.
+        own = frozenset(
+            s
+            for s, t in clubs.items()
+            if t.nation is not None and given is not False and not _chosen(given, s)
+        )
         for slot, note in flags.write(image, crests, fallbacks, pins, unused, own).items():
             name = teams[slot].name if slot in teams else R.TEAMS_ALL[slot]
             self.status(f"{name}: flag {note}")
