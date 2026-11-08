@@ -543,3 +543,70 @@ def test_the_images_verb_refuses_a_game_without_slots(tmp_path, stubs, capsys):
 
 def test_we2002_has_the_three_slots():
     assert WE2002Patcher.image_slots == ("title", "menu", "boot")
+
+
+# --- `--fill-nations`: the slots the mapping leaves, filled by FIFA ranking -----
+
+
+class FillPatcher(LogoPatcher):
+    """Maps each slot of a slot map, or slot 0 without one, and fills nations."""
+
+    supports_nation_fill: bool = True
+
+    def map_rosters(self, data, slot_mapping=None):
+        if not slot_mapping:
+            return MappedRosters(game_id=self.game_id, teams={0: data.teams[0]})
+        by_id = {r.team.id: r for r in data.teams}
+        return MappedRosters(
+            game_id=self.game_id, teams={m.slot_index: by_id[m.team_id] for m in slot_mapping}
+        )
+
+    def patch(self, *, rom_path, output_path, rosters, on_progress=None, **options):
+        SEEN.append(("slots", {s: r.team.name for s, r in rosters.teams.items()}))
+        return super().patch(
+            rom_path=rom_path,
+            output_path=output_path,
+            rosters=rosters,
+            on_progress=on_progress,
+            **options,
+        )
+
+
+@pytest.fixture
+def fill_stub(monkeypatch):
+    SEEN.clear()
+    spain = TeamRoster(team=Team(id=164, name="Spain"), players=[Player(id=9, name="Nine")])
+
+    def fake_fetch_top_nations(patcher, rom, season, taken, on_progress=None):
+        SEEN.append(("fill", season, set(taken)))
+        league = League(id=2021, name="International Friendlies", season=season)
+        mapping = [SlotMapping(slot_index=5, team_id=164, team_name="Spain")]
+        return LeagueData(league=league, teams=[spain]), mapping
+
+    monkeypatch.setattr(
+        "retro_roster_patcher.cli.commands.fetch_top_nations", fake_fetch_top_nations
+    )
+    try:
+        registry.register("fill-game", platform="test", sport="soccer")(FillPatcher)
+        yield
+    finally:
+        registry._REGISTRY.pop("fill-game", None)
+
+
+def test_fill_nations_merges_the_ranked_nations_into_the_free_slots(tmp_path, fill_stub):
+    assert main(_stub_argv(tmp_path, "fill-game", "--fill-nations")) == 0
+    assert ("fill", 2024, {0}) in SEEN  # the league's slot is taken
+    assert [c[1] for c in SEEN if c[0] == "slots"] == [{0: "Team A", 5: "Spain"}]
+    assert _options_seen() == {}
+
+
+def test_fill_nations_on_a_game_without_it_is_a_usage_error(tmp_path, logo_stub, capsys):
+    assert main(_stub_argv(tmp_path, "logo-game", "--fill-nations")) == 2
+    assert events(capsys)[-1]["msg"] == "logo-game does not take --fill-nations"
+    assert not [c for c in SEEN if c[0] == "fetch"]  # refused before any fetch
+
+
+def test_fill_nations_and_blank_unused_together_is_a_usage_error(tmp_path, fill_stub):
+    with pytest.raises(SystemExit) as exc:
+        main(_stub_argv(tmp_path, "fill-game", "--fill-nations", "--blank-unused"))
+    assert exc.value.code == 2

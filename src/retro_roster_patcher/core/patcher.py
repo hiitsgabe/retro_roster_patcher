@@ -18,7 +18,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from ..sports.models import LeagueData, Player, TeamRoster
+from ..sports.models import League, LeagueData, Player, Team, TeamRoster
 from .concurrency import emit_status
 from .errors import CapabilityError
 from .kits import KitTemplate
@@ -71,6 +71,9 @@ class Patcher(ABC):
     #: National teams are slots `national_slot_base` and up.
     supports_nationals: bool = False
     national_slot_base: int | None = None
+    #: `sports.nationals.fetch_top_nations` can fill the slots a league leaves
+    #: (`fill_slots`) with today's best-ranked national teams.
+    supports_nation_fill: bool = False
 
     def __init__(
         self,
@@ -154,6 +157,22 @@ class Patcher(ABC):
         reads them off `rom_path`.
         """
         return []
+
+    def fill_slots(self, rom_path: Path) -> list[int]:
+        """The slots a nation fill may use, in the order it fills them. None by default."""
+        return []
+
+    def own_national_slot(self, rom_path: Path, team: Team) -> int | None:
+        """The slot the ROM holds national team `team` in, or None.
+
+        By default the slot the game's `national_slot_map` pairs it with, for a
+        game that has one.
+        """
+        slot_map = getattr(self, "national_slot_map", None)
+        if slot_map is None:
+            return None
+        data = LeagueData(league=League(id=2021, name=""), teams=[TeamRoster(team=team)])
+        return next((m.slot_index for m in slot_map(rom_path, data)), None)
 
     @staticmethod
     def _given_blocks(

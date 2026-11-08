@@ -65,6 +65,11 @@ def test_the_kit_catalogue_is_readable_as_package_data():
     assert doc["format"] == 1 and len(doc["clubs"]) >= 100
 
 
+def test_the_fifa_ranking_snapshot_is_readable_as_package_data():
+    doc = json.loads(package_bytes("retro_roster_patcher.assets", "fifa_ranking.json"))
+    assert len(doc["rankings"]) == 211
+
+
 def _shipped_game_packages() -> set[str]:
     """Game ids implied by the subpackages actually present in the distribution.
 

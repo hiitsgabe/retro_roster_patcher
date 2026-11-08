@@ -124,10 +124,17 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="keep the game's own flags instead of drawing each team's logo (we2002)",
     )
-    p_patch.add_argument(
+    # The two answers to "what goes in the slots the slot map leaves out".
+    unused = p_patch.add_mutually_exclusive_group()
+    unused.add_argument(
         "--blank-unused",
         action="store_true",
         help="empty the name and flag of every slot the slot map leaves out (we2002)",
+    )
+    unused.add_argument(
+        "--fill-nations",
+        action="store_true",
+        help="fill the slots the slot map leaves out with today's top national teams (FIFA)",
     )
     p_patch.add_argument(
         "--image",

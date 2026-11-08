@@ -17,9 +17,11 @@ from ..core.errors import CapabilityError, RomError, as_storage_error
 from ..core.models import PartialFn, SlotMapping
 from ..core.patcher import Patcher
 from ..core.registry import get_patcher, list_patchers
+from ..sports.espn import default_season
 from ..sports.fotmob import FotmobClient
 from ..sports.headshots import fill_headshots
 from ..sports.models import LeagueData
+from ..sports.nationals import fetch_top_nations
 from ..sports.serde import league_data_from_dict, league_data_to_dict
 from .render import Renderer
 
@@ -228,6 +230,9 @@ def _patch_options(game_id: str, args: argparse.Namespace, patcher: Patcher) -> 
         if not getattr(patcher, "supports_blank_unused", False):
             raise UsageError(f"{game_id} does not take --blank-unused")
         options["blank_unused"] = True
+    # Not a `patch` option: `cmd_patch` merges the nations into the rosters.
+    if getattr(args, "fill_nations", False) and not patcher.supports_nation_fill:
+        raise UsageError(f"{game_id} does not take --fill-nations")
     images = _image_args(game_id, getattr(args, "image", None) or [], patcher)
     if images:
         options["images"] = images
@@ -306,6 +311,16 @@ def cmd_patch(args: argparse.Namespace, renderer: Renderer) -> None:
 
     renderer.status("Mapping rosters...")
     mapped = patcher.map_rosters(data, slot_mapping=slot_mapping, **map_extras)
+    if getattr(args, "fill_nations", False):
+        renderer.status("Filling the free slots with the top national teams...")
+        season = args.season or data.league.season or default_season("fifa.friendly")
+        nations, nation_map = fetch_top_nations(
+            patcher, rom, season, mapped.teams, on_progress=renderer.progress
+        )
+        if nation_map:
+            mapped = mapped.merge(
+                patcher.map_rosters(nations, slot_mapping=nation_map, **map_extras)
+            )
 
     out = Path(args.out)
     # Before `patcher.patch`, so an unwritable `--out` costs neither the ROM copy
