@@ -108,6 +108,15 @@ NATIONAL_SQUAD_SIZE = 23
 #: overlay team table names) are offered.
 NATIONAL_SLOT_BASE = 1000
 NATIONAL_NAMED = 67
+#: The nations' rows, 0-59; the seven after them are the Classic sides (England, France,
+#: Germany, Italy, Netherlands, Argentina, Brazil), which wear their nation's flag.
+NATION_ROWS = 60
+#: Nationalities the disc has a flag for (`0_TEXT.AFS` emblem table 0, image n is
+#: nationality n), each named in every language overlay's nationality table: 0-59 are the
+#: nations' rows, 101-103 placeholders without a name. A national row's flag is its
+#: nationality, the low half of the third word of its team-table entry (both halves hold
+#: it); its name and code are the entry's pointers. Changing the two was checked in PCSX2.
+NATIONALITIES = 144
 #: Position nibble written into a record that changes hands between groups.
 GROUP_POSITIONS = {"Goalkeeper": 0, "Defender": 3, "Midfielder": 7, "Attacker": 12}
 
@@ -256,6 +265,9 @@ class PESTeamRecord:
     league_logo_url: str = ""
     #: A national-team slot (`NATIONAL_SLOT_BASE` and up).
     national: bool = False
+    #: A national team's nationality on the disc (`patcher.nation_ident`: its flag, name and
+    #: code in every language), set by the patch; it is at home in the row of that number.
+    nation: int | None = None
     #: Home and away kits to draw from colours (`core.kits.KitSpec`); None keeps the disc's.
     kit_home: KitSpec | None = None
     kit_away: KitSpec | None = None

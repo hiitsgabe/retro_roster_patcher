@@ -190,7 +190,11 @@ def build_formation_entry() -> bytes:
 def build_overlay(
     lang: str, names: list[str] | None = None, codes: list[str] | None = None
 ) -> bytes:
-    """A `database_<lang>.ovl`: header, strings, then the team table."""
+    """A `database_<lang>.ovl`: header, strings, the team table, then the nationality table
+    (`nationality`): 144 name/code pointer pairs, as on the disc, after the team table as in
+    the English overlay. Rows 0-59 of the team table are nationalities 0-59 (word 3 holds
+    the row's nationality in both halves), whose names the nationality table repeats in
+    strings of its own."""
     names = names or CLUB_NAMES
     codes = codes or CLUB_CODES
     strings = bytearray()
@@ -208,8 +212,9 @@ def build_overlay(
     entries = b""
     for k, (name_off, code_off) in enumerate(pointers):
         ident = 0x16020000 | (k - FIRST_CLUB_ENTRY) if k >= FIRST_CLUB_ENTRY else 0x100000CD
+        nation = 0x900006 if k >= FIRST_CLUB_ENTRY else k * 0x10001
         entries += struct.pack(
-            "<IIII", OVERLAY_BASE + name_off, OVERLAY_BASE + code_off, 0x900006, ident
+            "<IIII", OVERLAY_BASE + name_off, OVERLAY_BASE + code_off, nation, ident
         )
     # Pad the table to the 40 entries the reader wants to see in a run.
     while len(entries) < 40 * 16:
@@ -217,13 +222,43 @@ def build_overlay(
         entries += struct.pack(
             "<IIII", OVERLAY_BASE + name_off, OVERLAY_BASE + code_off, 0, 0x16020000 | 0xFF
         )
-    total = table_off + len(entries) + 16
+    nat_strings_off = table_off + len(entries) + 16
+    nat_strings = bytearray()
+    nat_pointers = []
+    for name, code in nationality(lang):
+        name_off = nat_strings_off + len(nat_strings)
+        nat_strings += name.encode("utf-8") + b"\0"
+        nat_strings += b"\0" * (-len(nat_strings) % 8)
+        code_off = nat_strings_off + len(nat_strings)
+        nat_strings += code.encode("ascii").ljust(8, b"\0")
+        nat_pointers.append(struct.pack("<II", OVERLAY_BASE + name_off, OVERLAY_BASE + code_off))
+    nat_table_off = nat_strings_off + len(nat_strings)
+    total = nat_table_off + 8 * len(nat_pointers) + 16
     data = bytearray(total)
     struct.pack_into("<4sIII", data, 0, b"MWo3", 1, OVERLAY_BASE, total)
     data[32:48] = f"database_{lang}.ovl".encode().ljust(16, b"\0")
     data[0x100 : 0x100 + len(strings)] = strings
     data[table_off : table_off + len(entries)] = entries
+    data[nat_strings_off:nat_table_off] = nat_strings
+    data[nat_table_off : nat_table_off + 8 * len(nat_pointers)] = b"".join(nat_pointers)
     return bytes(data)
+
+
+#: Nationalities the disc has a flag for; 0-59 are the nations' rows.
+NATIONALITIES = 144
+#: A placeholder entry, as the disc's 101-103 ("0", "1", "2"): no nation, though its code is
+#: a real one's (Solomon Islands).
+PLACEHOLDER = 101
+
+
+def nationality(lang: str) -> list[tuple[str, str]]:
+    """The overlay's nationality names and codes: rows 0-59 as the team table names them,
+    then other nations, spelled per language ("b": Portuguese)."""
+    word = "NACIONALIDADE" if lang == "b" else "NATIONALITY"
+    names = [(f"NATION {i}", f"N{i:02d}") for i in range(60)]
+    names += [(f"{word} {i}", f"X{i}") for i in range(60, NATIONALITIES)]
+    names[PLACEHOLDER] = ("0", "SOL")
+    return names
 
 
 def build_libertadores_entry(looks: dict[int, bytes] | None = None, count: int = 8) -> bytes:

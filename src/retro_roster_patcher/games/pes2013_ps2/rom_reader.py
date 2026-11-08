@@ -7,6 +7,7 @@ club squads and the team-name tables of the language overlays.
 
 from __future__ import annotations
 
+import bisect
 import os
 import struct
 import zlib
@@ -28,6 +29,7 @@ from .models import (
     LIBERTADORES_ENTRY,
     NATIONAL_NAMED,
     NATIONAL_SQUAD_SIZE,
+    NATIONALITIES,
     OVER_AFS,
     OVERLAY_LOAD_ADDRESS_OFFSET,
     PART_CLUB_NUMBERS,
@@ -182,13 +184,18 @@ class TeamString:
 
 @dataclass
 class OverlayTeams:
-    """The team-name table of one language overlay."""
+    """The team-name table of one language overlay, and its nationality table."""
 
     entry: AfsEntry
     load_address: int
     table_offset: int
     clubs: dict[int, tuple[TeamString, TeamString]] = field(default_factory=dict)
     nationals: dict[int, tuple[TeamString, TeamString]] = field(default_factory=dict)
+    #: Each national row's nationality (the low half of its entry's third word): its flag.
+    idents: dict[int, int] = field(default_factory=dict)
+    #: The nationalities the disc has a flag for, by number (`NATIONALITIES` of them): the
+    #: name and code in this language, in strings of their own.
+    nationalities: list[tuple[TeamString, TeamString]] = field(default_factory=list)
 
 
 class RomReader:
@@ -297,35 +304,46 @@ class RomReader:
             raise RomError(f"{OVER_AFS} entry {index} has no team-name table")
         # Every string the table points at, so each slot's room is known.
         pointers: set[int] = set()
-        rows: list[tuple[int, int, int]] = []
+        rows: list[tuple[int, int, int, int]] = []
         off = table_offset
         while off + TEAM_ENTRY_SIZE <= len(data):
-            name_ptr, code_ptr, _flags, ident = struct.unpack(
+            name_ptr, code_ptr, nation, ident = struct.unpack(
                 "<IIII", data[off : off + TEAM_ENTRY_SIZE]
             )
             if not (_in_overlay(name_ptr, base, data) and _in_overlay(code_ptr, base, data)):
                 break
-            rows.append((name_ptr, code_ptr, ident))
+            rows.append((name_ptr, code_ptr, nation, ident))
             pointers.update((name_ptr, code_ptr))
             off += TEAM_ENTRY_SIZE
-        ordered = sorted(pointers) + [base + table_offset]
-        room = {p: q - p for p, q in zip(ordered, ordered[1:], strict=False)}
+        nat_offset = _find_nationality_table(data, base)
+        pairs = []
+        if nat_offset is not None:
+            pairs = [
+                struct.unpack("<II", data[nat_offset + 8 * k : nat_offset + 8 * k + 8])
+                for k in range(NATIONALITIES)
+            ]
+            pointers.update(p for pair in pairs for p in pair)
+            pointers.add(base + nat_offset)
+        # A string's room runs to the next string or table, whichever comes first.
+        bounds = sorted(pointers | {base + table_offset, base + len(data)})
+
+        def string(ptr: int) -> TeamString:
+            end = bounds[bisect.bisect_right(bounds, ptr)]
+            return _team_string(data, ptr - base, end - ptr)
+
         nationals: dict[int, tuple[TeamString, TeamString]] = {}
-        for k, (name_ptr, code_ptr, _ident) in enumerate(rows[:NATIONAL_NAMED]):
-            nationals[k] = (
-                _team_string(data, name_ptr - base, room[name_ptr]),
-                _team_string(data, code_ptr - base, room[code_ptr]),
-            )
+        idents: dict[int, int] = {}
+        for k, (name_ptr, code_ptr, nation, _ident) in enumerate(rows[:NATIONAL_NAMED]):
+            nationals[k] = (string(name_ptr), string(code_ptr))
+            idents[k] = nation & 0xFFFF
         clubs: dict[int, tuple[TeamString, TeamString]] = {}
-        for k, (name_ptr, code_ptr, ident) in enumerate(rows[FIRST_CLUB_ENTRY:]):
+        for k, (name_ptr, code_ptr, _nation, ident) in enumerate(rows[FIRST_CLUB_ENTRY:]):
             club = ident & 0xFF
             if club != k or club >= CLUB_COUNT:
                 break
-            clubs[club] = (
-                _team_string(data, name_ptr - base, room[name_ptr]),
-                _team_string(data, code_ptr - base, room[code_ptr]),
-            )
-        return OverlayTeams(entry, base, table_offset, clubs, nationals)
+            clubs[club] = (string(name_ptr), string(code_ptr))
+        nationalities = [(string(a), string(b)) for a, b in pairs]
+        return OverlayTeams(entry, base, table_offset, clubs, nationals, idents, nationalities)
 
     # -- UI textures -------------------------------------------------------
 
@@ -427,6 +445,22 @@ def _find_team_table(data: bytes, base: int) -> int | None:
                 return run_start
         else:
             run_start = None
+            run = 0
+    return None
+
+
+def _find_nationality_table(data: bytes, base: int) -> int | None:
+    """Offset of the nationality table: the first run of `NATIONALITIES` consecutive
+    `{name ptr, code ptr}` pairs. The team table's entries are 16 bytes whose last two words
+    are not pointers, so read 8 bytes at a time it never makes such a run."""
+    run = 0
+    for off in range(0, len(data) - 7, 8):
+        a, b = struct.unpack("<II", data[off : off + 8])
+        if _in_overlay(a, base, data) and _in_overlay(b, base, data) and a < b:
+            run += 1
+            if run == NATIONALITIES:
+                return off - 8 * (NATIONALITIES - 1)
+        else:
             run = 0
     return None
 

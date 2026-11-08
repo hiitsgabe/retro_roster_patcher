@@ -589,9 +589,9 @@ def test_a_national_squad_takes_only_the_records_no_club_shares(iso, tmp_path):
     for entry in PLAYER_ENTRIES:
         tables = reader.player_tables(entry)
         row = tables.national_squad(0)
-        # The three exclusive records first, then two from the free pool, then
-        # the three records club 0 shares, which keep their names.
-        assert row[:8] == [34, 35, 36, 37, 38, 1, 2, 3] and row[8:] == [0] * 15
+        # The three exclusive records first, then two from the free pool; the
+        # three records club 0 shares leave the row and keep their names.
+        assert row[:5] == [34, 35, 36, 37, 38] and row[5:] == [0] * 18
 
         def name(i, tables=tables):
             return tables.record(i)[:32].decode("utf-16-le").split("\0")[0]
@@ -603,7 +603,7 @@ def test_a_national_squad_takes_only_the_records_no_club_shares(iso, tmp_path):
             "VINÍCIUS JÚNIOR",
             "R. BELLOLI",
         ]
-        assert name(1) == "PLAYER 1"
+        assert name(1) == "PLAYER 1" and name(3) == "PLAYER 3"
         # Each taken record carries the player's position group.
         assert [tables.record(i)[53] >> 4 for i in row[:5]] == [0, 3, 7, 12, 12]
         # Club 0 is untouched.
@@ -698,6 +698,32 @@ def test_a_shared_place_with_no_free_record_left_is_blanked(tmp_path):
     assert tables.national_squad(0)[:6] == [37, 34, 35, 36, 0, 0]
     assert _name(tables, 37) == "PLAYER 1"
     assert any("2 national places" in s for s in statuses), statuses
+
+
+def test_squads_asking_for_more_records_than_the_disc_has_are_cut_to_one_size(iso, tmp_path):
+    """Rows 0 and 1 have three records of their own between them (34-36) and the pool three
+    more (37-39): two squads of five come out as two of three, today's players only."""
+    statuses: list[str] = []
+    patcher = PES2013PS2Patcher(tmp_path, on_status=statuses.append)
+    other = roster(303, "Nation One", "N01", [(f"Other {k}", "Defender", k) for k in range(5)])
+    data = LeagueData(league=NATIONS.league, teams=[NATIONS.teams[0], other])
+    rosters = patcher.map_rosters(
+        data,
+        [
+            SlotMapping(slot_index=NATIONAL_SLOT_BASE, team_id=300),
+            SlotMapping(slot_index=NATIONAL_SLOT_BASE + 1, team_id=303),
+        ],
+    )
+    out = tmp_path / "out.iso"
+    patcher.patch(rom_path=iso, output_path=out, rosters=rosters, logos=False)
+    reader = RomReader(str(out))
+    reader.load()
+    tables = reader.player_tables(PLAYER_ENTRIES[0])
+    rows = [[i for i in tables.national_squad(r) if i] for r in (0, 1)]
+    assert [len(r) for r in rows] == [3, 3] and not set(rows[0]) & set(rows[1])
+    assert set(rows[0] + rows[1]) == {34, 35, 36, 37, 38, 39}
+    assert [_name(tables, i) for i in rows[0]] == ["ALISSON BECKER", "M. CORRÊA", "BRUNO GUIMARÃES"]
+    assert any("cut to 3" in s for s in statuses), statuses
 
 
 def test_a_mapping_outside_both_ranges_is_refused(tmp_path):

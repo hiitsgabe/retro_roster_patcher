@@ -24,8 +24,11 @@ disc's parametric clubs. Clubs 130..138 have no record.
 from __future__ import annotations
 
 import struct
+import zlib
 from dataclasses import dataclass
+from functools import cache
 
+from ...core.assets import package_bytes
 from ...core.errors import RomError
 from ...core.kits import KitSpec, contrast
 from .afs import Table, unwrap, wrap
@@ -168,3 +171,18 @@ class KitTable:
                     leaf[at + k * KIT_SIZE : at + (k + 1) * KIT_SIZE] = kit.build()
             self.table.parts[part] = wrap(self.part_headers[part], bytes(leaf))
         return wrap(self.header, self.table.build())
+
+
+@cache
+def _retail() -> bytes:
+    return zlib.decompress(
+        package_bytes("retro_roster_patcher.assets", "pes2013_national_kits.zlib")
+    )
+
+
+def retail_national(row: int) -> list[Kit]:
+    """The disc's four kits of national row `row` (0-59), packaged
+    (`assets/pes2013_national_kits.zlib`, a real-disc test pins it), so a nation back on
+    its own row gets its kits back over any earlier patch."""
+    at = row * 4 * KIT_SIZE
+    return [Kit.parse(_retail()[at + k * KIT_SIZE : at + (k + 1) * KIT_SIZE]) for k in range(4)]

@@ -51,13 +51,14 @@ from ...sports import _http
 from ...sports.espn import LINEUP_GROUPS, EspnClient
 from ...sports.lineup import DEPTH, GROUP_ROLE, apply_lineup, parse_shape, team_formation
 from ...sports.lineup import lineup_role as lineup_role_name
-from ...sports.models import LeagueData, Player, TeamRoster
+from ...sports.models import LeagueData, Player, Team, TeamRoster
 from . import kit_textures, looks
 from .formations import FORMATIONS, PRESETS, pick_preset, seats
-from .kits import AWAY, HOME, apply_spec
+from .kits import AWAY, HOME, apply_spec, retail_national
 from .models import (
     CLUB_COUNT,
     CLUB_SQUAD_SIZE,
+    DATABASE_OVERLAY_ENGLISH,
     DATABASE_OVERLAYS,
     DISPLAY_NAME_CHARS,
     FIRST_CLUB_FORMATION,
@@ -69,6 +70,7 @@ from .models import (
     LIBERTADORES_BASE,
     LOOK_END,
     LOOK_START,
+    NATION_ROWS,
     NATIONAL_COUNT,
     NATIONAL_NAMED,
     NATIONAL_SLOT_BASE,
@@ -82,7 +84,7 @@ from .models import (
     PESPlayer,
     PESTeamRecord,
 )
-from .rom_reader import PlayerTables, RomReader
+from .rom_reader import OverlayTeams, PlayerTables, RomReader
 from .rom_writer import RomWriter, ascii_fold
 
 GROUP_ORDER = ("Goalkeeper", "Defender", "Midfielder", "Attacker")
@@ -126,6 +128,23 @@ def pes_name(player: Player) -> str:
         if name and len(name) <= DISPLAY_NAME_CHARS:
             return name.upper()
     return full[:DISPLAY_NAME_CHARS].upper()
+
+
+def nation_ident(nationalities: list[tuple[str, str]], name: str, code: str) -> int | None:
+    """The disc's nationality (its flag) of the nation called `name` (`code`): the one of
+    `nationalities` (the English names and codes) whose name is `name` (`NATIONAL_ALIASES`
+    turning the disc's spelling into ESPN's), else whose code is `code` when no other has
+    it. A placeholder without a name (101-103) is none."""
+
+    def key(text: str) -> str:
+        return ascii_fold(text).upper()
+
+    real = [(k, n, c.upper()) for k, (n, c) in enumerate(nationalities) if any(map(str.isalpha, n))]
+    by_name = {key(NATIONAL_ALIASES.get(key(n), n)): k for k, n, _ in real}
+    codes = Counter(c for _, _, c in real)
+    by_code = {c: k for k, _, c in real if codes[c] == 1}
+    ident = by_name.get(key(name))
+    return by_code.get(code.upper()) if ident is None and code else ident
 
 
 #: The slot groups by league, for `Patcher.slot_groups`.
@@ -383,6 +402,39 @@ def formation_team(slot: int) -> int:
     return FIRST_CLUB_FORMATION + slot
 
 
+def at_home(slot: int, record: PESTeamRecord) -> bool:
+    """A nation in its own row of the 60 (`PESTeamRecord.nation`), whose disc kits are
+    packaged."""
+    return record.nation == slot - NATIONAL_SLOT_BASE < NATION_ROWS
+
+
+def _national_rows(
+    teams: OverlayTeams, rosters: MappedRosters, slots: list[int], blanks: list[int]
+) -> dict[int, tuple[int, int, int]]:
+    """The national rows of one overlay to point elsewhere (`RomWriter.write_national_rows`):
+    each national team's row at its nationality's name and code, with its nationality as the
+    flag, where the row shows anything else (a row at home on the disc is left byte for
+    byte); each row in `blanks` at empty strings (the ends of its name and code: the name
+    must stay before the code, which is how the reader finds the table), so no string is
+    written over, a nationality's least of all."""
+    rows: dict[int, tuple[int, int, int]] = {}
+    for slot in slots:
+        nation, row = rosters.teams[slot].nation, slot - NATIONAL_SLOT_BASE
+        if nation is None or nation >= len(teams.nationalities) or row not in teams.nationals:
+            continue
+        name, code = teams.nationalities[nation]
+        shown = tuple(s.text for s in teams.nationals[row]) + (teams.idents[row],)
+        if shown != (name.text, code.text, nation):
+            rows[row] = (name.offset, code.offset, nation)
+    for slot in blanks:
+        row = slot - NATIONAL_SLOT_BASE
+        name, code = teams.nationals[row]
+        if name.text or code.text:
+            ends = [s.offset + len(s.text.encode("utf-8")) for s in (name, code)]
+            rows[row] = (ends[0], ends[1], teams.idents[row])
+    return rows
+
+
 @dataclass(frozen=True)
 class _Disc:
     """The disc's player records as they were before any write: the main
@@ -425,6 +477,9 @@ class PES2013PS2Patcher(Patcher):
     max_leagues: int = len(LEAGUE_GROUPS)
     supports_nationals: bool = True
     national_slot_base: int | None = NATIONAL_SLOT_BASE
+    #: `fill_slots`: the 60 nations' rows (the Classic sides keep theirs). A nation the disc
+    #: has a row for stays in it; any other takes a free row in its own name and flag.
+    supports_nation_fill: bool = True
     #: Screen art `patch(images={name: png})` can replace; `export_images`
     #: writes the current art of each as a PNG to edit.
     image_slots: tuple[str, ...] = IMAGE_SLOT_NAMES
@@ -450,6 +505,7 @@ class PES2013PS2Patcher(Patcher):
         self.assets_dir = Path(assets_dir) if assets_dir is not None else None
         self._transport = transport
         self.api: Any = EspnClient(str(self.cache_dir), on_status, transport=transport)
+        self._nationality_names: dict[str, list[tuple[str, str]]] = {}
 
     # -- analyze -------------------------------------------------------------
 
@@ -500,6 +556,29 @@ class PES2013PS2Patcher(Patcher):
                     )
                 )
         return out
+
+    def fill_slots(self, rom_path: Path) -> list[int]:
+        """The 60 nations' rows, 1000-1059; the Classic rows 1060-1066 are left."""
+        return list(range(NATIONAL_SLOT_BASE, NATIONAL_SLOT_BASE + NATION_ROWS))
+
+    def own_national_slot(self, rom_path: Path, team: Team) -> int | None:
+        """The row of the nation `team` is, or None when the disc has no row for it: its
+        nationality (`nation_ident`), when that is one of the 60 nations' rows."""
+        ident = nation_ident(self._nationalities(rom_path), team.name, team.code)
+        return NATIONAL_SLOT_BASE + ident if ident is not None and ident < NATION_ROWS else None
+
+    def _nationalities(self, rom_path: Path) -> list[tuple[str, str]]:
+        """The English names and codes of the disc's nationalities (no patch writes them),
+        read once per disc."""
+        key = str(rom_path)
+        if key not in self._nationality_names:
+            with as_rom_error(rom_path):
+                reader = RomReader(key)
+                if not reader.load():
+                    raise RomError(f"Not a PES 2013 (PS2) image: {rom_path}")
+                found = reader.overlay_teams(DATABASE_OVERLAY_ENGLISH).nationalities
+            self._nationality_names[key] = [(name.text, code.text) for name, code in found]
+        return self._nationality_names[key]
 
     # -- fetch ---------------------------------------------------------------
 
@@ -649,6 +728,7 @@ class PES2013PS2Patcher(Patcher):
         rosters.require_game(self.game_id)
         if not Path(rom_path).exists():
             raise RomError(f"ROM not found: {rom_path}")
+        rosters = self._with_nations(rom_path, rosters)
         # Every kit choice is read and checked before the disc is copied, so a
         # bad picture is refused up front instead of after a 2 GB write.
         kit_choices = self._resolve_kits(rosters, options.get("kits", True))
@@ -705,13 +785,15 @@ class PES2013PS2Patcher(Patcher):
             if presets:
                 self._write_formations(writer, presets)
             blank_unused = bool(options.get("blank_unused", False))
+            blanks: list[int] = []
             if blank_unused:
                 # Before the logos: a blanked crest frees its palette entries.
-                names.update(self._blank_unused(writer, rosters, slots, national_slots))
+                club_names, blanks = self._blank_unused(writer, rosters, slots, national_slots)
+                names.update(club_names)
             if options.get("logos", True):
                 self._write_logos(writer, rosters, slots, on_progress)
             self._write_leagues(writer, rosters, slots, options.get("logos", True), blank_unused)
-            if kit_choices is not None:
+            if kit_choices:
                 self._write_kits(writer, rosters, slots + national_slots, kit_choices)
             images = self._collect_images(options.get("images"))
             if images:
@@ -724,6 +806,9 @@ class PES2013PS2Patcher(Patcher):
                 except RomError:
                     continue  # an overlay without a team table is not a database
                 writer.write_team_names(teams, names)
+                writer.write_national_rows(
+                    teams, _national_rows(teams, rosters, national_slots, blanks)
+                )
             if on_progress is not None:
                 on_progress(1.0, "Done")
         return PatchResult(
@@ -747,6 +832,27 @@ class PES2013PS2Patcher(Patcher):
         for record in dressed.teams.values():
             looks.dress(record.players, faces)
         return dressed
+
+    def _with_nations(self, rom_path: Path, rosters: MappedRosters) -> MappedRosters:
+        """A copy of `rosters` whose national teams carry their nationality on the disc
+        (`PESTeamRecord.nation`). A team the disc has no flag for (no nation the fill
+        reaches) keeps the row's name, flag and kits, as before the fill, with a status line."""
+        national = [s for s in rosters.teams if s >= NATIONAL_SLOT_BASE]
+        if not national:
+            return rosters
+        nationalities = self._nationalities(rom_path)
+        teams = dict(rosters.teams)
+        for slot in national:
+            record = teams[slot]
+            ident = nation_ident(nationalities, record.name, record.code)
+            if ident is None:
+                self.status(
+                    f"{record.name}: the disc has no flag for it; national row "
+                    f"{slot - NATIONAL_SLOT_BASE} keeps its name and flag"
+                )
+            else:
+                teams[slot] = replace(record, nation=ident)
+        return MappedRosters(game_id=rosters.game_id, teams=teams)
 
     def _presets(self, rosters: MappedRosters, slots: list[int]) -> dict[int, bytes]:
         """The preset to write for each slot whose team has a formation (`team_preset`). A club
@@ -942,9 +1048,13 @@ class PES2013PS2Patcher(Patcher):
         A national squad shares records with the clubs its players play for,
         and renaming such a record would rename the club's player too. So a
         row only takes over the records no club squad points at: its own
-        exclusive ones first, then named records no squad uses at all (a pool
-        the rows share, at most `pool_limit` of them, spread over the rows).
-        Records it must keep stay at the end of the row with their old names.
+        exclusive ones, then named records no squad uses at all (a pool the
+        rows share, at most `pool_limit` of them) and the exclusive records
+        other rows leave over. A row keeps none of its old players: the places
+        its squad does not fill are left empty (the game plays a short squad).
+        The disc has too few such records for 60 squads of 23, so when the
+        rows ask for more than there are, every squad is cut to the same
+        size, the eleven and the first of the bench kept, with a status line.
         Each record taken over gets the player's position. A team with a
         formation lists its eleven in the order of the preset's places (the
         row is the places). Returns players written and pool records used.
@@ -954,40 +1064,52 @@ class PES2013PS2Patcher(Patcher):
         pool = primary.free_records()
         if pool_limit is not None:
             pool = pool[:pool_limit]
-        per_row = -(-len(pool) // max(len(slots), 1))
+        order = [s for s in rosters.teams if s in slots]
+        squads: dict[int, list[PESPlayer]] = {}
+        takes: dict[int, list[int]] = {}
+        for slot in order:
+            preset = team_preset(rosters.teams[slot])
+            players = rosters.teams[slot].players
+            squads[slot] = seat_squad(players, preset) if preset else players
+            takes[slot] = [
+                idx
+                for idx in primary.national_squad(slot - NATIONAL_SLOT_BASE)
+                if 0 < idx < primary.player_count and idx not in club_used
+            ]
+        supply = sum(len(t) for t in takes.values()) + len(pool)
+        cap = next(
+            size
+            for size in range(NATIONAL_SQUAD_SIZE, -1, -1)
+            if sum(min(size, len(squad)) for squad in squads.values()) <= supply
+        )
+        spare = [idx for slot in order for idx in takes[slot][min(cap, len(squads[slot])) :]]
         written = pool_used = 0
-        for slot in slots:
-            record = rosters.teams[slot]
-            preset = team_preset(record)
-            squad = seat_squad(record.players, preset) if preset else record.players
-            row = slot - NATIONAL_SLOT_BASE
-            current = [idx for idx in primary.national_squad(row) if 0 < idx < primary.player_count]
-            exclusive = [idx for idx in current if idx not in club_used]
-            kept = [idx for idx in current if idx in club_used]
-            wanted = len(squad)
-            take = exclusive[:wanted]
-            share = per_row
-            while len(take) < wanted and pool and share:
-                take.append(pool.pop(0))
-                share -= 1
-                pool_used += 1
-            new_row: list[int] = []
+        for slot in order:
+            record, squad = rosters.teams[slot], squads[slot][:cap]
+            take = takes[slot][: len(squad)]
+            while len(take) < len(squad) and (spare or pool):
+                if spare:
+                    take.append(spare.pop(0))
+                else:
+                    take.append(pool.pop(0))
+                    pool_used += 1
             for player, idx in zip(squad, take, strict=False):
                 for t in tables.values():
                     RomWriter.set_player_names(t, idx, player.display_name, player.shirt_name)
                     self._write_look(t, idx, player, disc)
                     self._write_position(t, idx, player, national=True)
-                new_row.append(idx)
                 written += 1
-            leftovers = [idx for idx in exclusive if idx not in take] + kept
-            new_row += leftovers[: NATIONAL_SQUAD_SIZE - len(new_row)]
-            new_row += [0] * (NATIONAL_SQUAD_SIZE - len(new_row))
+            row = take + [0] * (NATIONAL_SQUAD_SIZE - len(take))
             for t in tables.values():
-                t.set_national_squad(row, new_row)
-            if len(take) < wanted:
+                t.set_national_squad(slot - NATIONAL_SLOT_BASE, row)
+            if len(take) < len(squad):
                 self.status(
-                    f"{record.name}: {wanted - len(take)} players left out, no free records"
+                    f"{record.name}: {len(squad) - len(take)} players left out, no free records"
                 )
+        if cap < max((len(squad) for squad in squads.values()), default=0):
+            self.status(
+                f"National squads cut to {cap} players: the disc has no more free records for them"
+            )
         return written, pool_used
 
     def _blank_unused(
@@ -996,25 +1118,26 @@ class PES2013PS2Patcher(Patcher):
         rosters: MappedRosters,
         slots: list[int],
         national_slots: list[int],
-    ) -> dict[int, tuple[str, str]]:
+    ) -> tuple[dict[int, tuple[str, str]], list[int]]:
         """Names to empty and crests to clear for the slots the mapping left
         out: clubs when the mapping has clubs, nationals when it has nationals.
-        Returns the empty names for the overlay writer."""
+        Returns the clubs' empty names for the overlay writer, and the national
+        slots to blank (`_national_rows`)."""
         names: dict[int, tuple[str, str]] = {}
+        blanks: list[int] = []
         if slots:
             unused = [slot for slot in range(CLUB_COUNT) if slot not in rosters.teams]
             names.update({slot: ("", "") for slot in unused})
             cleared = writer.blank_emblems(unused)
             self.status(f"Unused clubs blanked: {len(unused)} names, {cleared} crests")
         if national_slots:
-            unused = [
+            blanks = [
                 NATIONAL_SLOT_BASE + row
                 for row in range(NATIONAL_NAMED)
                 if NATIONAL_SLOT_BASE + row not in rosters.teams
             ]
-            names.update({slot: ("", "") for slot in unused})
-            self.status(f"Unused national teams blanked: {len(unused)} names")
-        return names
+            self.status(f"Unused national teams blanked: {len(blanks)} names")
+        return names, blanks
 
     def _write_logos(
         self,
@@ -1130,10 +1253,10 @@ class PES2013PS2Patcher(Patcher):
             self.status(f"League icon {icon}: {count} bundles" + (" (blank)" if not url else ""))
 
     @staticmethod
-    def _resolve_kits(rosters: MappedRosters, given: Any) -> dict[int, dict[int, Any]] | None:
+    def _resolve_kits(rosters: MappedRosters, given: Any) -> dict[int, dict[int, Any]]:
         """Every mapped team's kit choices, read and checked.
 
-        `given` is the `kits` patch option: False keeps the disc's kits (None);
+        `given` is the `kits` patch option: False keeps the disc's kits;
         anything else draws the record's default kits (the provider's two
         colours, plain) except where a dict `{slot: {"home": KIT, "away": KIT}}`
         names the slot. A KIT is a `KitSpec`, its dict or `{"image": png}`; a
@@ -1141,13 +1264,21 @@ class PES2013PS2Patcher(Patcher):
         fallback spec)` for `_write_kits`, anything else becomes `("spec",
         KitSpec, None)`. A choice that cannot be read is a `CapabilityError`
         naming the slot.
+
+        A nation wears its own kits whatever `given` says, unless the dict names
+        its slot: at home the disc's (`("retail", None, None)`, packaged, so an
+        earlier patch's are undone), in a row not its own its default ones, never
+        the row owner's.
         """
-        if given is False:
-            return None
         overrides = given if isinstance(given, dict) else {}
         resolved: dict[int, dict[int, Any]] = {}
         for slot, record in rosters.teams.items():
             chosen = overrides.get(slot) or overrides.get(str(slot)) or {}
+            if at_home(slot, record) and not chosen:
+                resolved[slot] = {HOME: ("retail", None, None)}
+                continue
+            if given is False and record.nation is None:
+                continue
             entry: dict[int, Any] = {}
             for which, side, default in (
                 (HOME, "home", record.kit_home),
@@ -1185,12 +1316,15 @@ class PES2013PS2Patcher(Patcher):
         picture for a team with a licensed kit is painted into that kit's
         package (`kit_textures`) and the record stays licensed; on a team
         without one it gives its colours and pattern instead. Clubs past the
-        last kit record (slots 130 and up) are skipped with a status line.
+        last kit record (slots 130 and up) are skipped with a status line. A
+        nation at home gets the disc's four kits back where they changed.
         """
         table = writer.reader.kits()
         licensed = kit_textures.licensed_slots(writer.reader)
         written = textures = 0
         for slot in slots:
+            if slot not in choices:
+                continue
             record = rosters.teams[slot]
             if slot >= NATIONAL_SLOT_BASE:
                 rows, row = table.nationals, slot - NATIONAL_SLOT_BASE
@@ -1200,7 +1334,13 @@ class PES2013PS2Patcher(Patcher):
                 self.status(f"{record.name}: slot {slot} has no kit record, kit kept")
                 continue
             kits = rows[row]
-            for which, (kind, value, fallback) in choices.get(slot, {}).items():
+            for which, (kind, value, fallback) in choices[slot].items():
+                if kind == "retail":
+                    disc = retail_national(row)
+                    if [k.build() for k in kits] != [k.build() for k in disc]:
+                        rows[row] = disc
+                        written += 1
+                    continue
                 spec = value
                 if kind == "texture":
                     if slot in licensed:

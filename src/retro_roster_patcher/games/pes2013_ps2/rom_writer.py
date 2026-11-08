@@ -9,6 +9,7 @@ overwritten where they sit, cut to the room each has before the next string.
 from __future__ import annotations
 
 import os
+import struct
 import unicodedata
 from collections.abc import Callable
 
@@ -47,6 +48,7 @@ from .models import (
     SKIN_BYTE,
     SPECIAL_HAIR_BIT,
     SPECIAL_HAIR_BYTE,
+    TEAM_ENTRY_SIZE,
     TEXT_AFS,
     TEXT_LANGUAGE_AFS,
     PESLook,
@@ -226,6 +228,25 @@ class RomWriter:
                 for slot, text in zip(slots, (name, code), strict=True):
                     f.seek(base + slot.offset)
                     f.write(shorten(text, slot.capacity - 1).ljust(slot.capacity, b"\0"))
+
+    def write_national_rows(
+        self, teams: OverlayTeams, rows: dict[int, tuple[int, int, int]]
+    ) -> None:
+        """Point national rows of one overlay at other strings, in place: row -> (name
+        offset, code offset, nationality), the offsets into the overlay (a `TeamString`'s),
+        the nationality the row's flag (both halves of the entry's third word)."""
+        base = self.reader.extent(OVER_AFS).offset + teams.entry.offset
+        with open(self.output_path, "r+b") as f:
+            for row, (name, code, nation) in rows.items():
+                f.seek(base + teams.table_offset + row * TEAM_ENTRY_SIZE)
+                f.write(
+                    struct.pack(
+                        "<III",
+                        teams.load_address + name,
+                        teams.load_address + code,
+                        nation * 0x10001,
+                    )
+                )
 
     # -- emblems -------------------------------------------------------------
 
