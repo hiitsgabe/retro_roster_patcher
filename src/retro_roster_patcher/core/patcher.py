@@ -44,6 +44,9 @@ class Patcher(ABC):
     platform: str = ""
     sport: str = ""
     requires_slot_mapping: bool = False
+    #: How many slots one league fills in slot order (`slot_order` first, then
+    #: by index); the app maps only that many teams. None: no limit known.
+    team_slots: int | None = None
     providers: tuple[str, ...] = ()
 
     #: `patch(kits=...)` is understood. Absent or True draws every mapped

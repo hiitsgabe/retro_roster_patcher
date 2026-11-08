@@ -151,6 +151,7 @@ class ISSDeluxePatcher(Patcher):
     supports_kits: bool = True
     #: `patch` draws each club's crest as its flag unless `logos=False`.
     supports_logos: bool = True
+    team_slots: int | None = len(R.TEAMS)
     #: `patch(blank_unused=True)` empties the nations no club replaced: their
     #: players' names, their names and their flags.
     supports_blank_unused: bool = True

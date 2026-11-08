@@ -91,6 +91,7 @@ class ISS2000Patcher(Patcher):
     """100 national-team slots of 22 players."""
 
     supports_logos: bool = True
+    team_slots: int | None = R.NATIONAL_TEAMS
     supports_blank_unused: bool = False
     supports_looks: bool = True
     #: `patch(kits=...)` as `Patcher` describes it, colours only: a kit's

@@ -110,6 +110,8 @@ class ISSPatcher(Patcher):
 
     #: `patch` draws each team's crest as its flag unless `logos=False`.
     supports_logos: bool = True
+    #: Slot 26, the Super Star team, is not on team select.
+    team_slots: int | None = TOTAL_TEAMS - 1
     #: `patch(blank_unused=True)` empties every slot the mapping leaves out: no
     #: team name on the selection screen, in its description or on the in-game
     #: tiles, a transparent flag and blank player names. Its kit, chest design

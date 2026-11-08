@@ -122,6 +122,7 @@ class WE2002Patcher(Patcher):
     #: must be able to ask before calling `patch`, and absent means "ships no
     #: translations".
     languages: tuple[str, ...] = tuple(LANGUAGE_CODES)
+    team_slots: int | None = MAX_NAT_SLOTS
     #: `patch` draws each team's logo into the flag slots unless `logos=False`.
     supports_logos: bool = True
     supports_looks: bool = True
