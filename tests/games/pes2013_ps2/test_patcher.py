@@ -720,6 +720,43 @@ def test_rows_short_of_copies_each_keep_their_first_places(tmp_path):
     assert tables.national_squad(1)[:3] == [38, 35, 0] and _name(tables, 38) == "PLAYER 4"
 
 
+def test_copies_go_to_the_row_with_the_fewest_players_left(tmp_path):
+    """Row 0 has one player of its own and shares 1-3 with club 0, row 1 has three and shares
+    4; with two records free (37, 38) both copies go to row 0, and the two rows end level."""
+    iso = tmp_path / "pes.iso"
+    entry = fixture.build_player_entry(nationals={0: [1, 2, 3, 34], 1: [4, 35, 36, 39]})
+    fixture.write_iso(iso, player_entry=entry)
+    patcher = PES2013PS2Patcher(tmp_path)
+    rosters = patcher.map_rosters(LEAGUE, [SlotMapping(slot_index=0, team_id=10)])
+    out = tmp_path / "out.iso"
+    patcher.patch(rom_path=iso, output_path=out, rosters=rosters, logos=False)
+    reader = RomReader(str(out))
+    reader.load()
+    tables = reader.player_tables(PLAYER_ENTRIES[0])
+    assert tables.national_squad(0)[:4] == [37, 38, 34, 0]
+    assert tables.national_squad(1)[:4] == [35, 36, 39, 0]
+
+
+def test_a_nation_left_out_for_want_of_records_still_reports_its_lost_places(tmp_path):
+    """Club 0's patch costs row 0 two shared places (one record free), and Nation Zero, 14
+    strong, is then too big for the four records left: the row is left as it is, and its
+    lost places are reported."""
+    names = [(f"PLAYER {i}", f"P{i}") for i in range(fixture.PLAYER_COUNT)]
+    names[38] = names[39] = ("", "")
+    iso = tmp_path / "pes.iso"
+    fixture.write_iso(iso, player_entry=fixture.build_player_entry(names=names))
+    statuses: list[str] = []
+    patcher = PES2013PS2Patcher(tmp_path, on_status=statuses.append)
+    clubs = patcher.map_rosters(LEAGUE, [SlotMapping(slot_index=0, team_id=10)])
+    data = LeagueData(league=NATIONS.league, teams=[_nation_of(300, "Nation Zero", "N00", 14)])
+    nations = patcher.map_rosters(data, [SlotMapping(slot_index=NATIONAL_SLOT_BASE, team_id=300)])
+    patcher.patch(
+        rom_path=iso, output_path=tmp_path / "out.iso", rosters=clubs.merge(nations), logos=False
+    )
+    assert any("left as the disc had them" in s for s in statuses), statuses
+    assert any("2 places of 1 national teams left empty" in s for s in statuses), statuses
+
+
 def test_places_a_row_written_anew_loses_are_not_reported(tmp_path):
     names = [(f"PLAYER {i}", f"P{i}") for i in range(fixture.PLAYER_COUNT)]
     names[38] = names[39] = ("", "")
@@ -728,12 +765,13 @@ def test_places_a_row_written_anew_loses_are_not_reported(tmp_path):
     statuses: list[str] = []
     patcher = PES2013PS2Patcher(tmp_path, on_status=statuses.append)
     clubs = patcher.map_rosters(LEAGUE, [SlotMapping(slot_index=0, team_id=10)])
-    nations = patcher.map_rosters(
-        NATIONS, [SlotMapping(slot_index=NATIONAL_SLOT_BASE, team_id=300)]
-    )
+    # Four players: the four records row 0 keeps take them all, nobody is cut or left out.
+    data = LeagueData(league=NATIONS.league, teams=[_nation_of(300, "Nation Zero", "N00", 4)])
+    nations = patcher.map_rosters(data, [SlotMapping(slot_index=NATIONAL_SLOT_BASE, team_id=300)])
     patcher.patch(
         rom_path=iso, output_path=tmp_path / "out.iso", rosters=clubs.merge(nations), logos=False
     )
+    assert not any("left as the disc had them" in s for s in statuses), statuses
     # Row 0 loses two shared places for want of free records, but the nation is written anew.
     assert not any("national" in s and ("empty" in s or "blanked" in s) for s in statuses)
     assert not any("fewer than 11" in s for s in statuses), statuses
@@ -1600,16 +1638,18 @@ def test_on_the_disc_a_premier_league_patch_leaves_every_nation_its_2012_players
 
 
 @pytest.mark.real_rom
-def test_on_the_disc_five_leagues_leave_every_national_row_an_eleven(disc):
-    """Clubs 0-97 (the five league groups) share 336 records with the national rows, and the
-    disc has 150 free: each row is copied enough to keep eleven players before any bench."""
+@pytest.mark.parametrize("clubs, smallest", [(40, 22), (60, 20), (98, 17), (130, 13)])
+def test_on_the_disc_the_copies_leave_the_national_rows_level(disc, clubs, smallest):
+    """Two to all six league groups share up to 480 records with the national rows, and the
+    disc has 150 free: each copy goes to the row with the fewest players left, so with every
+    club patched no row ends below 13 (with the five leagues, 0-97, below 17)."""
     reader = RomReader(str(disc))
     assert reader.load()
     tables = {index: reader.player_tables(index) for index in PLAYER_ENTRIES}
     originals = {index: t.players for index, t in tables.items()}
-    copied, short = PES2013PS2Patcher._unshare(tables, originals, list(range(98)))
+    copied, short = PES2013PS2Patcher._unshare(tables, originals, list(range(clubs)))
     assert copied == 150 and short
     for t in tables.values():
         sizes = [sum(1 for i in t.national_squad(r) if i) for r in range(67)]
-        assert min(sizes) >= 11, sizes
-    assert all(players >= 11 for _, players in short.values())
+        assert min(sizes) == smallest, sizes
+    assert min(players for _, players in short.values()) == smallest

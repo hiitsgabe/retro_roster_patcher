@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import heapq
 from collections import Counter
 from collections.abc import Callable
 from copy import deepcopy
@@ -997,7 +998,8 @@ class PES2013PS2Patcher(Patcher):
                 over = max(len(b) - writer.room(TEXT_AFS, index) for index, b in blocks.items())
                 self.status(f"{blanked} records no squad uses blanked to make room")
             if over <= 0:
-                self._report_short(writer, short, national_slots)
+                written_anew = [s for s in national_slots if s not in dropped]
+                self._report_short(writer, short, written_anew)
                 return written, blocks, dropped
             if pool_used:
                 limit = int(pool_used * 0.8)
@@ -1053,9 +1055,8 @@ class PES2013PS2Patcher(Patcher):
         the club's new player. So each such record's disc bytes (`originals`, every entry's
         player part before the patch) go to a free record (`PlayerTables.free_records`, at
         most `limit` of them) and every national row pointing at it points at the copy, on
-        the same place. The copies go first to what each row needs to keep eleven players,
-        then round the rows place by place (every row's first shared place, then every row's
-        second, ...), so when they run out no row is emptied before another keeps its bench.
+        the same place. Each copy goes to the row with the fewest players left, its shared
+        places in order, so when the free records run out the rows end as level as they can.
         A shared place left without a copy leaves its
         row, the places after it moving up with their shirt numbers. Rows sharing nothing
         are left as they are. Returns the records copied, and for each row that lost places
@@ -1067,24 +1068,21 @@ class PES2013PS2Patcher(Patcher):
         }
         rows = [r for r in range(NATIONAL_COUNT) if patched.intersection(primary.national_squad(r))]
         squads = {r: [i for i in primary.national_squad(r) if i in patched] for r in rows}
-        # Enough copies for every row to keep eleven players first, then the rest place by place.
-        own = {r: sum(1 for i in primary.national_squad(r) if i) - len(squads[r]) for r in rows}
-        need = {r: min(len(squads[r]), max(0, LINEUP_SIZE - own[r])) for r in rows}
-        shared = list(
-            dict.fromkeys(
-                [squads[r][k] for k in range(LINEUP_SIZE) for r in rows if k < need[r]]
-                + [
-                    squads[r][k]
-                    for k in range(NATIONAL_SQUAD_SIZE)
-                    for r in rows
-                    if k < len(squads[r])
-                ]
-            )
-        )
-        if not shared:
+        if not rows:
             return 0, {}
-        pool = primary.free_records()
-        copies = dict(zip(shared, pool[:limit] if limit is not None else pool, strict=False))
+        # Water-filling: each free record copies a shared place of the row with the fewest
+        # players left (ties by row), its places in order, so the rows end as level as can be.
+        left = [(sum(1 for i in primary.national_squad(r) if i) - len(squads[r]), r) for r in rows]
+        heapq.heapify(left)
+        pool = primary.free_records()[:limit]
+        copies: dict[int, int] = {}
+        while left and pool:
+            players, row = heapq.heappop(left)
+            record = squads[row].pop(0)
+            if record not in copies:  # a record two rows share is copied once
+                copies[record] = pool.pop(0)
+            if squads[row]:
+                heapq.heappush(left, (players + 1, row))
         short: dict[int, tuple[int, int]] = {}
         for index, t in tables.items():
             for old, new in copies.items():
