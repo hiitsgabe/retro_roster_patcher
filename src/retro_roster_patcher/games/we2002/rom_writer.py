@@ -2667,6 +2667,17 @@ class RomWriter:
             self._pending_tex_patches.append((nat_index, team))
         return min(len(players), _PLAYERS_PER_NAT) if players is not None else 0
 
+    def write_nat_names(self, nat_index: int, team: WETeamRecord) -> None:
+        """Write only national slot `nat_index`'s names and abbreviations (`team.name`,
+        `team.short_name`): nothing of its squad, flag or kits."""
+        if not os.path.exists(self.output_path) or not 0 <= nat_index < _SQUADRE_NAZ:
+            return
+        with open(self.output_path, "r+b") as f:
+            self._write_nat_team_names(f, nat_index, team)
+            self._write_nat_kanji_name(f, nat_index, team)
+            self._write_nat_abbreviations(f, nat_index, team)
+            _sync(f)
+
     def _write_nat_team_names(self, f, nat_index: int, team: WETeamRecord):
         name = team.name
 

@@ -45,11 +45,13 @@ ALIASES = {
     "Korea": "South Korea",
 }
 #: National slots without a colour entry the writer knows: a flag moved there would
-#: draw through the slot's own colours, so the fill leaves them alone.
+#: draw through the slot's own colours, so they are home-only (`HOME_ONLY`).
 NO_COLOURS = tuple(n for n in range(len(NAMES)) if n not in _NAT_COLOR_OFFSETS)
 #: The slots only their own nation may take: those without a colour entry, and 35, whose
 #: entry is Master League club 5's too (`_ML_COLOR_OFFSETS[5]`), the club a league puts there.
 HOME_ONLY = sorted({35, *NO_COLOURS})
+#: The home-only nations' FIFA codes, for a name the grid's 5 characters cannot hold.
+HOME_CODES = {35: "RSA", 36: "SEN", 39: "CRC", 47: "ECU"}
 
 
 @dataclass(frozen=True)

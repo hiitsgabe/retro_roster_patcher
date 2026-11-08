@@ -85,6 +85,13 @@ MAX_NAT_SLOTS = 63
 NATIONAL_ALIASES = nations.ALIASES
 
 
+def _grid_name(name: str, code: str, slot: int) -> str:
+    """A nation's name for national slot `slot`: the grid shows `_LUN_NOMIK - 1` characters,
+    so a longer name is its FIFA code."""
+    name = to_ascii(name)
+    return name if len(name) < _LUN_NOMIK[slot] or not code else code
+
+
 def _parse_hex_colour(value: str) -> tuple[int, int, int] | None:
     """Read a `RRGGBB` or `#RRGGBB` provider colour, or `None` if it is neither.
 
@@ -378,11 +385,8 @@ class WE2002Patcher(Patcher):
             if national:
                 record.national = True
                 record.nation = cartridge_slot(nations.NAMES, NATIONAL_ALIASES, roster.team)
-                # The grid shows `_LUN_NOMIK - 1` characters: a longer name is the FIFA code.
-                name = to_ascii(roster.team.name)
                 code = roster.team.code.upper()
-                fits = len(name) < _LUN_NOMIK[entry.slot_index] or not code
-                record.name = name if fits else code
+                record.name = _grid_name(roster.team.name, code, entry.slot_index)
                 record.short_name = code or record.short_name
             teams[entry.slot_index] = record
         return MappedRosters(game_id=self.game_id, teams=teams)
@@ -507,6 +511,15 @@ class WE2002Patcher(Patcher):
                 # in-range slot has changed the ROM even with an empty squad.
                 teams_patched += 1
                 players_patched += written
+
+            # The translation labels some slots with other nations (35 "Alger", 39 "Venez"):
+            # with nations in, a home-only slot left as it is shows its own nation's name.
+            if any(rosters.teams[s].national for s in slots):
+                for slot in nations.HOME_ONLY:
+                    if slot not in rosters.teams:
+                        code = nations.HOME_CODES[slot]
+                        name = _grid_name(nations.NAMES[slot], code, slot)
+                        writer.write_nat_names(slot, WETeamRecord(name=name, short_name=code))
 
             if blank_unused:
                 logos_queued += self._blank_unused(rosters, writer, used_styles)

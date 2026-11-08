@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import io
 import os
+import unicodedata
 from pathlib import Path
 
 import pytest
@@ -130,6 +131,9 @@ def _recording_writer(calls):
             calls.append(("nat", slot, include_flag, kits))
             calls.append(("record", slot, team))
             return len(players or [])
+
+        def write_nat_names(self, slot, team):
+            calls.append(("names", slot, team.name))
 
         def flush_tex_patches(self):
             pass
@@ -416,3 +420,60 @@ def test_patch_forces_a_nation_s_kit_and_leaves_an_untouched_home_one(tmp_path, 
     )
     kits = {c[1]: c[3] for c in calls if c[0] == "nat"}
     assert kits == {0: None, 20: True, 22: False}
+
+
+def _grid_name(image, slot):
+    """The name the exhibition grid shows for national slot `slot` (its kanji table entry)."""
+    raw = _read(image, W._nat_kanji_chunks(slot))
+    text = ""
+    for i in range(0, len(raw), 2):
+        if raw[i : i + 2] == b"\0\0":
+            break
+        text += raw[i : i + 2].decode("shift_jis", "replace")
+    return unicodedata.normalize("NFKC", text)
+
+
+@pytest.mark.real_rom
+def test_after_the_fill_no_leftover_slot_shows_the_name_of_a_nation_placed_elsewhere(tmp_path):
+    """The translation the patch applies labels slot 35 (South Africa) "Alger" and 39 (Costa
+    Rica) "Venez": with today's Algeria in 52 the grid showed two Algerias. A home-only slot
+    the fill leaves untouched gets its own nation's name (or FIFA code) back."""
+    disc = _disc()
+    patcher = WE2002Patcher(cache_dir=tmp_path / "cache")
+    placed = {52: _nation(52, "Algeria", "ALG"), 36: _nation(36, "Senegal", "SEN")}
+    for slot in range(20, 54):
+        if slot not in placed and slot not in nations.HOME_ONLY:
+            placed[slot] = _nation(100 + slot, f"Zz{slot}", f"Z{slot}")
+    mapped = patcher.map_rosters(
+        _nations(*placed.values()),
+        [SlotMapping(slot, roster.team.id, "") for slot, roster in placed.items()],
+    )
+    out = tmp_path / "out.bin"
+    patcher.patch(
+        rom_path=disc, output_path=out, rosters=mapped, kits=False, logos=False, looks=False
+    )
+    names = {slot: _grid_name(out, slot) for slot in range(54)}
+    assert (names[35], names[39]) == ("RSA", "CRC")
+    for slot in set(range(54)) - set(placed):
+        label = names[slot].lower()
+        for roster in placed.values():
+            nation = roster.team.name.lower()
+            assert not (
+                len(label) >= 3 and (nation.startswith(label) or label.startswith(nation))
+            ), (slot, names[slot], roster.team.name)
+
+
+def test_without_nations_no_home_only_slot_is_renamed(tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr(patcher_module, "RomWriter", _recording_writer(calls))
+    monkeypatch.setattr(patcher_module, "apply_ppf", lambda *args, **kwargs: "")
+    club = WETeamRecord(name="Club", short_name="CLB", players=[WEPlayerRecord("A", "B", 2, 1)])
+    WE2002Patcher(cache_dir=tmp_path / "cache").patch(
+        rom_path=_sparse_rom(tmp_path),
+        output_path=tmp_path / "out.bin",
+        rosters=MappedRosters(game_id="we2002", teams={0: club}),
+        kits=False,
+        logos=False,
+        looks=False,
+    )
+    assert not [c for c in calls if c[0] == "names"]
