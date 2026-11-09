@@ -477,6 +477,33 @@ def bigf_replace_inplace(archive: bytearray, filename: str, new_data: bytes) -> 
     return True
 
 
+def bigf_alias(archive: bytearray, targets: Mapping[str, str]) -> int:
+    """Point each `{name: target}` file's directory entry at the target's
+    bytes, in place: the game then reads the target's data under the name.
+    Nothing moves and the name's old bytes stay, unread. Returns how many
+    entries changed; a name or target the archive lacks is skipped.
+
+    Raises:
+        EaTdbError: `archive` is not a BIGF.
+    """
+    if len(archive) < 16 or archive[:4] != b"BIGF":
+        raise EaTdbError("Not a BIGF archive")
+    where: dict[str, int] = {}
+    pos = 16
+    for _ in range(struct.unpack_from(">I", archive, 8)[0]):
+        end = archive.find(0, pos + 8)
+        if end < 0:
+            break
+        where[archive[pos + 8 : end].decode("ascii", "replace")] = pos
+        pos = end + 1
+    changed = 0
+    for name, target in targets.items():
+        if name in where and target in where:
+            archive[where[name] : where[name] + 8] = archive[where[target] : where[target] + 8]
+            changed += 1
+    return changed
+
+
 def bigf_build(entries: list[BigfEntry], file_contents: dict[str, bytes]) -> bytes:
     """Assemble a BIGF from a directory and a name-to-bytes mapping.
 

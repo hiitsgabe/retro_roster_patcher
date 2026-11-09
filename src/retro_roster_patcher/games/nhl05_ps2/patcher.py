@@ -63,7 +63,9 @@ from ...sports.espn import EspnClient
 from ...sports.models import League, LeagueData, Player, TeamRoster
 from ...sports.nhl import NhlApiClient, current_season
 from ..nhl07_psp.rom_writer import iso_entry, write_in_place
-from . import faces, logos, looks, portraits, saves, screens, teams, wordmarks
+from ..nhl94_snes.identity import club_code
+from ..nhl94_snes.identity import logo_url as club_logo_url
+from . import faces, ice, jerseys, logos, looks, portraits, saves, screens, teams, wordmarks
 from .models import (
     ALL_STAR_SLOTS,
     NAMED_SLOT_COUNT,
@@ -614,6 +616,8 @@ class NHL05PS2Patcher(Patcher):
             renamed = teams.rename_tables(tables.tdb, rosters.teams)
             for rename in renamed:
                 self.status(f"Club renamed: {rename.old.full} is now {rename.new.full}")
+            if options.get("jerseys", True):
+                jerseys.limit(tables.tdb, [r.slot for r in renamed])
 
             self.status("Rebuilding DB.VIV...")
             writer.rebuild_and_write(
@@ -624,10 +628,16 @@ class NHL05PS2Patcher(Patcher):
                 self._write_portraits(writer, master_tdb)
             if options.get("looks", True):
                 self._write_faces(writer, master_tdb)
+            crests: dict[int, bytes] = {}
             if options.get("logos", True):
-                self._write_logos(writer, rosters)
+                crests = self._write_logos(writer, rosters)
             if renamed:
                 self._write_names(writer, renamed)
+            relocated = [r.slot for r in renamed if r.slot in teams.RELOCATED]
+            if crests and relocated:
+                self._write_ice(writer, ice.logo_ids(master_tdb, relocated), crests)
+            if options.get("jerseys", True) and renamed:
+                self._write_jerseys(writer, [r.slot for r in renamed], crests)
             if pictures:
                 self._write_images(writer, pictures)
             self._own_save_folder(writer)
@@ -877,23 +887,32 @@ class NHL05PS2Patcher(Patcher):
         for name in skipped:
             self.status(f"Screen image {name} skipped: it does not fit every copy's slot")
 
-    def _write_logos(self, writer: NHL05PS2RomWriter, rosters: MappedRosters) -> None:
-        """Each patched club's current crest over its front-end logos (`logos`).
-        Nothing is fetched for a disc without the archive or a provider
-        without crests (the NHL API gives none)."""
+    def _crest_urls(self, rosters: MappedRosters) -> dict[int, str]:
+        """Each patched slot's crest URL. The NHL API sends none, so on it
+        each club takes ESPN's crest for its code."""
+        urls: dict[int, str] = {}
+        for team in self.api.get_nhl_teams():
+            slot = self.mapper.get_team_slot(team.code)
+            url = team.logo_url
+            if not url and self.provider == "nhl":
+                url = club_logo_url(club_code(team.code) or team.code)
+            if slot is not None and slot in rosters.teams and url:
+                urls[slot] = url
+        return urls
+
+    def _write_logos(self, writer: NHL05PS2RomWriter, rosters: MappedRosters) -> dict[int, bytes]:
+        """Each patched club's current crest over its front-end logos (`logos`),
+        returning the crests by slot. Nothing is fetched for a disc without
+        the archive."""
         with open(writer.output_path, "r+b") as f:
             found = iso_entry(f, logos.ARCHIVE)
             if found is None:
-                return
+                return {}
             entry = found[0]
-            urls: dict[int, str] = {}
-            for team in self.api.get_nhl_teams():
-                slot = self.mapper.get_team_slot(team.code)
-                if slot is not None and slot in rosters.teams and team.logo_url:
-                    urls[slot] = team.logo_url
+            urls = self._crest_urls(rosters)
             if not urls:
                 self.status("Team logos skipped: the provider has no crests")
-                return
+                return {}
             pngs = parallel_map(
                 lambda url: crest_png(None, None, url, self._transport), list(urls.values())
             )
@@ -903,6 +922,41 @@ class NHL05PS2Patcher(Patcher):
             f.seek(entry.extent.offset)
             f.write(edited)
         self.status(f"Team logos drawn: {len(drawn)} of {len(crests)} clubs")
+        return crests
+
+    def _write_ice(
+        self, writer: NHL05PS2RomWriter, logo_ids: Mapping[int, int], crests: Mapping[int, bytes]
+    ) -> None:
+        """Each relocated club's crest at centre ice (`ice`), in place."""
+        wanted = {logo: crests[slot] for slot, logo in logo_ids.items() if slot in crests}
+        with open(writer.output_path, "r+b") as f:
+            found = iso_entry(f, ice.ARCHIVE)
+            if found is None or not wanted:
+                return
+            f.seek(found[0].extent.offset)
+            edited, drawn = ice.redraw(f.read(found[0].extent.size), wanted)
+            f.seek(found[0].extent.offset)
+            f.write(edited)
+        self.status(f"Centre ice redrawn: {len(drawn)} of {len(wanted)}")
+
+    def _write_jerseys(
+        self, writer: NHL05PS2RomWriter, renamed: list[int], crests: Mapping[int, bytes]
+    ) -> None:
+        """The renamed clubs' jerseys and menu pictures (`jerseys`), in place."""
+        with open(writer.output_path, "r+b") as f:
+            uniforms, pictures = iso_entry(f, jerseys.ARCHIVE), iso_entry(f, jerseys.PICTURES)
+            if uniforms is None or pictures is None:
+                return
+            before = []
+            for entry, _ in (uniforms, pictures):
+                f.seek(entry.extent.offset)
+                before.append(f.read(entry.extent.size))
+            *after, changed, drawn = jerseys.dress(before[0], before[1], renamed, crests)
+            for (entry, _), old, new in zip((uniforms, pictures), before, after, strict=True):
+                if new != old:
+                    f.seek(entry.extent.offset)
+                    f.write(new)
+        self.status(f"Jerseys redressed: {changed}, menu pictures {drawn}")
 
     def _write_names(self, writer: NHL05PS2RomWriter, renamed: list[teams.Rename]) -> None:
         """The renamed clubs' names in the front end's strings and their

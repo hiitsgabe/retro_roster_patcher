@@ -44,7 +44,7 @@ def packed_shape(width: int, height: int, kind: int = ssh.PACKED) -> bytes:
     head = bytearray(0x20)
     head[:4] = ssh.MAGIC
     struct.pack_into(">I", head, 0x10, 0x20)
-    size = width * height * (5 if kind == ssh.PACKED else 3) // 8
+    size = ssh._data_size(kind, width, height)
     pixels = bytearray(0x20)
     pixels[0] = kind
     struct.pack_into("<I", pixels, 4, 0x20 + size)
@@ -114,3 +114,29 @@ def test_a_tightly_packed_picture_round_trips_in_runs_of_four_shades():
     indices, _, _ = ssh.indices(data)
     for group in ssh._groups(128, 128, ssh.PACKINGS[ssh.PACKED_TIGHT]):
         assert len(group) == 8 and len({indices[i] >> 2 for i in group}) == 1
+
+
+@pytest.mark.parametrize("kind", [ssh.PACKED_FINE, ssh.PACKED_SQUARE])
+def test_the_jersey_and_ice_packings_round_trip(kind):
+    # The front end's jerseys (two pixels to an index) and the centre ice (a
+    # 2x2 square): two low bits each, so the palette is 64 runs of four shades.
+    picture = PIL.new("RGBA", (64, 64))
+    picture.putdata(
+        [((x * 4) % 256, (y * 4) % 256, 200 - x - y, 255) for y in range(64) for x in range(64)]
+    )
+    empty = packed_shape(64, 64, kind)
+    data = ssh.encode(empty, picture)
+    assert len(data) == len(empty)
+    out = ssh.decode(data)
+    error = sum(
+        abs(a - b)
+        for y in range(64)
+        for x in range(64)
+        for a, b in zip(out.getpixel((x, y))[:3], picture.getpixel((x, y))[:3], strict=True)
+    ) / (64 * 64 * 3)
+    assert error < 8
+    packing = ssh.PACKINGS[kind]
+    indices, _, _ = ssh.indices(data)
+    for group in ssh._groups(64, 64, packing):
+        assert len(group) == packing.shares
+        assert len({indices[i] >> 2 for i in group}) == 1

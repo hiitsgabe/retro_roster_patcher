@@ -119,3 +119,31 @@ def test_every_patched_slot_names_a_file():
     assert len(logos.SLOT_FILES) == 32 and len(set(logos.SLOT_FILES)) == 32
     assert logos.SLOT_FILES[30:] == ("EAS", "WES")
     assert ssh.dimensions(packed_shape(256, 128)) == (256, 128)
+
+
+def test_on_the_nhl_api_each_club_takes_espns_crest_for_its_code(tmp_path):
+    # The NHL API sends no crest URL, so the menus kept the 2004 logos.
+    from retro_roster_patcher.sports.models import Team
+    from tests.games.nhl05_ps2.test_patcher import FakeApi, build, league
+
+    teams = [
+        Team(id=1, name="Anaheim Ducks", code="ANA", logo_url=""),
+        Team(id=2, name="Utah Mammoth", code="UTA", logo_url=""),
+        Team(id=3, name="Los Angeles Kings", code="LAK", logo_url=""),
+    ]
+    patcher = build(tmp_path, FakeApi(teams=teams), provider="nhl")
+    urls = patcher._crest_urls(patcher.map_rosters(league(teams)))
+    espn = "https://a.espncdn.com/i/teamlogos/nhl/500/"
+    assert urls == {0: f"{espn}ana.png", 22: f"{espn}uta.png", 13: f"{espn}la.png"}
+
+
+def test_espns_own_crest_urls_are_kept(tmp_path):
+    from retro_roster_patcher.sports.models import Team
+    from tests.games.nhl05_ps2.test_patcher import FakeApi, build, league
+
+    teams = [
+        Team(id=1, name="Anaheim Ducks", code="ANA", logo_url="https://x/ana.png"),
+        Team(id=2, name="Boston Bruins", code="BOS", logo_url=""),
+    ]
+    patcher = build(tmp_path, FakeApi(teams=teams))
+    assert patcher._crest_urls(patcher.map_rosters(league(teams))) == {0: "https://x/ana.png"}

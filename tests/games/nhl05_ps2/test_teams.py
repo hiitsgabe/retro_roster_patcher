@@ -57,6 +57,7 @@ ENTRIES = [
     (5, "Phoenix"),
     (6, "Boston Bruins®"),
     (7, "Atlanta is lovely in spring"),
+    (8, "PHO"),
 ] + [(100 + i, f"filler string number {i} with words") for i in range(60)]
 
 
@@ -76,7 +77,7 @@ def test_the_patched_disc_names_the_jets_in_its_team_table(tmp_path):
 def test_strings_that_spell_an_old_name_change_and_the_rest_stay():
     archive = local_viv(ENTRIES, padding=64)
     edited, changed, skipped = teams.rename_strings(archive, jets_and_mammoth())
-    assert (changed, skipped) == (10, []) and len(edited) == len(archive)
+    assert (changed, skipped) == (12, []) and len(edited) == len(archive)
     for member in bigf_parse(edited):
         if not member.name.endswith(".bin"):
             continue
@@ -86,7 +87,7 @@ def test_strings_that_spell_an_old_name_change_and_the_rest_stay():
                 refpack_decompress(edited[member.offset : member.offset + member.size])
             )
         ]
-        assert texts[:7] == [
+        assert texts[:8] == [
             "Winnipeg Jets",
             "Winnipeg",
             "Jets",
@@ -94,8 +95,9 @@ def test_strings_that_spell_an_old_name_change_and_the_rest_stay():
             "Utah",
             "Boston Bruins®",
             "Atlanta is lovely in spring",
+            "UTA",  # the front end's own spelling of Phoenix, not STEA's PHX
         ]
-        assert texts[7:] == [t for _, t in ENTRIES[7:]]
+        assert texts[8:] == [t for _, t in ENTRIES[8:]]
 
 
 def test_a_table_that_no_longer_fits_its_member_is_left_alone():
@@ -151,9 +153,11 @@ def _table(name, fields, size, rows):
     return TableSpec(name, fields, size, len(rows), len(rows), data)
 
 
-def test_seattle_and_vegas_take_the_all_star_sides_names_and_leave_the_arenas():
+def test_seattle_and_vegas_take_the_all_star_sides_names_and_the_all_star_ice():
     # All four All-Star sides play at the All-Star game's arena, SARE 30, and
-    # SARE 31 is Austria's: a side's slot is not its arena's.
+    # SARE 31 is Austria's: a side's slot is not its arena's. The arena keeps
+    # its name and takes the All-Star game's centre ice for the Thrashers',
+    # which becomes the Jets'.
     stea = [
         FieldSpec("INDX", TYPE_UINT, 0, 8),
         FieldSpec("FNME", TYPE_STRING, 8, 248),
@@ -164,10 +168,11 @@ def test_seattle_and_vegas_take_the_all_star_sides_names_and_leave_the_arenas():
         FieldSpec("INDX", TYPE_UINT, 0, 8),
         FieldSpec("NAME", TYPE_STRING, 8, 280),
         FieldSpec("CITY", TYPE_STRING, 288, 256),
+        FieldSpec("LOGO", TYPE_UINT, 544, 8),
     ]
     arenas = [
-        {"INDX": 30, "NAME": "Philips Arena", "CITY": "Atlanta, GA"},
-        {"INDX": 31, "NAME": "EA SPORTS Arena", "CITY": "Austria"},
+        {"INDX": 30, "NAME": "Philips Arena", "CITY": "Atlanta, GA", "LOGO": 1},
+        {"INDX": 31, "NAME": "EA SPORTS Arena", "CITY": "Austria", "LOGO": 34},
     ]
     tdb = TDBFile.parse(
         build_tdb(
@@ -181,7 +186,7 @@ def test_seattle_and_vegas_take_the_all_star_sides_names_and_leave_the_arenas():
                         {"INDX": 31, "FNME": "Western All-Stars", "SNME": "Western", "ABBR": "WES"},
                     ],
                 ),
-                _table("SARE", sare, 68, arenas),
+                _table("SARE", sare, 69, arenas),
             ]
         )
     )
@@ -192,7 +197,10 @@ def test_seattle_and_vegas_take_the_all_star_sides_names_and_leave_the_arenas():
         ("Seattle Kraken", "Seattle", "EAS"),
         ("Vegas Golden Knights", "Vegas", "WES"),
     ]
-    assert [tdb.get_table("SARE").read_record(i) for i in range(2)] == arenas
+    assert [tdb.get_table("SARE").read_record(i) for i in range(2)] == [
+        {**arenas[0], "LOGO": teams.ALL_STAR_ARENA},
+        arenas[1],
+    ]
 
 
 def wordmark_member(name: str, glyph_widths, joined_first=False) -> bytes:
@@ -242,3 +250,30 @@ def test_a_wordmark_is_centred_and_a_missing_capital_is_grown_from_the_small_one
     box = picture.getchannel("A").point(lambda v: 255 if v >= 128 else 0).getbbox()
     assert abs((box[0] + box[2]) - 256) <= 3 and box[1] == 3
     assert wordmarks.render("Utah", atlas) is None
+
+
+def test_the_game_finds_utahs_abbreviation_under_steas_spelling():
+    # The game looks a club's abbreviation up as TEAM_ABBR_<STEA ABBR>; the
+    # disc spells Phoenix's PHO, so without TEAM_ABBR_PHX it showed "PHX".
+    from retro_roster_patcher.games.nhl07_psp.strings import ea_hash
+
+    front = [
+        (ea_hash("TEAM_ABBR_ANA"), "ANA"),
+        (ea_hash("TEAM_ABBR_ATL"), "ATL"),
+        (ea_hash("TEAM_ABBR_PHO"), "PHO"),
+    ] + [(100 + i, f"filler string number {i} with words") for i in range(60)]
+    members = {
+        "frontEnglish.bin": refpack_compress(build_table(front)) + bytes(64),
+        "gameEnglish.bin": refpack_compress(build_table(ENTRIES)) + bytes(64),
+    }
+    archive = bigf_build([BigfEntry(n, 0, 0) for n in members], members)
+    edited, _, skipped = teams.rename_strings(archive, jets_and_mammoth())
+    assert skipped == []
+    tables = {
+        m.name: dict(parse_table(refpack_decompress(edited[m.offset : m.offset + m.size])))
+        for m in bigf_parse(edited)
+    }
+    assert tables["frontEnglish.bin"][ea_hash("TEAM_ABBR_PHX")] == "UTA"
+    assert tables["frontEnglish.bin"][ea_hash("TEAM_ABBR_PHO")] == "UTA"
+    assert tables["frontEnglish.bin"][ea_hash("TEAM_ABBR_ATL")] == "WPG"
+    assert ea_hash("TEAM_ABBR_PHX") not in tables["gameEnglish.bin"]

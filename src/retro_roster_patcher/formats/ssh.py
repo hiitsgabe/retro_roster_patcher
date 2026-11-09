@@ -8,7 +8,9 @@ the words at +0x18 and +0x1C its width and height.
 
     0x02  8-bit indexed pixels, row by row (the portraits, the boot screen)
     0x08  8-bit indexed pixels packed for the GS (the menu and title pictures)
-    0x0e  the same, packed tighter (the faces, skates and gear in the game)
+    0x0c  the same, two low bits per pixel (the front end's jersey pictures)
+    0x0d  the same, four pixels to an index (the centre ice, the arenas)
+    0x0e  the same, packed tighter (the faces, jerseys, skates and gear)
     0x21  the palette: 256 RGBA entries, alpha 0-0x80 (0x80 opaque), in the
           GS's CSM1 order (within every 32, entries 8-15 and 16-23 swapped)
 
@@ -37,6 +39,8 @@ if TYPE_CHECKING:
 MAGIC = b"ShpS"
 PIXELS = 0x02
 PACKED = 0x08
+PACKED_FINE = 0x0C
+PACKED_SQUARE = 0x0D
 PACKED_TIGHT = 0x0E
 PALETTE = 0x21
 OPAQUE = 0x80
@@ -60,8 +64,14 @@ class Packing(NamedTuple):
 
 
 #: `PACKED` keeps 7 bits of every two vertically adjacent pixels and one bit
-#: each; `PACKED_TIGHT` keeps 6 bits of eight pixels and two bits each.
-PACKINGS = {PACKED: Packing(1, 2, "CT16", "T4", 1), PACKED_TIGHT: Packing(4, 2, "CT32", "T8", 2)}
+#: each; `PACKED_FINE` 6 bits of two and two bits each, `PACKED_SQUARE` 6 bits
+#: of four (2x2) and `PACKED_TIGHT` 6 bits of eight (4x2), two bits each.
+PACKINGS = {
+    PACKED: Packing(1, 2, "CT16", "T4", 1),
+    PACKED_FINE: Packing(1, 2, "CT32", "T8", 2),
+    PACKED_SQUARE: Packing(2, 2, "CT32", "T8", 2),
+    PACKED_TIGHT: Packing(4, 2, "CT32", "T8", 2),
+}
 
 
 class SshError(RomError):

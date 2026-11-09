@@ -3,7 +3,9 @@ Thrashers become the Winnipeg Jets, the Coyotes the Utah Mammoth, and the East
 and West All-Star sides Seattle and Vegas.
 
 What is NHL 2005's own: where its strings live (`FE/LOCAL.VIV`, five languages,
-rewritten in place) and its All-Star sides' string ids. The wordmark of
+rewritten in place), its All-Star sides' string ids, the front end's spelling
+of abbreviations (`PHO` for STEA's `PHX`, with `TEAM_ABBR_PHX` added so the
+scoreboard finds Utah's) and the All-Star arena's centre ice. The wordmark of
 `FE/TLOGOAPT.VIV` is `wordmarks`'.
 """
 
@@ -18,12 +20,16 @@ from ...core.nhl_clubs import (
     Identity,
     Rename,
     plain,
-    rename_tables,
 )
 from ...core.nhl_clubs import rename_strings as _rename_strings
+from ...core.nhl_clubs import rename_tables as _rename_tables
+from ...formats.ea_tdb import TDBFile
+from .logos import SLOT_FILES
 
 __all__ = [
+    "ABBREVIATION",
     "ALL_STARS",
+    "ALL_STAR_ARENA",
     "ALL_STAR_STRINGS",
     "LOCAL_ARCHIVE",
     "MARKS",
@@ -36,6 +42,13 @@ __all__ = [
 ]
 
 LOCAL_ARCHIVE = "FE/LOCAL.VIV"
+#: The front end's strings of club abbreviations: `TEAM_ABBR_<abbreviation>`
+#: (`ea_hash`), the game looking a club's up by its STEA `ABBR`.
+ABBREVIATION = "TEAM_ABBR_"
+#: The All-Star game's arena (SARE), where all four sides play. Its centre
+#: ice is the Thrashers' (`LOGO` 1), which becomes the Jets'; Seattle and
+#: Vegas play on the 2005 All-Star game's own (`ICE_030`) instead.
+ALL_STAR_ARENA = 30
 
 #: The All-Star sides' names in `front<language>.bin`, by string id and the part
 #: of the name each holds: the full name, the abbreviation, the city in three
@@ -65,6 +78,20 @@ ALL_STAR_STRINGS: Mapping[int, Mapping[int, str]] = {
 }
 
 
+def rename_tables(tdb: TDBFile, slots: Iterable[int]) -> list[Rename]:
+    """`core.nhl_clubs.rename_tables`, and the All-Star arena on the All-Star
+    game's centre ice once the sides are Seattle and Vegas."""
+    renames = _rename_tables(tdb, slots)
+    sare = tdb.get_table("SARE")
+    if sare is not None and any(r.slot in ALL_STARS for r in renames):
+        for i in range(min(sare.num_records, sare.capacity)):
+            if sare.read_record(i).get("INDX") == ALL_STAR_ARENA:
+                sare.write_record(i, {"LOGO": ALL_STAR_ARENA})
+    return renames
+
+
 def rename_strings(archive: bytes, renames: Iterable[Rename]) -> tuple[bytes, int, list[str]]:
-    """`FE/LOCAL.VIV` renamed in place; see `core.nhl_clubs.rename_strings`."""
-    return _rename_strings(archive, renames, ALL_STAR_STRINGS)
+    """`FE/LOCAL.VIV` renamed in place; see `core.nhl_clubs.rename_strings`.
+    The front end spells abbreviations as `FE/TLOGOAPT.VIV`'s files do."""
+    spellings = dict(enumerate(SLOT_FILES))
+    return _rename_strings(archive, renames, ALL_STAR_STRINGS, spellings, ABBREVIATION)

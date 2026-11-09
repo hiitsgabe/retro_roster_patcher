@@ -26,7 +26,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 
-from ..formats.ea_strings import StringTableError, build_table, parse_table
+from ..formats.ea_strings import StringTableError, build_table, ea_hash, parse_table
 from ..formats.ea_tdb import TDBFile, bigf_parse, refpack_compress, refpack_decompress
 
 #: Trademark marks the disc appends to names, dropped before comparing.
@@ -110,7 +110,7 @@ def rename_tables(tdb: TDBFile, slots: Iterable[int]) -> list[Rename]:
     return renames
 
 
-def _replacements(renames: Iterable[Rename]) -> dict[str, str]:
+def _replacements(renames: Iterable[Rename], spellings: Mapping[int, str]) -> dict[str, str]:
     out = {}
     for r in renames:
         for old, new in (
@@ -120,18 +120,31 @@ def _replacements(renames: Iterable[Rename]) -> dict[str, str]:
         ):
             if old:
                 out[old] = new
-        if len(r.old.abbr) >= 2:
-            out[r.old.abbr] = r.new.abbr
+        for abbr in (r.old.abbr, spellings.get(r.slot, "")):
+            if len(abbr) >= 2:
+                out[abbr] = r.new.abbr
     return out
 
 
 def rename_entries(
-    entries: list[tuple[int, str]], renames: Iterable[Rename], all_star_strings: AllStarStrings
+    entries: list[tuple[int, str]],
+    renames: Iterable[Rename],
+    all_star_strings: AllStarStrings,
+    spellings: Mapping[int, str] | None = None,
+    abbreviation_key: str = "",
 ) -> int:
     """Change, in one parsed string table, every entry that spells an old name
-    (or holds an All-Star side's, by `all_star_strings`) to the new; how many."""
+    (or holds an All-Star side's, by `all_star_strings`) to the new; how many.
+
+    `spellings` gives, by slot, the abbreviation the front end spells its own
+    way (NHL 2005's `PHO` for STEA's `PHX`). The game shows a club's
+    abbreviation from the string `<abbreviation_key><STEA ABBR>` and, without
+    one, STEA's own: a table holding the front end's spelling's string then
+    gets one under STEA's for a relocated club."""
     renames = list(renames)
-    wanted = _replacements(r for r in renames if r.slot in RELOCATED)
+    spellings = spellings or {}
+    relocated = [r for r in renames if r.slot in RELOCATED]
+    wanted = _replacements(relocated, spellings)
     by_id = {
         string: getattr(r.new, part)
         for r in renames
@@ -143,11 +156,24 @@ def rename_entries(
         if new is not None and new != text:
             entries[i] = (h, new)
             edited += 1
+    if abbreviation_key:
+        ids = {h for h, _ in entries}
+        for r in relocated:
+            front = ea_hash(abbreviation_key + spellings.get(r.slot, r.old.abbr))
+            steas = ea_hash(abbreviation_key + r.old.abbr)
+            if front in ids and steas not in ids:
+                entries.append((steas, r.new.abbr))
+                ids.add(steas)
+                edited += 1
     return edited
 
 
 def rename_strings(
-    archive: bytes, renames: Iterable[Rename], all_star_strings: AllStarStrings
+    archive: bytes,
+    renames: Iterable[Rename],
+    all_star_strings: AllStarStrings,
+    spellings: Mapping[int, str] | None = None,
+    abbreviation_key: str = "",
 ) -> tuple[bytes, int, list[str]]:
     """`LOCAL.VIV` with every string table renamed (`rename_entries`) in
     place, its directory unchanged: (the archive, entries changed, tables that
@@ -164,7 +190,7 @@ def rename_strings(
             entries = parse_table(refpack_decompress(member))
         except (StringTableError, ValueError):
             continue
-        edited = rename_entries(entries, renames, all_star_strings)
+        edited = rename_entries(entries, renames, all_star_strings, spellings, abbreviation_key)
         if not edited:
             continue
         data = refpack_compress(build_table(entries), tight=True)

@@ -6,7 +6,13 @@ import struct
 import pytest
 
 from retro_roster_patcher.formats import ssh
-from retro_roster_patcher.formats.ea_tdb import BigfEntry, bigf_build, bigf_parse, refpack_compress
+from retro_roster_patcher.formats.ea_tdb import (
+    BigfEntry,
+    bigf_build,
+    bigf_extract,
+    bigf_parse,
+    refpack_compress,
+)
 from retro_roster_patcher.games.nhl05_ps2 import faces
 
 PIL = pytest.importorskip("PIL.Image")
@@ -99,3 +105,21 @@ def test_the_thumbnail_follows_the_face():
 def test_face_targets_keep_only_an_art_one_bio_alone_uses():
     art_of = {0: 7, 1: 7, 2: 9, 3: 0, 4: 12}
     assert faces.face_targets(art_of, {0: 1, 2: 5, 3: 2, 4: 3}) == {9: 5, 12: 3}
+
+
+def test_a_drawn_face_takes_the_generic_head_its_texture_is_unwrapped_for():
+    # On the 2004 occupant's mesh the generic texture lost its eyes and
+    # smeared (PCSX2): the drawn face's mesh entry points at the generic's.
+    before = archive(
+        {
+            "FACE9999.ssh": generic(),
+            "FACE9999.ebo": b"generic mesh " * 40,
+            "FACE21.ssh": face_file(),
+            "FACE21.ebo": b"occupant mesh " * 40,
+            "FACE40.ebo": b"untouched mesh " * 40,
+        }
+    )
+    out, drawn = faces.repack(before, {21: 2})
+    assert drawn == 1 and len(out) == len(before)
+    assert bigf_extract(out, "FACE21.ebo") == bigf_extract(before, "FACE9999.ebo")
+    assert bigf_extract(out, "FACE40.ebo") == bigf_extract(before, "FACE40.ebo")

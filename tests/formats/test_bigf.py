@@ -19,6 +19,7 @@ from retro_roster_patcher.core.errors import RetroRosterError, RomError
 from retro_roster_patcher.formats.ea_tdb import (
     BigfEntry,
     EaTdbError,
+    bigf_alias,
     bigf_build,
     bigf_extract,
     bigf_parse,
@@ -409,3 +410,14 @@ def test_build_agrees_with_the_hand_written_fixture():
     # changed and every parse assertion above is checking the wrong format.
     entries = [BigfEntry(name=name, offset=0, size=0) for name, _ in FILES]
     assert bigf_build(entries, dict(FILES)) == ARCHIVE
+
+
+def test_an_alias_reads_the_targets_bytes_and_nothing_moves():
+    members = {"a.bin": b"A" * 30, "b.bin": b"B" * 50, "c.bin": b"C" * 20}
+    original = bigf_build([BigfEntry(n, 0, 0) for n in members], members)
+    archive = bytearray(original)
+    assert bigf_alias(archive, {"a.bin": "b.bin", "c.bin": "missing.bin"}) == 1
+    assert bigf_extract(bytes(archive), "a.bin") == b"B" * 50
+    assert bigf_extract(bytes(archive), "c.bin") == b"C" * 20
+    first = min(e.offset for e in bigf_parse(original))
+    assert archive[first:] == original[first:]

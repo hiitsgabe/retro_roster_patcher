@@ -9,9 +9,12 @@ disc, plus `FACE9999`, a pale generic face, and `FACE8999`, a woman's. The
 game draws the face the bio's `ART_` names, so a patched player keeps the
 2004 occupant's face unless his `FACE<n>.ssh` is rewritten: `repack` writes
 there the generic face toned (`toned_face`) to the cheek colour the disc's
-own faces have for his `SKIN` (`FACE_TONES`), and its thumbnail. The mesh
-stays the occupant's. A face is written where its member sits, with the most
-colours that let the member keep its size.
+own faces have for his `SKIN` (`FACE_TONES`), and its thumbnail. Each face
+texture is unwrapped for its own head, so the face's mesh becomes the generic
+one too (its directory entry points at `FACE9999.ebo`'s data): on the 2004
+occupant's mesh the generic face lost its eyes and smeared (checked in
+PCSX2). A face is written where its member sits, with the most colours that
+let the member keep its size.
 """
 
 from __future__ import annotations
@@ -24,6 +27,7 @@ from typing import TYPE_CHECKING
 from ...formats import ssh
 from ...formats.ea_tdb import (
     EaTdbError,
+    bigf_alias,
     bigf_parse,
     refpack_compress,
     refpack_decompress,
@@ -54,6 +58,10 @@ FACE = "FAC1"
 
 def face_name(art: int) -> str:
     return f"FACE{art}.ssh"
+
+
+def mesh_name(art: int) -> str:
+    return f"FACE{art}.ebo"
 
 
 def face_targets(art_of: Mapping[int, object], skins: Mapping[int, int]) -> dict[int, int]:
@@ -175,6 +183,7 @@ def repack(
             data = candidate(skin, colours)
             if data is not None and len(data) <= entry.size:
                 out[entry.offset : entry.offset + entry.size] = data.ljust(entry.size, b"\0")
+                bigf_alias(out, {mesh_name(art): mesh_name(generic)})
                 drawn += 1
                 break
     return bytes(out), drawn
