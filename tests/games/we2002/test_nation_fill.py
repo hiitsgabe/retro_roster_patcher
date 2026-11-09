@@ -69,6 +69,14 @@ def test_a_moved_nation_on_a_home_only_slot_is_skipped_and_its_own_nation_kept(t
     assert sorted(home.teams) == [35]
 
 
+def test_the_nations_regions_follow_the_disc_s_order():
+    regions = WE2002Patcher(cache_dir="unused").fill_regions(Path("unused"))
+    assert len(regions) == 54
+    assert [regions[s] for s in (0, 29, 30, 36, 37, 39, 40, 47, 48, 53)] == [
+        "UEFA", "UEFA", "CAF", "CAF", "CONCACAF", "CONCACAF", "CONMEBOL", "CONMEBOL", "AFC", "AFC",
+    ]  # fmt: skip
+
+
 @pytest.mark.parametrize(
     ("name", "slot"),
     [("Denmark", 13), ("Republic of Ireland", 0), ("Türkiye", 27), ("United States", 37),

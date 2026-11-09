@@ -112,6 +112,15 @@ MIN_SQUAD = 13
 BLANK_PNG = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNgYGBgAAAABQABeqhXUAAAAABJRU5ErkJggg=="
 )
+#: Each of the 60 nations' rows' confederation (`PES2013PS2Patcher.fill_regions`).
+NATION_REGIONS = (
+    ("UEFA",) * 32
+    + ("CAF",) * 8
+    + ("CONCACAF",) * 4
+    + ("CONMEBOL",) * 8
+    + ("AFC",) * 7
+    + ("OFC",)  # New Zealand
+)
 #: Disc national-team names that ESPN spells differently (folded upper case).
 NATIONAL_ALIASES = {
     "CZECH REPUBLIC": "CZECHIA",
@@ -604,6 +613,12 @@ class PES2013PS2Patcher(Patcher):
             self.status("No nationality table on this disc: national teams are not filled")
             return []
         return list(range(NATIONAL_SLOT_BASE, NATIONAL_SLOT_BASE + NATION_ROWS))
+
+    def fill_regions(self, rom_path: Path) -> dict[int, str]:
+        """The disc's rows are its nations by region, as team select pages them (Europe
+        0-31, Africa 32-39, North and South America 40-51, Asia and Oceania 52-59): a moved
+        nation stays among its own."""
+        return {NATIONAL_SLOT_BASE + row: c for row, c in enumerate(NATION_REGIONS)}
 
     def own_national_slot(self, rom_path: Path, team: Team) -> int | None:
         """The row of the nation `team` is, or None when the disc has no row for it: its

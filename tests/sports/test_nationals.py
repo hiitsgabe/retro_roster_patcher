@@ -11,6 +11,7 @@ from retro_roster_patcher.core.models import MappedRosters, PatchResult, RomInfo
 from retro_roster_patcher.core.patcher import Patcher
 from retro_roster_patcher.sports.models import League, LeagueData, Player, Team, TeamRoster
 from retro_roster_patcher.sports.nationals import (
+    CONFEDERATIONS,
     RankedNation,
     cartridge_slot,
     cartridge_slot_map,
@@ -451,3 +452,41 @@ def test_the_cartridge_slot_map_pairs_each_slot_with_its_nation_in_slot_order():
         SlotMapping(slot_index=0, team_id=8, team_name="Italy"),
         SlotMapping(slot_index=2, team_id=9, team_name="South Korea"),
     ]
+
+
+# --- regions ----------------------------------------------------------------
+
+
+def test_every_nation_of_the_snapshot_has_a_confederation(tmp_path):
+    ranking = fifa_ranking(tmp_path, on_status=lambda m: None, transport=failing_transport)
+    assert [n.code for n in ranking if n.code not in CONFEDERATIONS] == []
+    assert CONFEDERATIONS["WAL"] == "UEFA" and CONFEDERATIONS["AUS"] == "AFC"
+
+
+WALES, JAPAN, SENEGAL = team(6, "Wales", "WAL"), team(7, "Japan", "JPN"), team(8, "Senegal", "SEN")
+
+
+def test_a_moved_nation_takes_a_slot_in_its_own_region_first():
+    ranking = [RankedNation(1, "Wales", "WAL"), RankedNation(2, "Japan", "JPN")]
+    regions = {20: "AFC", 21: "AFC", 22: "UEFA", 23: "CAF"}
+    mapping = ranked_slot_map(ranking, [WALES, JAPAN], [20, 21, 22, 23], lambda t: None,
+                              regions=regions)  # fmt: skip
+    assert slots(mapping) == {22: WALES.id, 20: JAPAN.id}
+    assert [m.team_id for m in mapping] == [WALES.id, JAPAN.id]
+
+
+def test_a_nation_whose_region_is_full_takes_any_slot_left_and_the_cut_stays_by_rank():
+    # Two slots, both Europe's: Wales takes one; Senegal, ranked above Japan, the other.
+    ranking = [RankedNation(1, "Senegal", "SEN"), RankedNation(2, "Wales", "WAL"),
+               RankedNation(3, "Japan", "JPN")]  # fmt: skip
+    mapping = ranked_slot_map(ranking, [SENEGAL, WALES, JAPAN], [20, 21], lambda t: None,
+                              regions={20: "UEFA", 21: "UEFA"})  # fmt: skip
+    assert slots(mapping) == {20: WALES.id, 21: SENEGAL.id}
+
+
+def test_the_patcher_s_regions_reach_the_mapping(tmp_path):
+    squads = {t.id: squad(100 * t.id) for t in (SPAIN, FRANCE, ARG, ENG, BRA)}
+    patcher = FillPatcher(tmp_path, squads)
+    patcher.fill_regions = lambda rom: {20: "CONMEBOL", 21: "CONMEBOL", 22: "UEFA", 23: "UEFA"}
+    _data, mapping = fetch_top_nations(patcher, Path("rom.bin"), 2026, taken=())
+    assert slots(mapping) == {22: SPAIN.id, 23: FRANCE.id, 20: ARG.id, 21: ENG.id}

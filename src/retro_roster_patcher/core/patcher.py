@@ -170,6 +170,12 @@ class Patcher(ABC):
         `home_only`): a moved nation's flag would draw wrong there. None by default."""
         return []
 
+    def fill_regions(self, rom_path: Path) -> dict[int, str]:
+        """Each `fill_slots` slot's confederation ("UEFA", "CAF", ...;
+        `sports.nationals.CONFEDERATIONS`), for a game whose national slots are grouped by
+        region (`ranked_slot_map`'s `regions`). None by default."""
+        return {}
+
     def own_national_slot(self, rom_path: Path, team: Team) -> int | None:
         """The slot the ROM holds national team `team` in, or None.
 

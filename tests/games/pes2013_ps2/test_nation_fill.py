@@ -220,6 +220,14 @@ def test_a_moved_nation_brings_keeper_kits_of_its_own_and_neutral_kits_without_c
     assert kits[pes_kits.AWAY].rgb(pes_kits.SHIRT) == (0, 0, 0)
 
 
+def test_the_rows_regions_follow_the_disc_s_pages(iso, tmp_path):
+    regions = PES2013PS2Patcher(tmp_path).fill_regions(iso)
+    assert sorted(regions) == PES2013PS2Patcher(tmp_path).fill_slots(iso)
+    by_row = [regions[NATIONAL_SLOT_BASE + r] for r in (0, 31, 32, 39, 40, 43, 44, 51, 52, 58, 59)]
+    assert by_row == ["UEFA", "UEFA", "CAF", "CAF", "CONCACAF", "CONCACAF", "CONMEBOL",
+                      "CONMEBOL", "AFC", "AFC", "OFC"]  # fmt: skip
+
+
 def test_the_fill_is_not_offered_on_a_disc_without_a_nationality_table(tmp_path):
     iso = tmp_path / "bare.iso"
     overlays = {

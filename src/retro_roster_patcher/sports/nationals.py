@@ -43,6 +43,30 @@ RANKING_URL = f"{API_URL}/fifarankings/ranking"
 NATIONAL_LEAGUE = 2021
 
 
+#: Each FIFA member's confederation, by FIFA code (and the snapshot's KOS and SGP for
+#: KVX and SIN): a moved nation's region on a game whose national slots are grouped by
+#: region (`Patcher.fill_regions`).
+CONFEDERATIONS = {
+    code: confederation
+    for confederation, codes in {
+        "UEFA": "ALB AND ARM AUT AZE BLR BEL BIH BUL CRO CYP CZE DEN ENG EST FRO FIN FRA GEO "
+        "GER GIB GRE HUN ISL ISR ITA KAZ KOS KVX LVA LIE LTU LUX MLT MDA MNE NED MKD NIR NOR POL "
+        "POR IRL ROU RUS SMR SCO SRB SVK SVN ESP SWE SUI TUR UKR WAL",
+        "CONMEBOL": "ARG BOL BRA CHI COL ECU PAR PER URU VEN",
+        "CONCACAF": "AIA ATG ARU BAH BRB BLZ BER VGB CAN CAY CRC CUB CUW DMA DOM SLV GRN GUA "
+        "GUY HAI HON JAM MEX MSR NCA PAN PUR SKN LCA VIN SUR TRI TCA USA VIR",
+        "CAF": "ALG ANG BEN BOT BFA BDI CPV CMR CTA CHA COM CGO COD DJI EGY EQG ERI SWZ ETH GAB "
+        "GAM GHA GUI GNB CIV KEN LES LBR LBY MAD MWI MLI MTN MRI MAR MOZ NAM NIG NGA RWA STP "
+        "SEN SEY SLE SOM RSA SSD SDN TAN TOG TUN UGA ZAM ZIM",
+        "AFC": "AFG AUS BHR BAN BHU BRU CAM CHN TPE GUM HKG IND IDN IRN IRQ JPN JOR KUW KGZ LAO "
+        "LBN MAC MAS MDV MNG MYA NEP PRK OMA PAK PLE PHI QAT KSA SGP SIN KOR SRI SYR TJK THA TLS "
+        "TKM UAE UZB VIE YEM",
+        "OFC": "ASA COK FIJ NCL NZL PNG SAM SOL TAH TGA VAN",
+    }.items()
+    for code in codes.split()
+}
+
+
 @dataclass(frozen=True)
 class RankedNation:
     rank: int
@@ -113,15 +137,23 @@ def fifa_ranking(
 def _ranked_teams(
     ranking: Iterable[RankedNation], espn_teams: Iterable[Team], aliases: Mapping[str, str]
 ) -> list[Team]:
-    """The ESPN teams the ranking names, in ranking order: by name, else by FIFA code
-    against the ESPN abbreviation, else by the name `aliases` gives it. A code more
-    than one ESPN team uses (Guam and Guatemala are both "GUA") never matches."""
+    """The ESPN teams the ranking names, in ranking order (`_ranked_pairs`)."""
+    return [team for _, team in _ranked_pairs(ranking, espn_teams, aliases)]
+
+
+def _ranked_pairs(
+    ranking: Iterable[RankedNation], espn_teams: Iterable[Team], aliases: Mapping[str, str]
+) -> list[tuple[RankedNation, Team]]:
+    """The ESPN teams the ranking names, with their ranking entry, in ranking order: by
+    name, else by FIFA code against the ESPN abbreviation, else by the name `aliases`
+    gives it. A code more than one ESPN team uses (Guam and Guatemala are both "GUA")
+    never matches."""
     teams = list(espn_teams)
     codes = Counter(t.code.upper() for t in teams if t.code)
     by_code = {t.code.upper(): t for t in teams if t.code and codes[t.code.upper()] == 1}
     by_name = {_key(t.name): t for t in teams}
     alias = {_key(k): _key(v) for k, v in aliases.items()}
-    out: list[Team] = []
+    out: list[tuple[RankedNation, Team]] = []
     for nation in ranking:
         name = _key(nation.name)
         team = (
@@ -129,8 +161,8 @@ def _ranked_teams(
             or by_code.get(nation.code.upper())
             or by_name.get(alias.get(name, ""))
         )
-        if team is not None and team not in out:
-            out.append(team)
+        if team is not None and all(team is not t for _, t in out):
+            out.append((nation, team))
     return out
 
 
@@ -164,6 +196,7 @@ def ranked_slot_map(
     *,
     aliases: Mapping[str, str] | None = None,
     home_only: Collection[int] = (),
+    regions: Mapping[int, str] | None = None,
 ) -> list[SlotMapping]:
     """Map the best-ranked ESPN teams onto `free_slots`, one each, until the slots run out.
 
@@ -171,10 +204,14 @@ def ranked_slot_map(
     others fill the slots left, in `free_slots`' order. Ranked sides ESPN does
     not have are skipped. `aliases` maps another spelling of a name to ESPN's.
     A slot in `home_only` takes its own nation only, never a moved one (a slot
-    where any other nation's flag would draw wrong). The mapping is in ranking
-    order, best first, so a game that must leave nations out drops the last.
+    where any other nation's flag would draw wrong). `regions` gives a slot's
+    confederation ("UEFA", ...; `CONFEDERATIONS`) on a game whose slots are grouped
+    by region: a moved nation takes a slot of its own confederation first, then any
+    slot left. The mapping is in ranking order, best first, so a game that must
+    leave nations out drops the last.
     """
-    chosen = _ranked_teams(ranking, espn_teams, aliases or {})[: len(free_slots)]
+    pairs = _ranked_pairs(ranking, espn_teams, aliases or {})[: len(free_slots)]
+    chosen = [team for _, team in pairs]
     placed: dict[int, Team] = {}
     moved: list[Team] = []
     for team in chosen:
@@ -184,6 +221,21 @@ def ranked_slot_map(
         else:
             moved.append(team)
     rest = [s for s in free_slots if s not in placed and s not in home_only]
+    moved = moved[: len(rest)]
+    if regions:
+        code = {id(team): nation.code or team.code for nation, team in pairs}
+        late = []
+        for team in moved:
+            confederation = CONFEDERATIONS.get(code[id(team)].upper())
+            slot = next(
+                (s for s in rest if confederation and regions.get(s) == confederation), None
+            )
+            if slot is None:
+                late.append(team)
+            else:
+                placed[slot] = team
+                rest.remove(slot)
+        moved = late
     placed.update(zip(rest, moved, strict=False))
     rank = {id(team): k for k, team in enumerate(chosen)}
     return [
@@ -283,5 +335,6 @@ def fetch_top_nations(
         lambda t: patcher.own_national_slot(rom, t),
         aliases=aliases,
         home_only=home_only,
+        regions=patcher.fill_regions(rom),
     )
     return LeagueData(league=league, teams=rosters), mapping

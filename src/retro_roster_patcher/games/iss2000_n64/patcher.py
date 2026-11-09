@@ -91,6 +91,17 @@ NATIONAL_ALIASES = {
 }
 
 
+#: The confederation of each region of team select (`ISS2000Patcher.slot_groups`).
+REGION_CONFEDERATIONS = {
+    "Europe": "UEFA",
+    "Africa": "CAF",
+    "CONCACAF": "CONCACAF",
+    "South America": "CONMEBOL",
+    "Asia": "AFC",
+    "Oceania": "OFC",
+}
+
+
 @register(
     "iss2000-n64",
     platform="n64",
@@ -201,6 +212,15 @@ class ISS2000Patcher(Patcher):
 
     def fill_slots(self, rom_path: Path) -> list[int]:
         return list(range(R.NATIONAL_TEAMS))
+
+    def fill_regions(self, rom_path: Path) -> dict[int, str]:
+        """Each slot's confederation, by its region (`slot_groups`): a moved nation goes
+        under its own region's label first."""
+        return {
+            slot: REGION_CONFEDERATIONS[name]
+            for name, first, count in self.slot_groups
+            for slot in range(first, first + count)
+        }
 
     # --- mapping ---------------------------------------------------------------
 

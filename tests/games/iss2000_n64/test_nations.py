@@ -22,7 +22,7 @@ from retro_roster_patcher.games.iss2000_n64 import flags, kits, names, scenarios
 from retro_roster_patcher.games.iss2000_n64 import rom as R
 from retro_roster_patcher.games.iss2000_n64.patcher import ISS2000Patcher
 from retro_roster_patcher.sports.models import League, LeagueData, Player, Team, TeamRoster
-from retro_roster_patcher.sports.nationals import fetch_top_nations
+from retro_roster_patcher.sports.nationals import RankedNation, fetch_top_nations, ranked_slot_map
 from tests.games.iss2000_n64.test_formation import real_rom, retail  # noqa: F401
 from tests.sports.test_nationals import FakeApi
 
@@ -147,6 +147,23 @@ def test_a_nation_knows_its_cartridge_slot_and_an_empty_squad_is_skipped(tmp_pat
     assert senegal.national and senegal.nation is None
     assert 86 not in rosters.teams
     assert any("Saudi Arabia" in line and "Skipped" in line for line in lines)
+
+
+def test_a_moved_nation_lands_under_its_own_region_when_it_has_room(tmp_path):
+    patcher = ISS2000Patcher(cache_dir=tmp_path)
+    rom = tmp_path / "x.z64"
+    regions = patcher.fill_regions(rom)
+    assert [regions[s] for s in (0, 50, 51, 61, 69, 79, 96, 99)] == [
+        "UEFA", "UEFA", "CAF", "CONCACAF", "CONMEBOL", "AFC", "OFC", "OFC",
+    ]  # fmt: skip
+    wales, sweden = Team(id=1, name="Wales", code="WAL"), Team(id=2, name="Sweden", code="SWE")
+    ranking = [RankedNation(1, "Wales", "WAL"), RankedNation(2, "Sweden", "SWE")]
+    # Their own slots (16, 19) hold clubs; Asia's 80 and 81 come first, Europe's 23 last.
+    mapping = ranked_slot_map(
+        ranking, [wales, sweden], [80, 81, 23], lambda t: patcher.own_national_slot(rom, t),
+        regions=regions,
+    )  # fmt: skip
+    assert {m.slot_index: m.team_name for m in mapping} == {23: "Wales", 80: "Sweden"}
 
 
 def test_serbia_on_yugoslavia_s_slot_is_a_moved_nation_with_its_own_name(tmp_path):

@@ -310,6 +310,11 @@ class WE2002Patcher(Patcher):
         """The 54 nations' national slots, 0-53."""
         return list(range(len(nations.NAMES)))
 
+    def fill_regions(self, rom_path: Path) -> dict[int, str]:
+        """The disc lists its nations by region (Europe 0-29, Africa 30-36, North and South
+        America 37-47, Asia 48-53, Australia with it): a moved nation stays among its own."""
+        return nations.REGIONS
+
     def home_only_slots(self, rom_path: Path) -> list[int]:
         """`nations.HOME_ONLY`: a moved nation's flag would draw wrong there."""
         return list(nations.HOME_ONLY)

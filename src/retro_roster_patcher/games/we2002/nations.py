@@ -35,6 +35,18 @@ NAMES = (
     "Colombia", "Brazil", "Peru", "Chile", "Paraguay", "Uruguay", "Argentina", "Ecuador", "Japan",
     "Korea", "China", "Iran", "Saudi Arabia", "Australia",
 )  # fmt: skip
+#: Each nation slot's confederation: the disc lists its nations by region.
+REGIONS = {
+    slot: confederation
+    for confederation, first, end in (
+        ("UEFA", 0, 30),
+        ("CAF", 30, 37),
+        ("CONCACAF", 37, 40),
+        ("CONMEBOL", 40, 48),
+        ("AFC", 48, 54),
+    )
+    for slot in range(first, end)
+}
 #: The disc's spelling -> ESPN's (league 2021).
 ALIASES = {
     "Ireland": "Republic of Ireland",
