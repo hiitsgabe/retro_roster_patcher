@@ -11,10 +11,13 @@ Checked in Mesen 2 on the USA cartridge:
   $A7 on the cartridge, where the flags fill 0x13E4B6-0x13EC14 with 85 bytes
   to spare). `write` moves every flag to the 17 KiB bank $AF leaves free
   (`ROOM`) and points the templates there.
-* The cup and league screens draw flags from RAM: $82:9021 (`RAM_LIST`) loads
-  up to 64 halves into $7F:0A80-$7F:227F, 0x60 bytes each, and $82:F829
-  (`RAM_CELLS`) gives each team the cell of its top half (the bottom follows).
-  `write` rebuilds both so every distinct flag has its own cell pair.
+* Team select (the big panel and the page cells) and the cup and league
+  screens draw flags from RAM: $82:9021 (`RAM_LIST`) loads up to 64 halves
+  into $7F:0A80-$7F:227F, 0x60 bytes each, and $82:F829 (`RAM_CELLS`) gives
+  each team the cell of its top half (the bottom follows). `write` rebuilds
+  both so every distinct flag has its own cell pair, up to 32: a team past
+  them shows another team's flag there (checked in Mesen on Nov 9 2026: with
+  36 distinct flags, Colombia, Mexico and the U.S.A. showed the first pair's).
 * $81:E7D8 (ROM 0xE7D8) points each team at five words in bank $89: a
   header, then OBJ entries 12-15. A flag pixel is 12 + its value; entry 12 is
   the shirt numbers' in a match (`kits.NUMBERS`), so a flag here draws in 13-15
@@ -267,8 +270,8 @@ def _ram_cells(
 ) -> dict[int, str]:
     """Rebuild the RAM load list and each team's cell: one cell pair per
     distinct flag, the teams in `first` served first. A team past the 32 pairs
-    the RAM holds borrows the first pair (its flag is wrong on the cup and
-    league screens). Returns those teams, {team: note}."""
+    the RAM holds borrows the first pair (its flag is wrong on team select and
+    the cup and league screens). Returns those teams, {team: note}."""
     pairs: dict[tuple[bytes, ...], int] = {}
     notes: dict[int, str] = {}
     order = sorted(range(TEAMS), key=lambda t: (t not in first, t))
@@ -285,6 +288,6 @@ def _ram_cells(
     image[RAM_LIST : RAM_LIST + len(entries)] = entries
     for team in range(TEAMS):
         if halves[team] not in pairs:
-            notes[team] = "shows another flag on the cup screens; their RAM is full"
+            notes[team] = "shows another flag on team select and the cup screens; their RAM is full"
         struct.pack_into("<H", image, RAM_CELLS + 2 * team, pairs.get(halves[team], RAM_FIRST))
     return notes
