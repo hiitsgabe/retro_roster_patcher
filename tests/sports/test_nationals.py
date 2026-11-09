@@ -288,6 +288,36 @@ def test_the_patcher_s_home_only_slots_reach_the_mapping(tmp_path):
     patcher.home_only = [22, 23]
     _data, mapping = fetch_top_nations(patcher, Path("rom.bin"), 2026, taken=())
     assert slots(mapping) == {22: FRANCE.id, 20: SPAIN.id, 21: ARG.id}
+    assert patcher.api.asked == [SPAIN.id, FRANCE.id, ARG.id]  # 23 waits for its own nation
+
+
+def test_no_squad_is_fetched_for_a_nation_that_gets_no_slot(tmp_path):
+    # 22 and 23 are home-only and their nations are not in the cut of four: two squads.
+    squads = {t.id: squad(100 * t.id) for t in (SPAIN, FRANCE, ARG, ENG, BRA)}
+    patcher = FillPatcher(tmp_path, squads)
+    patcher.home_only = [22, 23]
+    progress: list[str] = []
+    data, mapping = fetch_top_nations(
+        patcher, Path("rom.bin"), 2026, taken=(), on_progress=lambda f, m: progress.append(m)
+    )
+    assert slots(mapping) == {20: SPAIN.id, 21: FRANCE.id}
+    assert patcher.api.asked == [SPAIN.id, FRANCE.id]
+    assert [r.team.id for r in data.teams] == [SPAIN.id, FRANCE.id]
+    assert [line for line in patcher.lines if "no slot left" in line] == [
+        "Skipped Argentina: no slot left",
+        "Skipped England: no slot left",
+    ]
+    assert len(progress) == 2
+
+
+def test_a_home_only_slot_counts_once_its_nation_is_in_the_cut(tmp_path):
+    # Argentina owns home-only 23 and is in the cut of four: England is skipped unfetched.
+    squads = {t.id: squad(100 * t.id) for t in (SPAIN, FRANCE, ARG, ENG, BRA)}
+    patcher = FillPatcher(tmp_path, squads, own={ARG.id: 23})
+    patcher.home_only = [22, 23]
+    _data, mapping = fetch_top_nations(patcher, Path("rom.bin"), 2026, taken=())
+    assert slots(mapping) == {23: ARG.id, 20: SPAIN.id, 21: FRANCE.id}
+    assert patcher.api.asked == [SPAIN.id, FRANCE.id, ARG.id]
 
 
 def test_squads_get_their_lineup_and_the_game_s_order(tmp_path):

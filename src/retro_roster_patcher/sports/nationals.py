@@ -203,8 +203,11 @@ def fetch_top_nations(
     `patcher.fill_slots(rom)` not in `taken`, for `map_rosters` and a `merge`.
 
     Squads and lineups are fetched in ranking order for as many nations as there
-    are slots. A nation whose squad fails or comes back empty is skipped with a
-    status line, and the next one takes its place. Each squad is in the game's
+    are slots. A home-only slot (`home_only_slots`) takes its own nation only, when
+    it is in that cut: a nation the cut reaches with only such slots left is
+    skipped with a status line before its squad is fetched. A nation whose squad
+    fails or comes back empty is skipped with a status line, and the next one
+    takes its place. Each squad is in the game's
     fielding order (`suggest_squad_order`), as a league fetch leaves it.
 
     `exclude_ids` are ESPN team ids the league mapping already placed (a World Cup
@@ -225,10 +228,23 @@ def fetch_top_nations(
     aliases = getattr(sys.modules[type(patcher).__module__], "NATIONAL_ALIASES", {})
     excluded = {str(i) for i in exclude_ids}
     espn_teams = [t for t in api.get_teams(NATIONAL_LEAGUE, season) if str(t.id) not in excluded]
+    home_only = set(patcher.home_only_slots(rom))
+    claimed: set[int] = set()  # free slots the fetched nations own
+    moved = 0  # fetched nations that take one of the other slots
+    cut = 0  # nations of the ranking cut so far: fetched, or with no slot left
     rosters: list[TeamRoster] = []
     for team in _ranked_teams(ranking, espn_teams, aliases):
-        if len(rosters) == len(free):
+        if cut == len(free):
             break
+        own = patcher.own_national_slot(rom, team)
+        home = own if own is not None and own in free and own not in claimed else None
+        if home is None and moved >= sum(
+            1 for s in free if s not in home_only and s not in claimed
+        ):
+            # Only home-only slots are left, and this is not their nation.
+            patcher.status(f"Skipped {team.name}: no slot left")
+            cut += 1
+            continue
         if on_progress is not None:
             on_progress(
                 len(rosters) / len(free),
@@ -253,12 +269,17 @@ def fetch_top_nations(
         apply_lineup(roster, lineup)
         roster.players = patcher.suggest_squad_order(roster)
         rosters.append(roster)
+        cut += 1
+        if home is not None:
+            claimed.add(home)
+        else:
+            moved += 1
     mapping = ranked_slot_map(
         ranking,
         [r.team for r in rosters],
         free,
         lambda t: patcher.own_national_slot(rom, t),
         aliases=aliases,
-        home_only=patcher.home_only_slots(rom),
+        home_only=home_only,
     )
     return LeagueData(league=league, teams=rosters), mapping
