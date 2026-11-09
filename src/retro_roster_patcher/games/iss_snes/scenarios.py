@@ -17,6 +17,9 @@ from collections.abc import Collection, Sequence
 
 PAIRS = 0x9CAE
 COUNT = 9
+#: The cartridge's nine pairs. A patch starts from them, not from the image: an earlier
+#: patch re-pointed the image's, so a re-patch would keep its clubs.
+RETAIL = ((19, 22), (1, 23), (25, 3), (5, 2), (16, 0), (2, 19), (18, 15), (22, 20), (16, 7))
 #: The description entry of scenario 1's blurb; scenario k's is `FIRST_TEXT + k`.
 FIRST_TEXT = 27
 LINE = 23

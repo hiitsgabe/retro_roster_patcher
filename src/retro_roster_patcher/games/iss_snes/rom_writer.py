@@ -1796,14 +1796,16 @@ class ISSRomWriter:
         """Point each scenario at slots `names` holds ({slot: team name}, every slot the patch
         wrote a team into) as `scenarios.repoint` pairs them, and rewrite in place, to its 0xFF,
         the blurb of each scenario whose two slots it holds; `blank` are the slots the patch
-        emptied, which no scenario keeps. A pair table that is not slot ids is left alone."""
+        emptied, which no scenario keeps. The pairs start from the cartridge's
+        (`scenarios.RETAIL`), so a re-patch pairs them as a first patch does. A pair table that
+        is not slot ids is left alone, and so is scenario mode with fewer than two teams."""
         self._seek(scenarios.PAIRS)
         raw = self._file.read(2 * scenarios.COUNT)
         if len(raw) < 2 * scenarios.COUNT or any(b % 2 or b // 2 >= TOTAL_TEAMS for b in raw):
             return
-        pairs = scenarios.repoint(
-            [(raw[k] // 2, raw[k + 1] // 2) for k in range(0, len(raw), 2)], names, blank
-        )
+        if len(names) < 2:
+            return
+        pairs = scenarios.repoint(scenarios.RETAIL, names, blank)
         self._seek(scenarios.PAIRS)
         self._file.write(bytes(2 * s for pair in pairs for s in pair))
         for k, (a, b) in enumerate(pairs):

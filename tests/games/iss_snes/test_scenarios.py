@@ -235,6 +235,21 @@ def test_re_patching_gives_the_same_scenarios(patcher, rom, tmp_path):
     assert _patch(patcher, tmp_path / "a.sfc", tmp_path / "b.sfc", rosters) == first
 
 
+def test_a_fill_over_a_plain_patch_gives_the_scenarios_of_a_direct_fill(patcher, rom, tmp_path):
+    """The plain patch re-points scenarios onto clubs; the fill over it starts again from the
+    cartridge's pairs, as a fill on the cartridge does."""
+    full = _rosters(patcher, range(26))
+    direct = _patch(patcher, rom, tmp_path / "direct.sfc", full)
+    _patch(patcher, rom, tmp_path / "plain.sfc", _rosters(patcher, range(20)))
+    again = _patch(patcher, tmp_path / "plain.sfc", tmp_path / "again.sfc", full)
+    assert _pairs(again) == _pairs(direct) == RETAIL
+    assert _region(again) == _region(direct)
+
+
+def test_the_packaged_pairs_are_the_fixture_s():
+    assert list(scenarios.RETAIL) == RETAIL
+
+
 # --- the real cartridge ---------------------------------------------------------------------
 
 

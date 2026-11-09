@@ -212,6 +212,36 @@ def test_the_cartridge_s_scenarios_name_the_league_s_clubs(deluxe_rom: Path, tmp
 
 
 @pytest.mark.real_rom
+def test_a_fill_over_a_plain_patch_gives_the_scenarios_of_a_direct_fill(deluxe_rom, tmp_path):
+    """The plain patch re-points scenarios onto clubs; the fill over it starts again from the
+    cartridge's pairs (`scenarios.RETAIL`), as a fill on the cartridge does."""
+    patcher = ISSDeluxePatcher(tmp_path / "cache")
+    teams = [roster(100 + k, f"Club {chr(65 + k)}") for k in range(len(R.TEAMS))]
+
+    def patch(rom, out, count):
+        rosters = patcher.map_rosters(
+            LeagueData(league=LEAGUE, teams=teams[:count]),
+            [
+                SlotMapping(slot_index=s, team_id=100 + k)
+                for k, s in enumerate(R.SLOT_ORDER[:count])
+            ],
+        )
+        patcher.patch(rom_path=rom, output_path=out, rosters=rosters, looks=False, logos=False)
+        return out.read_bytes()
+
+    direct = patch(deluxe_rom, tmp_path / "direct.sfc", len(R.TEAMS))
+    patch(deluxe_rom, tmp_path / "plain.sfc", 20)
+    again = patch(tmp_path / "plain.sfc", tmp_path / "again.sfc", len(R.TEAMS))
+    assert _pairs(again) == _pairs(direct) == RETAIL
+    for k in range(scenarios.COUNT):
+        assert (_title(again, k), _text(again, k)) == (_title(direct, k), _text(direct, k)), k
+
+
+def test_the_packaged_pairs_are_the_cartridge_s():
+    assert list(scenarios.RETAIL) == RETAIL
+
+
+@pytest.mark.real_rom
 @pytest.mark.parametrize("count", [20, 2])
 def test_with_blank_unused_every_scenario_plays_two_patched_clubs(
     deluxe_rom: Path, tmp_path, count

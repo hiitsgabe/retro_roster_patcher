@@ -41,6 +41,12 @@ PIECES = (
     "C.K.", "F.K.", "C.K.", "F.K.", "THROW IN", "F.K.",
     "F.K.", "G.K.", "F.K.", "C.K.", "F.K.", "C.K.",
 )  # fmt: skip
+#: The cartridge's twelve pairs. A patch starts from them, not from the image: an earlier
+#: patch re-pointed the image's, so a re-patch would keep its clubs.
+RETAIL = (
+    (0, 17), (8, 13), (2, 30), (8, 0), (26, 11), (10, 4),
+    (12, 23), (20, 14), (6, 5), (31, 30), (1, 22), (2, 24),
+)  # fmt: skip
 TEXT_FONT = {" ": 0x00, "-": 0x26, ".": 0x29, "'": 0x50, ",": 0x52}
 TEXT_FONT.update({str(d): 0x01 + d for d in range(10)})
 TEXT_FONT.update({chr(65 + k): 0x0B + k for k in range(26)})
@@ -55,11 +61,12 @@ def pairs(image: bytes | bytearray) -> list[tuple[int, int]]:
 def write(image: bytearray, names: dict[int, str], blank: Collection[int] = ()) -> None:
     """Point the scenarios at slots `names` holds ({slot: the name the patch gave it}, every
     slot it wrote a team into; `blank` the slots it emptied, which no scenario keeps) and write
-    the title and description of each on two of them."""
-    old = pairs(image)
-    if any(max(pair) >= len(R.TEAMS) for pair in old):
+    the title and description of each on two of them. The pairs start from the cartridge's
+    (`RETAIL`), so a re-patch pairs them as a first patch does; with fewer than two teams
+    scenario mode is left as it is."""
+    if any(max(pair) >= len(R.TEAMS) for pair in pairs(image)) or len(names) < 2:
         return
-    for k, (a, b) in enumerate(repoint(old, names, blank)):
+    for k, (a, b) in enumerate(repoint(RETAIL, names, blank)):
         at = RECORDS + RECORD * k
         image[at + 4], image[at + 5] = 2 * a, 2 * b
         if a in names and b in names:
