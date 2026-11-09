@@ -451,6 +451,9 @@ def test_a_row_left_out_on_a_re_patch_never_shows_a_nation_twice(tmp_path):
     tables = reader.player_tables(PLAYER_ENTRIES[0])
     assert len([i for i in tables.national_squad(0) if i]) == 13
     assert any("NATION 0 left as the disc had them" in s for s in statuses), statuses
+    # Row 0 wears Nationality 70's kits, as the first patch gave it, not Nation 0's.
+    kits = [k.build() for k in reader.kits().nationals[0]]
+    assert kits == [k.build() for k in _reader(first).kits().nationals[0]]
 
 
 # -- a national row sharing a club's string ------------------------------------------------

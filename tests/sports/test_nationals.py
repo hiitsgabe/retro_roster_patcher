@@ -490,3 +490,14 @@ def test_the_patcher_s_regions_reach_the_mapping(tmp_path):
     patcher.fill_regions = lambda rom: {20: "CONMEBOL", 21: "CONMEBOL", 22: "UEFA", 23: "UEFA"}
     _data, mapping = fetch_top_nations(patcher, Path("rom.bin"), 2026, taken=())
     assert slots(mapping) == {22: SPAIN.id, 23: FRANCE.id, 20: ARG.id, 21: ENG.id}
+
+
+def test_a_fetched_nation_a_later_one_takes_the_slot_from_is_reported(tmp_path):
+    # Free: 20 (France's own) and 21 (home-only, nobody's in the ranking). Spain is fetched
+    # while 20 still counts as room; France then claims it, and Spain is said to be left out.
+    squads = {t.id: squad(100 * t.id) for t in (SPAIN, FRANCE, ARG, ENG, BRA)}
+    patcher = FillPatcher(tmp_path, squads, own={FRANCE.id: 20})
+    patcher.home_only = [21]
+    _data, mapping = fetch_top_nations(patcher, Path("rom.bin"), 2026, taken=(22, 23))
+    assert slots(mapping) == {20: FRANCE.id}
+    assert "Skipped Spain: no slot left" in patcher.lines

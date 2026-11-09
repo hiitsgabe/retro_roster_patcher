@@ -337,4 +337,8 @@ def fetch_top_nations(
         home_only=home_only,
         regions=patcher.fill_regions(rom),
     )
+    placed = {m.team_id for m in mapping}
+    for r in rosters:
+        if r.team.id not in placed:  # a later nation took the slot it counted on
+            patcher.status(f"Skipped {r.team.name}: no slot left")
     return LeagueData(league=league, teams=rosters), mapping

@@ -879,6 +879,8 @@ class PES2013PS2Patcher(Patcher):
                 national_slots.remove(slot)
                 presets.pop(slot, None)
                 del rosters.teams[slot]
+            if moves:  # a row given back to its disc nation wears that nation's kits
+                kit_choices = self._resolve_kits(rosters, options.get("kits", True))
             players_patched += written
             for index, t in tables.items():
                 writer.write_player_tables(index, t, blocks[index])
