@@ -35,6 +35,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from ...core import nhl_clubs
+from ...core.assets import crest_png
 from ...core.concurrency import parallel_map
 from ...core.errors import ApiError, CapabilityError, RomError, as_rom_error
 from ...core.headshots import load_headshot, measure_faces
@@ -55,7 +57,7 @@ from ...sports import _http
 from ...sports.espn import EspnClient
 from ...sports.models import League, LeagueData, TeamRoster
 from ...sports.nhl import NhlApiClient
-from . import looks
+from . import logos, looks, teams
 from .faces import (
     FACE_TONES,
     FACES_PATH,
@@ -602,6 +604,60 @@ class NHL07PSPPatcher(Patcher):
         if changed:
             self.status(f"Front-end strings replaced: {changed}")
 
+    def _write_logos(self, writer: NHL07PSPRomWriter, rosters: MappedRosters) -> None:
+        """Each patched club's current crest over its front-end logos, in place
+        (`logos`). Nothing is fetched for a disc without the archive or a
+        provider without crests (the NHL API gives none)."""
+        with open(writer.output_path, "r+b") as f:
+            found = iso_entry(f, logos.ARCHIVE)
+            if found is None:
+                return
+            entry = found[0]
+            urls: dict[int, str] = {}
+            for team in self.api.get_nhl_teams():
+                slot = self.mapper.get_team_slot(team.code)
+                if slot is not None and slot in rosters.teams and team.logo_url:
+                    urls[slot] = team.logo_url
+            if not urls:
+                self.status("Team logos skipped: the provider has no crests")
+                return
+            if importlib.util.find_spec("PIL") is None:
+                self.status("Team logos skipped: Pillow is not installed")
+                return
+            pngs = parallel_map(
+                lambda url: crest_png(None, None, url, self._transport), list(urls.values())
+            )
+            crests = {slot: png for slot, png in zip(urls, pngs, strict=True) if png is not None}
+            f.seek(entry.extent.offset)
+            edited, drawn = logos.edits(f.read(entry.extent.size), crests)
+            f.seek(entry.extent.offset)
+            f.write(edited)
+        self.status(f"Team logos drawn: {len(drawn)} of {len(crests)} clubs")
+
+    def _write_names(self, writer: NHL07PSPRomWriter, renamed: list[nhl_clubs.Rename]) -> None:
+        """The renamed clubs' names in the front end's strings (`teams`), with
+        `LOCAL.VIV` rebuilt and its cached directory updated.
+
+        Raises:
+            RomError: the rebuilt `LOCAL.VIV`, or `FMISC.VIV` holding its cached
+                directory, does not fit before the next file.
+        """
+        with open(writer.output_path, "r+b") as f:
+            found = iso_entry(f, LOCAL_VIV_PATH)
+            if found is None:
+                return
+            f.seek(found[0].extent.offset)
+            old = f.read(found[0].extent.size)
+            try:
+                new, changed = teams.rename_strings(old, renamed)
+            except EaTdbError as e:
+                self.status(f"Club names in the front end's text skipped: {e}")
+                return
+            if changed:
+                write_in_place(f, *found, new)
+                sync_header_cache(f, FMISC_VIV_PATH, LOCAL_BH_NAME, old, new)
+        self.status(f"Club names in the front end's text: {changed} strings")
+
     def suggest_squad_order(self, team_roster):
         """`select_roster`'s order with the starting six first: the first G, C,
         LW and RW and the first two D. The ROST output is the same either way,
@@ -727,6 +783,13 @@ class NHL07PSPPatcher(Patcher):
                 writer, rosters, tables, mirrors, on_progress, photos
             )
 
+            # ponytail: renames go by slot, as on NHL 2005, so an NHL API season
+            # from before the move (Atlanta to 2011, Arizona to 2024) is renamed
+            # too; carry each slot's team code in MappedRosters if that matters.
+            renamed = nhl_clubs.rename_tables(master_tdb, rosters.teams)
+            for rename in renamed:
+                self.status(f"Club renamed: {rename.old.full} is now {rename.new.full}")
+
             self.status("Rebuilding db.viv...")
             writer.rebuild_and_write(
                 self._archive_spelling(writer, master_tdb, bioatt_tdb, roster_tdb),
@@ -746,6 +809,11 @@ class NHL07PSPPatcher(Patcher):
                     master_tdb,
                     {bio: shade for bio, shade in shades.items() if isinstance(shade, int)},
                 )
+
+            if options.get("logos", True):
+                self._write_logos(writer, rosters)
+            if renamed:
+                self._write_names(writer, renamed)
 
             if pictures:
                 self._write_images(writer, pictures)

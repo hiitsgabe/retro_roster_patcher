@@ -9,14 +9,25 @@ a zip, `open("assets/x.ppf")` fails and `importlib.resources` works.
 from __future__ import annotations
 
 import atexit
+import io
 import pathlib
 import tempfile
 from collections.abc import Callable
 from importlib import resources
+from typing import TYPE_CHECKING
 
 from .errors import RetroRosterError
 
-__all__ = ["MissingAssetError", "crest_png", "package_bytes", "package_path"]
+if TYPE_CHECKING:
+    from PIL import Image
+
+__all__ = [
+    "MissingAssetError",
+    "centred_crest",
+    "crest_png",
+    "package_bytes",
+    "package_path",
+]
 
 # One temporary copy per asset, keyed by `(package, name)`.
 _materialised: dict[tuple[str, str], str] = {}
@@ -100,3 +111,26 @@ def crest_png(
         return (transport or _http.default_transport)(url, {}, 15.0)
     except Exception:  # noqa: BLE001 - a missing crest must not fail the patch
         return None
+
+
+#: The share of a crest picture left clear around the crest.
+CREST_MARGIN = 0.06
+
+
+def centred_crest(
+    png: bytes, size: tuple[int, int], squash: int = 1, white: bool = False
+) -> Image.Image:
+    """`png` (a crest) centred in a `size` picture, keeping its shape as it
+    shows: fitted to the picture `squash` times taller, then stored squashed,
+    on a white ground when `white`, else a transparent one."""
+    from PIL import Image
+
+    width, height = size
+    crest = Image.open(io.BytesIO(png)).convert("RGBA")
+    box = (round(width * (1 - 2 * CREST_MARGIN)), round(height * squash * (1 - 2 * CREST_MARGIN)))
+    crest.thumbnail(box, Image.Resampling.LANCZOS)
+    canvas = Image.new("RGBA", (width, height * squash), (255, 255, 255, 255 if white else 0))
+    canvas.alpha_composite(
+        crest, ((width - crest.width) // 2, (height * squash - crest.height) // 2)
+    )
+    return canvas.resize((width, height), Image.Resampling.LANCZOS) if squash > 1 else canvas

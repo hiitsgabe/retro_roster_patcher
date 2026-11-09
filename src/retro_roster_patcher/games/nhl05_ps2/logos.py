@@ -14,16 +14,12 @@ keep its size (`screens.fitted`); one that fits at none is left as it was.
 
 from __future__ import annotations
 
-import io
 from collections.abc import Mapping
-from typing import TYPE_CHECKING
 
+from ...core.assets import centred_crest
 from ...formats import ssh
 from ...formats.ea_tdb import EaTdbError, bigf_parse, refpack_decompress
 from . import screens
-
-if TYPE_CHECKING:
-    from PIL import Image
 
 ARCHIVE = "FE/TLOGOAPT.VIV"
 #: The archive's abbreviation for each slot this game patches, in STEA order:
@@ -42,24 +38,6 @@ KINDS = (
     ("LOGO_LRG_", 1, False),
     ("LOGO_SML_", 2, True),
 )
-#: The share of the picture left clear around the crest.
-MARGIN = 0.06
-
-
-def picture(png: bytes, size: tuple[int, int], squash: int, white: bool) -> Image.Image:
-    """`png` (a crest) centred in a `size` picture, keeping its shape as it
-    shows: fitted to the picture `squash` times taller, then stored squashed."""
-    from PIL import Image
-
-    width, height = size
-    crest = Image.open(io.BytesIO(png)).convert("RGBA")
-    box = (round(width * (1 - 2 * MARGIN)), round(height * squash * (1 - 2 * MARGIN)))
-    crest.thumbnail(box, Image.Resampling.LANCZOS)
-    canvas = Image.new("RGBA", (width, height * squash), (255, 255, 255, 255 if white else 0))
-    canvas.alpha_composite(
-        crest, ((width - crest.width) // 2, (height * squash - crest.height) // 2)
-    )
-    return canvas.resize((width, height), Image.Resampling.LANCZOS) if squash > 1 else canvas
 
 
 def _dimensions(member: bytes, shape: str) -> tuple[int, int] | None:
@@ -92,7 +70,7 @@ def edits(archive: bytes, crests: Mapping[int, bytes]) -> tuple[bytearray, dict[
             if size is None:
                 continue
             copy = screens.Copy(ARCHIVE, entry.name, f"{name}.ssh")
-            data = screens.fitted(member, copy, picture(png, size, squash, white))
+            data = screens.fitted(member, copy, centred_crest(png, size, squash, white))
             if data is None:
                 continue
             out[entry.offset : entry.offset + entry.size] = data.ljust(entry.size, b"\0")

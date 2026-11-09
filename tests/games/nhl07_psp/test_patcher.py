@@ -931,6 +931,8 @@ def test_patching_reports_its_phases_as_status(tmp_path, monkeypatch, pillow):
         "Loading db.viv...",
         "Parsing TDB tables...",
         "Writing rosters...",
+        # The synthetic STEA's Atlanta row has no names to report.
+        "Club renamed:  is now Winnipeg Jets",
         "Rebuilding db.viv...",
     ]
 
