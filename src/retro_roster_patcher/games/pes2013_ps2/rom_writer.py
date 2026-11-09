@@ -19,6 +19,10 @@ from .emblems import CLUB_TABLE, Atlas, copy_club_table, paint_logos
 from .formations import FormationTable
 from .kits import KIT_ENTRY, KitTable
 from .models import (
+    AGE_BASE,
+    AGE_BYTE,
+    AGE_MASK,
+    AGE_SHIFT,
     BEARD_BYTE,
     BEARD_COLOUR_BYTE,
     CLUB_SQUAD_SIZE,
@@ -196,6 +200,19 @@ class RomWriter:
         players = bytearray(tables.players)
         at = index * PLAYER_RECORD_SIZE
         players[at + LOOK_START : at + LOOK_END] = source[LOOK_START:LOOK_END]
+        tables.parts[PART_PLAYERS] = bytes(players)
+
+    @staticmethod
+    def set_age(tables: PlayerTables, index: int, age: int) -> None:
+        """Record `index`'s age (bits 1-5 of `AGE_BYTE`, `AGE_BASE` and up); every other bit
+        of the byte, the edited flag (bit 6) among them, stays. An age of 0 (unknown) changes
+        nothing."""
+        if not age:
+            return
+        players = bytearray(tables.players)
+        at = index * PLAYER_RECORD_SIZE + AGE_BYTE
+        value = max(0, min(AGE_MASK, age - AGE_BASE))
+        players[at] = players[at] & ~(AGE_MASK << AGE_SHIFT) & 0xFF | value << AGE_SHIFT
         tables.parts[PART_PLAYERS] = bytes(players)
 
     @staticmethod

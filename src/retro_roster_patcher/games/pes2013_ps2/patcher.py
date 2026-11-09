@@ -31,6 +31,7 @@ from collections import Counter
 from collections.abc import Callable, Collection
 from copy import deepcopy
 from dataclasses import dataclass, replace
+from datetime import date
 from functools import partial
 from pathlib import Path
 from typing import Any
@@ -413,6 +414,17 @@ def seat_eleven(starters: list[PESPlayer], preset: bytes) -> list[PESPlayer | No
     return placed
 
 
+def age_today(player: Player, today: date | None = None) -> int:
+    """The age his birth date gives today, else the provider's (ESPN says 25 when it has
+    none); 0 when neither is known."""
+    try:
+        born = date.fromisoformat(player.birth_date)
+    except ValueError:
+        return player.age
+    today = today or date.today()
+    return today.year - born.year - ((today.month, today.day) < (born.month, born.day))
+
+
 def cut_squad(
     players: list[Any], size: int, group: Callable[[Any], str] = lambda p: p.position
 ) -> list[Any]:
@@ -776,6 +788,7 @@ class PES2013PS2Patcher(Patcher):
                         player_id=p.id or 0,
                         photo_url=p.photo_url or "",
                         nationality=p.nationality or "",
+                        age=age_today(p),
                     )
                     for i, p in enumerate(
                         players[: NATIONAL_SQUAD_SIZE if national else CLUB_SQUAD_SIZE]
@@ -986,14 +999,16 @@ class PES2013PS2Patcher(Patcher):
     @staticmethod
     def _write_look(t: PlayerTables, index: int, player: PESPlayer, disc: _Disc) -> None:
         """The player's look onto record `index`: his old disc record's whole
-        look region when he is on the disc, else the look from his photo."""
-        if player.look is None:
-            return
-        source = disc.record(player.look.disc_record)
-        if source is not None:
-            RomWriter.copy_look(t, index, source)
-        else:
-            RomWriter.set_look(t, index, player.look)
+        look region when he is on the disc, else the look from his photo. Then his
+        age today, when known: the look region holds the age byte, which the disc
+        record has at his 2012 age and any other record at its old player's."""
+        if player.look is not None:
+            source = disc.record(player.look.disc_record)
+            if source is not None:
+                RomWriter.copy_look(t, index, source)
+            else:
+                RomWriter.set_look(t, index, player.look)
+        RomWriter.set_age(t, index, player.age)
 
     def _fit_player_tables(
         self,

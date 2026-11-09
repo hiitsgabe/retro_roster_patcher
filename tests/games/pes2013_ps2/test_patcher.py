@@ -13,6 +13,7 @@ import os
 import random
 import struct
 import zlib
+from datetime import date, timedelta
 from pathlib import Path
 
 import pytest
@@ -1501,6 +1502,42 @@ def test_a_player_already_on_the_disc_gets_that_records_look(tmp_path, monkeypat
         havertz, raya = by_name["KAI HAVERTZ"], by_name["DAVID RAYA"]
         assert havertz[92:124] == bytes([0xAB]) * 32  # the disc's look, licensed flags and all
         assert raya[102] & 3 == 0  # an unmapped player is dressed as usual: a built face
+
+
+def test_a_player_on_the_disc_gets_his_look_and_his_age_today(tmp_path, monkeypatch):
+    """Byte 113 sits in the look region: bits 1-5 his age - 15, bit 6 the edited flag. The
+    disc's look comes with his 2012 age (18 here); he gets today's, the flag as copied. Raya,
+    with a birth date only, gets the age it gives; a player with neither keeps the byte."""
+    look = bytearray([0xAB]) * 32
+    look[113 - 92] = 0x40 | (18 - 15) << 1  # edited, 18
+    iso = _iso_with_looks(tmp_path, {1: bytes(look)})
+    monkeypatch.setattr(looks, "disc_players", lambda: {101: 1})
+    league = _league_with_photos("")
+    raya, havertz = league.teams[0].players
+    havertz.age = 32
+    raya.birth_date = (date.today() - timedelta(days=365 * 31 + 30)).isoformat()  # 31
+    patcher = PES2013PS2Patcher(tmp_path)
+    rosters = patcher.map_rosters(league, [SlotMapping(slot_index=0, team_id=10)])
+    out = tmp_path / "out.iso"
+    patcher.patch(
+        rom_path=iso, output_path=out, rosters=rosters, logos=False, kits=False, looks=False
+    )
+    for entry in PLAYER_ENTRIES:
+        found = _by_name(out, entry)
+        assert found["KAI HAVERTZ"][113] == 0x40 | (32 - 15) << 1
+        assert found["KAI HAVERTZ"][92:113] == bytes(look[:21])  # the rest of the look
+        assert found["DAVID RAYA"][113] >> 1 & 0x1F == 31 - 15
+
+
+def test_an_unknown_age_leaves_the_records_byte(iso, tmp_path):
+    reader = RomReader(str(iso))
+    reader.load()
+    t = reader.player_tables()
+    before = t.record(7)
+    RomWriter.set_age(t, 7, 0)
+    assert t.record(7) == before
+    RomWriter.set_age(t, 7, 60)  # past the field: its largest, 46
+    assert t.record(7)[113] >> 1 & 0x1F == 31 and t.record(7)[113] & 0xC1 == before[113] & 0xC1
 
 
 def test_a_player_on_the_disc_gets_his_own_look_over_an_image_a_patch_rewrote(

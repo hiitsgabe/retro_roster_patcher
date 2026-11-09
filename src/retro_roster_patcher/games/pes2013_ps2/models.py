@@ -249,6 +249,9 @@ class PESPlayer:
     nationality: str = ""
     #: Set by `looks.dress`; None leaves the record's look alone.
     look: PESLook | None = None
+    #: His age today, 0 when the provider gives neither age nor birth date: the record's
+    #: age (`AGE_BYTE`) is left as it is then.
+    age: int = 0
 
 
 @dataclass
