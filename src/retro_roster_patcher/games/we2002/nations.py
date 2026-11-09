@@ -39,7 +39,8 @@ NAMES = (
 ALIASES = {
     "Ireland": "Republic of Ireland",
     "Czecho": "Czechia",
-    "Yugoslavia": "Serbia",
+    # No "Yugoslavia": "Serbia": a defunct nation is no nation's own slot (another state and
+    # flag), so Serbia is placed as a moved nation, with its own name and flag.
     "Turkey": "Türkiye",
     "U.States": "United States",
     "Korea": "South Korea",

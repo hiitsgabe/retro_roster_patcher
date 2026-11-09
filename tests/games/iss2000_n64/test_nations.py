@@ -119,6 +119,9 @@ def test_the_fill_takes_the_hundred_nations_and_never_the_all_stars(tmp_path):
     [
         ("Germany", GERMANY), ("Netherlands", HOLLAND), ("Republic of Ireland", 18),
         ("United States", 61), ("Turkiye", 38), ("South Korea", 80), ("Senegal", None),
+        ("Czechia", 30), ("Bosnia-Herzegovina", 34),
+        # Defunct or renamed on the cartridge: never their successor's own slot.
+        ("Serbia", None), ("North Macedonia", None),
     ],
 )  # fmt: skip
 def test_a_nation_s_own_slot_comes_from_the_cartridge_s_names(tmp_path, name, slot):
@@ -144,6 +147,14 @@ def test_a_nation_knows_its_cartridge_slot_and_an_empty_squad_is_skipped(tmp_pat
     assert senegal.national and senegal.nation is None
     assert 86 not in rosters.teams
     assert any("Saudi Arabia" in line and "Skipped" in line for line in lines)
+
+
+def test_serbia_on_yugoslavia_s_slot_is_a_moved_nation_with_its_own_name(tmp_path):
+    serbia = roster(60, "Serbia", "SRB")
+    patcher = ISS2000Patcher(cache_dir=tmp_path)
+    data = LeagueData(league=NATIONS, teams=[serbia])
+    team = patcher.map_rosters(data, [SlotMapping(slot_index=24, team_id=60)]).teams[24]
+    assert team.national and team.nation is None and team.name == "Serbia"
 
 
 @pytest.mark.parametrize(

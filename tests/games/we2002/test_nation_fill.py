@@ -72,7 +72,7 @@ def test_a_moved_nation_on_a_home_only_slot_is_skipped_and_its_own_nation_kept(t
 @pytest.mark.parametrize(
     ("name", "slot"),
     [("Denmark", 13), ("Republic of Ireland", 0), ("Türkiye", 27), ("United States", 37),
-     ("South Korea", 49), ("Czechia", 11), ("Serbia", 23), ("Australia", 53), ("Canada", None)],
+     ("South Korea", 49), ("Czechia", 11), ("Serbia", None), ("Australia", 53), ("Canada", None)],
 )  # fmt: skip
 def test_a_nation_s_own_slot_is_its_name_on_the_disc(name, slot):
     patcher = WE2002Patcher(cache_dir="unused")

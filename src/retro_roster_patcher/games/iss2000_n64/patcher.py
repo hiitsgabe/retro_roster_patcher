@@ -70,14 +70,16 @@ TEAM_NAMES = (
 #: ESPN's international friendlies, the league national squads come from.
 NATIONAL_LEAGUE = 2021
 
+#: A defunct or renamed cartridge nation is no nation's own slot, so it has no alias:
+#: "Yugoslavia" is not Serbia (another state, another flag) and "Macedonia" is now North
+#: Macedonia. Their successors are placed as moved nations, with their own name and flag.
+#: Czechia and Turkiye keep their slots: the same state and flag, a shorter name.
 NATIONAL_ALIASES = {
     "Holland": "Netherlands",
     "N.Ireland": "Northern Ireland",
     "Ireland": "Republic of Ireland",
-    "Yugoslavia": "Serbia",
     "Czech Rep.": "Czechia",
     "Bosnia": "Bosnia-Herzegovina",
-    "Macedonia": "North Macedonia",
     "Turkey": "Turkiye",
     "S.Africa": "South Africa",
     "U.S.A.": "United States",
