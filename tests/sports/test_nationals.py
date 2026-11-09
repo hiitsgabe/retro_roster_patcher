@@ -122,6 +122,8 @@ def test_a_nation_takes_its_own_slot_when_free_and_the_rest_fill_in_order():
         RANKING, [SPAIN, FRANCE, ARG, ENG, BRA], [20, 21, 22, 23, 24], lambda t: own(t.id)
     )
     assert slots(mapping) == {22: BRA.id, 20: SPAIN.id, 21: FRANCE.id, 23: ARG.id, 24: ENG.id}
+    # In ranking order, Brazil on its own slot last: a game short of room drops the last.
+    assert [m.team_id for m in mapping] == [SPAIN.id, FRANCE.id, ARG.id, ENG.id, BRA.id]
     assert len(mapping) == len({m.slot_index for m in mapping})
     assert {m.slot_index: m.team_name for m in mapping}[22] == "Brazil"
 

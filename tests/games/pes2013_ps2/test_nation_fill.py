@@ -27,6 +27,7 @@ from retro_roster_patcher.games.pes2013_ps2.models import (
 from retro_roster_patcher.games.pes2013_ps2.patcher import PES2013PS2Patcher, cut_squad
 from retro_roster_patcher.games.pes2013_ps2.rom_reader import RomReader
 from retro_roster_patcher.sports.models import League, LeagueData, Player, Team, TeamRoster
+from retro_roster_patcher.sports.nationals import RankedNation, ranked_slot_map
 from tests.fixtures import synthetic_pes2013_iso as fixture
 
 OVERLAYS = (DATABASE_OVERLAY_ENGLISH, 5)
@@ -379,3 +380,66 @@ def test_a_keeper_heavy_squad_is_cut_to_its_full_size():
     assert len(cut) == 23 and cut[:11] == eleven
     assert [p.display_name for p in cut[11:13]] == ["GK 0", "MF 0"]
     assert sum(p.position == "Goalkeeper" for p in cut) == 3  # the spare, then two to fill
+
+
+# -- too few records: the lowest-ranked nation is left out ----------------------------------
+
+
+def _short_disc(path):
+    """Rows 0 and 1 own seven records each (34-40, 41-47) and six more are free (48-53):
+    one squad of 14 fits (13 records), two do not (ten each)."""
+    names = [(f"PLAYER {i}", f"P{i}") for i in range(54)]
+    rows = {0: list(range(34, 41)), 1: list(range(41, 48))}
+    fixture.write_iso(path, player_entry=fixture.build_player_entry(names=names, nationals=rows))
+    return path
+
+
+def _ranked_patch(tmp_path, iso, out_name):
+    """The best-ranked nation is moved (Nationality 70, into row 1), the next one is at
+    home in row 0 (Nation 0): the order `ranked_slot_map` gives, 14 players each."""
+    statuses: list[str] = []
+    patcher = PES2013PS2Patcher(tmp_path, on_status=statuses.append)
+    best, next_ = _nation(470, "Nationality 70", "X70", 14), _nation(400, "Nation 0", "N00", 14)
+    ranking = [RankedNation(1, "Nationality 70", "X70"), RankedNation(2, "Nation 0", "N00")]
+    mapping = ranked_slot_map(
+        ranking,
+        [best.team, next_.team],
+        patcher.fill_slots(iso)[:2],
+        lambda t: patcher.own_national_slot(iso, t),
+    )
+    data = LeagueData(league=NATIONS.league, teams=[best, next_])
+    out = tmp_path / out_name
+    rosters = patcher.map_rosters(data, mapping)
+    patcher.patch(rom_path=iso, output_path=out, rosters=rosters, logos=False)
+    return out, statuses
+
+
+def test_the_lowest_ranked_nation_is_left_out_not_the_last_written(tmp_path):
+    iso = _short_disc(tmp_path / "pes.iso")
+    out, statuses = _ranked_patch(tmp_path, iso, "out.iso")
+    reader = _reader(out)
+    assert _row(reader, DATABASE_OVERLAY_ENGLISH, 1) == ("NATIONALITY 70", "X70", 70)
+    assert _row(reader, DATABASE_OVERLAY_ENGLISH, 0) == ("NATION 0", "N00", 0)
+    tables = reader.player_tables(PLAYER_ENTRIES[0])
+    assert _name(tables, tables.national_squad(1)[0]) == "N. PLAYER0"  # written anew
+    assert tables.national_squad(0)[:7] == list(range(34, 41))  # the disc's row 0
+    assert any("NATION 0 left as the disc had them" in s for s in statuses), statuses
+
+
+def test_a_row_left_out_on_a_re_patch_never_shows_a_nation_twice(tmp_path):
+    """The first patch puts Nationality 70 in row 0. The second places it in row 1 and Nation
+    0 at home in row 0, and has room for one: Nation 0, the lower-ranked, is left out, and
+    Nationality 70 goes back to row 0, where the disc shows it, rather than into row 1 too."""
+    iso = _short_disc(tmp_path / "pes.iso")
+    first, _ = _patch(tmp_path, iso, [(0, MOVED.team.id)], "first.iso")
+    assert _row(_reader(first), DATABASE_OVERLAY_ENGLISH, 0)[2] == 70
+    out, statuses = _ranked_patch(tmp_path, first, "second.iso")
+    reader = _reader(out)
+    for overlay in OVERLAYS:
+        rows = [_row(reader, overlay, r) for r in range(60)]
+        assert [r[2] for r in rows].count(70) == 1, rows[:2]
+    assert _row(reader, DATABASE_OVERLAY_ENGLISH, 0) == ("NATIONALITY 70", "X70", 70)
+    assert _row(reader, DATABASE_OVERLAY_ENGLISH, 1) == ("NATION 1", "N01", 1)
+    tables = reader.player_tables(PLAYER_ENTRIES[0])
+    assert len([i for i in tables.national_squad(0) if i]) == 13
+    assert any("NATION 0 left as the disc had them" in s for s in statuses), statuses

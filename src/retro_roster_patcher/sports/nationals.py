@@ -171,7 +171,8 @@ def ranked_slot_map(
     others fill the slots left, in `free_slots`' order. Ranked sides ESPN does
     not have are skipped. `aliases` maps another spelling of a name to ESPN's.
     A slot in `home_only` takes its own nation only, never a moved one (a slot
-    where any other nation's flag would draw wrong).
+    where any other nation's flag would draw wrong). The mapping is in ranking
+    order, best first, so a game that must leave nations out drops the last.
     """
     chosen = _ranked_teams(ranking, espn_teams, aliases or {})[: len(free_slots)]
     placed: dict[int, Team] = {}
@@ -184,9 +185,10 @@ def ranked_slot_map(
             moved.append(team)
     rest = [s for s in free_slots if s not in placed and s not in home_only]
     placed.update(zip(rest, moved, strict=False))
+    rank = {id(team): k for k, team in enumerate(chosen)}
     return [
         SlotMapping(slot_index=slot, team_id=team.id, team_name=team.name)
-        for slot, team in placed.items()
+        for slot, team in sorted(placed.items(), key=lambda item: rank[id(item[1])])
     ]
 
 
