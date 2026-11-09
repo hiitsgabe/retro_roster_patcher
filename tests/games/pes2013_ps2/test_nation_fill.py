@@ -346,10 +346,11 @@ def test_a_squad_cut_to_17_keeps_one_spare_keeper_and_a_bench_of_every_line(benc
     assert cut_squad(eleven + rest[:3], 17) == eleven + rest[:3]  # short enough: untouched
 
 
-def test_a_national_squad_listed_by_line_keeps_attackers_on_its_bench(tmp_path):
+@pytest.mark.parametrize("order_as_given", [False, True])
+def test_a_national_squad_listed_by_line_keeps_attackers_on_its_bench(tmp_path, order_as_given):
     """ESPN lists a squad of 25 by line, keepers first (England, France, Brazil): the 23 the
     row takes, and the 17 the fill cuts them to, keep an attacker on the bench and at most
-    two spare keepers."""
+    two spare keepers. The same when the squad is mapped as given, as the app maps the fill."""
     lines = ["Goalkeeper"] * 3 + ["Defender"] * 9 + ["Midfielder"] * 9 + ["Forward"] * 4
     team = TeamRoster(
         team=Team(id=480, name="Nation 8", code="N08"),
@@ -361,7 +362,8 @@ def test_a_national_squad_listed_by_line_keeps_attackers_on_its_bench(tmp_path):
     patcher = PES2013PS2Patcher(tmp_path)
     team.players = patcher.suggest_squad_order(team)
     data = LeagueData(league=NATIONS.league, teams=[team])
-    record = patcher.map_rosters(data, [SlotMapping(slot_index=1008, team_id=480)]).teams[1008]
+    mapping = [SlotMapping(slot_index=1008, team_id=480)]
+    record = patcher.map_rosters(data, mapping, order_as_given=order_as_given).teams[1008]
     for squad in (record.players, cut_squad(record.players, 17)):
         bench = [p.position for p in squad[11:]]
         assert bench.count("Goalkeeper") <= 2 and "Attacker" in bench, bench

@@ -724,8 +724,9 @@ class PES2013PS2Patcher(Patcher):
                 # The keeper first, then ten outfielders: the formation cuts them into its lines
                 # by index, in the order given (the editor's, or the depth order of the suggestion).
                 players, starting = eleven_first(players, lineup)
-            if national and not order_as_given:
-                # The bench by line, keepers first, would lose the attackers to the cut.
+            if national:
+                # The bench by line, keepers first, would lose the attackers to the cut. Also with
+                # order_as_given (the app maps the fill's nations so): the eleven stay as given.
                 group = partial(lineup_group, lineup=lineup)
                 players = cut_squad(players, NATIONAL_SQUAD_SIZE, group)
             home_kit, away_kit = default_kits(roster.team)
