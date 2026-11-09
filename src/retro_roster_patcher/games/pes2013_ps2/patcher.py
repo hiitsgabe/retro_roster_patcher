@@ -28,7 +28,7 @@ import base64
 import hashlib
 import heapq
 from collections import Counter
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 from copy import deepcopy
 from dataclasses import dataclass, replace
 from functools import partial
@@ -457,14 +457,20 @@ def at_home(slot: int, record: PESTeamRecord) -> bool:
 
 
 def _national_rows(
-    teams: OverlayTeams, rosters: MappedRosters, slots: list[int], blanks: list[int]
+    teams: OverlayTeams,
+    rosters: MappedRosters,
+    slots: list[int],
+    blanks: list[int],
+    renamed: Collection[int] = (),
 ) -> dict[int, tuple[int, int, int]]:
     """The national rows of one overlay to point elsewhere (`RomWriter.write_national_rows`):
     each national team's row at its nationality's name and code, with its nationality as the
     flag, where the row shows anything else (a row at home on the disc is left byte for
     byte); each row in `blanks` at empty strings (the ends of its name and code: the name
     must stay before the code, which is how the reader finds the table), so no string is
-    written over, a nationality's least of all."""
+    written over, a nationality's least of all. A row sharing a string with a club in
+    `renamed` (the clubs whose names are written in place: Spain's code is Espanyol's on the
+    disc) is pointed at its nationality's own strings, so it keeps its name and code."""
     rows: dict[int, tuple[int, int, int]] = {}
     for slot in slots:
         nation, row = rosters.teams[slot].nation, slot - NATIONAL_SLOT_BASE
@@ -480,6 +486,14 @@ def _national_rows(
         if name.text or code.text:
             ends = [s.offset + len(s.text.encode("utf-8")) for s in (name, code)]
             rows[row] = (ends[0], ends[1], teams.idents[row])
+    clobbered = {s.offset for slot in renamed for s in teams.clubs.get(slot, ())}
+    for row, strings in teams.nationals.items():
+        nation = teams.idents.get(row)
+        if row in rows or nation is None or nation >= len(teams.nationalities):
+            continue
+        if any(s.offset in clobbered for s in strings):
+            name, code = teams.nationalities[nation]
+            rows[row] = (name.offset, code.offset, nation)
     return rows
 
 
@@ -880,7 +894,7 @@ class PES2013PS2Patcher(Patcher):
                     continue  # an overlay without a team table is not a database
                 writer.write_team_names(teams, names)
                 writer.write_national_rows(
-                    teams, _national_rows(teams, rosters, national_slots, blanks)
+                    teams, _national_rows(teams, rosters, national_slots, blanks, names)
                 )
             if on_progress is not None:
                 on_progress(1.0, "Done")

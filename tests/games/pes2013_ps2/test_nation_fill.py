@@ -451,3 +451,46 @@ def test_a_row_left_out_on_a_re_patch_never_shows_a_nation_twice(tmp_path):
     tables = reader.player_tables(PLAYER_ENTRIES[0])
     assert len([i for i in tables.national_squad(0) if i]) == 13
     assert any("NATION 0 left as the disc had them" in s for s in statuses), statuses
+
+
+# -- a national row sharing a club's string ------------------------------------------------
+
+
+def test_a_row_sharing_a_renamed_club_s_code_keeps_its_own(tmp_path):
+    """Club 0's code is national row 3's string, as Espanyol's is Spain's on the disc: the
+    club's new code is written in place, and row 3 moves to its nationality's strings."""
+    iso = tmp_path / "pes.iso"
+    overlays = {
+        DATABASE_OVERLAY_ENGLISH: fixture.build_overlay("u", shared_code=(0, 3)),
+        5: fixture.build_overlay("b", shared_code=(0, 3)),
+    }
+    fixture.write_iso(iso, overlays=overlays)
+    before = _reader(iso).overlay_teams(DATABASE_OVERLAY_ENGLISH)
+    assert before.clubs[0][1].offset == before.nationals[3][1].offset
+    club = TeamRoster(team=Team(id=10, name="Elche", code="ELC"), players=[])
+    data = LeagueData(league=League(id=1, name="LaLiga", season=2026), teams=[club])
+    patcher = PES2013PS2Patcher(tmp_path)
+    rosters = patcher.map_rosters(data, [SlotMapping(slot_index=0, team_id=10)])
+    out = tmp_path / "out.iso"
+    patcher.patch(rom_path=iso, output_path=out, rosters=rosters, logos=False, kits=False)
+    reader = _reader(out)
+    for overlay in OVERLAYS:
+        assert _row(reader, overlay, 3) == ("NATION 3", "N03", 3)
+        assert reader.overlay_teams(overlay).clubs[0][1].text == "ELC"
+        assert _row(reader, overlay, 4) == _row(_reader(iso), overlay, 4)  # no other row moves
+
+
+@pytest.mark.real_rom
+def test_on_the_disc_a_laliga_club_on_espanyol_s_slot_leaves_spain_its_code(disc):
+    """Espanyol (club 84) and Spain (row 26) share the code string "ESP" in every overlay:
+    the rows a patch over club 84 points elsewhere give Spain its nationality's own "ESP"."""
+    reader = _reader(disc)
+    empty = pes_patcher.MappedRosters(game_id="pes2013-ps2")
+    for overlay in range(5, 20):
+        teams = reader.overlay_teams(overlay)
+        assert teams.clubs[84][1].offset == teams.nationals[26][1].offset, overlay
+        rows = pes_patcher._national_rows(teams, empty, [], [], renamed={84: ("ELCHE", "ELC")})
+        name, code = teams.nationalities[26]
+        assert rows == {26: (name.offset, code.offset, 26)}, overlay
+        assert code.text == teams.nationals[26][1].text == "ESP"
+        assert pes_patcher._national_rows(teams, empty, [], [], renamed={83: ("X", "X")}) == {}

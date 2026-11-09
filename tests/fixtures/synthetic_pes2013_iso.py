@@ -196,12 +196,14 @@ def build_overlay(
     names: list[str] | None = None,
     codes: list[str] | None = None,
     nationalities: bool = True,
+    shared_code: tuple[int, int] | None = None,
 ) -> bytes:
     """A `database_<lang>.ovl`: header, strings, the team table, then the nationality table
     (`nationality`): 144 name/code pointer pairs, as on the disc, after the team table as in
     the English overlay. Rows 0-59 of the team table are nationalities 0-59 (word 3 holds
     the row's nationality in both halves), whose names the nationality table repeats in
-    strings of its own."""
+    strings of its own. `shared_code` (club, row) points the club's code at the row's code
+    string, as the disc does Espanyol's and Spain's."""
     names = names or CLUB_NAMES
     codes = codes or CLUB_CODES
     strings = bytearray()
@@ -214,6 +216,9 @@ def build_overlay(
         code_off = 0x100 + len(strings)
         strings += code.encode("ascii").ljust(8, b"\0")
         pointers.append((name_off, code_off))
+    if shared_code is not None:
+        club, row = shared_code
+        pointers[FIRST_CLUB_ENTRY + club] = (pointers[FIRST_CLUB_ENTRY + club][0], pointers[row][1])
     table_off = 0x100 + len(strings)
     table_off += -table_off % 16
     entries = b""
