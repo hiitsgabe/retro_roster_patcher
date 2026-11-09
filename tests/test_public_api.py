@@ -135,10 +135,12 @@ def test_core_assets_declares_its_own_surface():
     # reading an asset by path does not work. `crest_png` is the one way every
     # game package fetches a club's crest: the user's `assets_dir/logos/<id>.png`
     # first, else the provider's URL, and None rather than a failed patch.
+    # `centred_crest` fits that crest into a game's logo picture (NHL 2005, NHL 07).
     from retro_roster_patcher.core import assets
 
     assert set(assets.__all__) == {
         "MissingAssetError",
+        "centred_crest",
         "crest_png",
         "package_bytes",
         "package_path",
