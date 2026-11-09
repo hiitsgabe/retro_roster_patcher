@@ -580,8 +580,9 @@ def fill_stub(monkeypatch):
     SEEN.clear()
     spain = TeamRoster(team=Team(id=164, name="Spain"), players=[Player(id=9, name="Nine")])
 
-    def fake_fetch_top_nations(patcher, rom, season, taken, on_progress=None):
+    def fake_fetch_top_nations(patcher, rom, season, taken, on_progress=None, *, exclude_ids=()):
         SEEN.append(("fill", season, set(taken)))
+        SEEN.append(("exclude", set(exclude_ids)))
         league = League(id=2021, name="International Friendlies", season=season)
         mapping = [SlotMapping(slot_index=5, team_id=164, team_name="Spain")]
         return LeagueData(league=league, teams=[spain]), mapping
@@ -599,6 +600,7 @@ def fill_stub(monkeypatch):
 def test_fill_nations_merges_the_ranked_nations_into_the_free_slots(tmp_path, fill_stub):
     assert main(_stub_argv(tmp_path, "fill-game", "--fill-nations")) == 0
     assert ("fill", 2024, {0}) in SEEN  # the league's slot is taken
+    assert ("exclude", {33}) in SEEN  # and so is its team (Team A)
     assert [c[1] for c in SEEN if c[0] == "slots"] == [{0: "Team A", 5: "Spain"}]
     assert _options_seen() == {}
 

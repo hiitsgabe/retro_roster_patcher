@@ -196,6 +196,8 @@ def fetch_top_nations(
     season: int,
     taken: Iterable[int],
     on_progress: ProgressFn | None = None,
+    *,
+    exclude_ids: Iterable[str | int] = (),
 ) -> tuple[LeagueData, list[SlotMapping]]:
     """(LeagueData, slot mapping) of the best-ranked national squads for the slots of
     `patcher.fill_slots(rom)` not in `taken`, for `map_rosters` and a `merge`.
@@ -204,6 +206,9 @@ def fetch_top_nations(
     are slots. A nation whose squad fails or comes back empty is skipped with a
     status line, and the next one takes its place. Each squad is in the game's
     fielding order (`suggest_squad_order`), as a league fetch leaves it.
+
+    `exclude_ids` are ESPN team ids the league mapping already placed (a World Cup
+    league's nations): the fill never places them a second time.
     """
     if not patcher.supports_nation_fill:
         raise CapabilityError(f"{patcher.game_id or type(patcher).__name__} has no nation fill")
@@ -218,8 +223,10 @@ def fetch_top_nations(
     )
     # ponytail: the aliases live as a module table beside each game's `national_slot_map`.
     aliases = getattr(sys.modules[type(patcher).__module__], "NATIONAL_ALIASES", {})
+    excluded = {str(i) for i in exclude_ids}
+    espn_teams = [t for t in api.get_teams(NATIONAL_LEAGUE, season) if str(t.id) not in excluded]
     rosters: list[TeamRoster] = []
-    for team in _ranked_teams(ranking, api.get_teams(NATIONAL_LEAGUE, season), aliases):
+    for team in _ranked_teams(ranking, espn_teams, aliases):
         if len(rosters) == len(free):
             break
         if on_progress is not None:

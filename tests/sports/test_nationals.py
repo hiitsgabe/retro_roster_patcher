@@ -333,6 +333,21 @@ def test_a_failed_lineup_keeps_the_nation_with_roles_only(tmp_path):
     )
 
 
+def test_the_league_s_own_nations_are_never_placed_twice(tmp_path):
+    # A World Cup league took slots 0-2 with Spain, Argentina and France.
+    squads = {t.id: squad(100 * t.id) for t in (SPAIN, FRANCE, ARG, ENG, BRA)}
+    patcher = FillPatcher(tmp_path, squads, own={SPAIN.id: 20})
+    _data, mapping = fetch_top_nations(
+        patcher,
+        Path("rom.bin"),
+        2026,
+        taken={0, 1, 2},
+        exclude_ids=[SPAIN.id, str(ARG.id), FRANCE.id],
+    )
+    assert slots(mapping) == {20: ENG.id, 21: BRA.id}
+    assert patcher.api.asked == [ENG.id, BRA.id]
+
+
 def test_no_free_slot_fetches_no_squad(tmp_path):
     patcher = FillPatcher(tmp_path, {})
     data, mapping = fetch_top_nations(patcher, Path("rom.bin"), 2026, taken=[20, 21, 22, 23])

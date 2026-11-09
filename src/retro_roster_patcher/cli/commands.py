@@ -314,8 +314,10 @@ def cmd_patch(args: argparse.Namespace, renderer: Renderer) -> None:
     if getattr(args, "fill_nations", False):
         renderer.status("Filling the free slots with the top national teams...")
         season = args.season or data.league.season or default_season("fifa.friendly")
+        # The league's own teams (a World Cup league's nations) are never placed twice.
+        placed = [m.team_id for m in slot_mapping or []] or [r.team.id for r in data.teams]
         nations, nation_map = fetch_top_nations(
-            patcher, rom, season, mapped.teams, on_progress=renderer.progress
+            patcher, rom, season, mapped.teams, on_progress=renderer.progress, exclude_ids=placed
         )
         if nation_map:
             mapped = mapped.merge(
