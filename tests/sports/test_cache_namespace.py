@@ -34,8 +34,8 @@ from tests.sports.test_nhl import NETWORK_CALLS as NHL_CALLS
 # `categories` for ESPN leaders, `skaters` for NHL club stats, `athletes` for
 # the roster parsers, `events` plus `rosters` for the lineup lookup, which
 # caches one file per completed match it finds on the schedule, `splits` for
-# one baseball player's line, and `items` plus `entries` for the baseball
-# lineup, which caches one file per game it finds.
+# one baseball player's line, `items` plus `entries` for the baseball
+# lineup, which caches one file per game it finds, and `team` for one team.
 OMNIBUS = json.dumps(
     {
         "sports": [
@@ -52,6 +52,7 @@ OMNIBUS = json.dumps(
         "items": [{"$ref": "https://example.test/events/1?lang=en"}],
         "entries": [{"playerId": 1, "starter": True, "batOrder": 1}],
         "skaters": [{"playerId": 1, "goals": 1}],
+        "team": {"id": "1", "displayName": "Team", "defaultLeague": {"slug": "ger.1"}},
         "athletes": [{"items": [{"id": 1, "displayName": "Player", "jersey": "1"}]}],
         "events": [
             {

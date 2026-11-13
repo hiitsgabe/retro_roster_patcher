@@ -487,6 +487,7 @@ NETWORK_CALLS = {
     # The team's schedule is the first request; an empty one ends the lookup.
     "get_lineup": ((359, 2001), {}),
     "get_league_logo": ((2001,), {}),
+    "get_team": ((132,), {}),
 }
 
 # Public members that answer from module constants and never make a request.
@@ -1721,3 +1722,65 @@ def test_a_season_not_started_has_no_lineup_and_asks_nothing(tmp_path):
     client = EspnClient(str(tmp_path), transport=transport)
     assert client.get_baseball_lineup(15, 2027, today=date(2026, 10, 23)) == []
     assert transport.calls == []
+
+
+# -- the club fill's plumbing: get_team, league_id_of, the European leagues --------------
+
+TEAM_URL = "https://site.api.espn.com/apis/site/v2/sports/soccer/all/teams/132"
+BAYERN = {
+    "team": {
+        "id": "132",
+        "displayName": "Bayern Munich",
+        "shortDisplayName": "Bayern",
+        "abbreviation": "MUN",
+        "color": "dc052d",
+        "alternateColor": "1a1a1a",
+        "logos": [{"href": "https://a.espncdn.com/i/teamlogos/soccer/500/132.png"}],
+        "defaultLeague": {"slug": "ger.1"},
+    }
+}
+
+
+def test_get_team_gives_the_team_and_its_default_league_once(tmp_path):
+    transport = _body_transport(json.dumps(BAYERN).encode())
+    client = EspnClient(str(tmp_path), transport=transport)
+    team, slug = client.get_team(132, 2026)
+    assert (team.id, team.name, team.code, team.color, slug) == (
+        132,
+        "Bayern Munich",
+        "MUN",
+        "dc052d",
+        "ger.1",
+    )
+    assert team.logo_url.endswith("/132.png")
+    assert client.get_team(132, 2026) == (team, slug)
+    assert transport.calls == [TEAM_URL]
+
+
+@pytest.mark.parametrize("body", [{}, {"team": {"id": "9"}}], ids=["no team", "no league"])
+def test_get_team_without_a_team_or_a_league_is_none_and_not_cached(tmp_path, body):
+    transport = _body_transport(json.dumps(body).encode())
+    client = EspnClient(str(tmp_path), transport=transport)
+    assert client.get_team(9) is None and client.get_team(9) is None
+    assert len(transport.calls) == 2
+
+
+def test_league_id_of_reads_any_case_and_knows_the_european_leagues():
+    assert espn.league_id_of("uefa.champions") == 2008  # registered as UEFA.CHAMPIONS
+    assert espn.league_id_of("ger.1") == 2003
+    assert [espn.league_id_of(c) for c in ("uefa.europa", "uefa.europa.conf", "eng.2")] == [
+        2022,
+        2023,
+        2032,
+    ]
+    assert espn.league_id_of("cze.1") is None
+
+
+def test_the_league_ids_only_grow():
+    ids = [item["id"] for item in espn.ESPN_LEAGUES]
+    assert ids == list(range(2001, 2033))
+
+
+def test_the_norwegian_season_is_the_calendar_year():
+    assert espn.default_season("nor.1", date(2026, 4, 1)) == 2026
+    assert espn.default_season("bel.1", date(2026, 4, 1)) == 2025

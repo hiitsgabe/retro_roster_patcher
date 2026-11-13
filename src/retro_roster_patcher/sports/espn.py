@@ -72,12 +72,40 @@ ESPN_LEAGUES = [
         "name": "International Friendlies",
         "country": "World",
     },
+    # The UEFA competitions and the European leagues today's best clubs play in: the club
+    # fill (`sports.clubs`) fetches a club's squad and lineup from its own league.
+    {"id": 2022, "code": "uefa.europa", "name": "UEFA Europa League", "country": "World"},
+    {
+        "id": 2023,
+        "code": "uefa.europa.conf",
+        "name": "UEFA Conference League",
+        "country": "World",
+    },
+    {"id": 2024, "code": "bel.1", "name": "Belgian Pro League", "country": "Belgium"},
+    {"id": 2025, "code": "tur.1", "name": "Super Lig", "country": "Turkey"},
+    {"id": 2026, "code": "gre.1", "name": "Super League", "country": "Greece"},
+    {"id": 2027, "code": "sco.1", "name": "Scottish Premiership", "country": "Scotland"},
+    {"id": 2028, "code": "aut.1", "name": "Austrian Bundesliga", "country": "Austria"},
+    {"id": 2029, "code": "den.1", "name": "Superliga", "country": "Denmark"},
+    {"id": 2030, "code": "nor.1", "name": "Eliteserien", "country": "Norway"},
+    {"id": 2031, "code": "sui.1", "name": "Swiss Super League", "country": "Switzerland"},
+    {"id": 2032, "code": "eng.2", "name": "Championship", "country": "England"},
 ]
 
 #: League code prefixes whose season runs inside one calendar year. ESPN names
 #: those by that year (bra.1 2026 is 2026) and every other league by the year
 #: its August-to-May season starts in (eng.1 2026 is 2026-27).
-CALENDAR_YEAR_LEAGUES = ("bra.", "usa.", "arg.", "jpn.", "col.", "chi.", "conmebol.", "fifa.")
+CALENDAR_YEAR_LEAGUES = (
+    "bra.",
+    "usa.",
+    "arg.",
+    "jpn.",
+    "col.",
+    "chi.",
+    "conmebol.",
+    "fifa.",
+    "nor.",
+)
 
 
 def default_season(code: str, today: date | None = None) -> int:
@@ -165,6 +193,14 @@ DRESSED_GAMES = 3
 
 _ID_TO_LEAGUE = {item["id"]: item for item in ESPN_LEAGUES}
 _CODE_TO_LEAGUE = {item["code"]: item for item in ESPN_LEAGUES}
+
+
+def league_id_of(code: str) -> int | None:
+    """The `ESPN_LEAGUES` id of ESPN league `code` ("ger.1", "uefa.champions"; any case), or
+    None for a league not registered."""
+    item = next((i for i in ESPN_LEAGUES if str(i["code"]).lower() == code.lower()), None)
+    return None if item is None else int(str(item["id"]))
+
 
 # The `PlayerStats` fields ESPN's soccer statistics document has no counterpart
 # for. Every record built here declares these in `PlayerStats.unsupplied`.
@@ -317,6 +353,24 @@ class EspnClient:
         if teams:
             self._save_cache(cache_key, data)
         return teams
+
+    def get_team(self, team_id: int, season: int | None = None) -> tuple[Team, str] | None:
+        """The team with ESPN id `team_id` (ids are the same in every league) and the code of
+        its default league (`defaultLeague.slug`: "ger.1", or "uefa.champions" for a club of a
+        league ESPN does not carry while it plays the competition), for `get_squad`'s
+        `league_code`; None when ESPN has no such team. `season` reaches the cache key only:
+        a promoted or relegated club changes league from one season to the next."""
+        cache_key = f"espn_team_{team_id}_{season or 'any'}"
+        data = self._load_cache(cache_key)
+        if not data:
+            data = self._request(f"/all/teams/{team_id}", sport="soccer")
+        team = data.get("team") if isinstance(data, dict) else None
+        slug = str(((team or {}).get("defaultLeague") or {}).get("slug") or "")
+        if not team or not slug:
+            return None
+        self._save_cache(cache_key, data)
+        parsed = self._parse_teams({"sports": [{"leagues": [{"teams": [{"team": team}]}]}]})
+        return parsed[0], slug
 
     def get_squad(
         self, team_id: int, season: int | None = None, league_code: str | None = None
