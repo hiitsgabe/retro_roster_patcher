@@ -79,6 +79,17 @@ def test_transparent_margins_are_cropped_away():
     assert logo_flag(crest).pixels == logo_flag(_png()).pixels
 
 
+def test_a_stroke_thinner_than_a_flag_pixel_survives():
+    """#11: Everton's white tower outline is a few source pixels wide. A white
+    line a third of a flag pixel wide on navy must still show as white."""
+    navy = (0, 0, 128)
+    crest = _png((240, 160), (*navy, 255), box=(120, 20, 122, 139), box_fill=(*WHITE, 255))
+    flag = logo_flag(crest)
+    column = [flag.colours[row[12]] for row in flag.pixels[3:13]]
+    assert column == [WHITE] * 10
+    assert flag.colours[flag.pixels[8][6]] == navy and flag.colours[flag.pixels[8][18]] == navy
+
+
 def test_a_crest_comes_out_in_at_most_four_colours():
     rainbow = Image.new("RGB", (60, 10))
     for x in range(60):

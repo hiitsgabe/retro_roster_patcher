@@ -18,11 +18,14 @@ def logo_flag(png: bytes, background: tuple[int, int, int] = WHITE, scale: int =
     """`png` cropped to its opaque pixels, fitted into 24x16 without distortion
     and centred on `background`, in four colours.
 
-    Quantised at `scale` times the size, then each `scale` x `scale` block
-    takes its most common colour, so an edge is one of the four colours rather
-    than a blend of two.
+    The four colours come from the crest drawn at `scale` times the size. Each
+    flag pixel is the area average of its `scale` x `scale` block, sharpened,
+    then snapped to the nearest of the four, so an edge is one of them rather
+    than a blend. Averaging keeps a stroke thinner than a block (Everton's
+    tower and lettering) that a vote for the block's most common colour would
+    drop; the sharpening keeps it from fading into its background.
     """
-    from PIL import Image
+    from PIL import Image, ImageFilter
 
     source = Image.open(io.BytesIO(png)).convert("RGBA")
     bbox = source.getchannel("A").getbbox()
@@ -42,15 +45,18 @@ def logo_flag(png: bytes, background: tuple[int, int, int] = WHITE, scale: int =
     palette = (quantised.getpalette() or [])[:12]
     colours = [(palette[i], palette[i + 1], palette[i + 2]) for i in range(0, len(palette), 3)]
     colours += [colours[-1]] * (4 - len(colours))
-    index = quantised.tobytes()  # one palette index per pixel, row by row
-    pixels = []
-    for y in range(FLAG_HEIGHT):
-        row = []
-        for x in range(FLAG_WIDTH):
-            votes = [0] * 4
-            for yy in range(y * scale, y * scale + scale):
-                for xx in range(x * scale, x * scale + scale):
-                    votes[index[yy * w + xx]] += 1
-            row.append(votes.index(max(votes)))
-        pixels.append(row)
+    small = (
+        canvas.convert("RGB")
+        .resize((FLAG_WIDTH, FLAG_HEIGHT), Image.Resampling.BOX)
+        .filter(ImageFilter.UnsharpMask(radius=1, percent=300, threshold=0))
+        .tobytes()
+    )
+
+    def nearest(p: int) -> int:
+        rgb = small[p * 3 : p * 3 + 3]
+        return min(
+            range(4), key=lambda c: sum((a - b) ** 2 for a, b in zip(colours[c], rgb, strict=True))
+        )
+
+    pixels = [[nearest(y * FLAG_WIDTH + x) for x in range(FLAG_WIDTH)] for y in range(FLAG_HEIGHT)]
     return Flag(pixels, colours)
