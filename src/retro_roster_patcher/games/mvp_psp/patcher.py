@@ -246,11 +246,14 @@ class _HashPool:
         ids: list[str],
         pitcher_ids: set[str],
         positions: dict[str, str] | None = None,
+        kept: set[str] | None = None,
     ) -> None:
         # In the club's row order, so a run is deterministic given a disc.
         # Membership of `pitchattrib` is what makes an id a pitcher's;
-        # `positions` is each id's `attrib` primary position.
+        # `positions` is each id's `attrib` primary position; `kept` the ids
+        # rows the patch keeps (the All-Stars) still list.
         self.left = list(ids)
+        self._kept = kept or set()
         self._pitchers = pitcher_ids
         self._positions = positions or {}
         self.crossed = 0
@@ -263,14 +266,21 @@ class _HashPool:
         if not self.left:
             self.synthesised += 1
             return f"00{team_index:02x}{player_index:05x}ff"
-        # `min` keeps the first of equals, so row order breaks ties.
-        taken = min(
-            self.left,
-            key=lambda h: (
-                (h in self._pitchers) != is_pitcher,
+
+        # `min` keeps the first of equals, so row order breaks ties. A kept row's
+        # id goes to a player of its own kind first and never to a cross-fall:
+        # a club's spare batter took its first pitcher id, often its All-Star's,
+        # and the AL All-Stars opened with a second baseman in PPSSPP.
+        def rank(h: str) -> tuple[bool, bool, bool, bool]:
+            wrong = (h in self._pitchers) != is_pitcher
+            return (
+                wrong,
+                wrong and h in self._kept,
                 self._positions.get(h) != position,
-            ),
-        )
+                h not in self._kept,
+            )
+
+        taken = min(self.left, key=rank)
         self.left.remove(taken)
         self.crossed += (taken in self._pitchers) != is_pitcher
         return taken
@@ -663,6 +673,7 @@ class MVPPSPPatcher(Patcher):
         # squad shorter than its block moved every later club, issue #18). A
         # squad longer than the old one takes fresh ids, counted past every id
         # the disc used.
+        kept = {fields.get(ROSTER_PLAYERID, "") for fields in new_roster.values()}
         old_ids: dict[str, list[str]] = {}
         for rec_id, fields in old_roster.items():
             old_ids.setdefault(fields.get(ROSTER_TEAMID, ""), []).append(rec_id)
@@ -682,7 +693,10 @@ class MVPPSPPatcher(Patcher):
             team_hash = TEAM_HASHES[MVP_TEAM_ABBREVS[slot]]
             ids = list(old_ids.get(team_hash, []))
             pool = _HashPool(
-                [old_roster[rid].get(ROSTER_PLAYERID, "") for rid in ids], pitcher_ids, positions
+                [old_roster[rid].get(ROSTER_PLAYERID, "") for rid in ids],
+                pitcher_ids,
+                positions,
+                kept,
             )
             dh_order = next((p.batting_order for p in players if p.roster_position == "DH"), None)
             for player_index, player in enumerate(players):

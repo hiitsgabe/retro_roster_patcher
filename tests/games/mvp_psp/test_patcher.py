@@ -749,6 +749,18 @@ def test_taking_from_the_right_pool_is_not_counted_as_a_cross_fall():
     assert pool.crossed == 0
 
 
+def test_a_cross_fall_leaves_the_ids_kept_rows_list():
+    # Issue #18 in PPSSPP: a club's spare batter took its first pitcher id, which on
+    # the disc is often its All-Star's, so the AL All-Stars opened with Nolan Gorman.
+    pool = _HashPool(["0aaaaaaaa", "0bbbbbbbb"], {"0aaaaaaaa", "0bbbbbbbb"}, kept={"0aaaaaaaa"})
+    assert pool.take(is_pitcher=False, team_index=0, player_index=0) == "0bbbbbbbb"
+
+
+def test_a_player_of_the_right_kind_takes_a_kept_rows_id_first():
+    pool = _HashPool(["0aaaaaaaa", "0bbbbbbbb"], set(), kept={"0bbbbbbbb"})
+    assert pool.take(is_pitcher=False, team_index=0, player_index=0) == "0bbbbbbbb"
+
+
 def test_two_exhausted_pools_synthesise_an_id():
     # Tier 3: `00`, two hex digits of team, five of player index, then `ff`.
     pool = _HashPool([], set())
@@ -1224,6 +1236,14 @@ def test_the_retail_disc_keeps_its_other_sides_and_every_clubs_place(tmp_path, m
     assert attrib["0f58f3c1b"] == before["attrib"]["0f58f3c1b"]  # the "Default Default" template
     written = [roster[r][ROSTER_PLAYERID] for r in order if roster[r][ROSTER_TEAMID] in clubs]
     assert {attrib[p].get(42) for p in written} == {"0"}  # playerattrib_hidden
+    # A pitcher's row on a kept side names a pitcher: a club's spare batter takes
+    # an id no kept row lists.
+    pitching = [
+        roster[r][ROSTER_PLAYERID]
+        for r in others + [r for r in order if roster[r][ROSTER_TEAMID] in all_stars]
+        if roster[r][ROSTER_RH_AL_POS] in ROTATION_POSITIONS + BULLPEN_POSITIONS
+    ]
+    assert [p for p in pitching if attrib[p][ATTRIB_PRIMARY_POS] not in {"0", "10"}] == []
     # An All-Star now names today's player of his 2005 player's club.
     club_of = {}
     for r in order:
