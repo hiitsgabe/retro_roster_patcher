@@ -21,7 +21,6 @@ of the id he is given. See `_HashPool`.
 from __future__ import annotations
 
 import os
-from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
@@ -203,23 +202,36 @@ def _lineup_positions(own: list[str], wanted: tuple[str, ...]) -> list[str]:
 
 
 class _HashPool:
-    """Hands out the disc's own player ids, pitchers' to pitchers where it can.
+    """Hands one club the player ids of its own disc rows, a player his own kind's.
 
     Ids matter because eight tables this patcher never writes key on them --
     `batstat`, `pitchstat`, `fieldstat`, `careerstats`, `pitchcareer` and the
     four split-stat tables. Reusing an id gives the new player the old player's
-    entire statistical history, which is why the pools are split: a pitcher
+    entire statistical history, which is why kinds are matched: a pitcher
     handed a batter's id gets a batter's career line and appears in the game's
     own leaderboards as a hitter.
 
+    The ids are the club's own (issue #18). Rows the patch keeps list players by
+    id too: the retail disc has 36 sides of 25 rows, the 30 clubs then the AL
+    and NL All-Stars, MVP Legends, MVP Heroes and EA's two Burnaby sides. One
+    pool over the whole `attrib` table handed those sides' players, and other
+    clubs', to today's squads, so the Legends and Burnaby sides showed today's
+    players and some took a Legend's hidden flag. A club's own ids are listed
+    only by its own rows and, for its 2005 All-Stars, by All-Star rows; the
+    disc has no spare records to give those back (its 851 `attrib` records are
+    the 850 rostered players and a "Default" template, and the sections have no
+    room for 50 more), so an All-Star row names today's player at the 2005
+    player's position on the 2005 player's club: an id goes to a player of the
+    same kind and, first, of the same `attrib` position.
+
     Three tiers, all preserved, because every alternative loses a player:
 
-      1. A pitcher takes the next id from the pitcher pool, a batter from the
-         batter pool.
-      2. Cross-fall: an exhausted pool borrows from the other, so the player
-         inherits the wrong kind of career line. Counted as `crossed`.
-      3. Synthesis: both pools are empty and an id is manufactured from the team
-         and player index. Counted as `synthesised`.
+      1. An id of the player's own kind, the same position first.
+      2. Cross-fall: the club has none of his kind left, so he takes the other
+         kind's and inherits the wrong kind of career line. Counted as `crossed`.
+      3. Synthesis: the club's ids are spent (a squad longer than its disc
+         block) and an id is manufactured from the team and player index.
+         Counted as `synthesised`.
 
     A synthesised id is `00`, two hex digits of team index, five of player
     index, then `ff` -- eleven characters, where every id in this repository is
@@ -229,30 +241,38 @@ class _HashPool:
     the player has no row in any statistics table at all.
     """
 
-    def __init__(self, attrib_ids: list[str], pitcher_ids: set[str]) -> None:
-        # Order comes from `attrib`, the table both pools are drawn from, so a
-        # run is deterministic given a disc. Membership of `pitchattrib` is what
-        # makes an id a pitcher's.
-        self._pitchers: Iterator[str] = iter([h for h in attrib_ids if h in pitcher_ids])
-        self._batters: Iterator[str] = iter([h for h in attrib_ids if h not in pitcher_ids])
+    def __init__(
+        self,
+        ids: list[str],
+        pitcher_ids: set[str],
+        positions: dict[str, str] | None = None,
+    ) -> None:
+        # In the club's row order, so a run is deterministic given a disc.
+        # Membership of `pitchattrib` is what makes an id a pitcher's;
+        # `positions` is each id's `attrib` primary position.
+        self.left = list(ids)
+        self._pitchers = pitcher_ids
+        self._positions = positions or {}
         self.crossed = 0
         self.synthesised = 0
 
-    def take(self, *, is_pitcher: bool, team_index: int, player_index: int) -> str:
+    def take(
+        self, *, is_pitcher: bool, team_index: int, player_index: int, position: str = ""
+    ) -> str:
         """One id for one player, degrading through the three tiers above."""
-        primary, fallback = (
-            (self._pitchers, self._batters) if is_pitcher else (self._batters, self._pitchers)
-        )
-        try:
-            return next(primary)
-        except StopIteration:
-            pass
-        try:
-            taken = next(fallback)
-        except StopIteration:
+        if not self.left:
             self.synthesised += 1
             return f"00{team_index:02x}{player_index:05x}ff"
-        self.crossed += 1
+        # `min` keeps the first of equals, so row order breaks ties.
+        taken = min(
+            self.left,
+            key=lambda h: (
+                (h in self._pitchers) != is_pitcher,
+                self._positions.get(h) != position,
+            ),
+        )
+        self.left.remove(taken)
+        self.crossed += (taken in self._pitchers) != is_pitcher
         return taken
 
 
@@ -625,10 +645,9 @@ class MVPPSPPatcher(Patcher):
         targets = sorted(
             slot for slot, players in rosters.teams.items() if 0 <= slot < TEAM_COUNT and players
         )
-        pool = _HashPool(
-            list(writer.reader.records.get("attrib", {})),
-            set(writer.reader.records.get("pitchattrib", {})),
-        )
+        pitcher_ids = set(writer.reader.records.get("pitchattrib", {}))
+        attrib = writer.reader.records.get("attrib", {})
+        positions = {h: cols.get(ATTRIB_PRIMARY_POS, "") for h, cols in attrib.items()}
 
         patched_team_hashes = {TEAM_HASHES[MVP_TEAM_ABBREVS[slot]] for slot in targets}
         old_roster = writer.reader.records.get("roster", {})
@@ -640,7 +659,8 @@ class MVPPSPPatcher(Patcher):
         # A patched club's rows take its own old rows' ids, so they stay where
         # its squad was in the table: the game reads a club's squad from its
         # place there (team select lost the Angels' and the Athletics' location
-        # and rank when their rows, the table's first, moved to its end). A
+        # and rank when their rows, the table's first, moved to its end; a
+        # squad shorter than its block moved every later club, issue #18). A
         # squad longer than the old one takes fresh ids, counted past every id
         # the disc used.
         old_ids: dict[str, list[str]] = {}
@@ -650,6 +670,8 @@ class MVPPSPPatcher(Patcher):
 
         teams_patched = 0
         players_patched = 0
+        crossed = synthesised = 0
+        short: list[str] = []
         for i, slot in enumerate(targets):
             players: list[MVPPlayerRecord] = rosters.teams[slot]
             if on_progress is not None:
@@ -659,12 +681,16 @@ class MVPPSPPatcher(Patcher):
                 )
             team_hash = TEAM_HASHES[MVP_TEAM_ABBREVS[slot]]
             ids = list(old_ids.get(team_hash, []))
+            pool = _HashPool(
+                [old_roster[rid].get(ROSTER_PLAYERID, "") for rid in ids], pitcher_ids, positions
+            )
             dh_order = next((p.batting_order for p in players if p.roster_position == "DH"), None)
             for player_index, player in enumerate(players):
                 player.hash_id = pool.take(
                     is_pitcher=player.is_pitcher,
                     team_index=slot,
                     player_index=player_index,
+                    position=str(POS_STRING_TO_NUM.get(player.primary_position, DEFAULT_POS_NUM)),
                 )
                 self._write_player(writer, player)
                 if ids:
@@ -674,6 +700,17 @@ class MVPPSPPatcher(Patcher):
                     roster_counter += 1
                 new_roster[rec_id] = self._build_roster_fields(team_hash, player, dh_order)
                 players_patched += 1
+            # A squad shorter than the club's block: the block keeps its length
+            # (see above), its last rows listing the 2005 players nobody took,
+            # out of every lineup.
+            for rec_id, player_id in zip(ids, pool.left, strict=False):
+                new_roster[rec_id] = self._benched_row(
+                    team_hash, player_id, player_id in pitcher_ids
+                )
+            if ids:
+                short.append(MVP_TEAM_ORDER[slot])
+            crossed += pool.crossed
+            synthesised += pool.synthesised
             teams_patched += 1
 
         writer.update_records("roster", new_roster)
@@ -691,13 +728,18 @@ class MVPPSPPatcher(Patcher):
             teams[TEAM_HASHES[abbrev]] = row
         if renamed:
             writer.update_records("team", teams)
-        if pool.crossed or pool.synthesised:
+        if crossed or synthesised:
             # Report the degradation; do not fix it. Every alternative to it
             # drops a player. See `_HashPool`.
             self.status(
-                f"{pool.crossed} player(s) took an id from the other position pool and "
-                f"{pool.synthesised} were given a synthesised id; their career statistics "
+                f"{crossed} player(s) took an id from the other position pool and "
+                f"{synthesised} were given a synthesised id; their career statistics "
                 f"in this game will not be their own"
+            )
+        if short:
+            self.status(
+                f"Fewer than {PLAYERS_PER_TEAM} players for {', '.join(short)}: "
+                f"the rest of each squad keeps 2005 players, out of the lineup"
             )
         return teams_patched, players_patched
 
@@ -851,6 +893,23 @@ class MVPPSPPatcher(Patcher):
             fields[base + PA_PITCH_CONTROL_OFFSET] = str(pitch.control)
             fields[base + PA_PITCH_VELOCITY_OFFSET] = str(pitch.velocity)
         return fields
+
+    @staticmethod
+    def _benched_row(team_hash: str, player_id: str, is_pitcher: bool) -> dict[int, str]:
+        """A `roster` row in no lineup: on the bench, or in long relief."""
+        where = BULLPEN_POSITIONS[-1] if is_pitcher else BENCH_POSITION
+        return {
+            ROSTER_TEAMID: team_hash,
+            ROSTER_PLAYERID: player_id,
+            ROSTER_RH_AL_POS: where,
+            ROSTER_RH_AL_ORDER: str(NOT_IN_LINEUP),
+            ROSTER_RH_NL_POS: where,
+            ROSTER_RH_NL_ORDER: str(NOT_IN_LINEUP),
+            ROSTER_LH_AL_POS: where,
+            ROSTER_LH_AL_ORDER: str(NOT_IN_LINEUP),
+            ROSTER_LH_NL_POS: where,
+            ROSTER_LH_NL_ORDER: str(NOT_IN_LINEUP),
+        }
 
     @staticmethod
     def _build_roster_fields(

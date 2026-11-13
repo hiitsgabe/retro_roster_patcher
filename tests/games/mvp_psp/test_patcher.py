@@ -76,7 +76,7 @@ from retro_roster_patcher.games.mvp_psp.patcher import (
     _HashPool,
     _on,
 )
-from retro_roster_patcher.games.mvp_psp.rom_writer import SectionTooLargeError
+from retro_roster_patcher.games.mvp_psp.rom_writer import MVPPSPRomWriter, SectionTooLargeError
 from retro_roster_patcher.sports.espn import EspnClient
 from retro_roster_patcher.sports.models import League, LeagueData, Player, Team, TeamRoster
 from tests.fixtures import synthetic_mvp_iso as fixture
@@ -910,10 +910,9 @@ def test_progress_reaches_one(tmp_path):
 
 
 def test_teams_are_written_in_slot_order_whatever_order_the_mapping_holds(tmp_path):
-    # `targets` is sorted, and it has to be: `_HashPool` hands ids out in the
-    # `attrib` table's order, so which player inherits which career depends on the
-    # order the clubs are visited in. A `MappedRosters` that crossed a JSON boundary
-    # carries whatever order its dict was built in; this one is built backwards.
+    # `targets` is sorted, so progress and fresh roster row ids follow slot order.
+    # A `MappedRosters` that crossed a JSON boundary carries whatever order its dict
+    # was built in; this one is built backwards.
     seen = []
     patcher = make_patcher(tmp_path)
     mapped = patcher.map_rosters(league(squads={2: full_squad(1000), 1: full_squad(2000)}))
@@ -1125,6 +1124,119 @@ def test_every_new_roster_row_names_a_player_the_patch_wrote(tmp_path):
         if cols[ROSTER_PLAYERID] not in attrib
     ]
     assert missing == []
+
+
+#: Every club's block as long as a full squad, which is what the retail disc has:
+#: 36 sides of 25 rows each.
+RETAIL_SHAPED_DISC = fixture.DiscSpec(teams=30, players_per_team=25)
+
+
+def test_a_patch_never_writes_over_a_player_a_kept_row_lists(tmp_path):
+    # Issue #18: ids came from one pool in `attrib` order, so a squad took ids that
+    # rows the patch keeps still list (other clubs; on the disc also the All-Star,
+    # Legends, Heroes and Burnaby sides), and those sides showed today's players.
+    _, out = patch_one(tmp_path, {1: full_squad(1000)})
+    before = patched_table(tmp_path / "game.iso", "attrib")
+    after = patched_table(out, "attrib")
+    kept = {
+        cols[ROSTER_PLAYERID]
+        for slot in range(1, DISC.teams)
+        for cols in roster_rows(out, slot).values()
+    }
+    assert [pid for pid in kept if after[pid] != before[pid]] == []
+
+
+def roster_order(path):
+    blob = fixture.read_database_big(path.read_bytes(), lba=fixture.SMALL_LBA)
+    table = fixture.decompress_section_at(blob, "roster")
+    rows = fixture.parse_table(table)
+    return [(rid, rows[rid][ROSTER_TEAMID]) for rid in fixture.parse_table_order(table)]
+
+
+def test_a_short_squad_keeps_every_clubs_rows_in_their_places(tmp_path):
+    # Issue #18: the game reads a club's squad from its place in the table. A squad
+    # shorter than its club's block dropped the rest of the block, so every later
+    # club's rows moved up and the clubs showed each other's players.
+    _, out = patch_one(tmp_path, {1: full_squad(1000)[:20]}, spec=RETAIL_SHAPED_DISC)
+    assert roster_order(out) == roster_order(tmp_path / "game.iso")
+
+
+ORDER_COLUMNS = (ROSTER_RH_AL_ORDER, ROSTER_RH_NL_ORDER, ROSTER_LH_AL_ORDER, ROSTER_LH_NL_ORDER)
+
+
+def test_the_rows_a_short_squad_leaves_bat_nobody(tmp_path):
+    _, out = patch_one(tmp_path, {1: full_squad(1000)[:20]}, spec=RETAIL_SHAPED_DISC)
+    attrib = patched_table(out, "attrib")
+    left = [
+        cols
+        for cols in roster_rows(out, 0).values()
+        if not attrib[cols[ROSTER_PLAYERID]][ATTRIB_LAST_NAME].startswith("Family")
+    ]
+    assert len(left) == RETAIL_SHAPED_DISC.players_per_team - 20
+    assert {cols[c] for cols in left for c in ORDER_COLUMNS} == {str(NOT_IN_LINEUP)}
+
+
+real_disc = pytest.mark.skipif(
+    not os.environ.get("RETRO_ROSTER_TEST_ROMS"),
+    reason="set RETRO_ROSTER_TEST_ROMS to a directory holding 'MVP Baseball (USA).iso'",
+)
+
+
+@pytest.mark.real_rom
+@real_disc
+def test_the_retail_disc_keeps_its_other_sides_and_every_clubs_place(tmp_path, monkeypatch):
+    # Issue #18 on the real disc, in memory (no image is written): all 30 clubs
+    # patched, Milwaukee short of 25. The six other sides -- AL and NL All-Stars,
+    # MVP Legends and Heroes, the Burnaby Argonauts and Chimaera -- keep their rows.
+    import dataclasses
+    from pathlib import Path
+
+    monkeypatch.undo()  # the real disc sits at the real `database.big` sector
+    rom = Path(os.environ["RETRO_ROSTER_TEST_ROMS"]) / "MVP Baseball (USA).iso"
+    if not rom.exists():
+        pytest.fail(f"RETRO_ROSTER_TEST_ROMS is set but {rom} is missing")
+    patcher = make_patcher(tmp_path)
+    squad = patcher.map_rosters(league(squads={1: full_squad(1000)})).teams[0]
+    teams = {slot: [dataclasses.replace(r) for r in squad] for slot in range(TEAM_COUNT)}
+    teams[22] = teams[22][:20]
+    writer = MVPPSPRomWriter(str(rom), os.devnull)
+    assert writer.load()
+    tables = writer.reader.records
+    before = {name: dict(tables[name]) for name in ("attrib", "roster")}
+    order = list(writer.reader.record_order["roster"])
+
+    patcher._write_all_teams(writer, MappedRosters(game_id="mvp-psp", teams=teams), None)
+    writer.rebuild_database_big()  # every rebuilt section still fits
+
+    roster, attrib = tables["roster"], tables["attrib"]
+    assert [(r, roster[r][ROSTER_TEAMID]) for r in order] == [
+        (r, before["roster"][r][ROSTER_TEAMID]) for r in order
+    ]
+    clubs = set(TEAM_HASHES.values())
+    all_stars = {"0005972f2", "00059749f"}
+    others = [r for r in order if roster[r][ROSTER_TEAMID] not in clubs | all_stars]
+    assert len(others) == 100
+    assert all(roster[r] == before["roster"][r] for r in others)
+    assert all(
+        attrib[roster[r][ROSTER_PLAYERID]] == before["attrib"][roster[r][ROSTER_PLAYERID]]
+        for r in others
+    )
+    assert attrib["0f58f3c1b"] == before["attrib"]["0f58f3c1b"]  # the "Default Default" template
+    written = [roster[r][ROSTER_PLAYERID] for r in order if roster[r][ROSTER_TEAMID] in clubs]
+    assert {attrib[p].get(42) for p in written} == {"0"}  # playerattrib_hidden
+    # An All-Star now names today's player of his 2005 player's club.
+    club_of = {}
+    for r in order:
+        if before["roster"][r][ROSTER_TEAMID] in clubs:
+            club_of[before["roster"][r][ROSTER_PLAYERID]] = before["roster"][r][ROSTER_TEAMID]
+    now_on = {
+        roster[r][ROSTER_PLAYERID]: roster[r][ROSTER_TEAMID]
+        for r in order
+        if roster[r][ROSTER_TEAMID] in clubs
+    }
+    stars = [roster[r][ROSTER_PLAYERID] for r in order if roster[r][ROSTER_TEAMID] in all_stars]
+    # One AL All-Star is a Burnaby Argonaut and on no club; he stays (checked above).
+    assert all(now_on.get(p) == club_of[p] for p in stars if p in club_of)
 
 
 def test_a_patched_players_jersey_reaches_the_disc(tmp_path):
@@ -1560,12 +1672,14 @@ def test_a_run_that_only_crosses_still_reports(tmp_path):
 
 
 def test_a_patch_that_does_not_degrade_says_nothing_about_it(tmp_path):
+    # A club block of 30 holds ten pitchers and twenty batters, room for a full
+    # squad of each kind: the club's own ids cover everyone.
     seen = []
     patcher = MVPPSPPatcher(tmp_path / "cache", on_status=seen.append)
     patcher.api = FakeApi()
     rosters = patcher.map_rosters(league(squads={1: full_squad(1000)}))
     patcher.patch(
-        rom_path=write_iso(tmp_path, DISC),
+        rom_path=write_iso(tmp_path, fixture.DiscSpec(teams=1, players_per_team=30)),
         output_path=tmp_path / "out.iso",
         rosters=rosters,
     )
