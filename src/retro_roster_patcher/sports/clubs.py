@@ -16,20 +16,26 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from datetime import date
 from functools import cache
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from ..core.assets import package_bytes
 from ..core.concurrency import emit_status
-from ..core.errors import ApiError, ensure_cache_dir
-from ..core.models import StatusFn
+from ..core.errors import ApiError, CapabilityError, ensure_cache_dir
+from ..core.models import ProgressFn, SlotMapping, StatusFn
 from ..core.text import to_ascii
 from . import _http
-from .models import Team
+from .espn import league_id_of
+from .lineup import apply_lineup
+from .models import League, LeagueData, Team, TeamRoster
+from .nationals import place_ranked
+
+if TYPE_CHECKING:
+    from ..core.patcher import Patcher
 
 RANKING_URL = "https://comp.uefa.com/v2/coefficients"
 #: The `LeagueData.league` of a club fill: no provider league, and a patch names no slot
@@ -57,6 +63,7 @@ COUNTRY_LEAGUES = {
 }
 #: The Champions League, the Europa League and the Conference League.
 UEFA_LEAGUES = (2008, 2022, 2023)
+CHAMPIONS_LEAGUE = 2008
 #: Words of a club's name that say what it is, not which one it is.
 GENERIC_WORDS = frozenset(
     "fc cf sc ac as afc club de da do del the calcio football futebol nk hnk gnk fk pfc ks mks "
@@ -73,6 +80,8 @@ WORD_ALIASES = {
     "zvezda": "star",
     "warszawa": "warsaw",
 }
+
+FillMode = Literal["ranking", "champions"]
 
 
 @dataclass(frozen=True)
@@ -226,3 +235,134 @@ def pair_club(
     if shared >= 2 or whole or (home and not rivals):
         return team
     return None
+
+
+class _Teams:
+    """The ESPN team lists `pair_club` needs, fetched once and only when a club has no
+    snapshot id."""
+
+    def __init__(self, api: Any, season: int) -> None:
+        self.api, self.season = api, season
+        self._teams: list[Team] | None = None
+        self.country: dict[int, str] = {}
+
+    def teams(self) -> list[Team]:
+        if self._teams is None:
+            by_id: dict[int, Team] = {}
+            for country, leagues in COUNTRY_LEAGUES.items():
+                for league in leagues:
+                    for team in self.api.get_teams(league, self.season):
+                        by_id.setdefault(team.id, team)
+                        self.country[team.id] = country
+            for league in UEFA_LEAGUES:
+                for team in self.api.get_teams(league, self.season):
+                    by_id.setdefault(team.id, team)
+            self._teams = list(by_id.values())
+        return self._teams
+
+
+def fetch_top_clubs(
+    patcher: Patcher,
+    rom: Path,
+    season: int,
+    taken: Iterable[int],
+    on_progress: ProgressFn | None = None,
+    *,
+    exclude_ids: Iterable[str | int] = (),
+    mode: FillMode = "ranking",
+) -> tuple[LeagueData, list[SlotMapping]]:
+    """(LeagueData, slot mapping) of the best-ranked clubs for `patcher.club_fill_slots(rom,
+    taken)`, for `map_rosters` and a `merge`.
+
+    Squads and lineups are fetched in ranking order until every slot has a club. `mode`
+    "champions" takes the clubs of this season's Champions League first (ESPN's
+    `uefa.champions` teams), by coefficient, then the rest. A club ESPN has no team or squad
+    for is skipped with a status line, and the next one takes its place. `exclude_ids` are the
+    ESPN team ids the league mapping already placed: they are never placed a second time.
+
+    A club the disc already has goes back to its own slot (`own_club_slot`), one whose
+    country's league group the slots take goes there (`club_fill_regions`), the rest fill the
+    slots left in order. The league is `CLUB_FILL_LEAGUE`, "Europe": no slot group is named
+    after it.
+    """
+    if not patcher.supports_club_fill:
+        raise CapabilityError(f"{patcher.game_id or type(patcher).__name__} has no club fill")
+    free = patcher.club_fill_slots(rom, set(taken))
+    league = League(id=CLUB_FILL_LEAGUE, name="Europe", country="Europe", season=season)
+    if not free:
+        return LeagueData(league=league), []
+    api: Any = getattr(patcher, "api")  # noqa: B009 -- the base Patcher declares no client
+    ranking = uefa_ranking(
+        patcher.cache_dir, on_status=patcher.status, transport=getattr(patcher, "_transport", None)
+    )
+    lists = _Teams(api, season)
+    paired: dict[str, int | None] = {}
+
+    def espn_id(club: RankedClub) -> int | None:
+        if club.uefa_id not in paired:
+            if club.espn_id:
+                paired[club.uefa_id] = int(club.espn_id)
+            else:
+                team = pair_club(club, lists.teams(), lists.country)
+                paired[club.uefa_id] = team.id if team else None
+        return paired[club.uefa_id]
+
+    def order() -> Iterator[RankedClub]:
+        if mode == "champions":
+            playing = {t.id for t in api.get_teams(CHAMPIONS_LEAGUE, season)}
+            yield from (c for c in ranking if espn_id(c) in playing)
+            yield from (c for c in ranking if espn_id(c) not in playing)
+        else:
+            yield from ranking
+
+    excluded = {str(i) for i in exclude_ids}
+    country: dict[int, str] = {}
+    rosters: list[TeamRoster] = []
+    for club in order():
+        if len(rosters) == len(free):
+            break
+        team_id = espn_id(club)
+        if team_id is None:
+            patcher.status(f"Skipped {club.name}: ESPN has no team for it")
+            continue
+        if str(team_id) in excluded or team_id in country:
+            continue
+        found = api.get_team(team_id, season)
+        if found is None:
+            patcher.status(f"Skipped {club.name}: ESPN has no team {team_id}")
+            continue
+        team, slug = found
+        if on_progress is not None:
+            on_progress(
+                len(rosters) / len(free), f"Clubs {len(rosters) + 1}/{len(free)}: {team.name}"
+            )
+        roster = TeamRoster(team=team)
+        try:
+            roster.players = api.get_squad(team.id, season, league_code=slug)
+        except ApiError as exc:
+            patcher.status(f"Skipped {team.name}: its squad failed ({exc})")
+            continue
+        if not roster.players:
+            patcher.status(f"Skipped {team.name}: ESPN has no squad for it")
+            continue
+        lineup = None
+        league_id = league_id_of(slug)
+        if league_id is not None:
+            try:
+                lineup = api.get_lineup(
+                    team.id, league_id, squad=roster.players, team=team, season=season
+                )
+            except ApiError as exc:
+                patcher.status(f"No lineup for {team.name} ({exc})")
+        apply_lineup(roster, lineup)
+        roster.players = patcher.suggest_squad_order(roster)
+        rosters.append(roster)
+        country[team.id] = club.country
+    mapping = place_ranked(
+        [r.team for r in rosters],
+        free,
+        lambda t: patcher.own_club_slot(rom, t),
+        regions=patcher.club_fill_regions(rom),
+        region_of=lambda t: country.get(t.id),
+    )
+    return LeagueData(league=league, teams=rosters), mapping

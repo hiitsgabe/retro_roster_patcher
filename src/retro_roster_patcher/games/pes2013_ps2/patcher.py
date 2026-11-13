@@ -52,6 +52,7 @@ from ...core.models import (
 from ...core.patcher import Patcher
 from ...core.registry import register
 from ...sports import _http
+from ...sports.clubs import CLUB_FILL_LEAGUE
 from ...sports.espn import LINEUP_GROUPS, EspnClient
 from ...sports.lineup import DEPTH, GROUP_ROLE, apply_lineup, parse_shape, team_formation
 from ...sports.lineup import lineup_role as lineup_role_name
@@ -132,6 +133,95 @@ NATIONAL_ALIASES = {
     "UNITED STATES": "USA",
     "UAE": "UNITED ARAB EMIRATES",
 }
+#: The ESPN team id of each disc club ESPN has (slots 0-125; the English group's 19 are
+#: unlicensed): a club fill puts the club back in its own slot (`own_club_slot`).
+DISC_CLUBS = {
+    7: 360,
+    23: 6997,
+    25: 166,
+    26: 273,
+    27: 167,
+    28: 176,
+    31: 2502,
+    32: 160,
+    34: 169,
+    37: 179,
+    38: 170,
+    40: 105,
+    41: 107,
+    42: 2925,
+    45: 109,
+    46: 3263,
+    47: 110,
+    48: 111,
+    49: 112,
+    50: 103,
+    51: 114,
+    53: 115,
+    55: 104,
+    58: 239,
+    59: 118,
+    60: 2726,
+    61: 139,
+    62: 140,
+    63: 142,
+    64: 145,
+    65: 146,
+    68: 147,
+    69: 148,
+    72: 152,
+    73: 153,
+    76: 156,
+    77: 2565,
+    78: 93,
+    79: 1068,
+    80: 83,
+    81: 244,
+    82: 85,
+    83: 90,
+    84: 88,
+    85: 2922,
+    87: 1538,
+    88: 99,
+    90: 97,
+    91: 101,
+    92: 86,
+    93: 89,
+    94: 243,
+    95: 94,
+    98: 441,
+    99: 570,
+    100: 597,
+    101: 433,
+    102: 909,
+    103: 3101,
+    104: 132,
+    106: 887,
+    107: 435,
+    108: 443,
+    109: 605,
+    111: 1929,
+    112: 2994,
+    113: 437,
+    114: 2250,
+    115: 5260,
+    117: 1941,
+    118: 2533,
+    119: 256,
+    120: 266,
+    121: 1895,
+    122: 436,
+    123: 432,
+    124: 493,
+}
+#: The slots a club fill takes first: the clubs of no league group (Exhibition "Other", the
+#: Champions League's "Other leagues A" 98-117 and "B" 118-125), then the slots of the league
+#: groups no league takes, then the four Exhibition-only sides 126-129. Never 130-138: those
+#: are hidden Master League sides, with no name, kit or formation.
+OTHER_CLUBS = range(98, 126)
+EXHIBITION_CLUBS = range(126, 130)
+#: Each league group's country, as UEFA codes it (`club_fill_regions`).
+GROUP_COUNTRIES = ("ENG", "FRA", "ITA", "NED", "ESP")
 #: ESPN spells attackers two ways across leagues.
 ESPN_GROUPS = {"Forward": "Attacker", "Attacker": "Attacker"}
 
@@ -555,6 +645,8 @@ class PES2013PS2Patcher(Patcher):
     #: `fill_slots`: the 60 nations' rows (the Classic sides keep theirs). A nation the disc
     #: has a row for stays in it; any other takes a free row in its own name and flag.
     supports_nation_fill: bool = True
+    #: `club_fill_slots`: the clubs of no league group, the unused groups, then 126-129.
+    supports_club_fill: bool = True
     #: Screen art `patch(images={name: png})` can replace; `export_images`
     #: writes the current art of each as a PNG to edit.
     image_slots: tuple[str, ...] = IMAGE_SLOT_NAMES
@@ -652,6 +744,26 @@ class PES2013PS2Patcher(Patcher):
         nationality (`nation_ident`), when that is one of the 60 nations' rows."""
         ident = nation_ident(self._nationalities(rom_path), team.name, team.code)
         return NATIONAL_SLOT_BASE + ident if ident is not None and ident < NATION_ROWS else None
+
+    def club_fill_slots(self, rom_path: Path, taken: Collection[int]) -> list[int]:
+        """`OTHER_CLUBS`, then the slots of every league group none of `taken` is in, then
+        `EXHIBITION_CLUBS`, less `taken`. A group a league holds even one slot of is left."""
+        groups = [g for g in LEAGUE_GROUPS if not any(g.holds(s) for s in taken)]
+        slots = [*OTHER_CLUBS, *(s for g in groups for s in range(g.first, g.first + g.count))]
+        return [s for s in [*slots, *EXHIBITION_CLUBS] if s not in taken]
+
+    def own_club_slot(self, rom_path: Path, team: Team) -> int | None:
+        """The disc's slot of club `team` (`DISC_CLUBS`, by ESPN id), or None."""
+        return next((slot for slot, espn in DISC_CLUBS.items() if espn == team.id), None)
+
+    def club_fill_regions(self, rom_path: Path) -> dict[int, str]:
+        """Each league group's slots are its country's (`GROUP_COUNTRIES`): a fill club of
+        that country takes one of them first."""
+        return {
+            s: country
+            for g, country in zip(LEAGUE_GROUPS, GROUP_COUNTRIES, strict=True)
+            for s in range(g.first, g.first + g.count)
+        }
 
     def _nationalities(self, rom_path: Path) -> list[tuple[str, str]]:
         """The English names and codes of the disc's nationalities (no patch writes them),
@@ -797,7 +909,8 @@ class PES2013PS2Patcher(Patcher):
                 ],
                 team_id=roster.team.id,
                 logo_url=roster.team.logo_url,
-                league_name=data.league.name,
+                # A club fill names no group after its "league" (`CLUB_FILL_LEAGUE`).
+                league_name="" if data.league.id == CLUB_FILL_LEAGUE else data.league.name,
                 league_logo_url=data.league.logo_url,
                 national=national,
                 kit_home=home_kit,

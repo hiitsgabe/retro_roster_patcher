@@ -211,10 +211,38 @@ def ranked_slot_map(
     leave nations out drops the last.
     """
     pairs = _ranked_pairs(ranking, espn_teams, aliases or {})[: len(free_slots)]
-    chosen = [team for _, team in pairs]
+    code = {id(team): nation.code or team.code for nation, team in pairs}
+    return place_ranked(
+        [team for _, team in pairs],
+        free_slots,
+        own_slot,
+        home_only=home_only,
+        regions=regions,
+        region_of=lambda team: CONFEDERATIONS.get(code[id(team)].upper()),
+    )
+
+
+def place_ranked(
+    teams: Sequence[Team],
+    free_slots: Sequence[int],
+    own_slot: Callable[[Team], int | None],
+    *,
+    home_only: Collection[int] = (),
+    regions: Mapping[int, str] | None = None,
+    region_of: Callable[[Team], str | None] | None = None,
+) -> list[SlotMapping]:
+    """Map `teams`, best first, onto `free_slots`, one each, until the slots run out.
+
+    A team whose `own_slot` is free takes it; the others fill the slots left, in
+    `free_slots`' order, a slot in `home_only` excepted. With `regions` (a slot's region) and
+    `region_of` (a team's), a moved team takes a slot of its own region first, then any slot
+    left. The mapping is in the teams' order, so a game that must leave teams out drops the
+    last. `ranked_slot_map` (nations by confederation) and `clubs.fetch_top_clubs` (clubs by
+    country) both place their teams so.
+    """
     placed: dict[int, Team] = {}
     moved: list[Team] = []
-    for team in chosen:
+    for team in teams:
         slot = own_slot(team)
         if slot is not None and slot in free_slots and slot not in placed:
             placed[slot] = team
@@ -222,14 +250,11 @@ def ranked_slot_map(
             moved.append(team)
     rest = [s for s in free_slots if s not in placed and s not in home_only]
     moved = moved[: len(rest)]
-    if regions:
-        code = {id(team): nation.code or team.code for nation, team in pairs}
+    if regions and region_of is not None:
         late = []
         for team in moved:
-            confederation = CONFEDERATIONS.get(code[id(team)].upper())
-            slot = next(
-                (s for s in rest if confederation and regions.get(s) == confederation), None
-            )
+            region = region_of(team)
+            slot = next((s for s in rest if region and regions.get(s) == region), None)
             if slot is None:
                 late.append(team)
             else:
@@ -237,7 +262,7 @@ def ranked_slot_map(
                 rest.remove(slot)
         moved = late
     placed.update(zip(rest, moved, strict=False))
-    rank = {id(team): k for k, team in enumerate(chosen)}
+    rank = {id(team): k for k, team in enumerate(teams)}
     return [
         SlotMapping(slot_index=slot, team_id=team.id, team_name=team.name)
         for slot, team in sorted(placed.items(), key=lambda item: rank[id(item[1])])

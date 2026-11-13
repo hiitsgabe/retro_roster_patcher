@@ -6,9 +6,10 @@ from datetime import date
 import pytest
 
 from retro_roster_patcher.core.errors import ApiError
+from retro_roster_patcher.core.patcher import Patcher
 from retro_roster_patcher.sports import clubs
 from retro_roster_patcher.sports.clubs import RankedClub, pair_club, season_year, uefa_ranking
-from retro_roster_patcher.sports.models import Team
+from retro_roster_patcher.sports.models import Player, Team
 
 
 def _member(uefa_id, name, country, rank, points, display="", official=""):
@@ -175,3 +176,173 @@ def test_a_club_pairs_with_the_espn_team_of_its_own_country(club, expected):
 )
 def test_a_club_without_a_team_of_its_country_is_not_paired(club):
     assert pair_club(club, ESPN, COUNTRY) is None
+
+
+# --- fetch_top_clubs --------------------------------------------------------------------
+
+# A ranking of five clubs: four with a snapshot id, one (Lens, rank 3) paired by name.
+RANKING = [
+    _member("50037", "FC Bayern München", "GER", 1, 133.5),  # snapshot: 132
+    _member("52280", "Arsenal FC", "ENG", 2, 132.0),  # snapshot: 359
+    _member("999001", "RC Lens", "FRA", 3, 99.0),  # not in the snapshot
+    _member("52747", "Paris Saint-Germain", "FRA", 4, 127.0),  # snapshot: 160
+    _member("50147", "SL Benfica", "POR", 5, 80.0),  # snapshot: 1929
+]
+TEAMS = {
+    132: (Team(id=132, name="Bayern Munich"), "ger.1"),
+    359: (Team(id=359, name="Arsenal"), "eng.1"),
+    175: (Team(id=175, name="Lens"), "fra.1"),
+    160: (Team(id=160, name="Paris Saint-Germain"), "fra.1"),
+    1929: (Team(id=1929, name="Benfica"), "por.1"),
+}
+
+
+class ClubApi:
+    def __init__(self, squads, champions=()):
+        self.squads = squads
+        self.champions = champions
+        self.asked: list[int] = []
+        self.lists: list[int] = []
+        self.lineups: list[tuple[int, int]] = []
+
+    def get_teams(self, league_id, season=None):
+        self.lists.append(league_id)
+        if league_id == 2008:
+            return [TEAMS[i][0] for i in self.champions]
+        return [TEAMS[175][0], TEAMS[160][0]] if league_id == 2005 else []
+
+    def get_team(self, team_id, season=None):
+        return TEAMS.get(team_id)
+
+    def get_squad(self, team_id, season=None, league_code=None):
+        assert league_code == TEAMS[team_id][1]
+        self.asked.append(team_id)
+        found = self.squads.get(team_id, [])
+        if isinstance(found, Exception):
+            raise found
+        return list(found)
+
+    def get_lineup(self, team_id, league_id, squad=None, team=None, season=None):
+        self.lineups.append((team_id, league_id))
+        return None
+
+
+class ClubPatcher(Patcher):
+    supports_club_fill = True
+
+    def __init__(self, cache_dir, squads, slots=(20, 98, 99), own=None, **api):
+        super().__init__(cache_dir)
+        self.api = ClubApi(squads, **api)
+        self._transport = uefa_transport({2027: RANKING, 2026: RANKING})
+        self.slots, self.own = list(slots), own or {}
+        self.lines: list[str] = []
+        self.on_status = self.lines.append
+
+    def club_fill_slots(self, rom_path, taken):
+        return [s for s in self.slots if s not in taken]
+
+    def own_club_slot(self, rom_path, team):
+        return self.own.get(team.id)
+
+    def club_fill_regions(self, rom_path):
+        return {20: "FRA", 21: "FRA"}
+
+    def suggest_squad_order(self, team_roster):
+        return list(reversed(team_roster.players))
+
+    def analyze_rom(self, rom_path):
+        raise NotImplementedError
+
+    def fetch(self, *, season, league_id=None, on_progress=None):
+        raise NotImplementedError
+
+    def map_rosters(self, data, slot_mapping=None, *, order_as_given=False):
+        raise NotImplementedError
+
+    def patch(self, *, rom_path, output_path, rosters, on_progress=None, **options):
+        raise NotImplementedError
+
+
+def players(base: int) -> list[Player]:
+    return [Player(id=base + i, name=f"P{base + i}", position="Defender") for i in range(2)]
+
+
+SQUADS = {i: players(i * 10) for i in TEAMS}
+
+
+def _fill(patcher, **kwargs):
+    from pathlib import Path
+
+    from retro_roster_patcher.sports.clubs import fetch_top_clubs
+
+    return fetch_top_clubs(patcher, Path("rom.iso"), 2026, kwargs.pop("taken", ()), **kwargs)
+
+
+def slots_of(mapping):
+    return {m.slot_index: m.team_id for m in mapping}
+
+
+def test_the_best_clubs_fill_the_slots_own_slot_first_then_their_country_s_group(tmp_path):
+    patcher = ClubPatcher(tmp_path, SQUADS, own={1929: 99})
+    data, mapping = _fill(patcher)
+    # Bayern, Arsenal and Lens make the cut; Lens is French, so it takes the French group's
+    # slot, and the rest fill 98, 99 in rank order.
+    assert [m.team_id for m in mapping] == [132, 359, 175]
+    assert slots_of(mapping) == {98: 132, 99: 359, 20: 175}
+    assert [r.team.id for r in data.teams] == [132, 359, 175]
+    assert data.league.id == 0 and data.league.name == "Europe"
+    # Each squad in the game's order, its lineup asked from its own league.
+    assert [p.id for p in data.teams[0].players] == [1321, 1320]
+    assert patcher.api.lineups == [(132, 2003), (359, 2001), (175, 2005)]
+
+
+def test_a_disc_club_goes_back_to_its_own_slot(tmp_path):
+    patcher = ClubPatcher(tmp_path, SQUADS, slots=(98, 99, 104), own={132: 104})
+    _data, mapping = _fill(patcher)
+    assert slots_of(mapping) == {104: 132, 98: 359, 99: 175}
+
+
+def test_the_leagues_own_clubs_are_never_placed_twice(tmp_path):
+    patcher = ClubPatcher(tmp_path, SQUADS)
+    _data, mapping = _fill(patcher, exclude_ids=[359])
+    assert [m.team_id for m in mapping] == [132, 175, 160]
+    assert 359 not in patcher.api.asked
+
+
+def test_an_empty_or_failed_squad_lets_the_next_club_in(tmp_path):
+    squads = {**SQUADS, 359: ApiError("HTTP 500"), 175: []}
+    patcher = ClubPatcher(tmp_path, squads)
+    data, mapping = _fill(patcher)
+    assert [r.team.id for r in data.teams] == [132, 160, 1929]
+    assert any("Arsenal" in line and "failed" in line for line in patcher.lines)
+    assert any("Lens" in line and "no squad" in line for line in patcher.lines)
+
+
+def test_the_name_pairing_lists_are_fetched_only_for_a_club_without_an_id(tmp_path):
+    patcher = ClubPatcher(tmp_path, SQUADS, slots=(98, 99))
+    _fill(patcher)
+    assert patcher.api.lists == []  # Bayern and Arsenal have snapshot ids
+    patcher = ClubPatcher(tmp_path, SQUADS, slots=(98, 99, 100))
+    _fill(patcher)
+    assert 2005 in patcher.api.lists and 2008 in patcher.api.lists
+
+
+def test_the_champions_mode_takes_this_season_s_participants_first(tmp_path):
+    patcher = ClubPatcher(tmp_path, SQUADS, champions=(160, 1929))
+    _data, mapping = _fill(patcher, mode="champions")
+    assert [m.team_id for m in mapping] == [160, 1929, 132]
+
+
+def test_no_free_slot_fetches_nothing(tmp_path):
+    patcher = ClubPatcher(tmp_path, SQUADS)
+    data, mapping = _fill(patcher, taken=[20, 98, 99])
+    assert mapping == [] and data.teams == [] and patcher.api.asked == []
+
+
+def test_a_patcher_without_the_club_fill_is_refused(tmp_path):
+    from retro_roster_patcher.core.errors import CapabilityError
+
+    patcher = ClubPatcher(tmp_path, SQUADS)
+    patcher.supports_club_fill = False
+    with pytest.raises(CapabilityError):
+        _fill(patcher)

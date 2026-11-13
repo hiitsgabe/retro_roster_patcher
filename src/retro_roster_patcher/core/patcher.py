@@ -14,7 +14,7 @@ re-running the network step.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 from pathlib import Path
 from typing import Any
 
@@ -77,6 +77,9 @@ class Patcher(ABC):
     #: `sports.nationals.fetch_top_nations` can fill the slots a league leaves
     #: (`fill_slots`) with today's best-ranked national teams.
     supports_nation_fill: bool = False
+    #: `sports.clubs.fetch_top_clubs` can fill the club slots the leagues leave
+    #: (`club_fill_slots`) with today's best clubs by UEFA coefficient.
+    supports_club_fill: bool = False
 
     def __init__(
         self,
@@ -187,6 +190,21 @@ class Patcher(ABC):
             return None
         data = LeagueData(league=League(id=2021, name=""), teams=[TeamRoster(team=team)])
         return next((m.slot_index for m in slot_map(rom_path, data)), None)
+
+    def club_fill_slots(self, rom_path: Path, taken: Collection[int]) -> list[int]:
+        """The club slots a club fill may use, in the order it fills them, none of `taken`
+        (the slots the leagues and the slot map already hold). None by default."""
+        return []
+
+    def own_club_slot(self, rom_path: Path, team: Team) -> int | None:
+        """The slot the ROM holds club `team` in, or None. None by default."""
+        return None
+
+    def club_fill_regions(self, rom_path: Path) -> dict[int, str]:
+        """Each `club_fill_slots` slot's country (a UEFA code: "ENG", "FRA", ...), for a game
+        whose club slots are grouped by league: a fill club takes a slot of its own country's
+        group first (`nationals.place_ranked`'s `regions`). None by default."""
+        return {}
 
     @staticmethod
     def _given_blocks(
