@@ -96,6 +96,7 @@ from .models import (
     POSITION_BYTE,
     POSITION_GROUPS,
     TEXT_AFS,
+    UCL_ROWS,
     PESPlayer,
     PESTeamRecord,
 )
@@ -908,6 +909,7 @@ class PES2013PS2Patcher(Patcher):
                 except RomError:
                     continue  # an overlay without a team table is not a database
                 writer.write_team_names(teams, names)
+                writer.write_ucl_rows(teams, names)
                 writer.write_national_rows(
                     teams, _national_rows(teams, rosters, national_slots, blanks, names)
                 )
@@ -1504,12 +1506,15 @@ class PES2013PS2Patcher(Patcher):
         package (`kit_textures`) and the record stays licensed; on a team
         without one it gives its colours and pattern instead. Clubs past the
         last kit record (slots 130 and up) are skipped with a status line. A
-        nation at home gets the disc's four kits back where they changed.
+        nation at home gets the disc's four kits back where they changed. A UCL
+        picker row (`UCL_ROWS`) whose club got new kits wears them in the
+        Champions League too: the club's record is copied over the row's UCL kits.
         """
         table = writer.reader.kits()
         licensed = kit_textures.licensed_slots(writer.reader)
         written = textures = 0
         licensed_keepers: list[str] = []
+        dressed: set[int] = set()
         for slot in slots:
             if slot not in choices:
                 continue
@@ -1543,11 +1548,22 @@ class PES2013PS2Patcher(Patcher):
                     if slot in licensed:
                         kit_textures.write_kit_png(writer, slot, which, value)
                         textures += 1
+                        dressed.add(slot)
                         continue
                     spec = fallback
                 if spec is not None:
                     apply_spec(kits[which], spec)
                     written += 1
+                    dressed.add(slot)
+        try:
+            ucl = writer.reader.overlay_teams(DATABASE_OVERLAY_ENGLISH).ucl
+        except RomError:
+            ucl = {}
+        for row, club in ucl.items():
+            k = row - UCL_ROWS.start
+            if club in dressed and k < len(table.ucl):
+                table.ucl[k] = deepcopy(table.clubs[club])
+                written += 1
         if written:
             writer.write_kits(table)
         if written or textures:

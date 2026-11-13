@@ -18,7 +18,9 @@ ff ff mark a PARAMETRIC kit, drawn from these colours over a generic shirt;
 t[31] = 0 and t[34..35] = 01 00 a LICENSED one, drawn from an encrypted texture
 package the colours do not touch. t[36] is 4 for a parametric player kit and
 2 for a goalkeeper's; t[1..4] = 49 3c 11 05 is the player model set of the
-disc's parametric clubs. Clubs 130..138 have no record.
+disc's parametric clubs. Clubs 130..138 have no record. Part 7 holds 18 more
+club records, the UCL versions of the kits of the clubs the overlays' "UEFA
+Champions League" picker rows (`models.UCL_ROWS`) point at, in row order.
 """
 
 from __future__ import annotations
@@ -36,6 +38,8 @@ from .afs import Table, unwrap, wrap
 KIT_ENTRY = 54
 PART_NATIONALS = 0
 PART_CLUBS = 1
+#: The UCL picker clubs' kits, one club record per row of `models.UCL_ROWS`.
+PART_UCL = 7
 CLUB_RECORD = 648
 NATIONAL_RECORD = 456
 KIT_SIZE = 88
@@ -176,7 +180,8 @@ def keeper_spec(*shirts: RGB) -> KitSpec:
 
 @dataclass
 class KitTable:
-    """Entry 54 as parts; `clubs[s]` and `nationals[n]` are the four kits of a team."""
+    """Entry 54 as parts; `clubs[s]` and `nationals[n]` are the four kits of a team, `ucl[k]`
+    those of UCL picker row k (empty on a disc without part 7)."""
 
     header: bytes
     table: Table
@@ -184,6 +189,7 @@ class KitTable:
     leaves: dict[int, bytes]
     clubs: list[list[Kit]]
     nationals: list[list[Kit]]
+    ucl: list[list[Kit]]
 
     @classmethod
     def parse(cls, block: bytes) -> KitTable:
@@ -193,21 +199,35 @@ class KitTable:
             raise RomError("Kit entry has no club part")
         part_headers: dict[int, bytes] = {}
         leaves: dict[int, bytes] = {}
-        teams: dict[int, list[list[Kit]]] = {}
-        for part, record in ((PART_NATIONALS, NATIONAL_RECORD), (PART_CLUBS, CLUB_RECORD)):
+        parts = [(PART_NATIONALS, NATIONAL_RECORD), (PART_CLUBS, CLUB_RECORD)]
+        if len(table.parts) > PART_UCL and table.parts[PART_UCL]:
+            parts.append((PART_UCL, CLUB_RECORD))
+        teams: dict[int, list[list[Kit]]] = {PART_UCL: []}
+        for part, record in parts:
             part_headers[part], leaves[part] = unwrap(table.parts[part])
             leaf = leaves[part]
             teams[part] = [
                 [Kit.parse(leaf[at + k * KIT_SIZE : at + (k + 1) * KIT_SIZE]) for k in range(4)]
                 for at in range(0, len(leaf) - record + 1, record)
             ]
-        return cls(header, table, part_headers, leaves, teams[PART_CLUBS], teams[PART_NATIONALS])
+        return cls(
+            header,
+            table,
+            part_headers,
+            leaves,
+            teams[PART_CLUBS],
+            teams[PART_NATIONALS],
+            teams[PART_UCL],
+        )
 
     def build(self) -> bytes:
         for part, record, teams in (
             (PART_NATIONALS, NATIONAL_RECORD, self.nationals),
             (PART_CLUBS, CLUB_RECORD, self.clubs),
+            (PART_UCL, CLUB_RECORD, self.ucl),
         ):
+            if part not in self.leaves:
+                continue
             leaf = bytearray(self.leaves[part])
             for row, kits in enumerate(teams):
                 at = row * record

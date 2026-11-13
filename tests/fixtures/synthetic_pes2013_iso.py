@@ -25,6 +25,7 @@ from retro_roster_patcher.games.pes2013_ps2.models import (
     FIRST_CLUB_ENTRY,
     NATIONAL_COUNT,
     NATIONAL_SQUAD_SIZE,
+    UCL_ROWS,
 )
 from tests.fixtures import synthetic_iso as iso
 
@@ -134,7 +135,9 @@ def build_kit(shirt: int, shorts: int, parametric: bool) -> bytes:
 def build_kit_entry() -> bytes:
     """Entry 54: part 0 = one national record (456 bytes), part 1 = three club
     records (648 bytes): club 0 parametric red/white, club 1 licensed blue/white,
-    club 2 parametric black/black. Kit order: GK home, home, GK away, away."""
+    club 2 parametric black/black. Kit order: GK home, home, GK away, away. Parts 2-6
+    are filler; part 7 = the two UCL picker rows' club records (`build_overlay`), licensed
+    lime/black: their UCL kits."""
     red, white, blue, black = 0x801F, 0xFFFF, 0xFC00, 0x8000
     lime = 0x83E0
 
@@ -153,9 +156,10 @@ def build_kit_entry() -> bytes:
         + record(blue, white, red, False, 648)
         + record(black, black, white, True, 648)
     )
-    return block(
-        table([block(nationals, compress=True), block(clubs, compress=True)]), compress=False
-    )
+    filler = [block(bytes([0xB0 + k]) * 64, compress=True) for k in range(2, 7)]
+    ucl = record(lime, black, lime, False, 648) * 2
+    parts = [block(nationals, compress=True), block(clubs, compress=True), *filler]
+    return block(table([*parts, block(ucl, compress=True)]), compress=False)
 
 
 #: Entry 53, the formations, restated here independently of `formations.py`: ten parts, of which
@@ -197,13 +201,17 @@ def build_overlay(
     codes: list[str] | None = None,
     nationalities: bool = True,
     shared_code: tuple[int, int] | None = None,
+    ucl: bool = True,
 ) -> bytes:
     """A `database_<lang>.ovl`: header, strings, the team table, then the nationality table
     (`nationality`): 144 name/code pointer pairs, as on the disc, after the team table as in
     the English overlay. Rows 0-59 of the team table are nationalities 0-59 (word 3 holds
     the row's nationality in both halves), whose names the nationality table repeats in
     strings of its own. `shared_code` (club, row) points the club's code at the row's code
-    string, as the disc does Espanyol's and Spain's."""
+    string, as the disc does Espanyol's and Spain's. With `ucl`, filler rows run on to the
+    "UEFA Champions League" picker rows (`UCL_ROWS`): row 326 carries club 1's id word and
+    strings, row 327 club 0's id word and strings of its own (as a few rows of the Greek and
+    Russian overlays do)."""
     names = names or CLUB_NAMES
     codes = codes or CLUB_CODES
     strings = bytearray()
@@ -219,12 +227,27 @@ def build_overlay(
     if shared_code is not None:
         club, row = shared_code
         pointers[FIRST_CLUB_ENTRY + club] = (pointers[FIRST_CLUB_ENTRY + club][0], pointers[row][1])
+    clubs_end = len(pointers)
+    extra: list[tuple[int, int, int, int]] = []  # pointers, word 3, id word past the clubs
+    if ucl:
+        filler = pointers[-1]
+        extra = [(*filler, 0, 0x7C0400FF)] * (UCL_ROWS.start - clubs_end)
+        extra.append((*pointers[FIRST_CLUB_ENTRY + 1], 0x900006, 0x16020001))
+        own_name = 0x100 + len(strings)
+        strings += b"OWN UCL NAME".ljust(16, b"\0")
+        own_code = 0x100 + len(strings)
+        strings += b"OWU".ljust(8, b"\0")
+        extra.append((own_name, own_code, 0x900006, 0x16020000))
     table_off = 0x100 + len(strings)
     table_off += -table_off % 16
     entries = b""
     for k, (name_off, code_off) in enumerate(pointers):
         ident = 0x16020000 | (k - FIRST_CLUB_ENTRY) if k >= FIRST_CLUB_ENTRY else 0x100000CD
         nation = 0x900006 if k >= FIRST_CLUB_ENTRY else k * 0x10001
+        entries += struct.pack(
+            "<IIII", OVERLAY_BASE + name_off, OVERLAY_BASE + code_off, nation, ident
+        )
+    for name_off, code_off, nation, ident in extra:
         entries += struct.pack(
             "<IIII", OVERLAY_BASE + name_off, OVERLAY_BASE + code_off, nation, ident
         )

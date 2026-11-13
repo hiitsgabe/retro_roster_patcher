@@ -188,6 +188,10 @@ TEAM_ENTRY_SIZE = 16
 #: Nationals occupy the first entries of the team table; clubs follow.
 FIRST_CLUB_ENTRY = 67
 TEAM_CODE_BYTES = 8
+#: The team table's "UEFA Champions League" picker group: 18 rows carrying a club's id word
+#: (Man Utd 7 ... Shakhtar 124), each wearing that club's UCL kits (`kits.PART_UCL`). The
+#: Champions League mode offers every club of slots 0-125; these rows are only its first group.
+UCL_ROWS = range(326, 344)
 
 #: Registered-position nibble values (byte 53 >> 4) grouped the way ESPN
 #: describes positions (2 SW, 3 CB, 4 SB, 6 WB defend; 5 DMF, 7 CMF, 8 SMF, 9 AMF

@@ -43,6 +43,7 @@ from .models import (
     TEXT_AFS,
     TEXT_ARCHIVE_PRIMARY,
     TEXT_LANGUAGE_AFS,
+    UCL_ROWS,
     ClubSlot,
     PESRomInfo,
 )
@@ -196,6 +197,10 @@ class OverlayTeams:
     #: The nationalities the disc has a flag for, by number (`NATIONALITIES` of them): the
     #: name and code in this language, in strings of their own.
     nationalities: list[tuple[TeamString, TeamString]] = field(default_factory=list)
+    #: The "UEFA Champions League" picker rows (`UCL_ROWS`), row -> the club whose id word
+    #: they carry (the crest follows it). Most point at the club row's strings too; a few
+    #: in the Greek and Russian overlays at strings of their own.
+    ucl: dict[int, int] = field(default_factory=dict)
 
 
 class RomReader:
@@ -353,7 +358,14 @@ class RomReader:
                 break
             clubs[club] = (string(name_ptr), string(code_ptr))
         nationalities = [(string(a), string(b)) for a, b in pairs]
-        return OverlayTeams(entry, base, table_offset, clubs, nationals, idents, nationalities)
+        ucl = {
+            row: rows[row][3] & 0xFF
+            for row in UCL_ROWS
+            if row < len(rows)
+            and rows[row][3] & 0xFF in clubs
+            and rows[row][3] == rows[FIRST_CLUB_ENTRY + (rows[row][3] & 0xFF)][3]
+        }
+        return OverlayTeams(entry, base, table_offset, clubs, nationals, idents, nationalities, ucl)
 
     # -- UI textures -------------------------------------------------------
 

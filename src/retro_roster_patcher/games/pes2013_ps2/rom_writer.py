@@ -11,7 +11,7 @@ from __future__ import annotations
 import os
 import struct
 import unicodedata
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 
 from ...core.errors import RomError
 from .afs import Table, unwrap, wrap
@@ -264,6 +264,23 @@ class RomWriter:
                         nation * 0x10001,
                     )
                 )
+
+    def write_ucl_rows(self, teams: OverlayTeams, clubs: Collection[int]) -> None:
+        """Point each UCL picker row of one overlay whose club is in `clubs` at the club
+        row's name and code, so it shows the club's new name in every language."""
+        base = self.reader.extent(OVER_AFS).offset + teams.entry.offset
+        with open(self.output_path, "r+b") as f:
+            for row, club in teams.ucl.items():
+                if club in clubs:
+                    name, code = teams.clubs[club]
+                    f.seek(base + teams.table_offset + row * TEAM_ENTRY_SIZE)
+                    f.write(
+                        struct.pack(
+                            "<II",
+                            teams.load_address + name.offset,
+                            teams.load_address + code.offset,
+                        )
+                    )
 
     # -- emblems -------------------------------------------------------------
 
