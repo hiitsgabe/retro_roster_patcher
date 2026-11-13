@@ -5,7 +5,7 @@ and West All-Star sides Seattle and Vegas.
 What is NHL 2005's own: where its strings live (`FE/LOCAL.VIV`, five languages,
 rewritten in place), its All-Star sides' string ids, the front end's spelling
 of abbreviations (`PHO` for STEA's `PHX`, with `TEAM_ABBR_PHX` added so the
-scoreboard finds Utah's) and the All-Star arena's centre ice. The wordmark of
+scoreboard finds Utah's) and the arenas Seattle and Vegas play at. The wordmark of
 `FE/TLOGOAPT.VIV` is `wordmarks`'.
 """
 
@@ -30,6 +30,8 @@ __all__ = [
     "ABBREVIATION",
     "ALL_STARS",
     "ALL_STAR_ARENA",
+    "ALL_STAR_HOMES",
+    "ALL_STAR_ICE",
     "ALL_STAR_STRINGS",
     "LOCAL_ARCHIVE",
     "MARKS",
@@ -45,10 +47,20 @@ LOCAL_ARCHIVE = "FE/LOCAL.VIV"
 #: The front end's strings of club abbreviations: `TEAM_ABBR_<abbreviation>`
 #: (`ea_hash`), the game looking a club's up by its STEA `ABBR`.
 ABBREVIATION = "TEAM_ABBR_"
-#: The All-Star game's arena (SARE), where all four sides play. Its centre
-#: ice is the Thrashers' (`LOGO` 1), which becomes the Jets'; Seattle and
-#: Vegas play on the 2005 All-Star game's own (`ICE_030`) instead.
+#: The All-Star game's arena (SARE), where all four sides play on the disc,
+#: and the centre ice it keeps for the North America and World sides: the 2005
+#: All-Star game's (`ICE_032`), its own (`LOGO` 1) being the Thrashers', which
+#: becomes the Jets'.
 ALL_STAR_ARENA = 30
+ALL_STAR_ICE = 32
+#: By side: the arena (SARE row) Seattle and Vegas play at instead, a copy of
+#: the All-Star game's, with its centre ice and name. No team plays in the two
+#: rows taken ("EA SPORTS Arena, Burnaby"), and the 2005 All-Star game's ice
+#: comes four times (`ICE_030` to `ICE_033`), the arena using none of them.
+ALL_STAR_HOMES: Mapping[int, tuple[int, int, str, str]] = {
+    30: (52, 30, "Climate Pledge Arena", "Seattle, WA"),
+    31: (51, 31, "T-Mobile Arena", "Las Vegas, NV"),
+}
 
 #: The All-Star sides' names in `front<language>.bin`, by string id and the part
 #: of the name each holds: the full name, the abbreviation, the city in three
@@ -79,14 +91,32 @@ ALL_STAR_STRINGS: Mapping[int, Mapping[int, str]] = {
 
 
 def rename_tables(tdb: TDBFile, slots: Iterable[int]) -> list[Rename]:
-    """`core.nhl_clubs.rename_tables`, and the All-Star arena on the All-Star
-    game's centre ice once the sides are Seattle and Vegas."""
+    """`core.nhl_clubs.rename_tables`, and Seattle and Vegas each at an arena of
+    their own (`ALL_STAR_HOMES`, AREN pointing each side at it), so each plays
+    on its own centre ice."""
     renames = _rename_tables(tdb, slots)
-    sare = tdb.get_table("SARE")
-    if sare is not None and any(r.slot in ALL_STARS for r in renames):
-        for i in range(min(sare.num_records, sare.capacity)):
-            if sare.read_record(i).get("INDX") == ALL_STAR_ARENA:
-                sare.write_record(i, {"LOGO": ALL_STAR_ARENA})
+    sides = [r.slot for r in renames if r.slot in ALL_STAR_HOMES]
+    sare, aren = tdb.get_table("SARE"), tdb.get_table("AREN")
+    if not sides or sare is None:
+        return renames
+    rows = {sare.read_record(i).get("INDX"): i for i in range(min(sare.num_records, sare.capacity))}
+    if ALL_STAR_ARENA not in rows:
+        return renames
+    game = sare.read_record(rows[ALL_STAR_ARENA])
+    sare.write_record(rows[ALL_STAR_ARENA], {"LOGO": ALL_STAR_ICE})
+    homes = {}
+    for side in sides:
+        arena, logo, name, city = ALL_STAR_HOMES[side]
+        if arena in rows:
+            sare.write_record(
+                rows[arena], {**game, "INDX": arena, "LOGO": logo, "NAME": name, "CITY": city}
+            )
+            homes[side] = arena
+    if aren is not None:
+        for i in range(min(aren.num_records, aren.capacity)):
+            team = aren.read_record(i).get("INDX")
+            if isinstance(team, int) and team in homes:
+                aren.write_record(i, {"ID__": homes[team]})
     return renames
 
 

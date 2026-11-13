@@ -157,12 +157,12 @@ def uniform_member():
     return multi(blocks)
 
 
-def utah_archive():
+def utah_archive(art=22):
     numbers = multi([("NMA0", four_bit([BRICK] * 8 + [WHITE] * 8))])
     members = {
-        "uni022_1.ssh": uniform_member(),
-        "num022_1.ssh": numbers,
-        "letters_022_1.ssh": numbers,
+        f"uni{art:03d}_1.ssh": uniform_member(),
+        f"num{art:03d}_1.ssh": numbers,
+        f"letters_{art:03d}_1.ssh": numbers,
     }
     packed = {name: refpack_compress(data) + bytes(4096) for name, data in members.items()}
     return bigf_build([BigfEntry(n, 0, 0) for n in packed], packed)
@@ -213,3 +213,41 @@ def test_utah_offers_its_two_drawn_jerseys_alone():
     tdb = TDBFile.parse(build_tdb([TableSpec("STEA", fields, 2, 2, 2, data)]))
     jerseys.limit(tdb, [1, 22])
     assert [tdb.get_table("STEA").read_record(i)["JRSY"] for i in range(2)] == [3, 2]
+
+
+# -- Seattle and Vegas, drawn from the All-Star sides' jerseys -----------------
+
+RED = (90, 0, 7, 255)
+CREAM = (215, 205, 190, 255)
+
+
+def eastern_home():
+    """The East's red home jersey: cream "EASTERN" down the front (one block
+    per letter, on the line the disc's run along), and the laces."""
+    torso = PIL.new("RGBA", (512, 512), RED)
+    pen = ImageDraw.Draw(torso)
+    for x, y in ((192, 332), (210, 355), (229, 372), (249, 392), (269, 412), (292, 432)):
+        pen.rectangle((x - 7, y - 11, x + 7, y + 11), fill=CREAM)
+    pen.rectangle((246, 300, 262, 330), fill=CREAM)  # the laces
+    return torso
+
+
+def test_the_all_star_front_loses_its_lettering_and_takes_the_crest():
+    torso = jerseys.restyle_torso(eastern_home(), jerseys.RESTYLED[30], utah_crest())
+    for x, y in ((192, 332), (292, 432)):  # letters, now the club's navy
+        r, g, b, _ = torso.getpixel((x, y))
+        assert b > r + 20 and max(r, g, b) < 110, (x, y)
+    x0, y0, x1, y1 = jerseys.CHEST
+    r, g, b, _ = torso.getpixel(((x0 + x1) // 2, (y0 + y1) // 2))
+    assert b > 180 and r > 90  # the crest
+    assert torso.getpixel((254, 305))[:3] == CREAM[:3]  # the laces stay
+
+
+def test_dress_draws_seattle_and_vegas_from_the_all_star_jerseys():
+    for slot, art in ((30, 30), (31, 31)):
+        archive = utah_archive(art)
+        edited, _, drawn, _ = jerseys.dress(archive, pictures(), [slot], {slot: utah_crest()})
+        assert drawn == 1 and len(edited) == len(archive)
+        assert bigf_extract(edited, f"uni{art:03d}_1.ssh") != bigf_extract(
+            archive, f"uni{art:03d}_1.ssh"
+        )

@@ -153,11 +153,12 @@ def _table(name, fields, size, rows):
     return TableSpec(name, fields, size, len(rows), len(rows), data)
 
 
-def test_seattle_and_vegas_take_the_all_star_sides_names_and_the_all_star_ice():
-    # All four All-Star sides play at the All-Star game's arena, SARE 30, and
-    # SARE 31 is Austria's: a side's slot is not its arena's. The arena keeps
-    # its name and takes the All-Star game's centre ice for the Thrashers',
-    # which becomes the Jets'.
+def test_seattle_and_vegas_take_the_all_star_sides_names_and_arenas_of_their_own():
+    # All four All-Star sides play at the All-Star game's arena, SARE 30 (AREN
+    # by team index), and SARE 31 is Austria's: a side's slot is not its
+    # arena's. Seattle and Vegas each take a copy of the All-Star arena in a
+    # row no team uses (51, 52), with a centre ice of their own; the arena
+    # keeps the North America and World sides on the All-Star game's ice.
     stea = [
         FieldSpec("INDX", TYPE_UINT, 0, 8),
         FieldSpec("FNME", TYPE_STRING, 8, 248),
@@ -169,10 +170,18 @@ def test_seattle_and_vegas_take_the_all_star_sides_names_and_the_all_star_ice():
         FieldSpec("NAME", TYPE_STRING, 8, 280),
         FieldSpec("CITY", TYPE_STRING, 288, 256),
         FieldSpec("LOGO", TYPE_UINT, 544, 8),
+        FieldSpec("ROOF", TYPE_UINT, 552, 8),
     ]
+    aren = [
+        FieldSpec("INDX", TYPE_UINT, 0, 8),
+        FieldSpec("ID__", TYPE_UINT, 8, 8),
+    ]
+    burnaby = {"NAME": "EA SPORTS Arena", "CITY": "Burnaby, BC", "ROOF": 34}
     arenas = [
-        {"INDX": 30, "NAME": "Philips Arena", "CITY": "Atlanta, GA", "LOGO": 1},
-        {"INDX": 31, "NAME": "EA SPORTS Arena", "CITY": "Austria", "LOGO": 34},
+        {"INDX": 30, "NAME": "Philips Arena", "CITY": "Atlanta, GA", "LOGO": 1, "ROOF": 1},
+        {"INDX": 31, "NAME": "EA SPORTS Arena", "CITY": "Austria", "LOGO": 34, "ROOF": 34},
+        {"INDX": 51, **burnaby, "LOGO": 54},
+        {"INDX": 52, **burnaby, "LOGO": 55},
     ]
     tdb = TDBFile.parse(
         build_tdb(
@@ -186,7 +195,8 @@ def test_seattle_and_vegas_take_the_all_star_sides_names_and_the_all_star_ice():
                         {"INDX": 31, "FNME": "Western All-Stars", "SNME": "Western", "ABBR": "WES"},
                     ],
                 ),
-                _table("SARE", sare, 69, arenas),
+                _table("SARE", sare, 70, arenas),
+                _table("AREN", aren, 2, [{"INDX": s, "ID__": 30} for s in (30, 31, 32)]),
             ]
         )
     )
@@ -197,10 +207,14 @@ def test_seattle_and_vegas_take_the_all_star_sides_names_and_the_all_star_ice():
         ("Seattle Kraken", "Seattle", "EAS"),
         ("Vegas Golden Knights", "Vegas", "WES"),
     ]
-    assert [tdb.get_table("SARE").read_record(i) for i in range(2)] == [
-        {**arenas[0], "LOGO": teams.ALL_STAR_ARENA},
+    game = {"ROOF": 1}
+    assert [tdb.get_table("SARE").read_record(i) for i in range(4)] == [
+        {**arenas[0], "LOGO": teams.ALL_STAR_ICE},
         arenas[1],
+        {"INDX": 51, "NAME": "T-Mobile Arena", "CITY": "Las Vegas, NV", "LOGO": 31, **game},
+        {"INDX": 52, "NAME": "Climate Pledge Arena", "CITY": "Seattle, WA", "LOGO": 30, **game},
     ]
+    assert [tdb.get_table("AREN").read_record(i)["ID__"] for i in range(3)] == [52, 51, 30]
 
 
 def wordmark_member(name: str, glyph_widths, joined_first=False) -> bytes:

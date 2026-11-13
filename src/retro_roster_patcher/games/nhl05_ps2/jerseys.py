@@ -23,6 +23,12 @@ the coyote on the chest and the shoulder patch give way to Utah's crest, and
 "PHOENIX" leaves the pants. The numbers and name bar take the same colours.
 Utah then offers those two jerseys alone (`JRSY` 2): the Coyotes' thirds and
 classics, and the Jets', are no longer its own.
+
+Seattle and Vegas are drawn the same way from the East and West All-Star
+sides' jerseys, which only those sides wear: red to the Kraken's navy and
+green to the Golden Knights' steel grey (ESPN's team colours), with
+"EASTERN"/"WESTERN" and the NHL shield erased from the front (`_erase`) and
+the club's crest on the chest and shoulder.
 """
 
 from __future__ import annotations
@@ -160,21 +166,72 @@ def dress(
     return jerseys, pictures, changed, pictured
 
 
+Box = tuple[int, int, int, int]
+Pixel = tuple[int, int, int, int]
+Polygon = tuple[tuple[int, int], ...]
+
+#: How light (`V`, 0-255) the template colour is that a recoloured pixel's
+#: lightness is measured against.
+LIGHTNESS = 140
+
+
 @dataclass(frozen=True)
 class Restyle:
-    """A club drawn from a template: the template's main colour (hue, 0-1) for
-    the club's, on these jerseys (art id, the front end's abbreviation)."""
+    """A club drawn from a template: the template's main colour (hue, 0-1, and
+    its mean lightness) for the club's, on these jerseys (art id, the front
+    end's abbreviation). A template with lettering on its front has it erased,
+    on the 512x512 `TORS` and on the 256x256 menu pictures; one without has its
+    chest crest covered from the back."""
 
     art: int
     abbr: str
     jerseys: tuple[int, ...]
     hue: float
     colour: tuple[int, int, int]
+    lightness: int = LIGHTNESS
+    lettering: tuple[Polygon, ...] = ()
+    picture_lettering: tuple[Polygon, ...] = ()
 
+
+#: Where the All-Star jerseys carry "EASTERN"/"WESTERN" (a band down the
+#: front, left of the laces) and the NHL shield, on `TORS` and on the menu
+#: pictures.
+ALL_STAR_LETTERING: tuple[Polygon, ...] = (
+    ((156, 314), (196, 314), (350, 470), (310, 470)),
+    ((282, 328), (324, 328), (324, 376), (282, 376)),
+)
+ALL_STAR_PICTURE_LETTERING: tuple[Polygon, ...] = (
+    ((72, 52), (100, 52), (186, 202), (158, 202)),
+    ((146, 72), (171, 72), (171, 108), (146, 108)),
+)
 
 #: By slot. Utah: the Coyotes' away (0) and home (1), their brick red
-#: (hue 352 degrees) to Utah's black.
-RESTYLED: Mapping[int, Restyle] = {22: Restyle(22, "PHO", (0, 1), 352 / 360, (0, 0, 0))}
+#: (hue 352 degrees) to Utah's black. Seattle and Vegas: the East (red, 354
+#: degrees, mean `V` 86) and West (green, 179 degrees, `V` 52) All-Stars' away
+#: and home, to the Kraken's navy and the Golden Knights' steel grey.
+RESTYLED: Mapping[int, Restyle] = {
+    22: Restyle(22, "PHO", (0, 1), 352 / 360, (0, 0, 0)),
+    30: Restyle(
+        30,
+        "EAS",
+        (0, 1),
+        354 / 360,
+        (0, 13, 51),
+        86,
+        ALL_STAR_LETTERING,
+        ALL_STAR_PICTURE_LETTERING,
+    ),
+    31: Restyle(
+        31,
+        "WES",
+        (0, 1),
+        179 / 360,
+        (52, 64, 67),
+        52,
+        ALL_STAR_LETTERING,
+        ALL_STAR_PICTURE_LETTERING,
+    ),
+}
 
 #: Where the template's art sits on the 512x512 `TORS` (shared by every
 #: jersey: one model): the chest crest, a clean patch of the back the same size
@@ -186,28 +243,29 @@ SHOULDER = (148, 236, 194, 275)
 PANTS = ((20, 2, 100, 30), (395, 6, 480, 36))
 #: The chest crest on the front end's 256x256 jersey pictures.
 PICTURE_CHEST = (98, 74, 164, 186)
-#: A recoloured pixel's lightness against the template colour's own (the
-#: brick's mean `V`, 0-255), and how much of the difference shows.
-LIGHTNESS = 140
+#: How much of a recoloured pixel's lightness against the template colour's
+#: shows.
 SHADING = 0.6
-#: The darkest a recoloured colour gets, so a black jersey keeps its folds.
+#: The darkest a recoloured colour's darkest channel gets, so a black jersey
+#: keeps its folds.
 FLOOR = 24
 #: How far (sum over channels) a pixel is from the fabric around it to be
 #: part of old art: the crest on a picture, the letters on the pants.
 ART_DISTANCE = 120
 LETTERING_DISTANCE = 60
-#: How many pixels a cover fades in over.
+#: How many pixels a cover fades in over, and how far an erased letter's fill
+#: reaches for the fabric around it on `TORS` (half that on a picture).
 FEATHER = 6
+ERASE_REACH = 8
 SHAPES = ("TORS", "TORL", "HEL1", "HEL2", "HEL3", "HEL4", "HEL5")
 COLOUR_STEPS = (256, 128, 64)
 
-Box = tuple[int, int, int, int]
-Pixel = tuple[int, int, int, int]
 
-
-def recolour(picture: Image.Image, hue: float, colour: tuple[int, int, int]) -> Image.Image:
+def recolour(
+    picture: Image.Image, hue: float, colour: tuple[int, int, int], lightness: int = LIGHTNESS
+) -> Image.Image:
     """`picture` with the pixels of `hue` (and their blends) in `colour`, each
-    keeping its lightness against the template colour's."""
+    keeping its lightness against the template colour's (`lightness`)."""
     from PIL import Image
 
     rgba = picture.convert("RGBA")
@@ -221,8 +279,10 @@ def recolour(picture: Image.Image, hue: float, colour: tuple[int, int, int]) -> 
     weight = Image.composite(
         h.point(near), Image.new("L", h.size, 0), s.point(lambda x: min(255, max(0, (x - 30) * 5)))
     )
+    # Lifted to `FLOOR` as a whole, so a dark colour keeps its hue.
+    lift = max(0, FLOOR - min(colour))
     channels = [
-        v.point(lambda x, c=c: min(255, max(0, round(max(c, FLOOR) + (x - LIGHTNESS) * SHADING))))
+        v.point(lambda x, c=c: min(255, max(0, round(c + lift + (x - lightness) * SHADING))))
         for c in colour
     ]
     new = Image.merge("RGBA", (*channels, rgba.getchannel("A")))
@@ -296,13 +356,49 @@ def _clear_lettering(picture: Image.Image, box: Box) -> None:
             picture.putpixel((x, y), pants)
 
 
+def _erase(picture: Image.Image, polygons: tuple[Polygon, ...], reach: int) -> Image.Image:
+    """`picture` with whatever stands out from the fabric inside `polygons`
+    (letters, a shield) filled with the fabric around it, blurred over `reach`
+    pixels so the folds' shading carries on."""
+    from PIL import Image, ImageChops, ImageDraw, ImageFilter
+
+    rgba = picture.convert("RGBA")
+    region = Image.new("L", rgba.size, 0)
+    for polygon in polygons:
+        ImageDraw.Draw(region).polygon(polygon, fill=255)
+    inside = Image.new("RGBA", rgba.size, (0, 0, 0, 0))
+    inside.paste(rgba, (0, 0), region)
+    data = inside.tobytes()
+    fabric = _median([tuple(data[i : i + 4]) for i in range(0, len(data), 4) if data[i + 3]])  # type: ignore[misc]
+    # A pixel's distance from the fabric, a third of the channels' sum.
+    diff = ImageChops.difference(rgba.convert("RGB"), Image.new("RGB", rgba.size, fabric[:3]))
+    third = [band.point(lambda v: v // 3) for band in diff.split()]
+    distance = ImageChops.add(ImageChops.add(third[0], third[1]), third[2])
+    far = distance.point(lambda v: 255 if v > ART_DISTANCE // 3 else 0)
+    mask = ImageChops.multiply(far, region).filter(ImageFilter.MaxFilter(5))
+    # The fill: the fabric-like pixels left, blurred and renormalised (an
+    # "RGBa" blur), over the plain fabric where none reaches.
+    source = rgba.copy()
+    source.putalpha(ImageChops.subtract(ImageChops.invert(far), mask))
+    fill = source.convert("RGBa").filter(ImageFilter.GaussianBlur(reach)).convert("RGBA")
+    fill.putalpha(fill.getchannel("A").point(lambda a: min(255, a * 8)))
+    out = Image.new("RGBA", rgba.size, fabric[:3] + (255,))
+    out.alpha_composite(fill)
+    rgba.paste(out, (0, 0), mask)
+    return rgba
+
+
 def restyle_torso(torso: Image.Image, style: Restyle, crest: bytes) -> Image.Image:
     """The template's `TORS` in the club's colour, with its crest: the chest's
-    old crest under a patch of the clean back, the shoulder's painted out."""
-    picture = recolour(torso, style.hue, style.colour)
+    old crest under a patch of the clean back (or the front's lettering
+    erased), the shoulder's painted out."""
+    if style.lettering:
+        torso = _erase(torso, style.lettering, ERASE_REACH)
+    picture = recolour(torso, style.hue, style.colour, style.lightness)
     for box in PANTS:
         _clear_lettering(picture, box)
-    _cover(picture, BACK, CHEST)
+    if not style.lettering:
+        _cover(picture, BACK, CHEST)
     _centre_crest(picture, CHEST, crest)
     _paint_out(picture, SHOULDER, _border(picture, SHOULDER), 0)
     _centre_crest(picture, SHOULDER, crest)
@@ -313,6 +409,15 @@ def restyle_picture(picture: Image.Image, style: Restyle, crest: bytes) -> Image
     """A front-end jersey picture in the club's colour, with its crest."""
     from PIL import Image, ImageDraw, ImageFilter
 
+    if style.picture_lettering:
+        out = recolour(
+            _erase(picture, style.picture_lettering, ERASE_REACH // 2),
+            style.hue,
+            style.colour,
+            style.lightness,
+        )
+        _centre_crest(out, PICTURE_CHEST, crest)
+        return out
     out = recolour(picture, style.hue, style.colour)
     # The old crest painted out and the box softened into the fabric around
     # it: the pictures are small, so a blur reads as the jersey's folds.
@@ -338,7 +443,7 @@ def _palettes(data: bytes, style: Restyle) -> bytes:
         pal = block + (struct.unpack_from("<I", data, block + 4)[0] & 0xFFFFFF) + 0x20
         colours = Image.new("RGBA", (16, 1))
         colours.putdata([tuple(data[pal + 4 * i : pal + 4 * i + 3]) + (255,) for i in range(16)])
-        new = recolour(colours, style.hue, style.colour)
+        new = recolour(colours, style.hue, style.colour, style.lightness)
         for i in range(16):
             out[pal + 4 * i : pal + 4 * i + 3] = bytes(new.getpixel((i, 0))[:3])  # type: ignore[index]
     return bytes(out)
@@ -349,8 +454,12 @@ def _uniform(data: bytes, style: Restyle, crest: bytes, colours: int) -> bytes:
         picture = ssh.decode(data, shape)
         if shape == "TORS":
             picture = restyle_torso(picture, style, crest)
+        elif shape == "TORL" and style.lettering:
+            # The far-away torso: `TORS` smaller, so drawn at `TORS`' size.
+            size = picture.size
+            picture = restyle_torso(picture.resize((512, 512)), style, crest).resize(size)
         else:
-            picture = recolour(picture, style.hue, style.colour)
+            picture = recolour(picture, style.hue, style.colour, style.lightness)
         data = ssh.encode(data, picture, colours, shape)
     return data
 

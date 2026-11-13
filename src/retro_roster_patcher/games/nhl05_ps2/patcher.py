@@ -633,9 +633,8 @@ class NHL05PS2Patcher(Patcher):
                 crests = self._write_logos(writer, rosters)
             if renamed:
                 self._write_names(writer, renamed)
-            relocated = [r.slot for r in renamed if r.slot in teams.RELOCATED]
-            if crests and relocated:
-                self._write_ice(writer, ice.logo_ids(master_tdb, relocated), crests)
+            if crests and renamed:
+                self._write_ice(writer, ice.logo_ids(master_tdb, [r.slot for r in renamed]), crests)
             if options.get("jerseys", True) and renamed:
                 self._write_jerseys(writer, [r.slot for r in renamed], crests)
             if pictures:
@@ -927,14 +926,16 @@ class NHL05PS2Patcher(Patcher):
     def _write_ice(
         self, writer: NHL05PS2RomWriter, logo_ids: Mapping[int, int], crests: Mapping[int, bytes]
     ) -> None:
-        """Each relocated club's crest at centre ice (`ice`), in place."""
+        """Each renamed club's crest at centre ice (`ice`), in place; Seattle's
+        and Vegas' on the All-Star game's rink, ringed in blue."""
         wanted = {logo: crests[slot] for slot, logo in logo_ids.items() if slot in crests}
+        ringed = {logo for slot, logo in logo_ids.items() if slot in teams.ALL_STARS}
         with open(writer.output_path, "r+b") as f:
             found = iso_entry(f, ice.ARCHIVE)
             if found is None or not wanted:
                 return
             f.seek(found[0].extent.offset)
-            edited, drawn = ice.redraw(f.read(found[0].extent.size), wanted)
+            edited, drawn = ice.redraw(f.read(found[0].extent.size), wanted, ringed)
             f.seek(found[0].extent.offset)
             f.write(edited)
         self.status(f"Centre ice redrawn: {len(drawn)} of {len(wanted)}")
