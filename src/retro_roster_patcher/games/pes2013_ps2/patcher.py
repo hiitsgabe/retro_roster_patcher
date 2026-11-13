@@ -600,6 +600,16 @@ def _national_rows(
     return rows
 
 
+def _blank_kinds(value: Any) -> set[str]:
+    """The `blank_unused` patch option as the kinds of slot it blanks: True both, "clubs" or
+    "nations" one (the other is filled), False none."""
+    if value is True or value is False:
+        return {"clubs", "nations"} if value else set()
+    if value in ("clubs", "nations"):
+        return {value}
+    raise CapabilityError(f"blank_unused takes True, False, 'clubs' or 'nations', not {value!r}")
+
+
 @dataclass(frozen=True)
 class _Disc:
     """The disc's player records as they were before any write: the main
@@ -933,6 +943,7 @@ class PES2013PS2Patcher(Patcher):
         rosters.require_game(self.game_id)
         if not Path(rom_path).exists():
             raise RomError(f"ROM not found: {rom_path}")
+        blank_kinds = _blank_kinds(options.get("blank_unused", False))
         rosters = self._with_nations(rom_path, rosters)
         # Every kit choice is read and checked before the disc is copied, so a
         # bad picture is refused up front instead of after a 2 GB write.
@@ -1000,15 +1011,21 @@ class PES2013PS2Patcher(Patcher):
                 writer.write_player_tables(index, t, blocks[index])
             if presets:
                 self._write_formations(writer, presets)
-            blank_unused = bool(options.get("blank_unused", False))
             blanks: list[int] = []
-            if blank_unused:
+            if blank_kinds:
                 # Before the logos: a blanked crest frees its palette entries.
-                club_names, blanks = self._blank_unused(writer, rosters, slots, national_slots)
+                club_names, blanks = self._blank_unused(
+                    writer,
+                    rosters,
+                    slots if "clubs" in blank_kinds else [],
+                    national_slots if "nations" in blank_kinds else [],
+                )
                 names.update(club_names)
             if options.get("logos", True):
                 self._write_logos(writer, rosters, slots, on_progress)
-            self._write_leagues(writer, rosters, slots, options.get("logos", True), blank_unused)
+            self._write_leagues(
+                writer, rosters, slots, options.get("logos", True), "clubs" in blank_kinds
+            )
             if kit_choices:
                 self._write_kits(writer, rosters, slots + national_slots, kit_choices)
             images = self._collect_images(options.get("images"))

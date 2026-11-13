@@ -17,6 +17,7 @@ from ..core.errors import CapabilityError, RomError, as_storage_error
 from ..core.models import PartialFn, SlotMapping
 from ..core.patcher import Patcher
 from ..core.registry import get_patcher, list_patchers
+from ..sports.clubs import fetch_top_clubs
 from ..sports.espn import default_season
 from ..sports.fotmob import FotmobClient
 from ..sports.headshots import fill_headshots
@@ -226,13 +227,25 @@ def _patch_options(game_id: str, args: argparse.Namespace, patcher: Patcher) -> 
         if not getattr(patcher, "supports_logos", False):
             raise UsageError(f"{game_id} does not take --no-logos")
         options["logos"] = False
+    # Not `patch` options: `cmd_patch` merges the clubs and the nations into the rosters.
+    fill_nations = bool(getattr(args, "fill_nations", False))
+    fill_clubs = bool(getattr(args, "fill_clubs", None))
+    if fill_nations and not patcher.supports_nation_fill:
+        raise UsageError(f"{game_id} does not take --fill-nations")
+    if fill_clubs and not patcher.supports_club_fill:
+        raise UsageError(f"{game_id} does not take --fill-clubs")
     if getattr(args, "blank_unused", False):
         if not getattr(patcher, "supports_blank_unused", False):
             raise UsageError(f"{game_id} does not take --blank-unused")
-        options["blank_unused"] = True
-    # Not a `patch` option: `cmd_patch` merges the nations into the rosters.
-    if getattr(args, "fill_nations", False) and not patcher.supports_nation_fill:
-        raise UsageError(f"{game_id} does not take --fill-nations")
+        if fill_nations and not patcher.supports_club_fill:
+            raise UsageError(f"{game_id} takes --blank-unused or --fill-nations, not both")
+        # A fill answers for its own kind of slot; blanking is left the other.
+        kinds = [
+            k for k, filled in (("clubs", fill_clubs), ("nations", fill_nations)) if not filled
+        ]
+        if not kinds:
+            raise UsageError("--blank-unused has nothing to blank: both kinds of slot are filled")
+        options["blank_unused"] = True if len(kinds) == 2 else kinds[0]
     images = _image_args(game_id, getattr(args, "image", None) or [], patcher)
     if images:
         options["images"] = images
@@ -311,11 +324,25 @@ def cmd_patch(args: argparse.Namespace, renderer: Renderer) -> None:
 
     renderer.status("Mapping rosters...")
     mapped = patcher.map_rosters(data, slot_mapping=slot_mapping, **map_extras)
+    # The league's own teams (its clubs, a World Cup league's nations) are never placed twice.
+    placed = [m.team_id for m in slot_mapping or []] or [r.team.id for r in data.teams]
+    fill_clubs = getattr(args, "fill_clubs", None)
+    if fill_clubs:
+        renderer.status("Filling the free club slots with today's best European clubs...")
+        clubs, club_map = fetch_top_clubs(
+            patcher,
+            rom,
+            default_season("uefa.champions"),
+            mapped.teams,
+            on_progress=renderer.progress,
+            exclude_ids=placed,
+            mode=fill_clubs,
+        )
+        if club_map:
+            mapped = mapped.merge(patcher.map_rosters(clubs, slot_mapping=club_map, **map_extras))
     if getattr(args, "fill_nations", False):
         renderer.status("Filling the free slots with the top national teams...")
         season = args.season or data.league.season or default_season("fifa.friendly")
-        # The league's own teams (a World Cup league's nations) are never placed twice.
-        placed = [m.team_id for m in slot_mapping or []] or [r.team.id for r in data.teams]
         nations, nation_map = fetch_top_nations(
             patcher, rom, season, mapped.teams, on_progress=renderer.progress, exclude_ids=placed
         )

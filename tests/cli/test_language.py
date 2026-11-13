@@ -611,7 +611,80 @@ def test_fill_nations_on_a_game_without_it_is_a_usage_error(tmp_path, logo_stub,
     assert not [c for c in SEEN if c[0] == "fetch"]  # refused before any fetch
 
 
-def test_fill_nations_and_blank_unused_together_is_a_usage_error(tmp_path, fill_stub):
-    with pytest.raises(SystemExit) as exc:
-        main(_stub_argv(tmp_path, "fill-game", "--fill-nations", "--blank-unused"))
-    assert exc.value.code == 2
+def test_fill_nations_and_blank_unused_together_is_a_usage_error(tmp_path, fill_stub, capsys):
+    argv = _stub_argv(tmp_path, "fill-game", "--fill-nations", "--blank-unused", "--json")
+    assert main(argv) == 2
+    assert events(capsys)[-1]["msg"] == "fill-game takes --blank-unused or --fill-nations, not both"
+
+
+# --- `--fill-clubs`: the club slots the leagues leave, filled by UEFA coefficient -------
+
+
+class ClubFillPatcher(FillPatcher):
+    """Fills nations and clubs (`--fill-clubs` and `--fill-nations` go together here)."""
+
+    supports_club_fill: bool = True
+
+
+@pytest.fixture
+def club_stub(monkeypatch, fill_stub):
+    psg = TeamRoster(
+        team=Team(id=160, name="Paris Saint-Germain"), players=[Player(id=8, name="Eight")]
+    )
+
+    def fake_fetch_top_clubs(
+        patcher, rom, season, taken, on_progress=None, *, exclude_ids=(), mode="ranking"
+    ):
+        SEEN.append(("clubs", season, set(taken), set(exclude_ids), mode))
+        league = League(id=0, name="Europe", season=season)
+        mapping = [SlotMapping(slot_index=98, team_id=160, team_name="Paris Saint-Germain")]
+        return LeagueData(league=league, teams=[psg]), mapping
+
+    monkeypatch.setattr("retro_roster_patcher.cli.commands.fetch_top_clubs", fake_fetch_top_clubs)
+    monkeypatch.setattr("retro_roster_patcher.cli.commands.default_season", lambda code: 2026)
+    try:
+        registry.register("club-game", platform="test", sport="soccer")(ClubFillPatcher)
+        yield
+    finally:
+        registry._REGISTRY.pop("club-game", None)
+
+
+def test_fill_clubs_merges_the_ranked_clubs_then_the_nations_fill_what_is_left(tmp_path, club_stub):
+    assert main(_stub_argv(tmp_path, "club-game", "--fill-clubs", "--fill-nations")) == 0
+    assert ("clubs", 2026, {0}, {33}, "ranking") in SEEN  # the league's slot and team
+    assert ("fill", 2024, {0, 98}) in SEEN  # the nations come after the clubs
+    assert [c[1] for c in SEEN if c[0] == "slots"] == [
+        {0: "Team A", 98: "Paris Saint-Germain", 5: "Spain"}
+    ]
+    assert _options_seen() == {}
+
+
+def test_fill_clubs_champions_reaches_the_fill(tmp_path, club_stub):
+    assert main(_stub_argv(tmp_path, "club-game", "--fill-clubs=champions")) == 0
+    assert [c[4] for c in SEEN if c[0] == "clubs"] == ["champions"]
+
+
+def test_fill_clubs_on_a_game_without_it_is_a_usage_error(tmp_path, fill_stub, capsys):
+    assert main(_stub_argv(tmp_path, "fill-game", "--fill-clubs", "--json")) == 2
+    assert events(capsys)[-1]["msg"] == "fill-game does not take --fill-clubs"
+
+
+@pytest.mark.parametrize(
+    "flags, blank",
+    [
+        (("--blank-unused",), True),
+        (("--blank-unused", "--fill-clubs"), "nations"),
+        (("--blank-unused", "--fill-nations"), "clubs"),
+    ],
+)
+def test_blank_unused_with_a_fill_blanks_the_other_kind(tmp_path, club_stub, flags, blank):
+    assert main(_stub_argv(tmp_path, "club-game", *flags)) == 0
+    assert _options_seen() == {"blank_unused": blank}
+
+
+def test_blank_unused_with_both_fills_is_a_usage_error(tmp_path, club_stub, capsys):
+    argv = _stub_argv(
+        tmp_path, "club-game", "--blank-unused", "--fill-clubs", "--fill-nations", "--json"
+    )
+    assert main(argv) == 2
+    assert "nothing to blank" in events(capsys)[-1]["msg"]

@@ -95,3 +95,30 @@ def test_a_fill_club_names_no_group_after_its_league(iso, tmp_path):
     table = afs.Table.parse(afs.unwrap(reader.read("U_TEXT.AFS", 15))[1])
     names = afs.unwrap(table.parts[0])[1].split(b"\0")
     assert b"FIXTURE LEAGUE" in names and b"Ligue 1" in names and b"EUROPE" not in names
+
+
+def test_blank_unused_can_blank_one_kind_only(iso, tmp_path):
+    from retro_roster_patcher.games.pes2013_ps2.models import (
+        DATABASE_OVERLAY_ENGLISH,
+        NATIONAL_SLOT_BASE,
+    )
+
+    clubs = LeagueData(league=League(id=1, name="L", season=2026), teams=[_club(10, "Arsenal")])
+    nations = LeagueData(
+        league=League(id=2021, name="N", season=2026), teams=[_club(20, "Nation 0")]
+    )
+    patcher = PES2013PS2Patcher(tmp_path)
+    rosters = patcher.map_rosters(clubs, [SlotMapping(slot_index=0, team_id=10)]).merge(
+        patcher.map_rosters(nations, [SlotMapping(slot_index=NATIONAL_SLOT_BASE, team_id=20)])
+    )
+    out = tmp_path / "out.iso"
+    patcher.patch(
+        rom_path=iso, output_path=out, rosters=rosters, logos=False, blank_unused="nations"
+    )
+    teams = RomReader(str(out))
+    assert teams.load()
+    teams = teams.overlay_teams(DATABASE_OVERLAY_ENGLISH)
+    assert teams.clubs[1][0].text == "WEST MIDLANDS VILLAGE"  # clubs kept
+    assert teams.nationals[1][0].text == ""  # nations blanked
+    with pytest.raises(Exception, match="blank_unused takes"):
+        patcher.patch(rom_path=iso, output_path=out, rosters=rosters, blank_unused="kits")

@@ -124,17 +124,28 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="keep the game's own flags instead of drawing each team's logo (we2002)",
     )
-    # The two answers to "what goes in the slots the slot map leaves out".
-    unused = p_patch.add_mutually_exclusive_group()
-    unused.add_argument(
+    # The answers to "what goes in the slots the slot map leaves out": `_patch_options`
+    # checks which go together on which game.
+    p_patch.add_argument(
         "--blank-unused",
         action="store_true",
-        help="empty the name and flag of every slot the slot map leaves out (we2002)",
+        help="empty the name and flag of every slot the slot map leaves out (we2002); with a "
+        "fill, of the kind it does not fill (pes2013-ps2)",
     )
-    unused.add_argument(
+    p_patch.add_argument(
         "--fill-nations",
         action="store_true",
         help="fill the slots the slot map leaves out with today's top national teams (FIFA)",
+    )
+    p_patch.add_argument(
+        "--fill-clubs",
+        nargs="?",
+        const="ranking",
+        default=None,
+        choices=("ranking", "champions"),
+        help="fill the club slots the leagues leave with today's best European clubs by UEFA "
+        "coefficient; =champions takes this season's Champions League clubs first "
+        "(pes2013-ps2)",
     )
     p_patch.add_argument(
         "--image",
