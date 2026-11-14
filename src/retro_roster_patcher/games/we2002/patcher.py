@@ -73,6 +73,7 @@ from .rom_writer import (
 )
 from .screen_art import SLOT_NAMES, SLOTS, apply_images, export_slot
 from .stat_mapper import FORMATIONS, StatMapper
+from .team_banner import write_banner_names
 from .translations.we2002 import LANGUAGE_CODES, LANGUAGES, ensure_ppf
 from .translations.we2002.fullwidth import translate_file
 
@@ -91,6 +92,13 @@ def _grid_name(name: str, code: str, slot: int) -> str:
     so a longer name is its FIFA code."""
     name = to_ascii(name)
     return name if len(name) < _LUN_NOMIK[slot] or not code else code
+
+
+def _banner_text(record: WETeamRecord) -> str:
+    """The name the VS banner shows: the full name, or the short one when the full one
+    would have to be squeezed past reading (over 18 characters)."""
+    full = (record.banner_name or record.name).upper()
+    return full if len(full) <= 18 or not record.kanji_name else record.kanji_name.upper()
 
 
 def _parse_hex_colour(value: str) -> tuple[int, int, int] | None:
@@ -388,6 +396,8 @@ class WE2002Patcher(Patcher):
             record.kit_third = record.kit_home
             record.team_id = roster.team.id
             record.logo_url = roster.team.logo_url
+            record.kanji_name = to_ascii(roster.team.short_name or "")
+            record.banner_name = to_ascii(roster.team.name)
             if national:
                 record.national = True
                 record.nation = cartridge_slot(nations.NAMES, NATIONAL_ALIASES, roster.team)
@@ -527,6 +537,11 @@ class WE2002Patcher(Patcher):
                         name = _grid_name(nations.NAMES[slot], code, slot)
                         writer.write_nat_names(slot, WETeamRecord(name=name, short_name=code))
 
+            # The VS banner shows a picture of each name, not the tables above. A nation on its
+            # own untouched slot keeps the disc's.
+            banner = {slot: _banner_text(rosters.teams[slot]) for slot in slots if slot not in kept}
+            banner.update({MAX_NAT_SLOTS + slot: banner[slot] for slot in clubs if slot in banner})
+
             if blank_unused:
                 logos_queued += self._blank_unused(rosters, writer, used_styles)
             images = self._collect_images(options.get("images"))
@@ -540,6 +555,7 @@ class WE2002Patcher(Patcher):
                 self._flush_logos(writer)
             if images:
                 self._apply_images(output_path, images)
+            self._write_banner(output_path, banner)
 
             if on_progress is not None:
                 on_progress(1.0, "Saving patched ROM...")
@@ -862,6 +878,21 @@ class WE2002Patcher(Patcher):
                 raise CapabilityError(f"Unknown image slot {name!r}. Slots: {', '.join(SLOTS)}")
             images[name] = Path(png).read_bytes() if isinstance(png, str | Path) else bytes(png)
         return images
+
+    def _write_banner(self, output_path: Path, names: dict[int, str]) -> None:
+        """Draw `names` on the VS banner; like the logos, a failure costs the banner only."""
+        if not names:
+            return
+        try:
+            report = write_banner_names(str(output_path), names)
+        except ImportError:
+            self.status("Pillow is not installed; VS banner names skipped")
+            return
+        except (RomError, ValueError, OSError) as exc:
+            self.status(f"VS banner names skipped: {exc}")
+            return
+        for line in report.skipped if report is not None else ():
+            self.status(f"VS banner: {line}")
 
     def _apply_images(self, output_path: Path, images: dict[str, bytes]) -> None:
         """Write the screen art; like the logos, a failure costs the art only."""

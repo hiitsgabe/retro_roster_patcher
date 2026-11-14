@@ -88,6 +88,11 @@ class WETeamRecord:
     kit_away_image: bytes | None = None
     kit_home_template: int | None = None
     kit_away_template: int | None = None
+    # The team-select grid holds only `_LUN_NOMIK - 1` characters: a shorter name to show there
+    # when `name` does not fit (a club's short name, "Spurs"); the code comes after it.
+    kanji_name: str = ""
+    # The full name, drawn on the pre-match VS banner (`team_banner`); empty draws `name`.
+    banner_name: str = ""
     # Up to 23 (a national squad, which a Master League club of the same slot number fields too).
     players: list[WEPlayerRecord] = field(default_factory=list)
     jersey_data: bytes | None = None  # Raw 64-byte jersey to copy from ROM

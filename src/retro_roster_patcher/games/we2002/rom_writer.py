@@ -1283,6 +1283,15 @@ def _encode_abbreviation(code: str) -> bytes:
     return ascii_bytes.ljust(4, b"\x00")
 
 
+def _kanji_text(team: WETeamRecord, budget: int) -> str:
+    """The name the team-select grid shows: `team.name` if it fits the slot's `budget - 1`
+    characters, else its `kanji_name`, else its code; a name that nothing fits is cut."""
+    for text in (team.name, team.kanji_name, team.short_name):
+        if text and len(_to_ascii(text)) < budget:
+            return text
+    return team.name
+
+
 def _encode_kanji_name(name: str, budget: int) -> bytes:
     """Encode a team name to the 2-byte Kanji format for the SQK section.
 
@@ -2488,7 +2497,7 @@ class RomWriter:
         budget = _LUN_NOMIK[63 + slot_index]
         offset = _ml_kanji_offset(slot_index)
         f.seek(offset)
-        f.write(_encode_kanji_name(team.name, budget))
+        f.write(_encode_kanji_name(_kanji_text(team, budget), budget))
 
     def _sq6_ml_offset(self, slot_index: int) -> int:
         """Compute offset for name variant 6 (SQ6), which has a sector boundary.
@@ -2730,7 +2739,7 @@ class RomWriter:
         (62, 61, ..., 0) with a sector boundary straddling nat_index=4.
         """
         budget = _LUN_NOMIK[nat_index]
-        encoded = _encode_kanji_name(team.name, budget)
+        encoded = _encode_kanji_name(_kanji_text(team, budget), budget)
         chunks = _nat_kanji_chunks(nat_index)
         _write_chunks(f, encoded, chunks)
 

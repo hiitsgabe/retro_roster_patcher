@@ -677,23 +677,13 @@ for _table in _TABLES:
 #: Plain ASCII strings the community patch writes whole or in pieces that the
 #: record-level dictionary in `menu_records` never matches. Same (es, fr, pt)
 #: layout; a translation must fit the English string's bytes, spaces included.
+#: The JOYPAD lines stay as they are: the controller menus draw the word's first
+#: letter from the "J" of JOYPAD, so "CONTR." showed as "JONTR.".
 _ASCII_ROWS: dict[str, tuple[str, str, str]] = {
-    "JOYPAD 1-C": ("MANDO 1-C", "MANETTE 1-C", "CONTR. 1-C"),
-    "JOYPAD 1-B": ("MANDO 1-B", "MANETTE 1-B", "CONTR. 1-B"),
-    "JOYPAD 1-A": ("MANDO 1-A", "MANETTE 1-A", "CONTR. 1-A"),
-    " JOYPAD  2": (" MANDO   2", "MANETTE  2", " CONTR.  2"),
-    "JOYPAD 2": ("MANDO 2", "MANETTE 2", "CONTR. 2"),
-    "JOYPAD 1": ("MANDO 1", "MANETTE 1", "CONTR. 1"),
     "1-2 SHOOT PRAC.": ("PAREDES 1-2", "UNE-DEUX", "TABELAS 1-2"),
-    "USE        JOYPAD 1-A": (
-        "USA        MANDO 1-A",
-        "UTIL.     MANETTE 1-A",
-        "USE        CONTR. 1-A",
-    ),
     "NORMAL FAR": ("NORMAL LEJ.", "NORMAL LOIN", "NORMAL LON."),
     "NORMAL MID": ("NORMAL MED.", "NORMAL MOY.", "NORMAL MED."),
     "NORMAL NEAR": ("NORMAL CER.", "NORMAL PRES", "NORMAL PER."),
-    "PAUSE JOYPAD   1-A": ("PAUSA MANDO    1-A", "PAUSE MANETTE  1-A", "PAUSA CONTR.   1-A"),
     "MEM CAR": ("TARJETA", "CARTE", "CARTAO"),
     "BGM": ("MUSICA", "MUSIQUE", "MUSICA"),
     "SOU": ("EFE", "SON", "SOM"),
@@ -707,11 +697,6 @@ _ASCII_ROWS: dict[str, tuple[str, str, str]] = {
     "UNUSED": ("SIN USAR", "INUTILISE", "SEM USO"),
     "CPU STRAT.": ("ESTR. CPU", "STRAT. CPU", "ESTR. CPU"),
     "$DIVISION 2": ("$DIVISION 2", "$DIVISION 2", "$DIVISAO 2"),
-    "USE JOYPAD 1-C": ("USA MANDO 1-C", "MANETTE 1-C", "USE CONTR. 1-C"),
-    "USE JOYPAD 1-B": ("USA MANDO 1-B", "MANETTE 1-B", "USE CONTR. 1-B"),
-    "USE JOYPAD 1-A": ("USA MANDO 1-A", "MANETTE 1-A", "USE CONTR. 1-A"),
-    "USE JOYPAD 2": ("USA MANDO 2", "MANETTE 2", "USE CONTR. 2"),
-    "USE JOYPAD 1": ("USA MANDO 1", "MANETTE 1", "USE CONTR. 1"),
     "2nd STAGE": ("2a FASE", "2e PHASE", "2a FASE"),
     "1st STAGE": ("1a FASE", "1re PHASE", "1a FASE"),
     " 5 MIN  SITUAT.": (" 5 MIN  SITUAC.", " 5 MIN  SITUAT.", " 5 MIN  SITUAC."),
