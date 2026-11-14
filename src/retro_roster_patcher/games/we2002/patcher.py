@@ -74,6 +74,7 @@ from .rom_writer import (
 from .screen_art import SLOT_NAMES, SLOTS, apply_images, export_slot
 from .stat_mapper import FORMATIONS, StatMapper
 from .translations.we2002 import LANGUAGE_CODES, LANGUAGES, ensure_ppf
+from .translations.we2002.fullwidth import translate_file
 
 # The ROM has two team tables: 32 Master League slots and 63 national slots.
 # A mapped `slot_index` i fills both tables at once, as the original tool did:
@@ -1050,6 +1051,11 @@ class WE2002Patcher(Patcher):
                     assets_dir=str(self.assets_dir) if self.assets_dir is not None else "",
                 )
                 apply_ppf(str(output_path), ppf_path)
+                english = self.assets_dir / "w202-english.ppf" if self.assets_dir else None
+                if english is not None and english.is_file():
+                    # The language PPF keeps the community patch's full-width
+                    # English (help lines, match menus, memory card): rewrite it.
+                    translate_file(str(output_path), str(english), language)
         # `struct.error`/`IndexError`: a truncated PPF fails mid-parse. Like any
         # other bad translation file, skip it rather than fail the roster patch.
         except (MissingAssetError, PPFError, OSError, ValueError, struct.error, IndexError) as exc:
