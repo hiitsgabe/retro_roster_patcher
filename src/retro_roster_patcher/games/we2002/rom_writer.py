@@ -22,6 +22,7 @@ Style is written identically at 5 FORMA offsets.  Colors are written in a
 complex non-sequential order at COLORE offsets.
 """
 
+import hashlib
 import os
 import shutil
 import struct
@@ -3247,3 +3248,36 @@ class RomWriter:
         sectors that emulators don't validate EDC for.
         """
         pass
+
+
+#: SHA-1 of the 95 teams' name-variant-2 fields on the retail disc, alone and with the
+#: community English patch applied: the two states a disc is in before this patcher touches it.
+_UNPATCHED_NAMES = frozenset(
+    {
+        "721f6fb2433685f9eaa797278590f1ef9188d80c",
+        "5a0ebdf98af76b23d3ccd478e705b133625f493d",
+    }
+)
+
+
+def _names_digest(image_path: str) -> str:
+    """SHA-1 of the 95 teams' name-variant-2 fields, Master League clubs first."""
+    digest = hashlib.sha1()
+    with open(image_path, "rb") as f:
+        for i in range(_SQUADRE_ML):
+            f.seek(_ml_name_offset(_OFS_NOMI_SQ2, i, _LUN_NOMI2))
+            digest.update(f.read(_ml_name_budget(i, _LUN_NOMI2)))
+        for n in range(len(_LUN_NOMI2) - _SQUADRE_ML):
+            f.seek(_nat_name_offset(_OFS_NOMI_SQ2, n, _LUN_NOMI2))
+            digest.update(f.read(_LUN_NOMI2[n]))
+    return digest.hexdigest()
+
+
+def patched_before(image_path: str) -> bool:
+    """Whether a roster patch already wrote this disc's team names (issue #15).
+
+    Patching a patched disc keeps everything the new mapping leaves out from the earlier
+    patch, and the translation, which writes only the bytes it changes on the retail disc,
+    leaves fragments of the earlier names in between ("JUVENTUSM H").
+    """
+    return _names_digest(image_path) not in _UNPATCHED_NAMES

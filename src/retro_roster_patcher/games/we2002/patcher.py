@@ -69,6 +69,7 @@ from .rom_writer import (
     _OFS_BANDIERE_FORMA1,
     _TEX_JERSEY_COLORS,
     RomWriter,
+    patched_before,
     read_tex_files,
 )
 from .screen_art import SLOT_NAMES, SLOTS, apply_images, export_slot
@@ -92,6 +93,22 @@ def _grid_name(name: str, code: str, slot: int) -> str:
     so a longer name is its FIFA code."""
     name = to_ascii(name)
     return name if len(name) < _LUN_NOMIK[slot] or not code else code
+
+
+#: National slot 35's colour entry is Master League club 5's too (`nations.HOME_ONLY`): the
+#: nation, written after the club, keeps it (issue #15).
+_SHARED_NATION, _SHARED_CLUB = 35, 5
+
+
+def _is_disc(path: Path) -> bool:
+    """Whether `path` holds the ISO file system a retail disc has (a test image does not)."""
+    from .flag_atlas import _disc_files
+
+    try:
+        with open(path, "rb") as f:
+            return bool(_disc_files(f))
+    except (RomError, OSError):
+        return False
 
 
 def _banner_text(record: WETeamRecord) -> str:
@@ -467,6 +484,12 @@ class WE2002Patcher(Patcher):
                 )
             # The constructor copies the ROM to `output_path`, so the file the
             # translation patches below exists by the time it runs.
+            if _is_disc(rom_path) and patched_before(str(rom_path)):
+                self.status(
+                    "This disc was patched before: the teams this patch leaves out keep the "
+                    "earlier patch's names, players and crests. Patch an original disc for a "
+                    "clean result."
+                )
             writer = RomWriter(str(rom_path), str(output_path))
             self._apply_translation(rom_path, output_path, language, on_progress)
 
@@ -489,6 +512,20 @@ class WE2002Patcher(Patcher):
 
             # A nation fills the national slot only; its slot's Master League club is left.
             clubs = [s for s in slots if s < MAX_ML_SLOTS and not rosters.teams[s].national]
+            if _SHARED_CLUB in clubs and _SHARED_NATION in slots:
+                club = rosters.teams[_SHARED_CLUB].name
+                nation = rosters.teams[_SHARED_NATION].name
+                # The nation is written after the club, but a nation left on its own slot
+                # keeps the disc's entry unwritten, so the club's stays.
+                shown = (
+                    f"{nation}'s flag shows {club}'s colours"
+                    if _SHARED_NATION in kept
+                    else f"{club} wears {nation}'s flag colours"
+                )
+                self.status(
+                    f"Slot {_SHARED_NATION} and Master League club {_SHARED_CLUB} share one "
+                    f"colour entry: {shown}"
+                )
             # Before the writes, which it reads the rewritten places' positions under: no
             # club outside the mapping keeps fielding a player of a slot written here.
             writer.relink_clubs(set(slots), set(clubs))
