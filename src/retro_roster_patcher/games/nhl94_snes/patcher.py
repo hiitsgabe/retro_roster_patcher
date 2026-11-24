@@ -57,8 +57,9 @@ from ...sports import _http
 from ...sports.espn import EspnClient
 from ...sports.models import League, LeagueData, Player, TeamRoster
 from ...sports.nhl import NhlApiClient
-from . import identity, portraits, screens
+from . import identity, league, portraits, screens
 from .models import (
+    CARTRIDGE_TEAMS,
     DEFAULT_ROSTER_COUNTS,
     NHL94_TEAM_ORDER,
     RETAIL_ROSTER_COUNTS,
@@ -90,7 +91,7 @@ def _pointer_table_fits(reader: NHL94SNESRomReader) -> bool:
     """
     if reader.data is None:
         return False
-    last = reader._ptr_table_offset() + (TEAM_COUNT - 1) * POINTER_SIZE
+    last = reader._ptr_table_offset() + (reader.team_count() - 1) * POINTER_SIZE
     return last + 2 <= len(reader.data)
 
 
@@ -193,7 +194,8 @@ def _looks_like_nhl94_snes(reader: NHL94SNESRomReader) -> bool:
         return False
 
     bases: set[int] = set()
-    for index in range(TEAM_COUNT):
+    count = reader.team_count()
+    for index in range(count):
         base = reader._read_team_pointer(index)
         if base is None or base + 2 > len(data):
             return False
@@ -207,7 +209,8 @@ def _looks_like_nhl94_snes(reader: NHL94SNESRomReader) -> bool:
         if not MIN_RECORD_LENGTH <= length <= MAX_RECORD_LENGTH:
             return False
         bases.add(base)
-    return len(bases) == TEAM_COUNT
+    # An expanded image's four new slots share slot 26's block until patched.
+    return len(bases) == count or (count == TEAM_COUNT and len(bases) >= CARTRIDGE_TEAMS)
 
 
 @register(
@@ -276,10 +279,16 @@ class NHL94SNESPatcher(Patcher):
             # Only for a valid image: on an invalid one every triple would be the
             # reader's `(2, 14, 7)` fallback, which reads as 28 measurements and is
             # 28 refusals to measure.
+            # A cartridge not yet laid out as 32 slots reports the new four as
+            # slot 26, whose block they start from.
+            count = reader.team_count()
             extra["roster_counts"] = [
                 [goalies, max(forwards, retail[0]), max(defence, retail[1])]
                 for (goalies, forwards, defence), retail in zip(
-                    (reader.read_team_player_counts(i) for i in range(TEAM_COUNT)),
+                    (
+                        reader.read_team_player_counts(i if i < count else 26)
+                        for i in range(TEAM_COUNT)
+                    ),
                     RETAIL_ROSTER_COUNTS,
                     strict=True,
                 )
@@ -502,6 +511,9 @@ class NHL94SNESPatcher(Patcher):
         otherwise surface as a wrong header byte."""
         if supplied is None:
             return [DEFAULT_ROSTER_COUNTS] * TEAM_COUNT
+        if len(supplied) == CARTRIDGE_TEAMS:
+            # From a library before 32 slots: the new ones as slot 26.
+            supplied = [*supplied, *[supplied[26]] * (TEAM_COUNT - CARTRIDGE_TEAMS)]
         if len(supplied) != TEAM_COUNT:
             raise MappingError(
                 f"roster_counts must hold {TEAM_COUNT} entries, one per ROM slot; "
@@ -687,8 +699,15 @@ class NHL94SNESPatcher(Patcher):
         # wipe a slot's roster. The range is re-checked because the reader guards
         # only `team_index >= TEAM_COUNT`: a negative key reads the bytes before
         # the pointer table and treats them as a team pointer.
+        base = writer.reader.header_offset
+        rom = writer.data[base:]
+        if league.expand(rom):
+            writer.data[base:] = rom
+        else:
+            self.status("Kept the cartridge's 28 slots: its layout is not the retail one")
+        count = writer.reader.team_count()
         targets = sorted(
-            slot for slot, team in rosters.teams.items() if 0 <= slot < TEAM_COUNT and team.players
+            slot for slot, team in rosters.teams.items() if 0 <= slot < count and team.players
         )
 
         # The team names first: they live in the team blocks, which

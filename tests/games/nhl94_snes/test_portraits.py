@@ -33,7 +33,9 @@ def with_portraits(rom: bytearray, flipped: frozenset[int] = frozenset()) -> byt
     """`rom` (headerless) with the cartridge's portrait layout: every entry on
     a skater drawing, the four drawings as stream headers, one palette for
     every team (1-12 a skin ramp from `SKIN` down, 13 grey, 14 red, 15 blue)
-    but the `flipped` teams', whose ramp runs the other way."""
+    but the `flipped` teams', whose ramp runs the other way. Laid out as 32
+    slots first, where the tables live once a patch has run."""
+    fixture.expand_like_the_cartridge(rom)
     for address in (portraits.GENERIC_GOALIE, *portraits.GENERIC_SKATERS):
         at = portraits._off(address)
         rom[at : at + 5] = b"\x30\xfb" + portraits.RAW_SIZE.to_bytes(3, "big")
@@ -427,7 +429,9 @@ def test_without_pillow_the_new_players_get_the_drawings(tmp_path, monkeypatch):
     out = tmp_path / "out.sfc"
     patcher.patch(rom_path=_rom_file(tmp_path), output_path=out, rosters=_rosters())
     rom = out.read_bytes()
-    assert len(rom) == fixture.ROM_SIZE
+    # Grown by the 32-slot layout alone: no picture went in.
+    assert len(rom) == 2 * fixture.ROM_SIZE
+    assert not any(b != 0xFF for b in rom[portraits.REGION.start : portraits.REGION.stop])
     assert entry(rom, 1, 0) == portraits.GENERIC_GOALIE
     assert entry(rom, 1, 2) == portraits.GENERIC_SKATERS[2]
     assert "Portraits: Pillow is not installed; new players get the game's drawings" in seen

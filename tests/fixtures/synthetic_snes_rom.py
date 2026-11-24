@@ -403,3 +403,39 @@ def write_nhl94_snes_rom(
         )
     )
     return path
+
+
+def expand_like_the_cartridge(rom: bytearray) -> bytearray:
+    """`rom` (headerless, in place) given what `league.expand` looks for --
+    the cartridge's code and table addresses, a banner list and a 30-entry
+    logo archive where none is set up yet -- then expanded to 32 slots."""
+    from retro_roster_patcher.formats.ea_tdb import refpack_compress
+    from retro_roster_patcher.games.nhl94_snes import league
+
+    if league.expanded(rom):
+        return rom
+    for cpu, old, _new in league.CODE:
+        at = league._file(cpu)
+        rom[at : at + len(old) // 2] = bytes.fromhex(old)
+    for table in league.MOVED:
+        for at, value in zip(
+            league._operands(table), league._sites(table, table.retail), strict=True
+        ):
+            rom[at : at + len(value)] = value
+    pointers = league._file(league.BANNER_POINTERS)
+    if not any(rom[pointers : pointers + 2 * league.RETAIL_SLOTS]):
+        names = b""
+        for slot in range(league.RETAIL_SLOTS):
+            struct.pack_into("<H", rom, pointers + 2 * slot, 0x9681 + len(names))
+            names += f"Old {slot}".encode() + b"\0"
+        rom[0xE1681 : 0xE1681 + len(names)] = names
+    loader = league._file(league.LOGO_LOADERS[0])
+    if rom[loader] != 0xA9:
+        entries = [bytes([k + 1]) * (40 + k) for k in range(league.RETAIL_SLOTS + 2)]
+        archive = refpack_compress(league.build_archive(entries))
+        rom[0xABDE : 0xABDE + len(archive)] = archive
+        for site in league.LOGO_LOADERS:
+            at = league._file(site)
+            rom[at : at + 8] = bytes.fromhex("a98100850ea9deab")
+    assert league.expand(rom)
+    return rom

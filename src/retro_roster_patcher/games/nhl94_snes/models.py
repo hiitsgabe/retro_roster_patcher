@@ -44,6 +44,11 @@ NHL94_TEAM_ORDER = [
     "Winnipeg",  # 25
     "All-Star East",  # 26
     "All-Star West",  # 27
+    # Slots a patch adds (`league.expand`).
+    "Columbus",  # 28
+    "Minnesota",  # 29
+    "Nashville",  # 30
+    "Utah",  # 31
 ]
 
 # Modern NHL team abbreviation → ROM slot index, ESPN variants included.
@@ -82,9 +87,16 @@ MODERN_NHL_TO_NHL94 = {
     "WPG": 25,
     "SEA": 26,  # was All-Stars East
     "VGK": 27,  # was All-Stars West
+    "CBJ": 28,
+    "MIN": 29,
+    "NSH": 30,
+    "UTA": 31,
 }
 
-TEAM_COUNT = 28
+#: The slots a patch writes, the four `league.expand` adds included.
+TEAM_COUNT = 32
+#: The cartridge's slots, before `league.expand`.
+CARTRIDGE_TEAMS = 28
 MAX_PLAYERS_PER_TEAM = 25
 
 # Roster composition assumed when the ROM cannot be asked, in the order
@@ -124,6 +136,8 @@ RETAIL_ROSTER_COUNTS = [
     (14, 8),
     (14, 8),
 ]
+# The four slots `league.expand` adds start as copies of slot 26.
+RETAIL_ROSTER_COUNTS += [RETAIL_ROSTER_COUNTS[26]] * 4
 
 
 @dataclass

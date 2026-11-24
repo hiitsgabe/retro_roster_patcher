@@ -19,6 +19,7 @@ structure big-endian.
 import os
 
 from .models import (
+    CARTRIDGE_TEAMS,
     NHL94_TEAM_ORDER,
     TEAM_COUNT,
     NHL94RomInfo,
@@ -131,8 +132,16 @@ class NHL94SNESRomReader:
     def _ptr_table_offset(self) -> int:
         return self.header_offset + POINTER_TABLE_FILE_OFFSET
 
+    def team_count(self) -> int:
+        """The slots the image holds: 32 once `league.expand` laid it out, else 28."""
+        from .league import expanded
+
+        if self.data and expanded(self.data[self.header_offset :]):
+            return TEAM_COUNT
+        return CARTRIDGE_TEAMS
+
     def _read_team_pointer(self, team_index: int) -> int | None:
-        if not self.data or team_index >= TEAM_COUNT:
+        if not self.data or team_index >= self.team_count():
             return None
 
         table_off = self._ptr_table_offset()
@@ -149,7 +158,7 @@ class NHL94SNESRomReader:
 
     def read_team_player_counts(self, team_index: int) -> tuple[int, int, int]:
         """(goalies, forwards, defencemen) from team-data byte 17."""
-        if not self.data or team_index >= TEAM_COUNT:
+        if not self.data or team_index >= self.team_count():
             return (2, 14, 7)
 
         file_off = self._read_team_pointer(team_index)
@@ -174,7 +183,7 @@ class NHL94SNESRomReader:
         if not self.data:
             return slots
 
-        for i in range(TEAM_COUNT):
+        for i in range(self.team_count()):
             file_off = self._read_team_pointer(i)
             name = ""
             if file_off is not None and file_off < len(self.data):
@@ -246,7 +255,7 @@ class NHL94SNESRomReader:
         return city
 
     def read_team_roster(self, team_index: int) -> tuple[list[str], list[bytes]]:
-        if not self.data or team_index >= TEAM_COUNT:
+        if not self.data or team_index >= self.team_count():
             return [], []
 
         file_off = self._read_team_pointer(team_index)

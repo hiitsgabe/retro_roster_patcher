@@ -19,7 +19,7 @@ from retro_roster_patcher.core.errors import RomError
 from retro_roster_patcher.core.models import MappedRosters
 from retro_roster_patcher.formats import snes
 from retro_roster_patcher.formats.ea_tdb import refpack_compress, refpack_decompress
-from retro_roster_patcher.games.nhl94_snes import identity, portraits
+from retro_roster_patcher.games.nhl94_snes import identity, league, portraits
 from retro_roster_patcher.games.nhl94_snes.logo import big_logo, center_ice
 from retro_roster_patcher.games.nhl94_snes.models import (
     MODERN_NHL_TO_NHL94,
@@ -59,8 +59,23 @@ def _strings(rom, slot):
     return out
 
 
+RETAIL_ENTRIES = league.RETAIL_SLOTS + 2
+
+
+def _retail(table):
+    return league._file(table.retail)
+
+
 def _entries():
-    return [bytes([k + 1]) * (40 + k) for k in range(identity.ARCHIVE_ENTRIES)]
+    """The cartridge's 30 logo entries: 28 teams, the NHL shield, the NHLPA logo."""
+    return [bytes([k + 1]) * (40 + k) for k in range(RETAIL_ENTRIES)]
+
+
+def _expanded_entries():
+    """`_entries()` as `league.expand` lays them out: Vegas and the four new
+    slots on All-Stars East's, the two league logos last."""
+    e = _entries()
+    return e[:27] + [e[26]] * 5 + e[28:]
 
 
 def add_identity(rom: bytearray) -> bytearray:
@@ -87,33 +102,33 @@ def add_identity(rom: bytearray) -> bytearray:
     for slot in range(28):
         struct.pack_into("<H", rom, identity.BANNER_POINTERS + 2 * slot, 0x9681 + len(names))
         names += f"Old {slot}".encode() + b"\0"
-    rom[identity.BANNER_LIST.start : identity.BANNER_LIST.start + len(names)] = names
+    rom[0xE1681 : 0xE1681 + len(names)] = names
 
     for slot in range(28):
         at = BANNER_PALETTE_AT + 32 * slot
         rom[at : at + 32] = bytes([slot]) * 32
-        struct.pack_into("<I", rom, identity.BANNER_PALETTES + 4 * slot, identity._cpu(at))
+        struct.pack_into("<I", rom, _retail(league.BANNER_PALETTES) + 4 * slot, identity._cpu(at))
         tiles = refpack_compress(bytes(32) + bytes([slot + 1]) * 32)
         rom[ICE_TILES_AT + 0x100 * slot : ICE_TILES_AT + 0x100 * slot + len(tiles)] = tiles
         layout = struct.pack("<HHH", 8, 4, 0x0308) + struct.pack("<32H", *([0x401] + [0] * 31))
         rom[ICE_MAP_AT + 70 * slot : ICE_MAP_AT + 70 * slot + 70] = layout
-        entry = identity.CENTER_ICE + 8 * slot
+        entry = _retail(league.CENTER_ICE) + 8 * slot
         struct.pack_into("<I", rom, entry, identity._cpu(ICE_TILES_AT + 0x100 * slot))
         struct.pack_into("<I", rom, entry + 4, identity._cpu(ICE_MAP_AT + 70 * slot))
-        for table in (identity.AWAY_UNIFORMS, identity.HOME_UNIFORMS):
+        for table in (_retail(league.AWAY_UNIFORMS), _retail(league.HOME_UNIFORMS)):
             words = [(slot * 16 + i) & 0x7FFF for i in range(16)]
             rom[table + 32 * slot : table + 32 * slot + 32] = struct.pack("<16H", *words)
-    for k in range(30):
+    for k in range(RETAIL_ENTRIES):
         at = LOGO_PALETTE_AT + 32 * k
         rom[at : at + 32] = bytes([0x40 + k]) * 32
-        struct.pack_into("<I", rom, identity.LOGO_PALETTES + 4 * k, identity._cpu(at))
+        struct.pack_into("<I", rom, _retail(league.LOGO_PALETTES) + 4 * k, identity._cpu(at))
 
     archive = refpack_compress(identity._build_archive(_entries()))
     rom[ARCHIVE_AT : ARCHIVE_AT + len(archive)] = archive
     for site in identity.LOGO_LOADERS:
         rom[site : site + 8] = LOADER
     rom[0xDC5E7 : 0xDC5E7 + 26] = b"\x0e\x00NY Islanders\x0c\x00NY Rangers"
-    return rom
+    return fixture.expand_like_the_cartridge(rom)
 
 
 def _save(image):
@@ -240,15 +255,16 @@ def _banners(rom):
 
 
 def _assert_todays_brackets(rom):
-    east = {s for c, s in MODERN_NHL_TO_NHL94.items() if s < 26 and identity._east(c)}
+    east = {s for c, s in MODERN_NHL_TO_NHL94.items() if identity._east(c)}
     seen = set()
     for k in range(32):
         table = rom[identity.SEEDS + 16 * k : identity.SEEDS + 16 * k + 16]
         assert set(table[:8]) <= east and not set(table[8:]) & east
         assert len(set(table)) == 16
         seen |= set(table)
-    assert seen == set(range(26))
+    assert seen == set(range(32))
     assert {18, 6, 22} & east == {6, 22}  # Colorado West, Detroit and Toronto East
+    assert {26, 27, 28, 29, 30, 31} & east == {28}  # Columbus East
 
 
 def _planar(tile):
@@ -344,8 +360,8 @@ def test_the_logo_archive_takes_each_logo_and_keeps_the_rest(tmp_path, rom_path,
     assert identity._file(rom[site + 1] << 16) in identity.REGION
     assert len({bytes(rom[s : s + 8]) for s in identity.LOGO_LOADERS}) == 1
     entries = _archive(rom)
-    old = _entries()
-    for slot in range(30):
+    old = _expanded_entries()
+    for slot in range(identity.ARCHIVE_ENTRIES):
         if slot in (9, 26):
             assert entries[slot][:4] == bytes([6, 0x80, 24, 0])  # six pieces, 24 tiles
         else:
@@ -400,8 +416,9 @@ def test_a_logo_that_cannot_be_had_costs_the_logo_only(tmp_path, rom_path):
     rom, messages = _patch(tmp_path, rom_path, _rosters([CAR]), transport=transport)
     assert any("logo skipped" in m for m in messages)
     assert _strings(rom, 9)[0] == "Carolina"
+    # The archive `league.expand` laid out, untouched.
     site = identity.LOGO_LOADERS[0]
-    assert rom[site : site + 8] == LOADER
+    assert identity._file(rom[site + 1] << 16) in league.TABLES
 
 
 def test_strings_too_long_for_their_block_move_to_the_padding(rom_path):

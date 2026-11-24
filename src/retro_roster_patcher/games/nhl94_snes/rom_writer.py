@@ -31,7 +31,6 @@ from dataclasses import replace
 from ...core.errors import RomError
 from ...core.fixes import Fixes
 from .models import (
-    TEAM_COUNT,
     NHL94GoalieAttributes,
     NHL94PlayerRecord,
 )
@@ -340,7 +339,7 @@ class NHL94SNESRomWriter:
         if not rosters:
             return set()
         blocks = {}
-        for slot in range(TEAM_COUNT):
+        for slot in range(self.reader.team_count()):
             try:
                 blocks[slot] = self._block(slot)
             except RomError:
@@ -391,7 +390,7 @@ class NHL94SNESRomWriter:
     # -- header --------------------------------------------------------------
 
     def _base(self, team_index: int) -> int | None:
-        if not self.data or not 0 <= team_index < TEAM_COUNT:
+        if not self.data or not 0 <= team_index < self.reader.team_count():
             return None
         return self.reader._read_team_pointer(team_index)
 

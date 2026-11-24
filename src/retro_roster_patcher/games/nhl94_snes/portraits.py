@@ -34,13 +34,15 @@ from typing import TYPE_CHECKING
 from ...core.headshots import portrait
 from ...formats import snes
 from ...formats.ea_tdb import refpack_compress
+from . import league
 
 if TYPE_CHECKING:
     from PIL import Image
 
-TABLE = 0xECD53  # $9D:CD53
-PALETTES = 0xED8B3  # $9D:D8B3
-TEAMS = 28
+#: The cartridge's $9D:CD53 and $9D:D8B3, moved by `league.expand`.
+TABLE = league.PHOTOS.at
+PALETTES = league.PHOTO_PALETTES.at
+TEAMS = league.SLOTS
 RECORDS = 26  # entries per team
 SIDE = 48
 RAW_SIZE = SIDE * SIDE // 2

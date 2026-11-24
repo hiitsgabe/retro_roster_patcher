@@ -14,7 +14,9 @@ import pytest
 
 from retro_roster_patcher.core.errors import RomError
 from retro_roster_patcher.games.nhl94_snes.models import (
-    TEAM_COUNT,
+    CARTRIDGE_TEAMS as TEAM_COUNT,
+)
+from retro_roster_patcher.games.nhl94_snes.models import (
     NHL94GoalieAttributes,
     NHL94PlayerAttributes,
     NHL94PlayerRecord,

@@ -12,7 +12,8 @@ shows up as a deliberate red test rather than a silent behaviour change.
 
 import pytest
 
-from retro_roster_patcher.games.nhl94_snes.models import NHL94_TEAM_ORDER, TEAM_COUNT
+from retro_roster_patcher.games.nhl94_snes.models import CARTRIDGE_TEAMS as TEAM_COUNT
+from retro_roster_patcher.games.nhl94_snes.models import NHL94_TEAM_ORDER
 from retro_roster_patcher.games.nhl94_snes.rom_reader import (
     POINTER_TABLE_FILE_OFFSET,
     ROM_SIZE_NO_HEADER,
@@ -177,7 +178,7 @@ def test_get_info_reads_every_slot_out_of_a_valid_image(tmp_path):
     assert len(info.team_slots) == TEAM_COUNT
     assert [slot.index for slot in info.team_slots] == list(range(TEAM_COUNT))
     assert [slot.current_name for slot in info.team_slots] == fixture.CITIES
-    assert [slot.display_name for slot in info.team_slots] == NHL94_TEAM_ORDER
+    assert [slot.display_name for slot in info.team_slots] == NHL94_TEAM_ORDER[:TEAM_COUNT]
 
 
 def test_get_info_reads_no_slot_out_of_an_image_that_does_not_validate(tmp_path):

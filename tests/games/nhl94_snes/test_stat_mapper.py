@@ -71,9 +71,9 @@ def test_a_lowercase_code_maps_to_the_same_slot(mapper):
     assert mapper.get_team_slot("bos") == 1
 
 
-def test_an_expansion_team_without_a_slot_has_none(mapper):
-    assert mapper.get_team_slot("CBJ") is None
-    assert mapper.get_team_slot("UTA") is None
+def test_the_four_clubs_the_cartridge_never_had_take_the_new_slots(mapper):
+    assert [mapper.get_team_slot(c) for c in ("CBJ", "MIN", "NSH", "UTA")] == [28, 29, 30, 31]
+    assert mapper.get_team_slot("ARI") is None
 
 
 def test_seattle_and_vegas_take_the_all_star_slots(mapper):
@@ -88,9 +88,9 @@ def test_each_espn_abbreviation_reaches_the_same_slot_as_the_official_one(mapper
     assert mapper.get_team_slot(espn) == mapper.get_team_slot(official)
 
 
-def test_thirty_two_codes_reach_all_twenty_eight_slots(mapper):
+def test_thirty_six_codes_reach_all_thirty_two_slots(mapper):
     """The collision `map_rosters` has to guard, counted: four ESPN aliases."""
-    assert len(MODERN_NHL_TO_NHL94) == 32
+    assert len(MODERN_NHL_TO_NHL94) == 36
     assert set(MODERN_NHL_TO_NHL94.values()) == set(range(TEAM_COUNT))
 
 

@@ -16,6 +16,7 @@ import pytest
 from retro_roster_patcher.core.errors import ApiError, CapabilityError, MappingError, RomError
 from retro_roster_patcher.core.models import MappedRosters, PatchResult, SlotMapping
 from retro_roster_patcher.games.nhl94_snes.models import (
+    CARTRIDGE_TEAMS,
     DEFAULT_ROSTER_COUNTS,
     RETAIL_ROSTER_COUNTS,
     TEAM_COUNT,
@@ -258,7 +259,8 @@ def test_a_synthetic_rom_is_recognised(patcher, rom):
     assert info.is_valid is True
     assert info.game_id == "nhl94-snes"
     assert info.size == fixture.ROM_SIZE
-    assert len(info.slots) == TEAM_COUNT
+    # The image is not laid out as 32 slots yet: the cartridge's 28.
+    assert len(info.slots) == CARTRIDGE_TEAMS
 
 
 def test_the_slots_carry_the_names_in_the_image_and_the_names_in_the_code(patcher, rom):
@@ -397,8 +399,10 @@ def test_analyze_publishes_one_roster_count_triple_per_slot(patcher, rom):
     counts = patcher.analyze_rom(rom).extra["roster_counts"]
     assert len(counts) == TEAM_COUNT
     image = list(fixture.TEAM_FD_COUNTS)
-    # Slots 26 and 27 are under the reader's sanity floor and fall back.
+    # Slots 26 and 27 are under the reader's sanity floor and fall back; the
+    # four new slots are reported as slot 26, which they start from.
     image[26] = image[27] = (14, 7)
+    image += [image[26]] * (TEAM_COUNT - CARTRIDGE_TEAMS)
     assert counts == [
         [2, max(f, rf), max(d, rd)]
         for (f, d), (rf, rd) in zip(image, RETAIL_ROSTER_COUNTS, strict=True)
@@ -467,7 +471,7 @@ def test_a_provider_with_no_teams_raises(patcher):
 
 
 def test_a_provider_with_no_matching_team_raises(patcher):
-    patcher.api = FakeApi([Team(id=9, name="Columbus Blue Jackets", code="CBJ")])
+    patcher.api = FakeApi([Team(id=9, name="Arizona Coyotes", code="ARI")])
     with pytest.raises(ApiError):
         patcher.fetch(season=2025)
 
@@ -813,7 +817,12 @@ def test_patch_narrates_its_three_steps(patcher, rom, tmp_path):
     patcher.on_status = seen.append
     mapped = MappedRosters(game_id="nhl94-snes", teams={BOS_SLOT: _team_record(BOS_SLOT, 5)})
     patcher.patch(rom_path=rom, output_path=tmp_path / "out.sfc", rosters=mapped)
-    assert seen == ["Validating ROM...", "Initializing ROM writer...", "Saving patched ROM..."]
+    assert seen == [
+        "Validating ROM...",
+        "Initializing ROM writer...",
+        "Kept the cartridge's 28 slots: its layout is not the retail one",
+        "Saving patched ROM...",
+    ]
 
 
 def test_an_unknown_option_is_ignored(patcher, rom, tmp_path):

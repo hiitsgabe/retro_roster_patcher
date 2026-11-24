@@ -74,7 +74,7 @@ from dataclasses import dataclass
 from ...core.errors import RomError
 from ...formats import ea_huff, snes
 from ...formats.ea_tdb import EaTdbError, refpack_compress, refpack_decompress
-from . import portraits
+from . import league, portraits
 from .models import MODERN_NHL_TO_NHL94, NHL94TeamRecord
 
 RGB = tuple[int, int, int]
@@ -151,7 +151,7 @@ def logo_url(code: str) -> str:
 
 TWO_MIB = 0x200000
 #: This module's part of the grown image.
-REGION = range(0x100000, 0x160000)
+REGION = range(0x100000, league.TABLES.start)
 BANK = 0x8000
 
 POINTER_TABLE = 0xE25E7  # team blocks, 16-bit pointers into bank $9C, 4 bytes a slot
@@ -162,27 +162,27 @@ NY_STRINGS = {13: (0x9BC5E7, 14), 14: (0x9BC5F5, 12)}
 NY_CODES = {13: "NYI", 14: "NYR"}
 
 BANNER_POINTERS = 0xE1649
-BANNER_LIST = range(0xE1681, 0xE1786)
+BANNER_LIST = range(league._file(league.BANNER_LIST), league._file(league.BANNER_LIST_END))
 #: Banner font widths in pixels ($9C:9623); a lower-case letter draws as its capital.
 _WIDTHS = [7, 7, 6, 7, 6, 6, 7, 6, 2, 5, 7, 5, 8, 7, 8, 6, 8, 6, 5, 6, 6, 7, 8, 6, 6, 5, 3]
 BANNER_WIDTHS = dict(zip("ABCDEFGHIJKLMNOPQRSTUVWXYZ.", _WIDTHS, strict=True))
 BANNER_WIDTHS |= dict.fromkeys(" 0123456789", 5)
 BANNER_MAX_WIDTH = 66
 
-BANNER_PALETTES = 0xE050F
-LOGO_PALETTES = 0xE0497
-CENTER_ICE = 0xE03B7
-AWAY_UNIFORMS = 0xB49CE
-HOME_UNIFORMS = 0xB4D4E
+BANNER_PALETTES = league.BANNER_PALETTES.at
+LOGO_PALETTES = league.LOGO_PALETTES.at
+CENTER_ICE = league.CENTER_ICE.at
+AWAY_UNIFORMS = league.AWAY_UNIFORMS.at
+HOME_UNIFORMS = league.HOME_UNIFORMS.at
 #: Each loads the logo archive: A9 bb 00 85 0E A9 aa aa.
 LOGO_LOADERS = (0xE87DB, 0xEC69B, 0xED9B7)
 ARCHIVE_SIZE = 0x7C00
-ARCHIVE_ENTRIES = 30
+ARCHIVE_ENTRIES = league.SLOTS + 2
 SEEDS = 0xE6D59
 SEED_TABLES = 32
 SEED_SIZE = 16
-TEAM_SLOTS = 26  # slots that play the playoffs
-SLOTS = 28
+TEAM_SLOTS = league.SLOTS  # slots that play the playoffs
+SLOTS = league.SLOTS
 
 #: BG palette 1, the rink's, in the game (CGRAM); the center-ice logo draws in it.
 RINK_PALETTE = (
@@ -313,16 +313,9 @@ class _Region:
 
 
 def recognised(rom: bytes | bytearray) -> bool:
-    """Does `rom` (headerless) have the cartridge's logo loaders and banner list,
-    the layout `write` was measured on?"""
-    sites = [bytes(rom[s : s + 8]) for s in LOGO_LOADERS]
-    if not all(s[0] == 0xA9 and s[2:6] == b"\x00\x85\x0e\xa9" and s == sites[0] for s in sites):
-        return False
-    for slot in range(SLOTS):
-        at = BANK_9C + _u16(rom, BANNER_POINTERS + 2 * slot) - 0x8000
-        if at not in BANNER_LIST or rom.find(b"\0", at, BANNER_LIST.stop) < 0:
-            return False
-    return True
+    """Is `rom` (headerless) laid out as 32 clubs (`league.expand`), the layout
+    `write` writes into?"""
+    return league.expanded(rom)
 
 
 def write(rom: bytearray, teams: Mapping[int, Identity], status: StatusFn) -> None:
@@ -436,21 +429,29 @@ def _ff_runs(rom: bytes | bytearray, lo: int, hi: int) -> list[tuple[int, int]]:
 
 
 def _write_banners(rom: bytearray, teams: Mapping[int, Identity], status: StatusFn) -> None:
-    """The banner list rebuilt where it is, the slots left alone keeping theirs."""
-    names = []
-    for slot in range(SLOTS):
-        at = BANK_9C + _u16(rom, BANNER_POINTERS + 2 * slot) - 0x8000
-        names.append(bytes(rom[at : rom.find(b"\0", at, BANNER_LIST.stop)]))
+    """The banner list rebuilt where it is, or at the end of bank $9C (its
+    16-bit pointers reach all of it) when today's names are too long for that;
+    the slots left alone keep theirs."""
+    end = BANK_9C + BANK
+    starts = [BANK_9C + _u16(rom, BANNER_POINTERS + 2 * slot) - 0x8000 for slot in range(SLOTS)]
+    names = [bytes(rom[at : rom.find(b"\0", at, end)]) for at in starts]
     for slot, team in teams.items():
         names[slot] = team.club.city.encode("ascii", "replace")
-    blob, where = b"", {}
-    for name in dict.fromkeys(names):
-        where[name] = BANNER_LIST.start + len(blob)
-        blob += name + b"\0"
-    if len(blob) > len(BANNER_LIST):
+    # A list an earlier patch moved to the end of the bank is this one's to reuse.
+    tail = min((at for at in starts if at >= BANNER_LIST.stop), default=end)
+    rom[tail:end] = b"\xff" * (end - tail)
+    blob = b"".join(name + b"\0" for name in dict.fromkeys(names))
+    start = BANNER_LIST.start if len(blob) <= len(BANNER_LIST) else end - len(blob)
+    if start != BANNER_LIST.start and any(b != 0xFF for b in rom[start:end]):
         status("Banner names do not fit; kept")
+        for at, name in zip(starts, names, strict=True):
+            if at >= tail:
+                rom[at : at + len(name) + 1] = name + b"\0"
         return
-    rom[BANNER_LIST.start : BANNER_LIST.start + len(blob)] = blob
+    rom[start : start + len(blob)] = blob
+    where, at = {}, start
+    for name in dict.fromkeys(names):
+        where[name], at = at, at + len(name) + 1
     for slot, name in enumerate(names):
         struct.pack_into("<H", rom, BANNER_POINTERS + 2 * slot, 0x8000 + where[name] - BANK_9C)
 
@@ -521,16 +522,10 @@ def _east(code: str) -> bool:
 
 
 def _archive_entries(archive: bytes) -> list[bytes]:
-    offsets = list(struct.unpack_from(f"<{ARCHIVE_ENTRIES}I", archive)) + [len(archive)]
-    return [archive[offsets[i] : offsets[i + 1]] for i in range(ARCHIVE_ENTRIES)]
+    return league.archive_entries(archive, ARCHIVE_ENTRIES)
 
 
-def _build_archive(entries: list[bytes]) -> bytes:
-    out = bytearray(4 * len(entries))
-    for i, entry in enumerate(entries):
-        struct.pack_into("<I", out, 4 * i, len(out))
-        out += entry
-    return bytes(out)
+_build_archive = league.build_archive
 
 
 def _decode(stream: bytes) -> bytes:

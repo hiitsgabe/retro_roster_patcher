@@ -30,7 +30,7 @@ def test_the_regions_follow_one_another_and_the_faces_take_the_rest():
 
 def test_identity_at_its_worst_stays_in_its_region():
     """`write`'s blobs in its order, each as large as it can be: every pointer
-    an earlier patch left in the region carried over, then all 28 slots with
+    an earlier patch left in the region carried over, then all 32 slots with
     a logo (center ice of incompressible tiles) and an incompressible archive."""
     tiles = _most(32 * logo.ICE_MAX_TILES)
     layout = 6 + 2 * logo.ICE_TILES[0] * logo.ICE_TILES[1]
@@ -41,7 +41,7 @@ def test_identity_at_its_worst_stays_in_its_region():
     region = identity._Region(bytearray(identity.TWO_MIB))
     for size in carried + logos + banners_and_portraits:
         region.put(bytes(size))  # raises past the region's end
-    assert region.at <= 0x120000  # four of its twelve banks
+    assert region.at <= 0x128000  # five of its eleven banks
 
 
 def test_each_screen_at_its_worst_fits_its_own_bank_of_the_screens_region():
