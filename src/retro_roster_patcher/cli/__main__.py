@@ -124,6 +124,14 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="keep the game's own flags instead of drawing each team's logo (we2002)",
     )
+    p_patch.add_argument(
+        "--fix",
+        action="append",
+        default=[],
+        metavar="NAME",
+        help="apply one of the game's optional fixes (nhl94-genesis: weight_fix, sock_fix, "
+        "head_fix; nhl94-snes: y_button_fix, extra_attacker_fix); repeatable",
+    )
     # The answers to "what goes in the slots the slot map leaves out": `_patch_options`
     # checks which go together on which game.
     p_patch.add_argument(

@@ -9,6 +9,7 @@ team header, strings, palettes, and structure are preserved.
 
 import os
 
+from ...core.fixes import Fixes
 from .models import (
     TEAM_COUNT,
     NHL94GenGoalieAttributes,
@@ -22,6 +23,24 @@ from .rom_reader import (
 
 #: The largest image: the cartridge's battery RAM is mapped from 0x200000.
 GROWN_SIZE = 0x200000
+
+
+#: The cartridge's bugs nhl94.com's ROMs fix, by option: each is a list of
+#: `(offset, retail bytes, fixed bytes)`.
+#: weight_fix: the check at $13D72 takes the checker's weight off and adds his
+#: target's (`sub.b $67(a3)` / `add.b $67(a2)`), so the lighter player wins.
+#: sock_fix: three sprite pieces of the skater drawn over his socks.
+#: head_fix: the heads two frames draw on the wrong body.
+FIXES: Fixes = {
+    "weight_fix": [(0x13D72, "902b0067d02a0067", "902a0067d02b0067")],
+    "sock_fix": [(at, "4801", "6801") for at in (0xA74EC, 0xA74FC, 0xA750C)],
+    "head_fix": [
+        (0xA74E0, "0132", "011e"),
+        (0xA74E8, "0142", "012e"),
+        (0xA7500, "011e", "0132"),
+        (0xA7508, "012e", "0142"),
+    ],
+}
 
 
 def grow(rom: bytearray) -> None:

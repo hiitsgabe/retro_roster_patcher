@@ -38,6 +38,7 @@ from typing import Any
 
 from ...core.concurrency import parallel_map
 from ...core.errors import ApiError, MappingError, RomError, as_rom_error
+from ...core.fixes import set_fix
 from ...core.headshots import load_headshot
 from ...core.models import (
     MappedRosters,
@@ -67,6 +68,7 @@ from .models import (
 )
 from .rom_reader import POINTER_SIZE, NHL94SNESRomReader
 from .rom_writer import (
+    FIXES,
     HEADER_GOALIE_SLOTS,
     LINE_ASSIGN_OFFSET,
     LINE_COUNT,
@@ -226,6 +228,7 @@ class NHL94SNESPatcher(Patcher):
     #: Screen art `patch(images={name: png})` can replace; `export_images`
     #: writes the cartridge's current art for each. See `screens.SLOTS`.
     image_slots: tuple[str, ...] = screens.IMAGE_SLOT_NAMES
+    fixes: tuple[str, ...] = tuple(FIXES)
     #: `patch` draws each mapped team's logo (Game Setup and the other menus,
     #: center ice, the title pucks) unless `logos=False`; see `identity`.
     supports_logos: bool = True
@@ -724,6 +727,12 @@ class NHL94SNESPatcher(Patcher):
         fix = bool(options.get("hot_cold_fix", True))
         if targets and not writer.set_hot_cold_fix(fix) and fix:
             self.status("Hot/cold fix skipped: the code at $9F:D232 is not the cartridge's")
+        # nhl94.com's fixes, each off (the cartridge's code) unless asked for.
+        for name in FIXES:
+            fix = bool(options.get(name, False))
+            at = writer.reader.header_offset
+            if writer.data is not None and not set_fix(writer.data, FIXES, name, fix, at) and fix:
+                self.status(f"{name} skipped: the code there is not the cartridge's")
 
         self._draw_portraits(writer, drawn, head_shots=bool(options.get("portraits", True)))
 

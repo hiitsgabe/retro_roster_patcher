@@ -17,6 +17,7 @@ import struct
 
 import pytest
 
+from retro_roster_patcher.core.fixes import set_fix
 from retro_roster_patcher.games.nhl94_genesis.models import (
     TEAM_COUNT,
     NHL94GenGoalieAttributes,
@@ -28,6 +29,7 @@ from retro_roster_patcher.games.nhl94_genesis.rom_reader import (
     NHL94GenesisRomReader,
 )
 from retro_roster_patcher.games.nhl94_genesis.rom_writer import (
+    FIXES,
     NHL94GenesisRomWriter,
     encode_nibble,
     encode_weight_nibble,
@@ -1191,3 +1193,38 @@ def test_patching_a_rom_that_was_already_patched_loses_roster_space(rom_paths):
     # Fifteen of the twenty-five: the shrunken region holds fifteen 18-byte records
     # and their sentinel, and nothing more.
     assert names == [f"NAME{i:04d}" for i in range(15)]
+
+
+def _retail_code():
+    rom = bytearray(0x100000)
+    for edits in FIXES.values():
+        for at, old, _ in edits:
+            rom[at : at + len(old) // 2] = bytes.fromhex(old)
+    return rom
+
+
+@pytest.mark.parametrize("name", sorted(FIXES))
+def test_a_fix_writes_its_bytes_and_can_be_undone(name):
+    rom = _retail_code()
+    retail = bytes(rom)
+    assert set_fix(rom, FIXES, name, True) is True
+    for at, _, new in FIXES[name]:
+        assert rom[at : at + len(new) // 2].hex() == new
+    assert set_fix(rom, FIXES, name, True) is True
+    assert set_fix(rom, FIXES, name, False) is True
+    assert bytes(rom) == retail
+
+
+def test_the_weight_fix_counts_the_checkers_weight_for_him():
+    rom = _retail_code()
+    set_fix(rom, FIXES, "weight_fix", True)
+    # sub.b $67(a2),d0 / add.b $67(a3),d0: a3 is the checker.
+    assert rom[0x13D72:0x13D7A] == bytes.fromhex("902a0067d02b0067")
+
+
+def test_a_fix_touches_nothing_where_the_code_is_not_the_cartridges():
+    rom = _retail_code()
+    rom[0xA750C] = 0x4E
+    before = bytes(rom)
+    assert set_fix(rom, FIXES, "sock_fix", True) is False
+    assert bytes(rom) == before

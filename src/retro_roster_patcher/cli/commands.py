@@ -227,6 +227,12 @@ def _patch_options(game_id: str, args: argparse.Namespace, patcher: Patcher) -> 
         if not getattr(patcher, "supports_logos", False):
             raise UsageError(f"{game_id} does not take --no-logos")
         options["logos"] = False
+    fixes: tuple[str, ...] = tuple(getattr(patcher, "fixes", ()))
+    for name in getattr(args, "fix", None) or []:
+        if name not in fixes:
+            have = f"; it has {', '.join(fixes)}" if fixes else ""
+            raise UsageError(f"{game_id} has no fix {name!r}{have}")
+        options[name] = True
     # Not `patch` options: `cmd_patch` merges the clubs and the nations into the rosters.
     fill_nations = bool(getattr(args, "fill_nations", False))
     fill_clubs = bool(getattr(args, "fill_clubs", None))

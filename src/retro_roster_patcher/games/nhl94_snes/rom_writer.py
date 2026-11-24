@@ -29,6 +29,7 @@ import struct
 from dataclasses import replace
 
 from ...core.errors import RomError
+from ...core.fixes import Fixes
 from .models import (
     TEAM_COUNT,
     NHL94GoalieAttributes,
@@ -77,6 +78,30 @@ TEAM_STRINGS = 4
 HOT_COLD_CODE = 0xFD232
 HOT_COLD_RETAIL = (0x00, 0x00)
 HOT_COLD_FIXED = (0x20, 0xC0)
+
+
+#: McMarkis's fixes (nhl94.com), by option, at headerless file offsets; the
+#: new code goes in 0xFF padding the patch leaves alone.
+#: y_button_fix: a checked player down on the ice stands up at once when Y
+#: (hook) is pressed; $9E:A251 now skips the hook while he is knocked down.
+#: extra_attacker_fix: an extra attacker also in the lines never comes on when
+#: the goalie is pulled or on a power play; $9B:8C96 swaps him in as the
+#: Genesis does.
+FIXES: Fixes = {
+    "y_button_fix": [
+        (0xF2251, "bde314", "4cc5fb"),
+        (0xF7BC5, "ff" * 12, "bde314c90100f0034c56a26b"),
+    ],
+    "extra_attacker_fix": [
+        (0xD8C96, "c90100", "2078ce"),
+        (
+            0xDCE78,
+            "ff" * 66,
+            "48a5a5186d9f1d8595ae9f1de8a59520728dcf8f1d9ff007c695cad0f0801eca"
+            "a5a5186d9f1ded8b1d859520728d48a5a586af186daf00859568207c8d68c9010060",
+        ),
+    ],
+}
 
 
 def _hot_cold_code(operands: tuple[int, int]) -> bytes:

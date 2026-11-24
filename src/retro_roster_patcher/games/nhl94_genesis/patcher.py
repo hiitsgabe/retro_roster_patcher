@@ -9,6 +9,7 @@ from typing import Any
 
 from ...core.concurrency import parallel_map
 from ...core.errors import ApiError, MappingError, RomError, as_rom_error
+from ...core.fixes import set_fix
 from ...core.headshots import MEASURE_CHUNK, load_headshot, portrait
 from ...core.models import (
     MappedRosters,
@@ -29,7 +30,7 @@ from ...sports.nhl import NhlApiClient
 from . import portraits, screens
 from .models import NHL94_GEN_TEAM_ORDER, TEAM_COUNT, NHL94GenPlayerRecord
 from .rom_reader import NHL94GenesisRomReader
-from .rom_writer import GROWN_SIZE, NHL94GenesisRomWriter
+from .rom_writer import FIXES, GROWN_SIZE, NHL94GenesisRomWriter
 from .stat_mapper import LeagueStats, NHL94GenStatMapper
 
 # Two goalies, four forward lines plus two spares, seven defencemen. A selection
@@ -73,6 +74,7 @@ class NHL94GenesisPatcher(Patcher):
     #: Screen art `patch(images={name: png})` can replace; `export_images`
     #: writes the cartridge's current art for each. See `screens.SLOTS`.
     image_slots: tuple[str, ...] = screens.IMAGE_SLOT_NAMES
+    fixes: tuple[str, ...] = tuple(FIXES)
     #: `patch` draws each written player's card (Game Setup, Matchups, Player
     #: Cards) from his head shot unless `looks=False` (then the game's drawing
     #: for his role and hand, with no download). See `portraits`.
@@ -379,6 +381,12 @@ class NHL94GenesisPatcher(Patcher):
             drawn[slot] = players[:written]
 
         self._draw_cards(writer, drawn, looks=bool(options.get("looks", True)))
+
+        # nhl94.com's fixes, each off (the cartridge's code) unless asked for.
+        for name in FIXES:
+            fix = bool(options.get(name, False))
+            if writer.data is not None and not set_fix(writer.data, FIXES, name, fix) and fix:
+                self.status(f"{name} skipped: the code there is not the cartridge's")
 
         if pictures and writer.data is not None:
             self.status("Drawing screen art...")
