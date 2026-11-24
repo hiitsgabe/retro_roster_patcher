@@ -264,8 +264,8 @@ def test_build_patcher_turns_an_unknown_game_id_into_a_usage_error(tmp_path):
 def test_assets_dir_on_a_patcher_that_does_not_accept_it_is_a_usage_error(tmp_path):
     renderer = JsonRenderer(out=io.StringIO())
     args = _args(tmp_path, assets_dir=str(tmp_path / "assets"))
-    with pytest.raises(UsageError, match="nhl94-genesis does not take --assets-dir"):
-        build_patcher("nhl94-genesis", args, renderer)
+    with pytest.raises(UsageError, match="nhl05-ps2 does not take --assets-dir"):
+        build_patcher("nhl05-ps2", args, renderer)
 
 
 def test_assets_dir_reaches_the_patcher_that_does_accept_it(tmp_path):

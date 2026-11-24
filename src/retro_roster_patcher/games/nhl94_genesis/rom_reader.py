@@ -30,6 +30,7 @@ ROM layout (Motorola 68000, big-endian):
 import os
 
 from .models import (
+    CARTRIDGE_TEAMS,
     NHL94_GEN_TEAM_ORDER,
     TEAM_COUNT,
     NHL94GenRomInfo,
@@ -107,10 +108,16 @@ class NHL94GenesisRomReader:
             | self.data[offset + 3]
         )
 
+    def team_count(self) -> int:
+        """The clubs the image holds: 32 once `identity.expand` laid it out, else 26."""
+        from .identity import expanded
+
+        return TEAM_COUNT if self.data and expanded(self.data) else CARTRIDGE_TEAMS
+
     def _read_team_pointer(self, team_index: int) -> int | None:
         """The table stores absolute 68000 addresses; Genesis has no banking, so
         the file offset is the ROM address."""
-        if not self.data or team_index >= TEAM_COUNT:
+        if not self.data or team_index >= self.team_count():
             return None
         ptr_off = POINTER_TABLE_OFFSET + (team_index * POINTER_SIZE)
         if ptr_off + 4 > len(self.data):
@@ -124,7 +131,7 @@ class NHL94GenesisRomReader:
         slots: list[NHL94GenTeamSlot] = []
         if not self.data:
             return slots
-        for i in range(TEAM_COUNT):
+        for i in range(self.team_count()):
             name = ""
             team_base = self._read_team_pointer(i)
             if team_base is not None:
@@ -141,7 +148,7 @@ class NHL94GenesisRomReader:
 
     def get_team_section_offsets(self, team_index: int) -> dict[str, int] | None:
         """Absolute file offsets of a team's six data sections."""
-        if not self.data or team_index >= TEAM_COUNT:
+        if not self.data or team_index >= self.team_count():
             return None
         team_base = self._read_team_pointer(team_index)
         if team_base is None:
@@ -195,7 +202,7 @@ class NHL94GenesisRomReader:
 
     def read_team_roster(self, team_index: int) -> tuple[list[str], list[bytes]]:
         """Each stat_bytes entry is 8 bytes: 1 jersey BCD + 7 attribute bytes."""
-        if not self.data or team_index >= TEAM_COUNT:
+        if not self.data or team_index >= self.team_count():
             return [], []
         team_base = self._read_team_pointer(team_index)
         if team_base is None:
@@ -233,7 +240,7 @@ class NHL94GenesisRomReader:
     def get_team_player_region(self, team_index: int) -> tuple[int, int]:
         """Offset and size of a team's player records, up to and including the
         2-byte end sentinel."""
-        if not self.data or team_index >= TEAM_COUNT:
+        if not self.data or team_index >= self.team_count():
             return 0, 0
         team_base = self._read_team_pointer(team_index)
         if team_base is None:

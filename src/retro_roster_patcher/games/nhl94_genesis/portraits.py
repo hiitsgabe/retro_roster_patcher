@@ -3,9 +3,10 @@ the Player Cards screen.
 
 Measured in genesis_plus_gx on the retail cartridge (Nov 2026):
 
-* `TABLE` holds 28 pointers, one per team (the 26 clubs, then the two All-Star
-  teams), to a list of `(u32 card, u16 roster index)` entries ending in a u32
-  0. The cartridge lists 144 photos, mostly each team's Best line (its line 0:
+* `TABLE` holds a pointer per team (on the cartridge 28 at $F92F4: the 26
+  clubs, then the two All-Star teams; `identity.expand` moves it, 34 long),
+  to a list of `(u32 card, u16 roster index)` entries ending in a u32 0.
+  The cartridge lists 144 photos, mostly each team's Best line (its line 0:
   goalie, defencemen, forwards), and a few players with a drawing.
 * A card is an EA art record: u32 palette offset, u32 map offset, u16 tile
   count, then 3-bit pixels, MSB first, 24 bytes a tile, the 36 tiles of a 6x6
@@ -31,14 +32,17 @@ from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
 from ...formats.genesis import LEVELS
+from .identity import CARDS, CLUB_SLOTS, SLOTS
 from .rom_reader import POINTER_TABLE_OFFSET
 from .rom_writer import grow
 
-TABLE = 0xF92F4
-TEAMS = 28
-#: The 26 clubs, whose rosters a patch writes.
-CLUBS = 26
-REGION = range(0x120000, 0x200000)
+TABLE = CARDS.at
+TEAMS = SLOTS
+#: The clubs, whose rosters a patch writes.
+CLUBS = CLUB_SLOTS
+REGION = range(0x140000, 0x200000)
+#: A list an earlier patch wrote: anywhere in the image grown past the cartridge.
+GROWN = 0x100000
 SIDE = 48
 #: The game's own drawing for a player with no card, by (is goalie, hand bit).
 GENERIC = {
@@ -63,7 +67,7 @@ Player = tuple[bool, int, str]
 
 
 def table_ok(rom: bytes | bytearray) -> bool:
-    """Is the card table there: 28 lists of at least the six entries Game Setup
+    """Is the card table there: 34 lists of at least the six entries Game Setup
     reads, ending within `MAX_ENTRIES`, each pointing at a card record of 1 to
     36 tiles inside the image?"""
     if len(rom) < TABLE + 4 * TEAMS:
@@ -155,13 +159,13 @@ def write(
     stale = {
         team: _roster(rom, team)
         for team in range(CLUBS)
-        if team not in teams and struct.unpack_from(">I", rom, TABLE + 4 * team)[0] in REGION
+        if team not in teams and struct.unpack_from(">I", rom, TABLE + 4 * team)[0] >= GROWN
     }
     urls = list(dict.fromkeys(url for players in teams.values() for *_, url in players if url))
     pictures = dict(zip(urls, load(urls), strict=True)) if load and urls else {}
     rom[REGION.start : REGION.stop] = b"\xff" * len(REGION)
-    # ponytail: no room check: 26 clubs of 23 players (the patcher's cap) take
-    # 523 KiB of cards and lists in the 960 KiB region; check if the cap grows.
+    # shortcut: no room check: 32 clubs of 23 players (the patcher's cap) take
+    # 645 KiB of cards and lists in the 768 KiB region; check if the cap grows.
     at = REGION.start
     cards: dict[str, int] = {}
     photos = drawings = 0

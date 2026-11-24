@@ -214,13 +214,12 @@ def test_nhl94_fetch_ends_the_stream_with_a_result(tmp_path, hockey_wire, capsys
 
 
 def test_nhl94_fetch_reports_the_season_and_the_rom_mapped_teams(tmp_path, hockey_wire, capsys):
-    # 26 is the slot-mapped subset of the 32 teams in the recorded standings:
-    # `fetch` drops any team with no slot in the 1994 ROM before requesting a
-    # squad, which is six of them.
+    # Every one of the 32 teams in the recorded standings has a slot: the patch
+    # lays the cartridge out as 32 clubs (`identity.expand`).
     main(_nhl94_argv(tmp_path))
     result = events(capsys)[-1]
     assert result["season"] == 2025
-    assert result["teams"] == 26
+    assert result["teams"] == 32
 
 
 def test_nhl94_fetch_writes_a_squad_for_every_mapped_team(tmp_path, hockey_wire, capsys):

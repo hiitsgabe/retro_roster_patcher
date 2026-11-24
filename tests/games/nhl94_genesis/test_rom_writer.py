@@ -29,14 +29,10 @@ from retro_roster_patcher.games.nhl94_genesis.rom_reader import (
     NHL94GenesisRomReader,
 )
 from retro_roster_patcher.games.nhl94_genesis.rom_writer import (
-    CARTRIDGE_BLOCKS,
     FIXES,
-    TEAM_REGION,
-    TEAM_SLOTS,
     NHL94GenesisRomWriter,
     encode_nibble,
     encode_weight_nibble,
-    relocate_teams,
 )
 from tests.fixtures import synthetic_rom
 
@@ -1231,47 +1227,4 @@ def test_a_fix_touches_nothing_where_the_code_is_not_the_cartridges():
     rom[0xA750C] = 0x4E
     before = bytes(rom)
     assert set_fix(rom, FIXES, "sock_fix", True) is False
-    assert bytes(rom) == before
-
-
-def _block(city):
-    """A team block cut to what `relocate_teams` reads: a header whose +4 word
-    points past 8 bytes of body to the four strings."""
-    strings = b"".join(
-        (len(s) + 2).to_bytes(2, "big") + s for s in (city, b"ABC\0", b"Nick", b"Rink")
-    )
-    return (20).to_bytes(2, "big") * 2 + (20).to_bytes(2, "big") + bytes(14) + strings
-
-
-def _cartridge_teams():
-    rom = bytearray(0x100000)
-    at = CARTRIDGE_BLOCKS.start
-    blocks = []
-    for i in range(TEAM_SLOTS):
-        block = _block(f"City{i:02d}".encode())
-        rom[at : at + len(block)] = block
-        rom[0x30E + 4 * i : 0x312 + 4 * i] = at.to_bytes(4, "big")
-        blocks.append(block)
-        at += len(block)
-    return rom, blocks
-
-
-def test_the_team_blocks_move_whole_into_the_grown_image():
-    rom, blocks = _cartridge_teams()
-    assert relocate_teams(rom) is True
-    assert len(rom) == 0x200000
-    for i, block in enumerate(blocks):
-        base = int.from_bytes(rom[0x30E + 4 * i : 0x312 + 4 * i], "big")
-        assert base in TEAM_REGION and base % 2 == 0
-        assert rom[base : base + len(block)] == block
-    moved = bytes(rom)
-    assert relocate_teams(rom) is True
-    assert bytes(rom) == moved
-
-
-def test_a_table_pointing_elsewhere_moves_nothing():
-    rom, _ = _cartridge_teams()
-    rom[0x30E:0x312] = (0x90000).to_bytes(4, "big")
-    before = bytes(rom)
-    assert relocate_teams(rom) is False
     assert bytes(rom) == before

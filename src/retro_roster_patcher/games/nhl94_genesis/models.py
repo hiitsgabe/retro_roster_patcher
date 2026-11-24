@@ -46,10 +46,16 @@ NHL94_GEN_TEAM_ORDER = [
     "Vancouver",  # 23
     "Washington",  # 24
     "Winnipeg",  # 25 - now Winnipeg Jets (returned 2011)
+    # Slots a patch adds (`identity.expand`); All-Stars East and West move to 32 and 33.
+    "Columbus",  # 26
+    "Minnesota",  # 27
+    "Nashville",  # 28
+    "Seattle",  # 29
+    "Utah",  # 30
+    "Vegas",  # 31
 ]
 
 # Modern NHL team abbreviation → ROM slot index, ESPN variants included.
-# Excludes expansion teams absent from NHL94: CBJ, MIN, NSH, SEA, UTA, VGK.
 MODERN_NHL_TO_NHL94_GEN = {
     "ANA": 0,
     "BOS": 1,
@@ -81,9 +87,18 @@ MODERN_NHL_TO_NHL94_GEN = {
     "VAN": 23,
     "WSH": 24,
     "WPG": 25,
+    "CBJ": 26,
+    "MIN": 27,
+    "NSH": 28,
+    "SEA": 29,
+    "UTA": 30,
+    "VGK": 31,
 }
 
-TEAM_COUNT = 26
+#: The clubs a patch writes, the six new ones included.
+TEAM_COUNT = 32
+#: The clubs on the cartridge, before `identity.expand`.
+CARTRIDGE_TEAMS = 26
 MAX_PLAYERS_PER_TEAM = 25
 
 
@@ -149,6 +164,14 @@ class NHL94GenPlayerRecord:
     )
     #: The head shot `portraits` draws his card from; "" for the game's drawing.
     photo_url: str = ""
+
+
+class NHL94GenRoster(list):
+    """A slot's player records, and the club they play for (None when unknown)."""
+
+    def __init__(self, players=(), team: Team | None = None) -> None:
+        super().__init__(players)
+        self.team = team
 
 
 @dataclass

@@ -410,10 +410,10 @@ def test_fetch_counts_only_the_teams_that_have_a_rom_slot_in_the_league_header(t
     p.api = FakeApi(
         [
             Team(id=1, name="Boston Bruins", code="BOS"),
-            Team(id=2, name="Seattle Kraken", code="SEA"),
+            Team(id=2, name="Arizona Coyotes", code="ARI"),
             Team(id=3, name="Chicago Blackhawks", code="CHI"),
             Team(id=4, name="Detroit Red Wings", code="DET"),
-            Team(id=5, name="Utah Mammoth", code="UTA"),
+            Team(id=5, name="Atlanta Thrashers", code="ATL"),
             Team(id=6, name="Toronto Maple Leafs", code="TOR"),
         ]
     )
@@ -486,7 +486,7 @@ def test_fetch_with_no_team_matching_a_slot_raises_api_error(tmp_path):
     # Distinct from the empty-list case: the provider answered, but the 1994 ROM
     # has no room for any of what it returned.
     p = NHL94GenesisPatcher(cache_dir=tmp_path / "cache")
-    p.api = FakeApi([Team(id=9, name="Seattle Kraken", code="SEA")])
+    p.api = FakeApi([Team(id=9, name="Arizona Coyotes", code="ARI")])
     with pytest.raises(ApiError, match="ROM slot"):
         p.fetch(season=2025)
 
@@ -522,7 +522,7 @@ def test_map_rosters_selects_at_most_the_declared_cap(patcher):
 def test_map_rosters_drops_a_team_with_no_rom_slot(patcher):
     # `fetch` already filters these out, so the guard in `map_rosters` is only
     # reachable through the split-process path: fetch to JSON, map from JSON.
-    mapped = patcher.map_rosters(_league_data([Player(id=1, name="X", position="C")], code="SEA"))
+    mapped = patcher.map_rosters(_league_data([Player(id=1, name="X", position="C")], code="ARI"))
     assert mapped.teams == {}
 
 
@@ -531,7 +531,7 @@ def test_exactly_four_rom_slots_are_reachable_by_two_team_codes():
     # rather than silently widening the blast radius of the guard below.
     duplicated = collections.Counter(MODERN_NHL_TO_NHL94_GEN.values())
     assert {slot: n for slot, n in duplicated.items() if n > 1} == {10: 2, 12: 2, 19: 2, 21: 2}
-    assert len(MODERN_NHL_TO_NHL94_GEN) == 30
+    assert len(MODERN_NHL_TO_NHL94_GEN) == 36
     assert len(set(MODERN_NHL_TO_NHL94_GEN.values())) == TEAM_COUNT
 
 
@@ -609,12 +609,12 @@ def test_the_leader_stats_order_the_roster_and_shape_the_attributes(patcher):
 
 
 def test_map_rosters_refuses_a_slot_the_rom_does_not_have(patcher, monkeypatch):
-    # `MODERN_NHL_TO_NHL94_GEN` only holds 0-25 today, so the range guard is
+    # `MODERN_NHL_TO_NHL94_GEN` only holds 0-31 today, so the range guard is
     # unreachable through the real table, but `MappedRosters` is a public type and
     # `patch` is the only other thing between an out-of-range key and the writer's
-    # missing lower bound. 26 is one past the last real slot, and the only value that
+    # missing lower bound. 32 is one past the last real slot, and the only value that
     # tells `< TEAM_COUNT` apart from `<= TEAM_COUNT`.
-    for slot in (99, 26, -1):
+    for slot in (99, 32, -1):
         monkeypatch.setattr(patcher.mapper, "get_team_slot", lambda code, s=slot: s)
         assert patcher.map_rosters(_league_data([Player(id=1, name="X", position="C")])).teams == {}
 
@@ -744,7 +744,7 @@ def test_two_slots_holding_empty_rosters_count_as_no_teams_patched(tmp_path, pat
 def test_patching_with_nothing_mapped_still_writes_an_output(tmp_path, patcher):
     rom = synthetic_rom.write_nhl94_genesis_rom(tmp_path / "nhl94.bin")
     out = tmp_path / "out.bin"
-    mapped = patcher.map_rosters(_league_data([], code="SEA"))
+    mapped = patcher.map_rosters(_league_data([], code="ARI"))
     seen = []
 
     result = patcher.patch(
@@ -774,7 +774,7 @@ def test_patch_forwards_status_messages(tmp_path):
     assert seen == [
         "Validating ROM...",
         "Initializing ROM writer...",
-        "Team blocks kept in place: the table at $30E is not the cartridge's",
+        "Kept the cartridge's 26 clubs: its layout is not the retail one",
         "Player cards kept: not the retail cartridge's layout",
         "Saving patched ROM...",
     ]

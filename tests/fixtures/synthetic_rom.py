@@ -244,3 +244,62 @@ def write_nhl94_genesis_rom(path: pathlib.Path) -> pathlib.Path:
     """Write a synthetic ROM to `path` and return it."""
     path.write_bytes(bytes(build_nhl94_genesis_rom()))
     return path
+
+
+#: A cartridge-like block: header, palettes, ratings, goalies, lines, players,
+#: then the four strings, as the cartridge orders them.
+CART_PALETTES, CART_RATINGS, CART_GOALIES, CART_LINES, CART_PLAYERS = 0x0C, 0x4C, 0x50, 0x52, 0x92
+
+
+def _cartridge_block(team_index: int) -> bytes:
+    players = b"".join(player_record(team_index, slot) for slot in range(ROSTER_PLAYERS))
+    players += b"\x00\x02"
+    strings = b""
+    city = CITIES[team_index % TEAM_COUNT]
+    for text in (city, ABBREVIATIONS[team_index % TEAM_COUNT], "Nick", "Rink"):
+        data = text.encode("ascii")
+        data += b"\0" * (len(data) % 2)
+        strings += struct.pack(">H", len(data) + 2) + data
+    head = struct.pack(
+        ">6H",
+        CART_PLAYERS,
+        CART_PALETTES,
+        CART_PLAYERS + len(players),
+        CART_LINES,
+        CART_RATINGS,
+        CART_GOALIES,
+    )
+    body = bytes([team_index]) * (CART_PLAYERS - len(head))
+    return head + body + players + strings
+
+
+def build_nhl94_genesis_cartridge() -> bytearray:
+    """The synthetic image laid out as the cartridge is where `identity.expand`
+    looks: 28 blocks (the 26 clubs, two All-Star teams) packed from $37E, the
+    code and table addresses it patches, and two banner sheets of 28 frames."""
+    from retro_roster_patcher.games.nhl94_genesis import identity
+
+    rom = build_nhl94_genesis_rom()
+    at = identity.CARTRIDGE_BLOCKS.start
+    for i in range(identity.RETAIL_SLOTS):
+        block = _cartridge_block(i)
+        rom[at : at + len(block)] = block
+        struct.pack_into(">I", rom, POINTER_TABLE_OFFSET + 4 * i, at)
+        at += len(block) + len(block) % 2
+    assert at <= identity.CARTRIDGE_BLOCKS.stop
+    for offset, old, _new in identity.CODE:
+        rom[offset : offset + len(old) // 2] = bytes.fromhex(old)
+    for table in identity.TABLES:
+        for site in table.sites:
+            struct.pack_into(">I", rom, site, table.retail)
+        for i in range(identity.RETAIL_SLOTS * table.size):
+            rom[table.retail + i] = i // table.size
+    frame = [[5] * 88] + [[5] + [1 + y // 8] * 86 + [5] for y in range(1, 15)] + [[5] * 88]
+    sheet = identity._record([frame] * identity.RETAIL_SLOTS, bytes(0x80))
+    rom[identity.BANNER_SHEET : identity.BANNER_SHEET + len(sheet)] = sheet
+    rom[identity.STRIPE_SHEET : identity.STRIPE_SHEET + len(sheet)] = sheet
+    for site in identity.STRIPE_SITES:
+        struct.pack_into(">I", rom, site, identity.STRIPE_SHEET)
+    for site in identity.STRIPE_TILE_SITES:
+        struct.pack_into(">I", rom, site, identity.STRIPE_SHEET + 8)
+    return rom

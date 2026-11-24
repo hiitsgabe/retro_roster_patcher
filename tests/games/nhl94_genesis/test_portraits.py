@@ -1,5 +1,5 @@
-"""NHL 94 (Genesis) player cards: the per-team card lists at $F92F4, on a
-synthetic image laid out like the cartridge."""
+"""NHL 94 (Genesis) player cards: the per-team card lists, on a synthetic image
+laid out like the cartridge and expanded to 34 slots."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ import struct
 import pytest
 
 from retro_roster_patcher.core.models import MappedRosters
-from retro_roster_patcher.games.nhl94_genesis import portraits
+from retro_roster_patcher.games.nhl94_genesis import identity, portraits
 from retro_roster_patcher.games.nhl94_genesis.models import NHL94GenPlayerRecord
 from retro_roster_patcher.games.nhl94_genesis.patcher import NHL94GenesisPatcher
 from tests.fixtures import synthetic_rom
@@ -19,9 +19,11 @@ PLAIN = bytes(8) + b"\x00\x24"
 
 
 def _card_rom() -> bytearray:
-    """The synthetic image with the four generic cards where the cartridge has
-    them and, per team, a list of six entries (a generic card, roster 0-5)."""
-    rom = synthetic_rom.build_nhl94_genesis_rom()
+    """The expanded synthetic image with the four generic cards where the
+    cartridge has them and, per team, a list of six entries (a generic card,
+    roster 0-5)."""
+    rom = synthetic_rom.build_nhl94_genesis_cartridge()
+    assert identity.expand(rom)
     for at in portraits.GENERIC.values():
         rom[at : at + 874] = PLAIN + bytes(864)
     for team in range(portraits.TEAMS):

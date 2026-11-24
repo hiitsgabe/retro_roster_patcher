@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from retro_roster_patcher.games.nhl94_genesis import portraits
+from retro_roster_patcher.games.nhl94_genesis import identity, portraits
 from retro_roster_patcher.games.nhl94_genesis.patcher import NHL94GenesisPatcher
 from retro_roster_patcher.games.nhl94_genesis.rom_reader import NHL94GenesisRomReader
 from retro_roster_patcher.sports.models import League, LeagueData, Player, Team, TeamRoster
@@ -59,6 +59,7 @@ def _patch(
         ],
     )
     out = tmp_path / name
+    options.setdefault("logos", False)
     patcher.patch(
         rom_path=source or _rom(), output_path=out, rosters=patcher.map_rosters(data), **options
     )
@@ -72,7 +73,8 @@ def test_each_written_player_gets_his_card_and_the_other_teams_keep_theirs(tmp_p
     from tests.fixtures.synthetic_headshot import headshot
 
     cartridge = _rom().read_bytes()
-    assert portraits.table_ok(cartridge)
+    expanded = bytearray(cartridge)
+    assert identity.expand(expanded) and portraits.table_ok(expanded)
     squad = _squad("LAK")
     for player in squad:
         player.photo_url = f"https://example.test/{player.id}.png"
@@ -92,11 +94,13 @@ def test_each_written_player_gets_his_card_and_the_other_teams_keep_theirs(tmp_p
     # The lookup at $FAE26 finds a card of his own for every one of the 20.
     assert sorted(found) == list(range(20))
     assert all(card in portraits.REGION for card in found.values())
-    # Montreal and the two All-Star teams keep the cartridge's lists.
-    for team in (11, 26, 27):
+    # Montreal and the two All-Star teams, now in slots 32 and 33, keep the
+    # cartridge's lists.
+    retail = identity.CARDS.retail
+    for team, was in ((11, 11), (32, 26), (33, 27)):
         assert (
             rom[table + 4 * team : table + 4 * team + 4]
-            == cartridge[table + 4 * team : table + 4 * team + 4]
+            == cartridge[retail + 4 * was : retail + 4 * was + 4]
         )
 
 

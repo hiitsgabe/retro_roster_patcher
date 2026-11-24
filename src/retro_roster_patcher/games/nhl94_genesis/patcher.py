@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import importlib.util
 from collections.abc import Mapping, Sequence
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
+from ...core.assets import crest_png
 from ...core.concurrency import parallel_map
 from ...core.errors import ApiError, MappingError, RomError, as_rom_error
 from ...core.fixes import set_fix
@@ -27,8 +29,9 @@ from ...sports import _http
 from ...sports.espn import EspnClient
 from ...sports.models import League, LeagueData, Player, TeamRoster
 from ...sports.nhl import NhlApiClient
-from . import portraits, screens
-from .models import NHL94_GEN_TEAM_ORDER, TEAM_COUNT, NHL94GenPlayerRecord
+from ..nhl94_snes.identity import logo_url
+from . import identity, portraits, screens
+from .models import NHL94_GEN_TEAM_ORDER, TEAM_COUNT, NHL94GenPlayerRecord, NHL94GenRoster
 from .rom_reader import NHL94GenesisRomReader
 from .rom_writer import FIXES, GROWN_SIZE, NHL94GenesisRomWriter
 from .stat_mapper import LeagueStats, NHL94GenStatMapper
@@ -79,6 +82,10 @@ class NHL94GenesisPatcher(Patcher):
     #: Cards) from his head shot unless `looks=False` (then the game's drawing
     #: for his role and hand, with no download). See `portraits`.
     supports_looks: bool = True
+    #: `patch` lays the cartridge out as 32 clubs and gives each written one its
+    #: name, colours, banners and, unless `logos=False`, its logo and center
+    #: ice. See `identity`.
+    supports_logos: bool = True
 
     def __init__(
         self,
@@ -88,6 +95,7 @@ class NHL94GenesisPatcher(Patcher):
         on_status: StatusFn | None = None,
         on_partial: PartialFn | None = None,
         transport: _http.Transport | None = None,
+        assets_dir: Path | str | None = None,
     ) -> None:
         super().__init__(
             cache_dir,
@@ -97,6 +105,9 @@ class NHL94GenesisPatcher(Patcher):
         )
         self.mapper = NHL94GenStatMapper()
         self._transport = transport
+        # User-supplied, read-only: `logos/<team_id>.png` drawn instead of the
+        # provider's logo.
+        self.assets_dir = Path(assets_dir) if assets_dir is not None else None
         # `Any`: the two clients take different arguments for squad and leaders, so
         # no single type describes both.
         if self.provider == "nhl":
@@ -257,7 +268,7 @@ class NHL94GenesisPatcher(Patcher):
             # wipe the populated one that already took the slot.
             if not records and teams.get(slot):
                 continue
-            teams[slot] = records
+            teams[slot] = NHL94GenRoster(records, team=roster.team)
         return MappedRosters(game_id=self.game_id, teams=teams)
 
     # -- patch --------------------------------------------------------------
@@ -268,6 +279,47 @@ class NHL94GenesisPatcher(Patcher):
             raise RomError(f"ROM not found: {rom_path}")
         with as_rom_error(rom_path):
             return screens.export(Path(rom_path).read_bytes(), Path(out_dir))
+
+    def _write_identity(
+        self,
+        writer: NHL94GenesisRomWriter,
+        rosters: MappedRosters,
+        targets: Sequence[int],
+        *,
+        logos: bool,
+    ) -> None:
+        """Each target slot's club as the game shows it (`identity`); a slot whose
+        roster names no club `identity` knows keeps what it has."""
+        data = writer.data
+        if data is None or not identity.expanded(data):
+            return
+        teams = {}
+        for slot in targets:
+            club = getattr(rosters.teams[slot], "team", None)
+            if club is not None:
+                team = identity.identity_of(club.code, club.color, club.alternate_color)
+                if team is not None:
+                    teams[slot] = team
+        if not teams:
+            return
+        if logos and importlib.util.find_spec("PIL") is None:
+            self.status("Pillow is not installed; team logos skipped")
+        elif logos:
+            self.status("Loading team logos...")
+            slots = sorted(teams)
+            pngs = parallel_map(
+                lambda slot: crest_png(
+                    self.assets_dir,
+                    rosters.teams[slot].team.id,
+                    rosters.teams[slot].team.logo_url or logo_url(teams[slot].code),
+                    self._transport,
+                ),
+                slots,
+            )
+            for slot, png in zip(slots, pngs, strict=True):
+                teams[slot] = replace(teams[slot], logo=png)
+        identity.write(data, teams, self.status)
+        self.status(f"Team identity written: {len(teams)}")
 
     def _draw_cards(
         self,
@@ -347,14 +399,15 @@ class NHL94GenesisPatcher(Patcher):
 
         # Without this the game refuses to boot an edited cartridge.
         writer.disable_checksum()
-        if not writer.relocate_teams():
-            self.status("Team blocks kept in place: the table at $30E is not the cartridge's")
+        if not writer.expand():
+            self.status("Kept the cartridge's 26 clubs: its layout is not the retail one")
 
         # An empty list would make `write_team_roster` zero-fill the region it was
         # going to patch. The range is re-checked because the reader guards only
-        # `team_index >= TEAM_COUNT`: a negative key reads the four bytes before the
+        # `team_index >= team_count()`: a negative key reads the four bytes before the
         # pointer table and writes wherever that word happens to point.
-        targets = [slot for slot in rosters.filled_slots() if 0 <= slot < TEAM_COUNT]
+        count = writer.reader.team_count()
+        targets = [slot for slot in rosters.filled_slots() if 0 <= slot < count]
 
         teams_patched = 0
         players_patched = 0
@@ -382,6 +435,7 @@ class NHL94GenesisPatcher(Patcher):
             players_patched += written
             drawn[slot] = players[:written]
 
+        self._write_identity(writer, rosters, targets, logos=bool(options.get("logos", True)))
         self._draw_cards(writer, drawn, looks=bool(options.get("looks", True)))
 
         # nhl94.com's fixes, each off (the cartridge's code) unless asked for.
