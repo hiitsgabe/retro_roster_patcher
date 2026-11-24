@@ -19,6 +19,7 @@ from ...core.nhl_clubs import (
     RELOCATED,
     Identity,
     Rename,
+    give_homes,
     plain,
 )
 from ...core.nhl_clubs import rename_strings as _rename_strings
@@ -95,28 +96,7 @@ def rename_tables(tdb: TDBFile, slots: Iterable[int]) -> list[Rename]:
     their own (`ALL_STAR_HOMES`, AREN pointing each side at it), so each plays
     on its own centre ice."""
     renames = _rename_tables(tdb, slots)
-    sides = [r.slot for r in renames if r.slot in ALL_STAR_HOMES]
-    sare, aren = tdb.get_table("SARE"), tdb.get_table("AREN")
-    if not sides or sare is None:
-        return renames
-    rows = {sare.read_record(i).get("INDX"): i for i in range(min(sare.num_records, sare.capacity))}
-    if ALL_STAR_ARENA not in rows:
-        return renames
-    game = sare.read_record(rows[ALL_STAR_ARENA])
-    sare.write_record(rows[ALL_STAR_ARENA], {"LOGO": ALL_STAR_ICE})
-    homes = {}
-    for side in sides:
-        arena, logo, name, city = ALL_STAR_HOMES[side]
-        if arena in rows:
-            sare.write_record(
-                rows[arena], {**game, "INDX": arena, "LOGO": logo, "NAME": name, "CITY": city}
-            )
-            homes[side] = arena
-    if aren is not None:
-        for i in range(min(aren.num_records, aren.capacity)):
-            team = aren.read_record(i).get("INDX")
-            if isinstance(team, int) and team in homes:
-                aren.write_record(i, {"ID__": homes[team]})
+    give_homes(tdb, renames, ALL_STAR_ARENA, ALL_STAR_ICE, ALL_STAR_HOMES)
     return renames
 
 

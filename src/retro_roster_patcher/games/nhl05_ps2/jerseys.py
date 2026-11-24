@@ -35,9 +35,9 @@ from __future__ import annotations
 
 import io
 import struct
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Union
+from typing import TYPE_CHECKING, Any, Union
 
 from ...formats import ssh
 from ...formats.ea_tdb import (
@@ -75,16 +75,20 @@ CLASSICS: Mapping[int, tuple[tuple[tuple[int, str, int], tuple[int, str, int]], 
 }
 
 
-def share(archive: bytes, moves: Mapping[int, Mapping[int, tuple[int, int]]]) -> tuple[bytes, int]:
+def share(
+    archive: bytes,
+    moves: Mapping[int, Mapping[int, tuple[int, int]]],
+    parts: tuple[str, ...] = PARTS,
+) -> tuple[bytes, int]:
     """`archive` (`JERSEYS.VIV`) with each `{art: {n: (art, n)}}` jersey's
-    members pointing at the other jersey's data, and how many jerseys changed.
-    A jersey either side lacks a member of is left as it was."""
+    members (`parts`) pointing at the other jersey's data, and how many
+    jerseys changed. A jersey either side lacks a member of is left as it was."""
     out = bytearray(archive)
     names = {e.name for e in bigf_parse(archive)}
     changed = 0
     for art, jerseys in moves.items():
         for n, (src_art, src_n) in jerseys.items():
-            pairs = {p.format(art, n): p.format(src_art, src_n) for p in PARTS}
+            pairs = {p.format(art, n): p.format(src_art, src_n) for p in parts}
             if all(d in names and s in names for d, s in pairs.items()):
                 bigf_alias(out, pairs)
                 changed += 1
@@ -96,15 +100,22 @@ def _picture_copy(abbr: str, n: int) -> screens.Copy:
     return screens.Copy(PICTURES, f"{name}.big", f"{name}.ssh")
 
 
-def redraw_pictures(archive: bytes, moves: Mapping[tuple[str, int], Drawing]) -> tuple[bytes, int]:
+def redraw_pictures(
+    archive: bytes,
+    moves: Mapping[tuple[str, int], Drawing],
+    copy: Callable[[str, int], Any] = _picture_copy,
+    art: Any = screens,
+) -> tuple[bytes, int]:
     """`archive` (`JERAPT.VIV`) with each `{(abbr, n): picture}` jersey picture
     drawn in place; `picture` is a PIL image or `(abbr, n)` of another picture
-    of the archive to copy. Returns the archive and how many were drawn."""
+    of the archive to copy. `copy` names a picture's member and `art` (a
+    game's `screens`) reads and fits it. Returns the archive and how many were
+    drawn."""
     out = bytearray(archive)
     entries = {e.name.lower(): e for e in bigf_parse(archive)}
 
     def member(abbr: str, n: int) -> tuple[BigfEntry, bytes] | None:
-        entry = entries.get(_picture_copy(abbr, n).member.lower())
+        entry = entries.get(copy(abbr, n).member.lower())
         if entry is None:
             return None
         return entry, archive[entry.offset : entry.offset + entry.size]
@@ -117,13 +128,13 @@ def redraw_pictures(archive: bytes, moves: Mapping[tuple[str, int], Drawing]) ->
         image: Image.Image | None
         if isinstance(picture, tuple):
             source = member(*picture)
-            image = screens.read_picture(source[1], _picture_copy(*picture)) if source else None
+            image = art.read_picture(source[1], copy(*picture)) if source else None
         else:
             image = picture
         if image is None:
             continue
         entry, data = found
-        fitted = screens.fitted(data, _picture_copy(abbr, n), image)
+        fitted = art.fitted(data, copy(abbr, n), image)
         if fitted is None:
             continue
         out[entry.offset : entry.offset + entry.size] = fitted.ljust(entry.size, b"\0")

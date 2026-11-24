@@ -59,8 +59,8 @@ RELOCATED: Mapping[int, Identity] = {
 }
 
 
-#: By slot: the All-Star sides Seattle and Vegas take. No arena: the sides play
-#: at the All-Star game's.
+#: By slot: the All-Star sides Seattle and Vegas take. No arena here: a game
+#: gives each side one of its own (`give_homes`).
 ALL_STARS: Mapping[int, Identity] = {
     30: Identity("Seattle Kraken", "Seattle", "Kraken", "SEA", "", ""),
     31: Identity("Vegas Golden Knights", "Vegas", "Golden Knights", "VGK", "", ""),
@@ -108,6 +108,48 @@ def rename_tables(tdb: TDBFile, slots: Iterable[int]) -> list[Rename]:
             if new is not None:
                 sare.write_record(i, {"NAME": new.arena, "CITY": new.arena_city})
     return renames
+
+
+def give_homes(
+    tdb: TDBFile,
+    renames: Iterable[Rename],
+    all_star_arena: int,
+    all_star_ice: int,
+    homes: Mapping[int, tuple[int, int, str, str]],
+    templates: Mapping[int, int] | None = None,
+) -> None:
+    """Each All-Star side among `renames` at an arena of its own: `homes`
+    `{side: (SARE row INDX, LOGO, name, city)}`, each a copy of the All-Star
+    game's arena (SARE `all_star_arena`), or of the side's `templates` arena,
+    with AREN pointing the side at it, so each plays on its own centre ice.
+    The All-Star game's arena keeps `all_star_ice` for the sides left there."""
+    sides = [r.slot for r in renames if r.slot in homes]
+    sare, aren = tdb.get_table("SARE"), tdb.get_table("AREN")
+    if not sides or sare is None:
+        return
+    rows = {sare.read_record(i).get("INDX"): i for i in range(min(sare.num_records, sare.capacity))}
+    if all_star_arena not in rows:
+        return
+    copies = {
+        side: sare.read_record(rows[source])
+        for side in sides
+        if (source := (templates or {}).get(side, all_star_arena)) in rows
+    }
+    sare.write_record(rows[all_star_arena], {"LOGO": all_star_ice})
+    moved = {}
+    for side in sides:
+        arena, logo, name, city = homes[side]
+        if arena in rows and side in copies:
+            sare.write_record(
+                rows[arena],
+                {**copies[side], "INDX": arena, "LOGO": logo, "NAME": name, "CITY": city},
+            )
+            moved[side] = arena
+    if aren is not None:
+        for i in range(min(aren.num_records, aren.capacity)):
+            team = aren.read_record(i).get("INDX")
+            if isinstance(team, int) and team in moved:
+                aren.write_record(i, {"ID__": moved[team]})
 
 
 def _replacements(renames: Iterable[Rename], spellings: Mapping[int, str]) -> dict[str, str]:

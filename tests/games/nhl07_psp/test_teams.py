@@ -123,3 +123,90 @@ def test_the_slot_files_follow_steas_order():
     assert (logos.SLOT_FILES[1], logos.SLOT_FILES[22]) == ("ATL", "PHO")
     assert logos.SLOT_FILES[24:26] == ("STL", "SJ")
     assert logos.SLOT_FILES[30:] == ("EAS", "WES")
+
+
+def test_seattle_and_vegas_play_in_copies_of_two_national_sides_arenas():
+    # The game draws an arena by its art id (AAID) and crashes on one no arena
+    # uses, so each side's arena copies a national side's, art id included.
+    from retro_roster_patcher.formats.ea_tdb import TDBFile
+    from tests.fixtures.synthetic_tdb import (
+        TYPE_STRING,
+        TYPE_UINT,
+        FieldSpec,
+        TableSpec,
+        build_tdb,
+        pack_bits,
+    )
+
+    def table(name, fields, size, rows):
+        data = b"".join(pack_bits(fields, row, size) for row in rows)
+        return TableSpec(name, fields, size, len(rows), len(rows), data)
+
+    stea = [
+        FieldSpec("INDX", TYPE_UINT, 0, 8),
+        FieldSpec("FNME", TYPE_STRING, 8, 248),
+        FieldSpec("SNME", TYPE_STRING, 256, 256),
+        FieldSpec("ABBR", TYPE_STRING, 512, 40),
+    ]
+    sare = [
+        FieldSpec("INDX", TYPE_UINT, 0, 8),
+        FieldSpec("NAME", TYPE_STRING, 8, 280),
+        FieldSpec("CITY", TYPE_STRING, 288, 256),
+        FieldSpec("LOGO", TYPE_UINT, 544, 8),
+        FieldSpec("AAID", TYPE_UINT, 552, 8),
+    ]
+    aren = [FieldSpec("INDX", TYPE_UINT, 0, 8), FieldSpec("ID__", TYPE_UINT, 8, 8)]
+    burnaby = {"NAME": "EA SPORTS Arena", "CITY": "Burnaby, BC", "AAID": 0}
+    arenas = [
+        {
+            "INDX": 30,
+            "NAME": "American Airlines Center",
+            "CITY": "Dallas, TX",
+            "LOGO": 9,
+            "AAID": 9,
+        },
+        {"INDX": 41, "NAME": "EA SPORTS Arena", "CITY": "Japan", "LOGO": 43, "AAID": 43},
+        {"INDX": 50, "NAME": "EA SPORTS Arena", "CITY": "Ukraine", "LOGO": 52, "AAID": 52},
+        {"INDX": 107, **burnaby, "LOGO": 54},
+        {"INDX": 108, **burnaby, "LOGO": 55},
+    ]
+    sides = [
+        {"INDX": 30, "FNME": "Eastern All-Stars", "SNME": "Eastern", "ABBR": "EAS"},
+        {"INDX": 31, "FNME": "Western All-Stars", "SNME": "Western", "ABBR": "WES"},
+    ]
+    tdb = TDBFile.parse(
+        build_tdb(
+            [
+                table("STEA", stea, 69, sides),
+                table("SARE", sare, 71, arenas),
+                table("AREN", aren, 2, [{"INDX": s, "ID__": 30} for s in (30, 31, 32)]),
+            ]
+        )
+    )
+    teams.rename_tables(tdb, [30, 31])
+    rows = [tdb.get_table("SARE").read_record(i) for i in range(5)]
+    assert rows[:3] == arenas[:3]
+    assert rows[3] == {"INDX": 107, "NAME": "T-Mobile Arena", "CITY": "Las Vegas, NV"} | {
+        "LOGO": 52,
+        "AAID": 52,
+    }
+    assert rows[4] == {"INDX": 108, "NAME": "Climate Pledge Arena", "CITY": "Seattle, WA"} | {
+        "LOGO": 43,
+        "AAID": 43,
+    }
+    assert [tdb.get_table("AREN").read_record(i)["ID__"] for i in range(3)] == [108, 107, 30]
+
+
+def test_utahs_abbreviation_replaces_the_front_ends_and_the_scoreboard_finds_it():
+    from retro_roster_patcher.formats.ea_strings import ea_hash
+
+    front = ea_hash("TEAM_ABBR_PHO")
+    table = build_table([(front, "PHO"), (0x1234, "Phoenix Coyotes")])
+    local = _archive({"frontenglish.bin": refpack_compress(table)})
+    rename = Rename(
+        22, Identity("Phoenix Coyotes", "Phoenix", "Coyotes", "PHX", "", ""), RELOCATED[22]
+    )
+    new, _ = teams.rename_strings(local, [rename])
+    texts = _table(new, "frontenglish.bin")
+    assert texts[front] == "UTA" and texts[ea_hash("TEAM_ABBR_PHX")] == "UTA"
+    assert texts[0x1234] == "Utah Mammoth"

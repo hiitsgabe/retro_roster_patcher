@@ -57,7 +57,7 @@ from ...sports import _http
 from ...sports.espn import EspnClient
 from ...sports.models import League, LeagueData, TeamRoster
 from ...sports.nhl import NhlApiClient
-from . import logos, looks, teams
+from . import ice, jerseys, logos, looks, teams
 from .faces import (
     FACE_TONES,
     FACES_PATH,
@@ -85,6 +85,7 @@ from .portraits import (
 )
 from .rom_reader import ISO_SECTOR_SIZE, NHL07PSPRomReader
 from .rom_writer import (
+    HEADER_CACHE_HOLDERS,
     LINE_FLAGS,
     PROGRESS_COPY_END,
     PROGRESS_RECORDS_END,
@@ -604,14 +605,15 @@ class NHL07PSPPatcher(Patcher):
         if changed:
             self.status(f"Front-end strings replaced: {changed}")
 
-    def _write_logos(self, writer: NHL07PSPRomWriter, rosters: MappedRosters) -> None:
+    def _write_logos(self, writer: NHL07PSPRomWriter, rosters: MappedRosters) -> dict[int, bytes]:
         """Each patched club's current crest over its front-end logos, in place
-        (`logos`). Nothing is fetched for a disc without the archive or a
-        provider without crests (the NHL API gives none)."""
+        (`logos`), and the crests by slot. Nothing is fetched for a disc
+        without the archive or a provider without crests (the NHL API gives
+        none)."""
         with open(writer.output_path, "r+b") as f:
             found = iso_entry(f, logos.ARCHIVE)
             if found is None:
-                return
+                return {}
             entry = found[0]
             urls: dict[int, str] = {}
             for team in self.api.get_nhl_teams():
@@ -620,10 +622,10 @@ class NHL07PSPPatcher(Patcher):
                     urls[slot] = team.logo_url
             if not urls:
                 self.status("Team logos skipped: the provider has no crests")
-                return
+                return {}
             if importlib.util.find_spec("PIL") is None:
                 self.status("Team logos skipped: Pillow is not installed")
-                return
+                return {}
             pngs = parallel_map(
                 lambda url: crest_png(None, None, url, self._transport), list(urls.values())
             )
@@ -633,6 +635,47 @@ class NHL07PSPPatcher(Patcher):
             f.seek(entry.extent.offset)
             f.write(edited)
         self.status(f"Team logos drawn: {len(drawn)} of {len(crests)} clubs")
+        return crests
+
+    def _write_ice(
+        self, writer: NHL07PSPRomWriter, logo_ids: Mapping[int, int], crests: Mapping[int, bytes]
+    ) -> None:
+        """Each renamed club's crest at centre ice (`ice`), in place; Seattle's
+        and Vegas' on the All-Star game's rinks, with a regular ring."""
+        wanted = {logo: crests[slot] for slot, logo in logo_ids.items() if slot in crests}
+        ringed = {logo for slot, logo in logo_ids.items() if slot in nhl_clubs.ALL_STARS}
+        with open(writer.output_path, "r+b") as f:
+            found = iso_entry(f, ice.ARCHIVE)
+            if found is None or not wanted:
+                return
+            f.seek(found[0].extent.offset)
+            edited, drawn = ice.redraw(f.read(found[0].extent.size), wanted, ringed)
+            f.seek(found[0].extent.offset)
+            f.write(edited)
+        self.status(f"Centre ice redrawn: {len(drawn)} of {len(wanted)}")
+
+    def _write_jerseys(
+        self, writer: NHL07PSPRomWriter, renamed: list[int], crests: Mapping[int, bytes]
+    ) -> None:
+        """The renamed clubs' jerseys and menu pictures (`jerseys`), in place."""
+        with open(writer.output_path, "r+b") as f:
+            uniforms, pictures = iso_entry(f, jerseys.ARCHIVE), iso_entry(f, jerseys.PICTURES)
+            if uniforms is None or pictures is None:
+                return
+            before = []
+            for entry, _ in (uniforms, pictures):
+                f.seek(entry.extent.offset)
+                before.append(f.read(entry.extent.size))
+            *after, changed, drawn = jerseys.dress(before[0], before[1], renamed, crests)
+            for (entry, _), old, new in zip((uniforms, pictures), before, after, strict=True):
+                if new != old:
+                    f.seek(entry.extent.offset)
+                    f.write(new)
+            # The game reads JERSEYS.VIV through its cached directory: a jersey
+            # pointed at the classics' data shows only once that copy agrees.
+            for holder in HEADER_CACHE_HOLDERS:
+                sync_header_cache(f, holder, jerseys.BH_NAME, before[0], after[0])
+        self.status(f"Jerseys redressed: {changed}, menu pictures {drawn}")
 
     def _write_names(self, writer: NHL07PSPRomWriter, renamed: list[nhl_clubs.Rename]) -> None:
         """The renamed clubs' names in the front end's strings (`teams`), with
@@ -786,9 +829,11 @@ class NHL07PSPPatcher(Patcher):
             # ponytail: renames go by slot, as on NHL 2005, so an NHL API season
             # from before the move (Atlanta to 2011, Arizona to 2024) is renamed
             # too; carry each slot's team code in MappedRosters if that matters.
-            renamed = nhl_clubs.rename_tables(master_tdb, rosters.teams)
+            renamed = teams.rename_tables(master_tdb, rosters.teams)
             for rename in renamed:
                 self.status(f"Club renamed: {rename.old.full} is now {rename.new.full}")
+            if options.get("jerseys", True):
+                jerseys.limit(master_tdb, [r.slot for r in renamed])
 
             self.status("Rebuilding db.viv...")
             writer.rebuild_and_write(
@@ -810,10 +855,15 @@ class NHL07PSPPatcher(Patcher):
                     {bio: shade for bio, shade in shades.items() if isinstance(shade, int)},
                 )
 
+            crests: dict[int, bytes] = {}
             if options.get("logos", True):
-                self._write_logos(writer, rosters)
+                crests = self._write_logos(writer, rosters)
             if renamed:
                 self._write_names(writer, renamed)
+            if crests and renamed:
+                self._write_ice(writer, ice.logo_ids(master_tdb, [r.slot for r in renamed]), crests)
+            if options.get("jerseys", True) and renamed:
+                self._write_jerseys(writer, [r.slot for r in renamed], crests)
 
             if pictures:
                 self._write_images(writer, pictures)

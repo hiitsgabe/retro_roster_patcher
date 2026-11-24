@@ -2,7 +2,8 @@
 Thrashers become the Winnipeg Jets, the Coyotes the Utah Mammoth, and the East
 and West All-Star sides Seattle and Vegas.
 
-What is NHL 07's own: its All-Star sides' string ids, and that `FE/LOCAL.VIV`
+What is NHL 07's own: its All-Star sides' string ids, the arenas Seattle and
+Vegas play at, and that `FE/LOCAL.VIV`
 is rebuilt rather than rewritten in place (`strings.replace_strings` does the
 same), so the caller writes it with `write_in_place` and updates `local.bh`.
 """
@@ -11,9 +12,39 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 
-from ...core.nhl_clubs import Rename, rename_entries
+from ...core.nhl_clubs import Rename, give_homes, rename_entries
+from ...core.nhl_clubs import rename_tables as _rename_tables
 from ...formats.ea_strings import StringTableError, build_table, parse_table
-from ...formats.ea_tdb import bigf_parse, bigf_replace, refpack_compress, refpack_decompress
+from ...formats.ea_tdb import (
+    TDBFile,
+    bigf_parse,
+    bigf_replace,
+    refpack_compress,
+    refpack_decompress,
+)
+from .logos import SLOT_FILES
+
+#: The front end's strings of club abbreviations, `TEAM_ABBR_<abbreviation>`
+#: (`ea_hash`), spelled as `FE/TLOGOAPT.VIV`'s files are (`PHO` for STEA's
+#: `PHX`); the scoreboard looks a club's up by its STEA `ABBR`.
+ABBREVIATION = "TEAM_ABBR_"
+SPELLINGS = dict(enumerate(SLOT_FILES))
+
+#: The All-Star game's arena (SARE), where all four sides play on the disc:
+#: Dallas', the 2007 game's, on Dallas' centre ice (`LOGO` 9), which it keeps.
+ALL_STAR_ARENA = 30
+ALL_STAR_ICE = 9
+#: By side: the arena (SARE row) Seattle and Vegas play at instead, with its
+#: centre ice and name, in rows no team plays in ("EA SPORTS Arena, Burnaby").
+#: The game draws an arena, centre ice included, by its art id (`AAID`), and
+#: one no arena uses crashes it, so each is a copy of a national side's
+#: (`ALL_STAR_TEMPLATES`, SARE INDX: Japan's, Ukraine's), whose centre ice
+#: (`ICE_043`, `ICE_052`) then shows the club's crest for that side too.
+ALL_STAR_HOMES: Mapping[int, tuple[int, int, str, str]] = {
+    30: (108, 43, "Climate Pledge Arena", "Seattle, WA"),
+    31: (107, 52, "T-Mobile Arena", "Las Vegas, NV"),
+}
+ALL_STAR_TEMPLATES: Mapping[int, int] = {30: 41, 31: 50}
 
 #: The All-Star sides' names in `front<language>.bin`, by string id and the part
 #: of the name each holds: the full name, the abbreviation, the city in two
@@ -40,6 +71,14 @@ ALL_STAR_STRINGS: Mapping[int, Mapping[int, str]] = {
 }
 
 
+def rename_tables(tdb: TDBFile, slots: Iterable[int]) -> list[Rename]:
+    """`core.nhl_clubs.rename_tables`, and Seattle and Vegas each at an arena of
+    their own (`ALL_STAR_HOMES`)."""
+    renames = _rename_tables(tdb, slots)
+    give_homes(tdb, renames, ALL_STAR_ARENA, ALL_STAR_ICE, ALL_STAR_HOMES, ALL_STAR_TEMPLATES)
+    return renames
+
+
 def rename_strings(local_viv: bytes, renames: Iterable[Rename]) -> tuple[bytes, int]:
     """`local_viv` with every string table's old club names changed to the
     new, and how many entries changed. A changed table is recompressed and the
@@ -55,7 +94,7 @@ def rename_strings(local_viv: bytes, renames: Iterable[Rename]) -> tuple[bytes, 
             entries = parse_table(refpack_decompress(out[entry.offset : entry.offset + entry.size]))
         except (StringTableError, ValueError):
             continue
-        edited = rename_entries(entries, renames, ALL_STAR_STRINGS)
+        edited = rename_entries(entries, renames, ALL_STAR_STRINGS, SPELLINGS, ABBREVIATION)
         if edited:
             out = bigf_replace(out, name, refpack_compress(build_table(entries), tight=True))
             changed += edited
