@@ -86,6 +86,13 @@ HOT_COLD_FIXED = (0x20, 0xC0)
 #: extra_attacker_fix: an extra attacker also in the lines never comes on when
 #: the goalie is pulled or on a power play; $9B:8C96 swaps him in as the
 #: Genesis does.
+#: The NHL94SNESVault's options (public domain), as its patches/*.asm write them:
+#: manual_pull_goalie: L+R pulls the goalie or puts him back, with a beep ($9E:D0BF).
+#: defense_control: Def. Control on for both teams from the face-off ($9F:837C).
+#: lines_any_position: Edit Lines lets a forward play defence and back ($9B:8E1A).
+#: one_minute_penalties: the minor penalties last one minute ($80:D4C7, $9E:B417).
+#: real_time_clock: the game and penalty clocks run at real speed ($9F:85B6).
+#: thirty_second_periods: Game Setup offers its hidden 30-second periods ($9D:ACD7).
 FIXES: Fixes = {
     "y_button_fix": [
         (0xF2251, "bde314", "4cc5fb"),
@@ -100,6 +107,40 @@ FIXES: Fixes = {
             "a5a5186d9f1ded8b1d859520728d48a5a586af186daf00859568207c8d68c9010060",
         ),
     ],
+    "manual_pull_goalie": [
+        (0xF50BF, "a491b9aa17", "206efbeaea"),
+        (
+            0xF7B6E,
+            "ff" * 87,
+            "a20000ac9100b9aa17c900ffd00160b9c1fbdd841cf009e8e8e00400d0f1802d"
+            "bd760729ff00c93000d022b9aa17f007c9fffff002801649ffff99aa172207d49f"
+            "a900708564a90500227da180a491b9aa176001000200",
+        ),
+    ],
+    "defense_control": [
+        (0xF837C, "22b2c69f", "2024fbea"),
+        (0xFFB24, "ff" * 14, "22b2c69fa901008d941c8d961c60"),
+    ],
+    "lines_any_position": [
+        (0xD8E1A, "10212200939b", "eaeaea4cbace"),
+        (
+            0xDCEBA,
+            "ff" * 33,
+            "2200939b8da31d2200d39ea5a58dab1d22dc929b186da31d8da31dadab1d4c3b8e",
+        ),
+    ],
+    "one_minute_penalties": [
+        *((at, "02", "01") for at in (0x54C7, 0x54E9, 0x550B, 0x552B, 0x554B, 0x556B, 0x558C)),
+        *((at, "02", "01") for at in (0x55B1, 0x55C9)),
+        (0xF3417, "29ff00", "4c5bfb"),
+        (0xF7B5B, "ff" * 19, "c90104f005c9010ad0034c21b429ff004c1ab4"),
+    ],
+    "real_time_clock": [
+        (0xF85B6, "aa0a", "4404"),
+        (0xF3F66, "1800", "3c00"),
+        (0xF8668, "1800", "3c00"),
+    ],
+    "thirty_second_periods": [(0xEACD7, "0300", "0400")],
 }
 
 

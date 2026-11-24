@@ -130,7 +130,9 @@ def build_parser() -> argparse.ArgumentParser:
         default=[],
         metavar="NAME",
         help="apply one of the game's optional fixes (nhl94-genesis: weight_fix, sock_fix, "
-        "head_fix; nhl94-snes: y_button_fix, extra_attacker_fix); repeatable",
+        "head_fix; nhl94-snes: y_button_fix, extra_attacker_fix, manual_pull_goalie, "
+        "defense_control, lines_any_position, one_minute_penalties, real_time_clock, "
+        "thirty_second_periods); repeatable",
     )
     # The answers to "what goes in the slots the slot map leaves out": `_patch_options`
     # checks which go together on which game.
