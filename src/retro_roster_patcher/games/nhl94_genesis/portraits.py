@@ -38,7 +38,7 @@ TABLE = 0xF92F4
 TEAMS = 28
 #: The 26 clubs, whose rosters a patch writes.
 CLUBS = 26
-REGION = range(0x110000, 0x200000)
+REGION = range(0x120000, 0x200000)
 SIDE = 48
 #: The game's own drawing for a player with no card, by (is goalie, hand bit).
 GENERIC = {

@@ -769,10 +769,12 @@ def test_patch_forwards_status_messages(tmp_path):
 
     p.patch(rom_path=rom, output_path=tmp_path / "out.bin", rosters=mapped)
 
-    # The fixture has no card table, so the cards are left alone and said so.
+    # The fixture has neither the cartridge's team run nor its card table, so
+    # both are left alone and said so.
     assert seen == [
         "Validating ROM...",
         "Initializing ROM writer...",
+        "Team blocks kept in place: the table at $30E is not the cartridge's",
         "Player cards kept: not the retail cartridge's layout",
         "Saving patched ROM...",
     ]

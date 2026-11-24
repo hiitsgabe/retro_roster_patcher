@@ -347,6 +347,8 @@ class NHL94GenesisPatcher(Patcher):
 
         # Without this the game refuses to boot an edited cartridge.
         writer.disable_checksum()
+        if not writer.relocate_teams():
+            self.status("Team blocks kept in place: the table at $30E is not the cartridge's")
 
         # An empty list would make `write_team_roster` zero-fill the region it was
         # going to patch. The range is re-checked because the reader guards only

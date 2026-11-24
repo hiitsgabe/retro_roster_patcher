@@ -17,6 +17,8 @@ from .models import (
 )
 from .rom_reader import (
     CHECKSUM_BYPASS_OFFSET,
+    POINTER_SIZE,
+    POINTER_TABLE_OFFSET,
     STATS_SIZE,
     NHL94GenesisRomReader,
 )
@@ -51,6 +53,46 @@ def grow(rom: bytearray) -> None:
     rom[0x1A4:0x1A8] = (len(rom) - 1).to_bytes(4, "big")
 
 
+#: Every team block the pointer table names (the 26 clubs and two All-Star
+#: teams) lies between the table and the organ-song table at $5576.
+TEAM_SLOTS = 28
+CARTRIDGE_BLOCKS = range(0x37E, 0x5576)
+#: Where `relocate_teams` moves them, in the image grown to 2 MiB.
+TEAM_REGION = range(0x110000, 0x120000)
+
+
+def _block_end(rom: bytearray, base: int) -> int:
+    """A team block ends with its four strings (city, abbreviation, nickname,
+    arena), each a length word that counts itself."""
+    at = base + int.from_bytes(rom[base + 4 : base + 6], "big")
+    for _ in range(4):
+        at += int.from_bytes(rom[at : at + 2], "big")
+    return at
+
+
+def relocate_teams(rom: bytearray) -> bool:
+    """Move every team block from the cartridge's run at the start of the image
+    into `TEAM_REGION`, repointing the table at $30E, which the code loads with
+    `movea.w` and so stays where it is. True when the blocks are there (moved
+    now or by an earlier patch); False, writing nothing, for an image whose
+    table points elsewhere."""
+    table = [POINTER_TABLE_OFFSET + POINTER_SIZE * i for i in range(TEAM_SLOTS)]
+    bases = [int.from_bytes(rom[t : t + 4], "big") for t in table]
+    if all(b in TEAM_REGION for b in bases):
+        return True
+    if not all(b in CARTRIDGE_BLOCKS for b in bases):
+        return False
+    grow(rom)
+    rom[TEAM_REGION.start : TEAM_REGION.stop] = b"\xff" * len(TEAM_REGION)
+    at = TEAM_REGION.start
+    for t, base in zip(table, bases, strict=True):
+        block = rom[base : _block_end(rom, base)]
+        rom[at : at + len(block)] = block
+        rom[t : t + 4] = at.to_bytes(4, "big")
+        at += (len(block) + 1) & ~1
+    return True
+
+
 def encode_nibble(high: int, low: int) -> int:
     high = max(0, min(6, high))
     low = max(0, min(6, low))
@@ -83,6 +125,16 @@ class NHL94GenesisRomWriter:
         assert self.data is not None
         self.data[offset] = (value >> 8) & 0xFF
         self.data[offset + 1] = value & 0xFF
+
+    def relocate_teams(self) -> bool:
+        """`relocate_teams` on the image and on the reader's own copy, which
+        finds each team through the table it moves."""
+        if not self.data or not self.reader.data:
+            return False
+        moved = relocate_teams(self.data)
+        if moved:
+            relocate_teams(self.reader.data)
+        return moved
 
     def disable_checksum(self):
         """RTS (0x4E75) at the bypass offset makes the checksum routine return
