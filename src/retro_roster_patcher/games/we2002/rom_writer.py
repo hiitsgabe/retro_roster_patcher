@@ -1147,13 +1147,24 @@ def _clamp(value: int, low: int, high: int) -> int:
 
 #: The bits of a record the patcher does not write, kept from the record it replaces. The game
 #: reads three of them as the top bit of a 4-bit field the community editor gives 3: position
-#: (byte 0 bit 3), hair colour (byte 1 bit 4) and beard (byte 2 bit 0); byte 5 bit 5 is never
-#: read, and the game's own editor clears it. All four are 0 on every retail player.
+#: (byte 0 bit 3), hair colour (byte 1 bit 4) and beard (byte 2 bit 0). All four are 0 on every
+#: retail player.
+#:
+#: Byte 5 bit 5 is a squad quota flag. The game's editor shows no field for it and clears it, no
+#: code was found that sets it, and only the menus' code reads it (SELECT.BIN, word 1 & 0x2000 of
+#: the record 0x8008ab34 returns): the automatic line-up (0x80088d0c) counts a team's flagged players
+#: and, with 4 or more, never brings a flagged reserve into the first 16 for an unflagged one,
+#: and an uncalled check (0x8008b6fc) caps them at 3 in the first 16 and 5 in the 23, the shape
+#: of the J.League's foreign-player quota. What real fact it stood for is not known: no retail
+#: player has it, so it stays 0 and the CPU picks its line-ups unrestricted.
 _DISC_BITS = bytes((0x08, 0x10, 0x01, 0, 0, 0x20, 0, 0, 0, 0, 0, 0))
-#: Byte 3 bit 7, the community editor's "out of role", is set on all 1,449 retail players. The
-#: match engine (GAME.BIN 0x14dc4, 0x187e4) lets a player make a foot-side ball move only with
-#: it set and the move on his preferred foot's side, so a cleared bit takes the move away.
-_OUT_OF_ROLE = 1
+#: Byte 3 bit 7 is "Outside" (アウトサイド, "can"/"cannot"), the last line of the game's own
+#: ability editor: whether the player plays the ball with the outside of his foot. The match engine
+#: (GAME.BIN 0x14dc4, 0x187e4) gives a player taking the ball while asked to go 56-101 degrees
+#: off his facing a turning first touch (motion 124) only with it set and the turn on his
+#: preferred foot's side; a two-footed player turns either way. Set on all 1,449 retail players;
+#: no provider says who can, so everyone can.
+_OUTSIDE = 1
 
 
 def _encode_player_carat(
@@ -1169,9 +1180,9 @@ def _encode_player_carat(
       Byte  0: posizione[2:0], stile_capelli_low4[7:4]
       Byte  1: stile_capelli_bit4[0], col_capelli[3:1], stile_barba[7:5]
       Byte  2: col_barba[3:1], altezza_low4[7:4]
-      Byte  3: altezza_high2[1:0], (numero-1)[6:2], fuori_ruolo[7]
+      Byte  3: altezza_high2[1:0], (numero-1)[6:2], outside[7] (fuori_ruolo)
       Byte  4: col_pelle[1:0], corporatura[4:2], eta_low3[7:5]
-      Byte  5: eta_high2[1:0], riflessi[4:2], forza_low2[7:6]
+      Byte  5: eta_high2[1:0], riflessi[4:2], quota[5], forza_low2[7:6]
       Byte  6: forza_high1[0], resistenza[3:1], dribbling[6:4], velocita_low1[7]
       Byte  7: velocita_high2[1:0], accel[4:2], attacco[7:5]
       Byte  8: difesa[2:0], pot_tiro[5:3], prec_tiro_low2[7:6]
@@ -1196,7 +1207,7 @@ def _encode_player_carat(
     eta = _clamp(player.age, AGE_RANGE[0], AGE_RANGE[1]) if player.age > 0 else 25
     scarpe = 0
     piede = _clamp(player.foot, 0, 2)
-    fuori_ruolo = _OUT_OF_ROLE
+    outside = _OUTSIDE
     numero = _clamp(
         number if number is not None else player.shirt_number or 1, 1, _MAX_SHIRT_NUMBER
     )
@@ -1225,7 +1236,7 @@ def _encode_player_carat(
     c[0] = (posizione & 0x07) | ((stile_capelli & 0x0F) << 4)
     c[1] = ((stile_capelli >> 4) & 0x01) | ((col_capelli & 0x07) << 1) | ((stile_barba & 0x07) << 5)
     c[2] = ((col_barba & 0x07) << 1) | ((h & 0x0F) << 4)
-    c[3] = ((h >> 4) & 0x03) | (((numero - 1) & 0x1F) << 2) | ((fuori_ruolo & 0x01) << 7)
+    c[3] = ((h >> 4) & 0x03) | (((numero - 1) & 0x1F) << 2) | ((outside & 0x01) << 7)
     c[4] = (col_pelle & 0x03) | ((corporatura & 0x07) << 2) | ((e & 0x07) << 5)
     c[5] = ((e >> 3) & 0x03) | ((riflessi & 0x07) << 2) | ((forza & 0x03) << 6)
     c[6] = (

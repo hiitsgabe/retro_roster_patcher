@@ -503,13 +503,19 @@ attempts.
 So a top value means top *of the league you fetched*. A stat the provider did not supply
 (`PlayerStats.unsupplied`: ESPN sends no duels or dribbles, FotMob only goals and assists) is
 left out rather than ranked as a zero, and an ability none of whose stats the player has is
-the group's median on the disc. No feed measures pace, so speed and acceleration lean on age.
+the group's median on the disc. Abilities with no real source: no feed measures pace, so speed
+ranks youth with attacking output and acceleration youth with shortness. Body balance and
+dribble rank fouls drawn (and height for body balance) where ESPN has no duels or dribbles, and
+jump ranks height.
 
 Preferred foot comes from shots taken with each foot (10 or more): the weaker foot taking 40%
-of them makes him two-footed. Byte 3 bit 7, set on every retail player, is kept set: the match
-engine allows a foot-side ball move only with it. The four bits the community editor leaves
-unnamed (the top bits of the game's 4-bit position, hair colour and beard fields, and one the
-game's own editor clears) are kept from the record each player replaces.
+of them makes him two-footed. Outside (byte 3 bit 7, the last line of the game's ability editor,
+"can" on every retail player) has no source and stays "can": without it a player loses the
+turning first touch on his preferred foot's side. The four bits the community editor leaves
+unnamed are kept from the record each player replaces: the top bits of the game's 4-bit
+position, hair colour and beard fields, and byte 5 bit 5, a squad quota flag (with 4 or more
+flagged players the CPU's automatic line-up keeps flagged reserves out of the first 16) that
+no retail player has. Not identified: what real fact that quota flag stood for.
 
 ### NHL94 (Genesis and SNES): ranked onto the cartridge's own spread, 0-6
 

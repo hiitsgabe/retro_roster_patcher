@@ -304,7 +304,7 @@ def test_reflexes_foot_and_the_set_bit_land_where_the_game_reads_them():
     c = _encode_player_carat(record)
     assert (c[5] >> 2) & 7 == 7 and c[8] & 7 == 1  # reflexes 19, no longer the defence's
     assert c[11] >> 6 == 2  # both feet
-    assert c[3] >> 7 == 1  # set on every retail player
+    assert c[3] >> 7 == 1  # Outside: "can", as on every retail player
 
 
 def test_the_bits_the_patcher_does_not_write_are_kept_from_the_disc_record():
