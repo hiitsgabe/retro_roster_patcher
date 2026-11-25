@@ -120,6 +120,8 @@ class NhlApiClient:
                 "SA": gl.get("shotsAgainst", 0),
                 "SV": gl.get("saves", 0),
                 "GA": gl.get("goalsAgainst", 0),
+                "A": gl.get("assists", 0),
+                "PIM": gl.get("penaltyMinutes", 0),
             }
 
         if stats:
@@ -255,11 +257,15 @@ class NhlApiClient:
                         first_name=first,
                         last_name=last,
                         age=0,
-                        nationality="",
+                        nationality=str(athlete.get("birthCountry") or ""),
                         position=pos,
                         number=number,
                         photo_url=athlete.get("headshot", "") or "",
                         birth_date=str(athlete.get("birthDate") or "")[:10],
+                        birth_city=str((athlete.get("birthCity") or {}).get("default") or ""),
+                        birth_state=str(
+                            (athlete.get("birthStateProvince") or {}).get("default") or ""
+                        ),
                         weight=float(weight),
                         height=float(height),
                         handedness=hand,

@@ -139,6 +139,10 @@ def test_get_hockey_squad_parses_the_recorded_roster(tmp_path, replay):
     assert pastrnak.photo_url == "https://assets.nhle.com/mugs/nhl/20252026/BOS/8477956.png"
     # The birth date NHL 94 ranks youth on (the roster carries no age).
     assert pastrnak.birth_date == "1996-05-25"
+    # The birthplace NHL 2005 and NHL 07 write the flag and birth city from.
+    assert (pastrnak.nationality, pastrnak.birth_city) == ("CZE", "Havirov")
+    swayman = next(p for p in players if p.number == 1)
+    assert (swayman.nationality, swayman.birth_state) == ("USA", "AK")
 
 
 def test_each_squad_team_and_season_caches_separately(tmp_path, replay):
