@@ -30,6 +30,7 @@ from retro_roster_patcher.games.nbalive95_genesis import looks
 from retro_roster_patcher.games.nbalive95_genesis.models import (
     BYTE_TO_POSITION,
     NBALIVE95_TEAM_ORDER,
+    POSITION_SF,
     TEAM_COUNT,
     NBALive95PlayerRecord,
     NBALive95TeamRecord,
@@ -44,6 +45,7 @@ from retro_roster_patcher.games.nbalive95_genesis.rom_reader import (
     ROM_SIZE_MIN,
     NBALive95RomReader,
 )
+from retro_roster_patcher.games.nbalive95_genesis.stat_mapper import POSITION_DEFAULTS
 from retro_roster_patcher.sports.espn import EspnClient
 from retro_roster_patcher.sports.models import League, LeagueData, Player, Team, TeamRoster
 from tests.fixtures import synthetic_nbalive95_rom as fixture
@@ -649,12 +651,22 @@ def test_every_alias_pair_names_one_slot(patcher):
 
 def test_the_leaders_reach_the_mapped_ratings(patcher):
     """`extra["leaders"]` is keyed by player id as a string, and only the
-    players it names get stat-derived ratings."""
+    players it names get stat-derived ratings, ranked against each other."""
     data = _league_data(("BOS", 3))
-    data.teams[0].extra["leaders"] = {"0": {"FG%": 46.5}}
+    data.teams[0].extra["leaders"] = {"0": {"FG%": 55.0}, "1": {"FG%": 40.0}}
     mapped = patcher.map_rosters(data)
-    rated = [record for record in mapped.teams[BOS_SLOT].players if record.ratings[0] == 62]
-    assert len(rated) == 1
+    shooting = sorted(record.ratings[0] for record in mapped.teams[BOS_SLOT].players)
+    assert shooting[0] < POSITION_DEFAULTS[POSITION_SF][0] < shooting[2]
+    assert shooting[1] == POSITION_DEFAULTS[POSITION_SF][0]
+
+
+def test_a_player_ranks_against_every_team_fetched(patcher):
+    """Chicago's lone shooter is the best of the league, not the middle of his team."""
+    data = _league_data(("BOS", 2), ("CHI", 1))
+    data.teams[0].extra["leaders"] = {"0": {"FG%": 40.0}, "1": {"FG%": 42.0}}
+    data.teams[1].extra["leaders"] = {"100": {"FG%": 60.0}}
+    mapped = patcher.map_rosters(data)
+    assert mapped.teams[CHI_SLOT].players[0].ratings[0] > POSITION_DEFAULTS[POSITION_SF][0]
 
 
 def test_patch_writes_an_image_of_the_same_length(patcher, rom, out):

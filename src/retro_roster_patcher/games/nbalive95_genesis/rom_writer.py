@@ -12,19 +12,32 @@ import struct
 from .models import (
     CHECKSUM_BYPASS_BYTES,
     CHECKSUM_BYPASS_OFFSET,
+    OFF_DEF_REACTION,
     OFF_EXPERIENCE,
+    OFF_FATIGUE,
     OFF_HAIR,
     OFF_HEIGHT,
     OFF_JERSEY,
     OFF_NAME,
+    OFF_OFF_REACTION,
     OFF_POSITION,
+    OFF_QUICK_STEP,
+    OFF_RANGE,
     OFF_RATINGS,
     OFF_SKIN,
+    OFF_SPEED_STEP,
+    OFF_STAMINA,
     OFF_STATS,
-    OFF_UNKNOWN2,
     OFF_WEIGHT,
     PLAYERS_PER_TEAM,
+    RANGE_BASE,
+    RANGE_LEVELS,
     RATING_COUNT,
+    RATING_DEF_AWARENESS,
+    RATING_OFF_AWARENESS,
+    RATING_QUICKNESS,
+    RATING_SPEED,
+    STAMINA_FATIGUE,
     STAT_COUNT,
     TEAM_COUNT,
     TEAM_POINTER_SIZE,
@@ -197,14 +210,23 @@ class NBALive95RomWriter:
             stat_val = player.season_stats[i] if i < len(player.season_stats) else 0
             struct.pack_into(">H", d, off + OFF_STATS + i * 2, max(0, min(0xFFFF, stat_val)))
 
-        d[off + OFF_UNKNOWN2] = 0x00
+        stamina = max(0, min(99, player.stamina))
+        d[off + OFF_STAMINA] = stamina
 
         # ratings, 16 x 1 byte on a 0-99 scale
         for i in range(RATING_COUNT):
             rating = player.ratings[i] if i < len(player.ratings) else 50
             d[off + OFF_RATINGS + i] = max(0, min(99, rating))
 
-        # bytes 0x3B-0x44 are unknown and left alone
+        # The game plays the bytes derived from the ratings, not the ratings themselves.
+        rated = d[off + OFF_RATINGS : off + OFF_RATINGS + RATING_COUNT]
+        level = max(0, min(RANGE_LEVELS - 1, player.shooting_range))
+        d[off + OFF_RANGE] = RANGE_BASE + level * 19 // 2
+        d[off + OFF_FATIGUE] = next(f for s, f in STAMINA_FATIGUE.items() if stamina >= s)
+        d[off + OFF_OFF_REACTION] = (100 - rated[RATING_OFF_AWARENESS]) // 2
+        d[off + OFF_DEF_REACTION] = (100 - rated[RATING_DEF_AWARENESS]) // 2
+        d[off + OFF_SPEED_STEP] = max(0, min(15, (rated[RATING_SPEED] - 50) // 3))
+        d[off + OFF_QUICK_STEP] = max(0, min(15, (rated[RATING_QUICKNESS] - 50) // 3))
 
         max_name = self._record_limits.get((team_index, player_slot), 24)
         name_bytes = _encode_name_variable(player.name_last, player.name_first, max_name)

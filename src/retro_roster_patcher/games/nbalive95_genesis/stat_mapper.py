@@ -1,12 +1,30 @@
-"""Maps NBA season stats onto NBA Live 95's 25-99 rating scale, falling back to
-position defaults when a player has no stat line.
+"""Maps a player's season onto NBA Live 95's ratings.
+
+Each rating comes from one to three of his stats (`SOURCES`), ranked against
+every player of his group (guards, forwards, centres) in the league fetched
+(`LeagueStats`): the rating is the value at the same rank of the cartridge's own
+spread of it (`RETAIL`), so the league's best passer gets the passing of the
+cartridge's best and its typical one the cartridge's median. A rating none
+of whose stats the line has keeps the group's default (its retail median), and
+a player without a stat line keeps them all.
+
+Counting stats are ranked per game, pulled toward the group's own rate by
+`SHRINK_GAMES` games; a shooting percentage is pulled toward the group's by
+`PCTS`' attempts. ESPN measures no speed, quickness, jumping, dunking or
+strength, so those rank the nearest stats it has: lightness and assists,
+assists and steals, blocks and offensive rebounds, blocks and free throws
+drawn, rebounds and weight. Each pairing is the one that ranks the
+cartridge's own 1993-94 lines closest to its ratings.
 
   - https://github.com/Team-95/rom-edit
 """
 
-from collections import Counter
-from dataclasses import replace
+import bisect
+from collections import Counter, defaultdict
+from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import dataclass, field, replace
 
+from ...core.hockey import shrunk, stat
 from ...sports.models import Player
 from .models import (
     MODERN_NBA_TO_NBALIVE95,
@@ -16,6 +34,7 @@ from .models import (
     POSITION_SF,
     POSITION_SG,
     POSITION_TO_BYTE,
+    RATING_NAMES,
     NBALive95PlayerRecord,
 )
 
@@ -36,28 +55,125 @@ _LABEL_ORDER = {"C": 0, "F": 1, "P": 1, "S": 2, "G": 2}
 #: The cartridge starts pointer slots 0-4 (`LINEUP`).
 STARTERS = 5
 
+GROUP = {POSITION_PG: "G", POSITION_SG: "G", POSITION_SF: "F", POSITION_PF: "F", POSITION_C: "C"}
 
-def _clamp(val: int, lo: int = 25, hi: int = 99) -> int:
-    return max(lo, min(hi, val))
+#: Each rating's deciles (0%, 10% ... 100%) over the cartridge's own 27 NBA
+#: rosters, by group: 122 guards, 141 forwards, 61 centres. `range` is the
+#: 0-15 level of `models.OFF_RANGE`, `stamina` byte 0x2A.
+RETAIL: dict[str, dict[str, tuple[int, ...]]] = {
+    "G": {
+        "stamina": (68, 75, 75, 77, 80, 80, 83, 86, 88, 90, 96),
+        "goals": (62, 70, 72, 75, 76, 77, 78, 80, 83, 86, 95),
+        "three_pt": (55, 65, 70, 73, 75, 77, 80, 83, 85, 87, 95),
+        "ft": (55, 67, 71, 75, 77, 80, 81, 83, 84, 86, 96),
+        "dunking": (50, 55, 60, 62, 65, 67, 72, 74, 77, 85, 97),
+        "stealing": (62, 70, 70, 72, 75, 75, 80, 82, 85, 90, 97),
+        "blocks": (50, 55, 60, 60, 60, 60, 65, 65, 70, 72, 80),
+        "off_reb": (50, 55, 60, 60, 60, 62, 65, 67, 70, 75, 85),
+        "def_reb": (60, 62, 65, 65, 65, 67, 68, 70, 72, 75, 80),
+        "passing": (64, 70, 72, 75, 75, 77, 80, 85, 87, 90, 98),
+        "off_awareness": (60, 65, 67, 70, 70, 75, 75, 80, 82, 87, 95),
+        "def_awareness": (60, 65, 67, 70, 72, 75, 75, 75, 80, 85, 95),
+        "speed": (75, 80, 80, 82, 85, 85, 85, 88, 88, 90, 95),
+        "quickness": (74, 80, 80, 81, 82, 83, 84, 85, 86, 88, 95),
+        "jumping": (50, 60, 65, 67, 70, 72, 75, 77, 82, 85, 98),
+        "dribbling": (67, 72, 75, 75, 76, 80, 82, 85, 85, 92, 97),
+        "strength": (55, 62, 65, 65, 67, 70, 70, 72, 72, 75, 85),
+        "range": (9, 10, 11, 12, 12, 12, 13, 13, 14, 15, 15),
+    },
+    "F": {
+        "stamina": (60, 70, 73, 75, 75, 78, 80, 82, 85, 87, 96),
+        "goals": (57, 69, 70, 72, 73, 75, 75, 78, 82, 85, 95),
+        "three_pt": (55, 60, 60, 60, 60, 63, 65, 70, 75, 82, 95),
+        "ft": (54, 59, 62, 67, 69, 72, 73, 75, 78, 80, 91),
+        "dunking": (60, 67, 72, 74, 75, 80, 81, 84, 85, 90, 98),
+        "stealing": (55, 60, 65, 65, 67, 70, 71, 75, 75, 80, 93),
+        "blocks": (60, 65, 67, 70, 70, 72, 73, 75, 79, 84, 95),
+        "off_reb": (55, 65, 66, 70, 72, 72, 75, 77, 82, 87, 99),
+        "def_reb": (52, 67, 70, 72, 75, 75, 76, 80, 82, 87, 99),
+        "passing": (55, 62, 65, 67, 67, 70, 70, 72, 75, 80, 88),
+        "off_awareness": (55, 65, 65, 67, 70, 72, 75, 75, 80, 85, 97),
+        "def_awareness": (50, 65, 65, 67, 70, 72, 75, 75, 78, 85, 98),
+        "speed": (62, 70, 74, 75, 75, 78, 80, 80, 81, 82, 88),
+        "quickness": (70, 77, 78, 79, 79, 80, 80, 81, 81, 83, 89),
+        "jumping": (60, 65, 70, 72, 75, 75, 78, 80, 85, 90, 98),
+        "dribbling": (55, 65, 65, 67, 70, 70, 72, 75, 75, 80, 85),
+        "strength": (65, 67, 70, 72, 75, 75, 77, 80, 82, 87, 97),
+        "range": (0, 6, 7, 8, 8, 8, 10, 10, 11, 12, 15),
+    },
+    "C": {
+        "stamina": (60, 65, 67, 70, 70, 73, 75, 77, 80, 83, 95),
+        "goals": (60, 65, 66, 70, 72, 72, 75, 76, 80, 84, 96),
+        "three_pt": (50, 50, 55, 55, 55, 57, 60, 60, 60, 67, 87),
+        "ft": (51, 55, 58, 60, 65, 68, 70, 72, 74, 78, 95),
+        "dunking": (62, 70, 73, 77, 80, 81, 83, 85, 87, 95, 98),
+        "stealing": (55, 60, 60, 60, 62, 65, 65, 67, 72, 75, 90),
+        "blocks": (64, 71, 75, 75, 78, 80, 83, 85, 87, 92, 98),
+        "off_reb": (60, 70, 72, 72, 75, 75, 79, 82, 85, 87, 98),
+        "def_reb": (67, 72, 75, 75, 75, 78, 80, 82, 85, 90, 97),
+        "passing": (50, 55, 60, 60, 60, 62, 65, 67, 70, 72, 90),
+        "off_awareness": (55, 60, 60, 65, 65, 70, 70, 72, 75, 85, 97),
+        "def_awareness": (55, 65, 67, 70, 72, 75, 77, 80, 85, 90, 97),
+        "speed": (55, 62, 65, 68, 70, 70, 72, 75, 75, 78, 86),
+        "quickness": (68, 71, 73, 75, 77, 78, 78, 79, 79, 80, 89),
+        "jumping": (60, 65, 70, 70, 72, 74, 75, 79, 80, 89, 98),
+        "dribbling": (55, 55, 60, 60, 62, 65, 65, 67, 70, 72, 82),
+        "strength": (60, 72, 75, 75, 77, 80, 83, 85, 85, 90, 97),
+        "range": (1, 3, 4, 4, 6, 6, 7, 7, 8, 10, 13),
+    },
+}
 
+#: The stats each rating ranks; a rating with several averages their ranks.
+SOURCES: dict[str, tuple[str, ...]] = {
+    "goals": ("fg_pct", "points"),
+    "three_pt": ("three_pct", "threes"),
+    "ft": ("ft_pct",),
+    "dunking": ("blocks", "free_throws"),
+    "stealing": ("steals",),
+    "blocks": ("blocks",),
+    "off_reb": ("off_rebounds",),
+    "def_reb": ("def_rebounds",),
+    "passing": ("assists",),
+    "off_awareness": ("points",),
+    "def_awareness": ("steals", "blocks", "def_rebounds"),
+    "speed": ("lightness", "assists"),
+    "quickness": ("assists", "steals"),
+    "jumping": ("blocks", "off_rebounds"),
+    "dribbling": ("assists", "ball_security"),
+    "strength": ("rebounds", "weight"),
+    "stamina": ("minutes",),
+    "range": ("three_attempts",),
+}
 
-def _scale(value: float, low: float, high: float) -> int:
-    """Map a value within [low, high] onto the game's 25-99 scale."""
-    if high <= low:
-        return 50
-    ratio = (value - low) / (high - low)
-    return _clamp(round(25 + ratio * 74))
+#: A counting stat per game: ESPN's average, the leaders endpoint's, else the
+#: season total over games played.
+COUNTS: dict[str, tuple[str, str, str]] = {
+    "points": ("avgPoints", "PTS", "points"),
+    "rebounds": ("avgRebounds", "REB", "rebounds"),
+    "off_rebounds": ("avgOffensiveRebounds", "ORPG", "offensiveRebounds"),
+    "def_rebounds": ("avgDefensiveRebounds", "DRPG", "defensiveRebounds"),
+    "assists": ("avgAssists", "AST", "assists"),
+    "steals": ("avgSteals", "STL", "steals"),
+    "blocks": ("avgBlocks", "BLK", "blocks"),
+    "turnovers": ("avgTurnovers", "TO", "turnovers"),
+    "threes": ("avgThreePointFieldGoalsMade", "3PM", "threePointFieldGoalsMade"),
+    "three_attempts": ("avgThreePointFieldGoalsAttempted", "3PA", "threePointFieldGoalsAttempted"),
+    "free_throws": ("avgFreeThrowsAttempted", "FTA", "freeThrowsAttempted"),
+    "minutes": ("avgMinutes", "MPG", "minutes"),
+}
+SHRINK_GAMES = 20
+#: A percentage: made, attempted, the percentage itself (0-100) for a line
+#: without the counts, and how many attempts' worth of the group's rate it is
+#: pulled toward.
+PCTS: dict[str, tuple[str, str, str, int]] = {
+    "fg_pct": ("fieldGoalsMade", "fieldGoalsAttempted", "FG%", 100),
+    "three_pct": ("threePointFieldGoalsMade", "threePointFieldGoalsAttempted", "3P%", 50),
+    "ft_pct": ("freeThrowsMade", "freeThrowsAttempted", "FT%", 20),
+}
 
-
-# Default ratings by position, in the ROM's rating order:
-# [goals,3pt,FT,dunk,stl,blk,oreb,dreb,pass,oaware,daware,spd,quick,jump,drib,str]
-# `map_player` copies each with `list(...)`, so no record shares one.
+#: A player with no line, or a rating whose stats his line lacks: his group's median.
 POSITION_DEFAULTS = {
-    POSITION_PG: [50, 50, 65, 35, 55, 30, 30, 35, 75, 60, 55, 75, 75, 45, 75, 35],
-    POSITION_SG: [55, 55, 65, 50, 50, 30, 30, 35, 50, 60, 50, 65, 65, 55, 55, 40],
-    POSITION_SF: [55, 50, 55, 55, 45, 40, 45, 50, 45, 55, 50, 55, 55, 55, 50, 55],
-    POSITION_PF: [55, 35, 55, 60, 35, 50, 55, 65, 35, 55, 55, 45, 45, 55, 35, 70],
-    POSITION_C: [55, 30, 55, 55, 30, 65, 55, 70, 35, 55, 60, 40, 40, 50, 30, 80],
+    pos: [RETAIL[group][name][5] for name in RATING_NAMES] for pos, group in GROUP.items()
 }
 
 
@@ -83,136 +199,172 @@ SEASON_TOTALS = (
 )
 
 
+def on_retail(share: float, deciles: Sequence[int]) -> int:
+    """The value at `share` (0-1, a player's rank in his group) of the
+    cartridge's spread, read between its deciles."""
+    at = share * (len(deciles) - 1)
+    i = min(int(at), len(deciles) - 2)
+    return round(deciles[i] + (deciles[i + 1] - deciles[i]) * (at - i))
+
+
+def _rank(values: Sequence[float], value: float) -> float:
+    """Where `value` ranks among sorted `values`, 0-1, ties at their middle."""
+    below = bisect.bisect_left(values, value)
+    equal = bisect.bisect_right(values, value) - below
+    return (below + equal / 2) / len(values)
+
+
+def _games(line: Mapping[str, object]) -> float | None:
+    return stat(line, "gamesPlayed") or stat(line, "GP")
+
+
+def _per_game(line: Mapping[str, object]) -> dict[str, float]:
+    """Each counting stat the line has, per game."""
+    games = _games(line)
+    out = {}
+    for name, (avg, short, total) in COUNTS.items():
+        value = stat(line, avg)
+        if value is None:
+            value = stat(line, short)
+        if value is None and games and (count := stat(line, total)) is not None:
+            value = count / games
+        if value is not None:
+            out[name] = value
+    return out
+
+
+def _group(player: Player) -> str:
+    """G, F or C: the cartridge's spreads are its guards', forwards', centres'."""
+    position = NBALive95StatMapper()._normalize_position(player.position)
+    return GROUP[POSITION_TO_BYTE[position]]
+
+
+@dataclass
+class LeagueStats:
+    """Every fetched player's stats, by group, to rank one player against."""
+
+    #: (group, stat) -> every value, sorted.
+    values: dict[tuple[str, str], list[float]] = field(default_factory=dict)
+    #: (group, counting stat or percentage) -> the group's rate.
+    rates: dict[tuple[str, str], float] = field(default_factory=dict)
+    #: (group, rating) -> every player's average rank over the rating's stats,
+    #: sorted: an average of ranks bunches in the middle, so it is ranked again.
+    blends: dict[tuple[str, str], list[float]] = field(default_factory=dict)
+
+    @classmethod
+    def from_lines(cls, lines: Iterable[tuple[Player, Mapping[str, object]]]) -> "LeagueStats":
+        """The league of these (player, stat line) pairs; a pair without a line is left out."""
+        lines = [(player, line) for player, line in lines if line]
+        sums: dict[tuple[str, str], list[float]] = defaultdict(lambda: [0.0, 0.0])
+        for player, line in lines:
+            group = _group(player)
+            for name, value in _per_game(line).items():
+                sums[group, name][0] += value
+                sums[group, name][1] += 1
+            for name, (made, tried, _pct, _weight) in PCTS.items():
+                if (m := stat(line, made)) is not None and (a := stat(line, tried)):
+                    sums[group, name][0] += m
+                    sums[group, name][1] += a
+        league = cls(rates={key: total / n for key, (total, n) in sums.items() if n})
+        own = [league.sources(player, line) for player, line in lines]
+        values: dict[tuple[str, str], list[float]] = defaultdict(list)
+        for (player, _line), mine in zip(lines, own, strict=True):
+            for name, value in mine.items():
+                values[_group(player), name].append(value)
+        league.values = {key: sorted(v) for key, v in values.items()}
+        blends: dict[tuple[str, str], list[float]] = defaultdict(list)
+        for (player, _line), mine in zip(lines, own, strict=True):
+            group = _group(player)
+            for rating, names in SOURCES.items():
+                if len(names) > 1 and (blend := league._blend(group, names, mine)) is not None:
+                    blends[group, rating].append(blend)
+        league.blends = {key: sorted(v) for key, v in blends.items()}
+        return league
+
+    def sources(self, player: Player, line: Mapping[str, object]) -> dict[str, float]:
+        """The player's value of each stat his ratings rank, higher the better."""
+        group, games = _group(player), _games(line)
+        out = {
+            name: shrunk(value, self.rates.get((group, name), value), games, SHRINK_GAMES)
+            if games
+            else value
+            for name, value in _per_game(line).items()
+        }
+        for name, (made, tried, pct, weight) in PCTS.items():
+            m, a = stat(line, made), stat(line, tried)
+            if m is not None and a is not None:
+                prior = self.rates.get((group, name), m / a if a else 0.0)
+                out[name] = (m + prior * weight) / (a + weight)
+            elif (value := stat(line, pct)) is not None:
+                out[name] = value / 100
+        if "assists" in out and "turnovers" in out:
+            out["ball_security"] = out["assists"] / max(out["turnovers"], 0.1)
+        if player.weight:
+            out["weight"] = float(player.weight)
+            out["lightness"] = -float(player.weight)
+        return out
+
+    def _blend(self, group: str, names: Sequence[str], own: Mapping[str, float]) -> float | None:
+        """The average rank of the player's values `own` of the stats `names`
+        among the group's; None when he has none the group has."""
+        shares = [
+            _rank(self.values[group, name], own[name])
+            for name in names
+            if name in own and self.values.get((group, name))
+        ]
+        return sum(shares) / len(shares) if shares else None
+
+    def rating_share(self, group: str, rating: str, own: Mapping[str, float]) -> float | None:
+        """Where a player whose stat values are `own` ranks for `rating` in his
+        group (0-1); None when he has none of its stats."""
+        blend = self._blend(group, SOURCES[rating], own)
+        pool = self.blends.get((group, rating))
+        return _rank(pool, blend) if blend is not None and pool else blend
+
+
 class NBALive95StatMapper:
     def map_player(
         self,
         player: Player,
-        stats: dict | None = None,
+        stats: Mapping[str, object] | None = None,
+        league: LeagueStats | None = None,
     ) -> NBALive95PlayerRecord:
-        """`season_stats` are the player's season totals from the line's ESPN
+        """`league` ranks his stats; without one his line is ranked alone.
+
+        `season_stats` are the player's season totals from the line's ESPN
         stat names (`SEASON_TOTALS`, in the ROM's field order), zeros for a
         player with no line: the writer puts them over the cartridge's 1994
         season.
         """
         pos_str = self._normalize_position(player.position)
         pos_byte = POSITION_TO_BYTE.get(pos_str, POSITION_SF)
+        group = GROUP[pos_byte]
 
         last, first = self._split_name(player.name)
 
-        height = self._estimate_height(pos_str, player)
-        weight = self._estimate_weight(pos_str, player)
-
+        rated = {name: RETAIL[group][name][5] for name in SOURCES}
         if stats:
-            ratings = self._map_stats_to_ratings(stats, pos_byte)
-        else:
-            ratings = list(POSITION_DEFAULTS.get(pos_byte, POSITION_DEFAULTS[POSITION_SF]))
+            league = league or LeagueStats.from_lines([(player, stats)])
+            own = league.sources(player, stats)
+            for name in SOURCES:
+                if (share := league.rating_share(group, name, own)) is not None:
+                    rated[name] = on_retail(share, RETAIL[group][name])
 
         return NBALive95PlayerRecord(
             name_last=last,
             name_first=first,
             jersey=player.number or 0,
             position=pos_byte,
-            height_inches=height,
-            weight_lbs=weight,
-            experience=max(0, player.age - 21) if player.age > 0 else 0,
-            ratings=ratings,
-            season_stats=[min(0xFFFF, round((stats or {}).get(n, 0))) for n in SEASON_TOTALS],
+            height_inches=self._estimate_height(pos_str, player),
+            weight_lbs=self._estimate_weight(pos_str, player),
+            experience=player.experience,
+            ratings=[rated[name] for name in RATING_NAMES],
+            stamina=rated["stamina"],
+            shooting_range=rated["range"],
+            season_stats=[min(0xFFFF, round(stat(stats or {}, n) or 0)) for n in SEASON_TOTALS],
             player_id=player.id,
             photo_url=player.photo_url,
         )
-
-    def _map_stats_to_ratings(self, stats: dict, pos: int) -> list[int]:
-        """Map a stat line onto the 16 ratings.
-
-        ESPN's NBA leaders keys are per-game averages with percentages on 0-100:
-        PTS, REB, AST, STL, BLK, FG%, 3P%, FT%, ORPG, DRPG, 3PM, MPG, PER, RAT,
-        DBLDBL, PFPG.
-        """
-        pts = float(stats.get("PTS", 0) or 0)
-        reb = float(stats.get("REB", 0) or 0)
-        ast = float(stats.get("AST", 0) or 0)
-        stl = float(stats.get("STL", 0) or 0)
-        blk = float(stats.get("BLK", 0) or 0)
-        oreb = float(stats.get("ORPG", stats.get("OREB", 0)) or 0)
-        dreb = float(stats.get("DRPG", stats.get("DREB", 0)) or 0)
-        to = float(stats.get("TO", stats.get("TOPG", 0)) or 0)
-
-        # ESPN percentages are 0-100
-        fg_pct = float(stats.get("FG%", 0) or 0) / 100.0
-        three_pct = float(stats.get("3P%", 0) or 0) / 100.0
-        ft_pct = float(stats.get("FT%", 0) or 0) / 100.0
-
-        goals = _scale(fg_pct, 0.380, 0.550)
-
-        three_pt = _scale(three_pct, 0.250, 0.420)
-
-        ft = _scale(ft_pct, 0.600, 0.920)
-
-        dunk_base = {
-            POSITION_C: 55,
-            POSITION_PF: 60,
-            POSITION_SF: 55,
-            POSITION_SG: 40,
-            POSITION_PG: 35,
-        }
-        dunk = _clamp(dunk_base.get(pos, 45) + (10 if fg_pct > 0.520 else 0))
-
-        stealing = _scale(stl, 0.3, 2.0)
-
-        blocks = _scale(blk, 0.1, 2.5)
-
-        off_reb = _scale(oreb, 0.3, 3.5)
-
-        def_reb = _scale(dreb, 1.0, 9.0)
-
-        passing = _scale(ast, 1.0, 10.0)
-
-        off_awareness = _scale(pts, 5.0, 30.0)
-
-        def_composite = stl * 2 + blk * 1.5 + dreb * 0.5
-        def_awareness = _scale(def_composite, 1.0, 12.0)
-
-        speed_base = {
-            POSITION_PG: 75,
-            POSITION_SG: 65,
-            POSITION_SF: 55,
-            POSITION_PF: 40,
-            POSITION_C: 35,
-        }
-        speed_bonus = 8 if stl > 1.2 else 0
-        speed = _clamp(speed_base.get(pos, 50) + speed_bonus)
-
-        quickness_val = stl * 2 + ast * 0.5
-        quickness = _scale(quickness_val, 1.0, 8.0)
-
-        jump_val = blk * 2 + (5 if fg_pct > 0.500 else 0)
-        jumping = _scale(jump_val, 0.5, 8.0)
-
-        to_ratio = to / ast if ast > 0 else 2.0
-        drib_val = ast * 0.8 + max(0, 2.0 - to_ratio) * 2
-        dribbling = _scale(drib_val, 1.0, 10.0)
-
-        strength_val = reb * 0.8 + (1 if pos in (POSITION_C, POSITION_PF) else 0) * 2
-        strength = _scale(strength_val, 1.0, 10.0)
-
-        return [
-            goals,
-            three_pt,
-            ft,
-            dunk,
-            stealing,
-            blocks,
-            off_reb,
-            def_reb,
-            passing,
-            off_awareness,
-            def_awareness,
-            speed,
-            quickness,
-            jumping,
-            dribbling,
-            strength,
-        ]
 
     def select_roster(
         self,

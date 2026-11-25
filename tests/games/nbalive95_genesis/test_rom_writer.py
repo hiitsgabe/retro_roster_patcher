@@ -614,12 +614,48 @@ def test_the_seventeen_stats_land_in_seventeen_distinct_slots(rom, out):
     assert decoded["season_stats"] == list(range(100, 117))
 
 
-def test_the_byte_the_writer_calls_unknown_two_is_zeroed(rom, out):
+def test_stamina_lands_at_0x2a_with_the_cartridges_fatigue_for_it_at_0x40(rom, out):
+    """Each pair the 1994 rosters hold (Pippen 91/17, Cartwright 65/28)."""
     writer = _loaded(rom, out)
-    assert fixture.player_unknown2(4, 2) != 0
-    writer.write_player(4, 2, _record())
+    found = []
+    for stamina in (60, 65, 77, 91, 96):
+        writer.write_player(4, 2, _record(stamina=stamina))
+        decoded = fixture.decode_player_record(writer.data, fixture.player_offset(4, 2))
+        found.append((decoded["stamina"], decoded["after_ratings"][5]))
+    assert found == [(60, 34), (65, 28), (77, 22), (91, 17), (96, 16)]
+
+
+def test_the_bytes_the_game_plays_are_derived_from_the_ratings_written(rom, out):
+    """Awareness becomes a reaction delay, speed and quickness a step: Olajuwon's
+    95/97/80/85 are 2, 1, 10, 11 on the cartridge."""
+    ratings = list(range(10, 26))
+    ratings[9:13] = [95, 97, 80, 85]
+    writer = _loaded(rom, out)
+    writer.write_player(4, 2, _record(ratings=ratings, shooting_range=15))
     decoded = fixture.decode_player_record(writer.data, fixture.player_offset(4, 2))
-    assert decoded["unknown2"] == 0
+    assert list(decoded["after_ratings"][4:]) == [218, 22, 2, 1, 10, 11]
+
+
+def test_the_shooting_range_level_is_written_on_the_cartridges_scale(rom, out):
+    writer = _loaded(rom, out)
+    found = []
+    for level in (0, 1, 3, 15, 40, -1):
+        writer.write_player(4, 2, _record(shooting_range=level))
+        found.append(
+            fixture.decode_player_record(writer.data, fixture.player_offset(4, 2))["after_ratings"][
+                4
+            ]
+        )
+    assert found == [76, 85, 104, 218, 218, 76]
+
+
+def test_a_step_below_fifty_or_above_ninety_five_clamps_to_the_tables_rows(rom, out):
+    ratings = list(range(10, 26))
+    ratings[11:13] = [20, 99]
+    writer = _loaded(rom, out)
+    writer.write_player(4, 2, _record(ratings=ratings))
+    decoded = fixture.decode_player_record(writer.data, fixture.player_offset(4, 2))
+    assert list(decoded["after_ratings"][8:]) == [0, 15]
 
 
 def test_the_university_byte_is_left_alone(rom, out):
@@ -629,11 +665,11 @@ def test_the_university_byte_is_left_alone(rom, out):
     assert decoded["university"] == fixture.player_university(4, 2)
 
 
-def test_the_ten_bytes_before_the_name_are_left_alone(rom, out):
+def test_the_four_bytes_the_game_never_reads_are_left_alone(rom, out):
     writer = _loaded(rom, out)
     writer.write_player(4, 2, _record())
     decoded = fixture.decode_player_record(writer.data, fixture.player_offset(4, 2))
-    assert decoded["unknown3"] == fixture.player_unknown3(4, 2)
+    assert decoded["after_ratings"][:4] == fixture.player_after_ratings(4, 2)[:4]
 
 
 def test_writing_one_record_leaves_the_next_records_first_byte_alone(rom, out):

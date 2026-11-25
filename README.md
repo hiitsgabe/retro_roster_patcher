@@ -546,48 +546,49 @@ out for the game, one rated 0 or 1 for the period, and in between for the game o
 injured player's own is odd); the SNES game copies it and never reads it (an injury there is
 for the game on a random draw). Weight class is `(pounds - 140) // 8`, clamped to 0-14.
 
-### NBA Live 95: scaled inside fixed windows, 25-99
+### NBA Live 95: ranked against the league, on the cartridge's own spread
 
-Sixteen attributes. The scale the ROM stores is 0-99, but the mapper clamps to a floor of
-25, so nothing this tool writes is ever rated below 25. Every input is a per-game average
-from ESPN's team-leaders endpoint, scaled linearly inside a window and clamped:
+Sixteen ratings and a stamina byte, each ranked within the player's group (guards, forwards,
+centres) across every team fetched. The rating is the value at the same rank of the
+cartridge's own 1994 spread of it, so the league's best passer gets the passing of the
+cartridge's best guard and its typical one the typical guard's. Counting stats rank per game,
+pulled toward the group's rate by 20 games; percentages are pulled toward the group's by 100
+field goals, 50 threes or 20 free throws.
 
-| Attribute | From | Window |
-| --- | --- | --- |
-| Field goals | field-goal percentage | .380-.550 |
-| Three-point | three-point percentage | .250-.420 |
-| Free throw | free-throw percentage | .600-.920 |
-| Stealing | steals per game | 0.3-2.0 |
-| Blocks | blocks per game | 0.1-2.5 |
-| Offensive rebounding | offensive rebounds per game | 0.3-3.5 |
-| Defensive rebounding | defensive rebounds per game | 1.0-9.0 |
-| Passing | assists per game | 1.0-10.0 |
-| Offensive awareness | points per game | 5.0-30.0 |
-| Defensive awareness | 2 x steals + 1.5 x blocks + 0.5 x defensive rebounds | 1.0-12.0 |
-| Quickness | 2 x steals + 0.5 x assists | 1.0-8.0 |
-| Jumping | 2 x blocks, plus 5 if field-goal percentage is over .500 | 0.5-8.0 |
-| Dribbling | 0.8 x assists + 2 x max(0, 2 - turnovers / assists) | 1.0-10.0 |
-| Strength | 0.8 x rebounds, plus 2 for a centre or power forward | 1.0-10.0 |
+| Rating | Ranks |
+| --- | --- |
+| Field goals | field-goal % and points |
+| Three-point | three-point % and threes made |
+| Free throw | free-throw % |
+| Dunking | blocks and free throws attempted |
+| Stealing, blocks, passing | steals, blocks, assists |
+| Offensive, defensive rebounding | offensive, defensive rebounds |
+| Offensive awareness | points |
+| Defensive awareness | steals, blocks and defensive rebounds |
+| Speed | lightness and assists |
+| Quickness | assists and steals |
+| Jumping | blocks and offensive rebounds |
+| Dribbling | assists and assists per turnover |
+| Strength | rebounds and weight |
+| Stamina (byte 0x2A) | minutes |
+| Shooting range (byte 0x3F) | three-point attempts |
 
-The two attributes missing from that table, dunking and speed, are position constants with
-one bonus each: dunking starts at 35 for a point guard through 60 for a power forward and
-gains 10 above .520 shooting, and speed starts at 35 for a centre through 75 for a point
-guard and gains 8 above 1.2 steals a game. A player the provider has no stats for gets a
-whole row of position defaults and none of the windows above.
+ESPN times nobody's speed or jump, so those pairings are the stats that rank the cartridge's
+own 1993-94 season lines closest to its ratings. A rating whose stats a partial line lacks
+keeps the group's median, and a player with no line gets the medians throughout.
 
-Height is always a position default — 6'2" at point guard through 6'11" at centre — because
-ESPN's roster response carries no height. Weight is ESPN's when it reports one. Experience
-is age minus 21, floored at zero. The roster is the top 12 by minutes played, two per
-position and then the best remaining.
+The game plays bytes derived from the ratings rather than the ratings, and the writer
+derives them as the cartridge does: the fatigue rate from stamina (byte 0x40), a reaction
+delay from each awareness (0x41, 0x42), a step from speed and quickness (0x43, 0x44), and the
+shooting range past which a shot takes the three-point rating (0x3F). Speed, jumping,
+dribbling and strength are shown on the ratings screen but read by nothing in play. Bytes
+0x3B-0x3E are read by nothing either and are left as they are.
 
-Two fields are written but never derived, and both are inherited from the code this port
-came from. `season_stats` is 17 zeros for every patched player, which erases the 1994 season
-line the cartridge shipped with — ESPN's leaders endpoint publishes averages, not the games,
-minutes, makes and attempts those fields hold, so there is nothing honest to put there. Skin
-tone and hair style are written as 0 for everyone, so every patched player looks the same.
+Height is ESPN's in inches, a position default (6'2" at point guard through 6'11" at centre)
+only when it sends none; weight is ESPN's, and experience is ESPN's years in the league.
 
-In short: WE2002 grades on a curve, NHL94 and NBA Live 95 against absolute yardsticks, and
-in all three the physical attributes are priors rather than measurements.
+In short: WE2002 and NBA Live 95 grade on a curve, NHL94 against absolute yardsticks, and
+in all three the physical attributes are estimates rather than measurements.
 
 ## Limits
 

@@ -41,16 +41,26 @@ JERSEY_DISPLAY_BYTES = bytes([0x42, 0x40, 0x4E, 0x71])
 # Field offsets within the 93-byte player record
 OFF_JERSEY = 0x00  # 1 byte
 OFF_POSITION = 0x01  # 1 byte (0=C, 1=PF, 2=SF, 3=PG, 4=SG)
-OFF_HEIGHT = 0x02  # 1 byte (value + 5 = inches)
+OFF_HEIGHT = 0x02  # 1 byte (inches: the roster screen shows 84 as 7'0")
 OFF_WEIGHT = 0x03  # 1 byte (value + 100 = lbs)
 OFF_EXPERIENCE = 0x04  # 1 byte (years)
 OFF_UNIVERSITY = 0x05  # 1 byte (index)
 OFF_SKIN = 0x06  # 1 byte (0x00-0x03)
 OFF_HAIR = 0x07  # 1 byte (0x00-0x26)
 OFF_STATS = 0x08  # 34 bytes (17 x 2-byte BE stats)
-OFF_UNKNOWN2 = 0x2A  # 1 byte
+# Play reads 0x3F-0x42 and 0x44 (the 68000 code) and never stamina, speed,
+# quickness, jumping, dribbling, strength, 0x3B-0x3E or 0x43 (mednafen read
+# breakpoints on one starter from power-on through a quarter); only the ratings
+# screen draws 0x36-0x3A. The writer derives 0x3F-0x44 as the cartridge does
+# (all 348 of its records fit) and leaves 0x3B-0x3E, which fit no rating.
+OFF_STAMINA = 0x2A  # 1 byte; the source of `OFF_FATIGUE`
 OFF_RATINGS = 0x2B  # 16 bytes (16 x 1 byte ratings)
-OFF_UNKNOWN3 = 0x3B  # 10 bytes
+OFF_RANGE = 0x3F  # 76 + 9.5 x a 0-15 level: past it a shot takes the 3-point rating
+OFF_FATIGUE = 0x40  # from stamina (`STAMINA_FATIGUE`); x 24 / quarter length = tiring rate
+OFF_OFF_REACTION = 0x41  # (100 - offensive awareness) // 2, frames added to a reaction
+OFF_DEF_REACTION = 0x42  # (100 - defensive awareness) // 2
+OFF_SPEED_STEP = 0x43  # (speed - 50) // 3
+OFF_QUICK_STEP = 0x44  # (quickness - 50) // 3, the running-speed table's row
 OFF_NAME = 0x45  # 24 bytes ("LASTNAME\0FIRST" ASCII)
 
 NAME_LENGTH = 24
@@ -90,6 +100,32 @@ RATING_NAMES = [
     "strength",  # 15 - Physical strength
 ]
 RATING_COUNT = 16
+RATING_OFF_AWARENESS = 9
+RATING_DEF_AWARENESS = 10
+RATING_SPEED = 11
+RATING_QUICKNESS = 12
+
+RANGE_BASE = 76
+RANGE_LEVELS = 16
+
+#: The cartridge's fatigue byte for a stamina of at least each value (its 360
+#: players fit no formula), the slowest-tiring first.
+STAMINA_FATIGUE = {
+    95: 16,
+    90: 17,
+    86: 18,
+    84: 19,
+    82: 20,
+    78: 21,
+    75: 22,
+    73: 23,
+    72: 24,
+    70: 26,
+    67: 27,
+    65: 28,
+    62: 32,
+    0: 34,
+}
 
 # Season stat indices (17 x 2-byte BE fields at OFF_STATS)
 STAT_GAMES = 0
@@ -265,6 +301,9 @@ class NBALive95PlayerRecord:
 
     # 0-99 scale
     ratings: list[int] = field(default_factory=lambda: [50] * RATING_COUNT)
+    stamina: int = 77
+    #: 0-15, `OFF_RANGE`'s level.
+    shooting_range: int = 10
 
     # 17 x 2-byte values: the season's totals
     season_stats: list[int] = field(default_factory=lambda: [0] * STAT_COUNT)

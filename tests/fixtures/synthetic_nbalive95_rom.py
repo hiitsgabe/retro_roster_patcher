@@ -125,14 +125,14 @@ OFF_UNIVERSITY = 0x05
 OFF_SKIN = 0x06
 OFF_HAIR = 0x07
 OFF_STATS = 0x08
-OFF_UNKNOWN2 = 0x2A
+OFF_STAMINA = 0x2A
 OFF_RATINGS = 0x2B
-OFF_UNKNOWN3 = 0x3B
+OFF_AFTER_RATINGS = 0x3B
 OFF_NAME = 0x45
 
 RATING_COUNT = 16
 STAT_COUNT = 17
-UNKNOWN3_SIZE = 10
+AFTER_RATINGS_SIZE = 10
 
 
 def player_last_name(team: int, slot: int) -> str:
@@ -235,8 +235,8 @@ def player_hair(team: int, slot: int) -> int:
     return 1 + (team + slot) % 0x26
 
 
-def player_unknown2(team: int, slot: int) -> int:
-    """Byte 0x2A, which `write_player` zeroes. Non-zero here so that is visible."""
+def player_stamina(team: int, slot: int) -> int:
+    """Byte 0x2A, stamina."""
     return 1 + (team * 3 + slot) % 255
 
 
@@ -260,9 +260,9 @@ def player_season_stats(team: int, slot: int) -> list[int]:
     return [1 + (team * 1000 + slot * 50 + index) % 0xFFFE for index in range(STAT_COUNT)]
 
 
-def player_unknown3(team: int, slot: int) -> bytes:
-    """Bytes 0x3B-0x44, which `write_player` says it preserves."""
-    return bytes((1 + (team * 11 + slot * 5 + index) % 255) for index in range(UNKNOWN3_SIZE))
+def player_after_ratings(team: int, slot: int) -> bytes:
+    """Bytes 0x3B-0x44: four the game never reads, then range and five derived from ratings."""
+    return bytes((1 + (team * 11 + slot * 5 + index) % 255) for index in range(AFTER_RATINGS_SIZE))
 
 
 def build_player_record(team: int, slot: int) -> bytes:
@@ -278,11 +278,11 @@ def build_player_record(team: int, slot: int) -> bytes:
     record[OFF_HAIR] = player_hair(team, slot)
     for index, value in enumerate(player_season_stats(team, slot)):
         struct.pack_into(">H", record, OFF_STATS + index * 2, value)
-    record[OFF_UNKNOWN2] = player_unknown2(team, slot)
+    record[OFF_STAMINA] = player_stamina(team, slot)
     for index, value in enumerate(player_ratings(team, slot)):
         record[OFF_RATINGS + index] = value
-    unknown3 = player_unknown3(team, slot)
-    record[OFF_UNKNOWN3 : OFF_UNKNOWN3 + UNKNOWN3_SIZE] = unknown3
+    after_ratings = player_after_ratings(team, slot)
+    record[OFF_AFTER_RATINGS : OFF_AFTER_RATINGS + AFTER_RATINGS_SIZE] = after_ratings
     return bytes(record) + encoded_name(team, slot)
 
 
@@ -311,9 +311,9 @@ def decode_player_record(rom: bytes | bytearray, offset: int) -> dict:
         "season_stats": [
             struct.unpack_from(">H", fixed, OFF_STATS + index * 2)[0] for index in range(STAT_COUNT)
         ],
-        "unknown2": fixed[OFF_UNKNOWN2],
+        "stamina": fixed[OFF_STAMINA],
         "ratings": list(fixed[OFF_RATINGS : OFF_RATINGS + RATING_COUNT]),
-        "unknown3": bytes(fixed[OFF_UNKNOWN3 : OFF_UNKNOWN3 + UNKNOWN3_SIZE]),
+        "after_ratings": bytes(fixed[OFF_AFTER_RATINGS : OFF_AFTER_RATINGS + AFTER_RATINGS_SIZE]),
         "last_name": last.decode("ascii", errors="replace"),
         "first_name": first.decode("ascii", errors="replace"),
     }

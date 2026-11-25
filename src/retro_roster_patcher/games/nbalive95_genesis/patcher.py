@@ -66,7 +66,7 @@ from .models import (
 from .rom_reader import NBALive95RomReader
 from .rom_writer import NBALive95RomWriter
 from .space import Space
-from .stat_mapper import NBALive95StatMapper
+from .stat_mapper import LeagueStats, NBALive95StatMapper
 
 #: File offset one past the last byte any team's pointer table occupies. Derived
 #: with `max` because the addresses are transcribed literals and need not be sorted.
@@ -281,6 +281,13 @@ class NBALive95Patcher(Patcher):
         (`split_positions`); that changes the position byte alone.
         """
         self.check_slot_mapping(slot_mapping)
+        # Every fetched player is the league each one's ratings rank against
+        # (`stat_mapper`), those whose team has no slot among them.
+        league = LeagueStats.from_lines(
+            (player, (roster.extra.get("leaders") or {}).get(str(player.id)) or {})
+            for roster in data.teams
+            for player in roster.players
+        )
         teams: dict[int, NBALive95TeamRecord] = {}
         for roster in data.teams:
             slot = self.mapper.get_team_slot(roster.team.code)
@@ -298,7 +305,7 @@ class NBALive95Patcher(Patcher):
             # position byte follows his row, so reordering moves no attribute.
             records = [
                 replace(
-                    self.mapper.map_player(player, leaders.get(str(player.id), {})),
+                    self.mapper.map_player(player, leaders.get(str(player.id), {}), league),
                     position=POSITION_TO_BYTE.get(
                         self.mapper._normalize_position(split.position), POSITION_SF
                     ),

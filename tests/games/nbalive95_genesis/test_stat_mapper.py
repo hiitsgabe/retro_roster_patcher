@@ -1,14 +1,10 @@
-"""The ported NBA Live 95 stat mapper.
+"""The NBA Live 95 stat mapper.
 
-Sixteen attributes on a 25-99 scale -- the ROM's field is 0-99, but `_clamp`'s
-default floor is 25, so nothing this mapper produces is ever below it. Each
-attribute is a linear scaling of one ESPN per-game average inside a fixed
-window, except dunking and speed, which are position constants with one bonus
-each.
-
-The expected numbers below are computed by hand from the windows the code
-documents, not by calling `_scale`: a test that derived its expectation from the
-function under test would agree with any window.
+Each rating ranks one to three of a player's stats against his group (guards,
+forwards, centres) in the league fetched and takes the value at that rank of the
+cartridge's own spread (`RETAIL`), so the expectations below are read off
+`RETAIL`'s deciles: the league's best is the cartridge's best, its middle the
+cartridge's median.
 """
 
 import pytest
@@ -22,9 +18,10 @@ from retro_roster_patcher.games.nbalive95_genesis.models import (
 )
 from retro_roster_patcher.games.nbalive95_genesis.stat_mapper import (
     POSITION_DEFAULTS,
+    RETAIL,
+    LeagueStats,
     NBALive95StatMapper,
-    _clamp,
-    _scale,
+    on_retail,
 )
 from retro_roster_patcher.sports.models import Player
 
@@ -57,202 +54,188 @@ def _ratings(mapper, stats, position="SF"):
     return mapper.map_player(_player(position=position), stats).ratings
 
 
-def test_the_clamp_floor_is_twenty_five_and_not_zero():
-    """The reason the README calls this a 25-99 scale on a 0-99 field."""
-    assert _clamp(0) == 25
+def _league(lines, position="SF"):
+    """Players 0..n-1 of one position, each with his line."""
+    players = [_player(id=i, position=position) for i in range(len(lines))]
+    return players, LeagueStats.from_lines(zip(players, lines, strict=True))
 
 
-def test_the_clamp_ceiling_is_ninety_nine():
-    assert _clamp(500) == 99
+def test_the_bottom_of_the_league_gets_the_cartridges_lowest():
+    assert on_retail(0.0, RETAIL["G"]["passing"]) == RETAIL["G"]["passing"][0]
 
 
-def test_a_value_inside_the_clamp_passes_through():
-    assert _clamp(63) == 63
+def test_the_top_of_the_league_gets_the_cartridges_highest():
+    assert on_retail(1.0, RETAIL["G"]["passing"]) == 98
 
 
-def test_the_bottom_of_a_window_scales_to_the_floor():
-    assert _scale(0.0, 0.0, 100.0) == 25
+def test_the_middle_of_the_league_gets_the_cartridges_median():
+    assert on_retail(0.5, (0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100)) == 50
 
 
-def test_the_top_of_a_window_scales_to_the_ceiling():
-    assert _scale(100.0, 0.0, 100.0) == 99
+def test_a_share_between_two_deciles_is_read_between_them():
+    assert on_retail(0.55, (0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100)) == 55
 
 
-def test_the_middle_of_a_window_scales_to_the_middle_of_the_range():
-    assert _scale(50.0, 0.0, 100.0) == 62
-
-
-def test_a_value_under_the_window_clamps_up_rather_than_going_negative():
-    assert _scale(-50.0, 0.0, 100.0) == 25
-
-
-def test_a_value_over_the_window_clamps_down():
-    assert _scale(500.0, 0.0, 100.0) == 99
-
-
-def test_a_window_with_no_width_answers_fifty_rather_than_dividing_by_zero():
-    assert _scale(7.0, 5.0, 5.0) == 50
-
-
-def test_an_inverted_window_answers_fifty_too():
-    assert _scale(7.0, 9.0, 5.0) == 50
-
-
-def test_shooting_comes_from_field_goal_percentage(mapper):
-    """.465 is halfway across the .380-.550 window, and halfway is 62."""
-    assert _ratings(mapper, {"FG%": 46.5})[GOALS] == 62
-
-
-def test_three_point_shooting_comes_from_three_point_percentage(mapper):
-    assert _ratings(mapper, {"3P%": 33.5})[THREE_PT] == 62
-
-
-def test_free_throws_come_from_free_throw_percentage(mapper):
-    assert _ratings(mapper, {"FT%": 76.0})[FT] == 62
-
-
-def test_percentages_are_read_as_hundredths_not_as_fractions(mapper):
-    """ESPN publishes 46.5, not 0.465. Reading it as a fraction floors the rating."""
-    assert _ratings(mapper, {"FG%": 0.465})[GOALS] == 25
-
-
-def test_dunking_is_a_position_constant(mapper):
+def test_passing_ranks_assists_onto_the_cartridges_spread(mapper):
+    players, league = _league([{"AST": a} for a in (1.0, 3.0, 5.0, 7.0, 9.0)])
     found = [
-        _ratings(mapper, {"PTS": 1}, position=position)[DUNKING]
-        for position in ("PG", "SG", "SF", "PF", "C")
+        mapper.map_player(p, {"AST": a}, league).ratings[PASSING]
+        for p, a in zip(players, (1.0, 3.0, 5.0, 7.0, 9.0), strict=True)
     ]
-    assert found == [35, 40, 55, 60, 55]
+    assert found == sorted(found)
+    assert found[-1] > RETAIL["F"]["passing"][5] > found[0]
 
 
-def test_dunking_gains_ten_above_fifty_two_percent_shooting(mapper):
-    assert _ratings(mapper, {"FG%": 53.0}, position="SF")[DUNKING] == 65
+def test_a_rating_ranks_only_against_its_own_group(mapper):
+    """The best-blocking guard is the guards' best even beside centres who block more."""
+    guards = [_player(id=i, position="PG") for i in range(3)]
+    centres = [_player(id=10 + i, position="C") for i in range(3)]
+    lines = [{"BLK": b} for b in (0.1, 0.2, 0.9)] + [{"BLK": b} for b in (1.5, 2.0, 3.0)]
+    league = LeagueStats.from_lines(zip(guards + centres, lines, strict=True))
+    best_guard = mapper.map_player(guards[2], lines[2], league).ratings[BLOCKS]
+    worst_centre = mapper.map_player(centres[0], lines[3], league).ratings[BLOCKS]
+    assert best_guard > RETAIL["G"]["blocks"][5]
+    assert worst_centre < RETAIL["C"]["blocks"][5]
 
 
-def test_dunking_gains_nothing_at_exactly_fifty_two_percent(mapper):
-    assert _ratings(mapper, {"FG%": 52.0}, position="SF")[DUNKING] == 55
+def test_a_stat_missing_from_a_partial_line_keeps_the_position_default(mapper):
+    """ESPN's leaders list a player only under what he leads: no FT% is not a 0."""
+    players, league = _league([{"PTS": 30.0}, {"PTS": 10.0, "FT%": 80.0}])
+    record = mapper.map_player(players[0], {"PTS": 30.0}, league)
+    assert record.ratings[FT] == POSITION_DEFAULTS[POSITION_SF][FT]
+    assert record.ratings[OFF_AWARENESS] > POSITION_DEFAULTS[POSITION_SF][OFF_AWARENESS]
 
 
-def test_stealing_comes_from_steals_a_game(mapper):
-    assert _ratings(mapper, {"STL": 1.15})[STEALING] == 62
+def test_a_line_of_nones_keeps_every_default_rather_than_raising(mapper):
+    assert (
+        _ratings(mapper, {"PTS": None, "AST": None, "FG%": None}) == POSITION_DEFAULTS[POSITION_SF]
+    )
 
 
-def test_blocking_comes_from_blocks_a_game(mapper):
-    assert _ratings(mapper, {"BLK": 1.3})[BLOCKS] == 62
-
-
-def test_offensive_rebounding_comes_from_offensive_rebounds_a_game(mapper):
-    assert _ratings(mapper, {"ORPG": 1.9})[OFF_REB] == 62
-
-
-def test_offensive_rebounding_falls_back_to_the_second_espn_key(mapper):
-    assert _ratings(mapper, {"OREB": 1.9})[OFF_REB] == 62
-
-
-def test_defensive_rebounding_comes_from_defensive_rebounds_a_game(mapper):
-    assert _ratings(mapper, {"DRPG": 5.0})[DEF_REB] == 62
-
-
-def test_defensive_rebounding_falls_back_to_the_second_espn_key(mapper):
-    assert _ratings(mapper, {"DREB": 5.0})[DEF_REB] == 62
-
-
-def test_passing_comes_from_assists_a_game(mapper):
-    assert _ratings(mapper, {"AST": 5.5})[PASSING] == 62
-
-
-def test_offensive_awareness_comes_from_points_a_game(mapper):
-    assert _ratings(mapper, {"PTS": 17.5})[OFF_AWARENESS] == 62
-
-
-def test_defensive_awareness_is_a_composite_of_three_stats(mapper):
-    """2 x steals + 1.5 x blocks + 0.5 x defensive rebounds, over a 1.0-12.0 window."""
-    assert _ratings(mapper, {"STL": 2.0, "BLK": 1.0, "DRPG": 2.0})[DEF_AWARENESS] == 62
-
-
-def test_defensive_awareness_weights_steals_above_blocks(mapper):
-    """Same total input, distributed two ways: the steal-heavy line rates higher."""
-    steals = _ratings(mapper, {"STL": 3.0})[DEF_AWARENESS]
-    blocks = _ratings(mapper, {"BLK": 3.0})[DEF_AWARENESS]
-    assert steals > blocks
-
-
-def test_speed_is_a_position_constant(mapper):
-    found = [
-        _ratings(mapper, {"PTS": 1}, position=position)[SPEED]
-        for position in ("PG", "SG", "SF", "PF", "C")
+def test_a_few_big_games_do_not_outrank_a_full_season(mapper):
+    """Per-game counts are pulled toward the group's rate by 20 games."""
+    lines = [
+        {"gamesPlayed": 2, "AST": 12.0},
+        {"gamesPlayed": 70, "AST": 9.0},
+        {"gamesPlayed": 70, "AST": 2.0},
     ]
-    assert found == [75, 65, 55, 40, 35]
+    players, league = _league(lines)
+    cameo, regular, _ = (
+        mapper.map_player(p, line, league).ratings[PASSING]
+        for p, line in zip(players, lines, strict=True)
+    )
+    assert regular > cameo
 
 
-def test_speed_gains_eight_above_one_point_two_steals(mapper):
-    assert _ratings(mapper, {"STL": 1.3}, position="SF")[SPEED] == 63
+def test_a_percentage_is_read_from_makes_and_attempts_when_the_line_has_them(mapper):
+    """1 of 1 is no 100% shooter: the group's rate weighs in by 20 free throws."""
+    lines = [
+        {"freeThrowsMade": 1, "freeThrowsAttempted": 1},
+        {"freeThrowsMade": 450, "freeThrowsAttempted": 500},
+        {"freeThrowsMade": 300, "freeThrowsAttempted": 500},
+    ]
+    players, league = _league(lines)
+    lucky, shooter, _ = (
+        mapper.map_player(p, line, league).ratings[FT]
+        for p, line in zip(players, lines, strict=True)
+    )
+    assert shooter > lucky
 
 
-def test_speed_gains_nothing_at_exactly_one_point_two_steals(mapper):
-    assert _ratings(mapper, {"STL": 1.2}, position="SF")[SPEED] == 55
+def test_a_percentage_is_read_as_hundredths_without_the_counts(mapper):
+    lines = [{"FG%": 40.0}, {"FG%": 55.0}]
+    players, league = _league(lines)
+    low, high = (
+        mapper.map_player(p, line, league).ratings[GOALS]
+        for p, line in zip(players, lines, strict=True)
+    )
+    assert high > low
 
 
-def test_quickness_is_steals_and_assists_together(mapper):
-    """2 x steals + 0.5 x assists, over a 1.0-8.0 window."""
-    assert _ratings(mapper, {"STL": 1.0, "AST": 5.0})[QUICKNESS] == 62
+def test_speed_ranks_lightness_and_assists(mapper):
+    players = [
+        _player(id=0, position="SF", weight=190.0),
+        _player(id=1, position="SF", weight=250.0),
+    ]
+    lines = [{"AST": 6.0}, {"AST": 1.0}]
+    league = LeagueStats.from_lines(zip(players, lines, strict=True))
+    quick, slow = (
+        mapper.map_player(p, line, league).ratings[SPEED]
+        for p, line in zip(players, lines, strict=True)
+    )
+    # Of two, the better ranks at 3/4 and the other at 1/4 (ties sit at their middle).
+    assert (quick, slow) == (
+        on_retail(0.75, RETAIL["F"]["speed"]),
+        on_retail(0.25, RETAIL["F"]["speed"]),
+    )
 
 
-def test_jumping_comes_from_blocks(mapper):
-    assert _ratings(mapper, {"BLK": 2.125})[JUMPING] == 62
+def test_strength_ranks_rebounds_and_weight(mapper):
+    players = [_player(id=0, weight=190.0), _player(id=1, weight=250.0)]
+    lines = [{"REB": 2.0}, {"REB": 10.0}]
+    league = LeagueStats.from_lines(zip(players, lines, strict=True))
+    light, heavy = (
+        mapper.map_player(p, line, league).ratings[STRENGTH]
+        for p, line in zip(players, lines, strict=True)
+    )
+    assert heavy > light
 
 
-def test_jumping_gains_a_flat_five_above_fifty_percent_shooting(mapper):
-    """The bonus is added to the input, before scaling, not to the rating."""
-    assert _ratings(mapper, {"BLK": 0.5})[JUMPING] == 30
-    assert _ratings(mapper, {"BLK": 0.5, "FG%": 60.0})[JUMPING] == 79
+def test_stamina_ranks_minutes_and_range_three_point_attempts(mapper):
+    lines = [{"MPG": 36.0, "3PA": 8.0}, {"MPG": 12.0, "3PA": 0.5}]
+    players, league = _league(lines, position="PG")
+    workhorse, cameo = (
+        mapper.map_player(p, line, league) for p, line in zip(players, lines, strict=True)
+    )
+    stamina = RETAIL["G"]["stamina"]
+    assert (workhorse.stamina, cameo.stamina) == (
+        on_retail(0.75, stamina),
+        on_retail(0.25, stamina),
+    )
+    assert (workhorse.shooting_range, cameo.shooting_range) == (14, 12)
 
 
-def test_dribbling_rewards_assists_and_punishes_turnovers(mapper):
-    generous = _ratings(mapper, {"AST": 6.0, "TO": 3.0})[DRIBBLING]
-    careless = _ratings(mapper, {"AST": 6.0, "TO": 12.0})[DRIBBLING]
-    assert generous > careless
+def test_a_full_line_above_the_rest_of_the_league_rates_above_the_median_everywhere(mapper):
+    line = {
+        "gamesPlayed": 70,
+        "PTS": 28.4,
+        "REB": 9.1,
+        "AST": 7.2,
+        "STL": 1.9,
+        "BLK": 1.4,
+        "FG%": 52.1,
+        "3P%": 39.4,
+        "FT%": 88.0,
+        "ORPG": 2.2,
+        "DRPG": 6.9,
+        "3PM": 3.1,
+        "3PA": 7.0,
+        "FTA": 6.0,
+        "MPG": 36.5,
+        "TO": 3.0,
+    }
+    weak = {key: value / 4 for key, value in line.items()} | {"gamesPlayed": 70}
+    players, league = _league([line, weak])
+    record = mapper.map_player(players[0], line, league)
+    assert [r > d for r, d in zip(record.ratings, POSITION_DEFAULTS[POSITION_SF], strict=True)] == [
+        True
+    ] * 16
+    assert record.stamina > RETAIL["F"]["stamina"][5]
+    assert record.shooting_range > RETAIL["F"]["range"][5]
 
 
-def test_dribbling_assumes_the_worst_turnover_ratio_when_there_are_no_assists(mapper):
-    """`to_ratio` defaults to 2.0, which zeroes the bonus term entirely."""
-    assert _ratings(mapper, {"TO": 0.0})[DRIBBLING] == 25
+def test_a_player_with_no_stats_gets_his_groups_median(mapper):
+    assert _ratings(mapper, {}) == [
+        RETAIL["F"][name][5] for name in RETAIL["F"] if name not in ("stamina", "range")
+    ]
+    record = mapper.map_player(_player(position="C"), None)
+    assert (record.stamina, record.shooting_range) == (
+        RETAIL["C"]["stamina"][5],
+        RETAIL["C"]["range"][5],
+    )
 
 
-def test_dribbling_reads_the_alternate_turnover_key(mapper):
-    named = _ratings(mapper, {"AST": 6.0, "TO": 12.0})[DRIBBLING]
-    alternate = _ratings(mapper, {"AST": 6.0, "TOPG": 12.0})[DRIBBLING]
-    assert named == alternate
-
-
-def test_strength_comes_from_total_rebounds(mapper):
-    assert _ratings(mapper, {"REB": 5.5}, position="SF")[STRENGTH] == 53
-
-
-def test_strength_adds_two_for_a_centre_or_a_power_forward(mapper):
-    assert _ratings(mapper, {"REB": 5.5}, position="C")[STRENGTH] == 69
-    assert _ratings(mapper, {"REB": 5.5}, position="PF")[STRENGTH] == 69
-
-
-def test_strength_adds_nothing_for_a_guard(mapper):
-    assert _ratings(mapper, {"REB": 5.5}, position="PG")[STRENGTH] == 53
-
-
-def test_a_stat_line_of_nones_is_read_as_zero_rather_than_raising(mapper):
-    """ESPN omits a category by sending `null`, and `or 0` is what absorbs it."""
-    assert _ratings(mapper, {"PTS": None, "AST": None, "FG%": None})[OFF_AWARENESS] == 25
-
-
-def test_every_rating_a_stat_line_produces_is_inside_the_field_the_rom_holds(mapper):
-    ratings = _ratings(mapper, {"PTS": 40.0, "AST": 15.0, "BLK": 5.0, "FG%": 70.0, "STL": 4.0})
-    assert len(ratings) == 16
-    assert [r for r in ratings if not 25 <= r <= 99] == []
-
-
-def test_a_player_with_no_stats_gets_the_position_defaults(mapper):
-    assert _ratings(mapper, {}) == POSITION_DEFAULTS[POSITION_SF]
-
-
-def test_each_position_has_its_own_default_row(mapper):
+def test_guards_forwards_and_centres_default_differently(mapper):
     rows = [_ratings(mapper, {}, position=name) for name in ("PG", "SG", "SF", "PF", "C")]
     assert rows == [
         POSITION_DEFAULTS[POSITION_PG],
@@ -261,28 +244,17 @@ def test_each_position_has_its_own_default_row(mapper):
         POSITION_DEFAULTS[POSITION_PF],
         POSITION_DEFAULTS[POSITION_C],
     ]
-
-
-def test_the_five_default_rows_are_not_the_same_row(mapper):
-    """Guards the test above from passing on five references to one list."""
-    assert len({tuple(row) for row in POSITION_DEFAULTS.values()}) == 5
+    assert len({tuple(row) for row in POSITION_DEFAULTS.values()}) == 3
 
 
 def test_the_default_row_is_copied_and_not_shared_with_the_record(mapper):
-    """The shared-mutable-default bug both NHL 94 ports had is absent here.
-
-    `map_player` copies with `list(...)`, so a caller mutating one record's
-    ratings cannot reach the module-level table -- and this is asserted rather
-    than assumed, because the two sibling ports needed a fix for exactly this.
-    """
     record = mapper.map_player(_player(position="C"), None)
     record.ratings[0] = 7
-    assert POSITION_DEFAULTS[POSITION_C][0] == 55
-    assert mapper.map_player(_player(position="C"), None).ratings[0] == 55
+    assert POSITION_DEFAULTS[POSITION_C][0] == RETAIL["C"]["goals"][5]
+    assert mapper.map_player(_player(position="C"), None).ratings[0] == RETAIL["C"]["goals"][5]
 
 
 def test_an_empty_stat_dict_is_treated_as_no_stats_at_all(mapper):
-    """`if stats:` and not `if stats is not None:`, so `{}` takes the defaults."""
     assert _ratings(mapper, {}) == _ratings(mapper, None)
 
 
@@ -340,7 +312,11 @@ def test_a_name_that_is_nothing_but_a_suffix_keeps_the_suffix(mapper):
     assert mapper._split_name("John Jr.") == ("Jr.", "John")
 
 
-def test_height_is_a_position_default_because_espn_reports_none(mapper):
+def test_height_is_espns_in_inches(mapper):
+    assert mapper.map_player(_player(height=83.0), None).height_inches == 83
+
+
+def test_height_is_a_position_default_when_espn_reports_none(mapper):
     found = [
         mapper.map_player(_player(position=name), None).height_inches
         for name in ("PG", "SG", "SF", "PF", "C")
@@ -360,71 +336,31 @@ def test_weight_is_a_position_default_when_espn_reports_zero(mapper):
     assert found == [190, 205, 220, 240, 255]
 
 
-def test_experience_is_years_past_twenty_one(mapper):
-    assert mapper.map_player(_player(age=30), None).experience == 9
+def test_experience_is_espns_years_in_the_league(mapper):
+    assert mapper.map_player(_player(age=30, experience=11), None).experience == 11
 
 
-def test_a_player_younger_than_twenty_one_has_no_experience(mapper):
+def test_a_rookie_has_no_experience(mapper):
     assert mapper.map_player(_player(age=19), None).experience == 0
-
-
-def test_an_unknown_age_gives_no_experience(mapper):
-    assert mapper.map_player(_player(age=0), None).experience == 0
 
 
 def test_a_missing_jersey_number_becomes_zero(mapper):
     assert mapper.map_player(_player(number=None), None).jersey == 0
 
 
-def test_a_mapped_record_carries_no_season_stats_of_its_own(mapper):
-    """PRESERVED, pinned: 17 zeros, which the writer puts over the ROM's.
-
-    Zero is the null season line and this port writes it deliberately; the
-    docstring on `map_player` sets out the three options and why. Repairing it
-    needs a provider that publishes season *totals*, so a change here would
-    show up as this test failing.
-    """
+def test_a_leaders_line_carries_no_season_totals(mapper):
+    """The leaders endpoint's per-game averages are not the totals the ROM keeps."""
     assert mapper.map_player(_player(), {"PTS": 30.0}).season_stats == [0] * 17
 
 
-def test_no_espn_leaders_key_reaches_the_season_stat_block(mapper):
-    """Every category `_map_stats_to_ratings` documents, supplied at once.
-
-    Not vacuous: the same line moves all sixteen ratings off the position
-    defaults, so the mapper really is reading it -- and still puts none of it in
-    the 17 fields the ROM keeps a season line in.
-    """
-    line = {
-        "PTS": 28.4,
-        "REB": 9.1,
-        "AST": 7.2,
-        "STL": 1.9,
-        "BLK": 1.4,
-        "FG%": 52.1,
-        "3P%": 39.4,
-        "FT%": 88.0,
-        "ORPG": 2.2,
-        "DRPG": 6.9,
-        "3PM": 3.1,
-        "MPG": 36.5,
-        "PER": 27.3,
-        "TO": 3.0,
-        "PFPG": 2.1,
-    }
-    record = mapper.map_player(_player(position="SF"), line)
-    assert record.season_stats == [0] * 17
-    defaults = POSITION_DEFAULTS[POSITION_SF]
-    moved = [i for i, value in enumerate(record.ratings) if value != defaults[i]]
-    assert moved == list(range(16))
+def test_a_season_line_writes_its_totals_in_the_roms_order(mapper):
+    line = {"gamesPlayed": 70, "minutes": 2400, "points": 1800.4, "fouls": 150}
+    stats = mapper.map_player(_player(), line).season_stats
+    assert (stats[0], stats[1], stats[14], stats[16]) == (70, 2400, 1800, 150)
 
 
 def test_a_mapped_record_carries_no_appearance_at_all(mapper):
-    """ESPN publishes neither, so both stay at the dataclass default of 0.
-
-    `rom_writer.write_player` writes that 0 -- upstream's behaviour, restored
-    deliberately -- so every patched player comes out with the same skin and the
-    same hair. See the comment there.
-    """
+    """`looks.dress` sets skin and head from the head shot later; the mapper leaves 0."""
     record = mapper.map_player(_player(), {"PTS": 30.0})
     assert record.skin_color == 0
     assert record.hair_style == 0
