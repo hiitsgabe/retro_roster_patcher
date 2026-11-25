@@ -1193,8 +1193,8 @@ def test_a_team_is_counted_once_not_once_per_table(tmp_path, monkeypatch):
 
 
 def test_patch_raises_when_finalisation_leaves_no_output(patcher, tmp_path, monkeypatch):
-    # `RomWriter.finalize` has `pass` for a body and returns `None`, so its
-    # return value cannot be checked. The output file existing can be.
+    # `RomWriter.finalize` returns `None`, so its return value cannot be checked.
+    # The output file existing can be.
     monkeypatch.setattr(patcher_module, "RomWriter", _fake_writer_class([], create_output=False))
     _silence_translation(monkeypatch)
     data = patcher.fetch(season=2024, league_id=39)

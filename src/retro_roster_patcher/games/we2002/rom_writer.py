@@ -2067,6 +2067,47 @@ def _edc_compute(data: bytes) -> int:
     return crc
 
 
+_SECTOR = 2352
+#: Doubling in GF(2^8), and the inverse of tripling: the sector parity's two multipliers.
+_GF2 = bytes(((i << 1) ^ (0x11D if i & 0x80 else 0)) & 0xFF for i in range(256))
+_GF3_INV = bytes(sorted(range(256), key=lambda i: i ^ _GF2[i]))
+
+
+def _xor(p: bytes, q: bytes) -> bytes:
+    return (int.from_bytes(p, "big") ^ int.from_bytes(q, "big")).to_bytes(len(p), "big")
+
+
+def _parity(rows: list[bytes]) -> bytes:
+    """The two Reed-Solomon parity rows of `rows`: column k of all of them is one codeword."""
+    a = b = bytes(len(rows[0]))
+    for row in rows:
+        b = _xor(b, row)
+        a = _xor(a, row).translate(_GF2)
+    a = _xor(a.translate(_GF2), b).translate(_GF3_INV)
+    return a + _xor(a, b)
+
+
+def _seal(sector: bytes) -> bytes:
+    """A Mode 2 sector with the checksums of the data it holds: its EDC and, for Form 1, its P
+    and Q parity (over the sector from its header on, the header read as zero)."""
+    s = bytearray(sector)
+    if s[18] & 0x20:  # Form 2: the EDC ends the sector and there is no parity
+        s[2348:] = struct.pack("<I", _edc_compute(bytes(s[16:2348])))
+        return bytes(s)
+    s[2072:2076] = struct.pack("<I", _edc_compute(bytes(s[16:2072])))
+    body = bytes(4) + bytes(s[16:2076])
+    body += _parity([body[k : k + 86] for k in range(0, 2064, 86)])
+    rows = []
+    for k in range(43):  # Q runs diagonally over the P rows, the two bytes of a word apart
+        row = bytearray(52)
+        for plane in (0, 1):
+            at = (88 * k + plane) % 2236
+            row[plane::2] = body[at::86] + body[at % 86 : at : 86]
+        rows.append(bytes(row))
+    s[2076:] = body[2064:] + _parity(rows)
+    return bytes(s)
+
+
 def _build_tex_dir_map(rom_data: bytes) -> tuple[dict, dict]:
     """Scan the ISO9660 BIN directory for `TEX_nn.BIN;1` entries.
 
@@ -2324,6 +2365,7 @@ class RomWriter:
                 os.fsync(fd)
             finally:
                 os.close(fd)
+        self._rom_path = rom_path
         self.output_path = output_path
         # Original TEX file data (avoids re-read corruption), their sizes from
         # the ISO9660 directory and their directory record offsets, by index.
@@ -3259,14 +3301,25 @@ class RomWriter:
             return str(list(data))
         return data.hex()[:24] + "..."
 
-    def finalize(self):
-        """Post-processing after all patches are written.
+    def finalize(self) -> None:
+        """Give every sector the patch changed its own checksums (`_seal`), last of all.
 
-        EDC checksums for TEX file sectors are recalculated inline during
-        3D jersey patching.  Non-TEX patches (names, maglia, flags) modify
-        sectors that emulators don't validate EDC for.
+        mednafen repairs a Mode 2 sector whose EDC is stale from its parity: with the disc's
+        old parity that undoes a small patch and garbles a large one (menus drawn without
+        their text), so a patched sector must carry the EDC and parity of what it now holds.
         """
-        pass
+        # shortcut: a disc patched in place has no original to compare with and keeps its
+        # sums; scan every sector's EDC instead if that case must run in mednafen.
+        if self._in_place or not os.path.exists(self._rom_path):
+            return
+        with open(self._rom_path, "rb") as disc, open(self.output_path, "r+b") as out:
+            at = 0
+            while len(sector := out.read(_SECTOR)) == _SECTOR:
+                if sector != disc.read(_SECTOR) and sector[15] == 2:
+                    out.seek(at)
+                    out.write(_seal(sector))
+                at += _SECTOR
+            _sync(out)
 
 
 #: SHA-1 of the 95 teams' name-variant-2 fields on the retail disc, alone and with the

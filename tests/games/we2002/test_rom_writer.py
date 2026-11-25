@@ -22,6 +22,7 @@ import pytest
 from retro_roster_patcher.games.we2002.models import WELook, WEPlayerRecord, WETeamRecord
 from retro_roster_patcher.games.we2002.rom_writer import (
     _DISC_BITS,
+    _GF2,
     _ML_COLOR_OFFSETS,
     _OFS_BANDIERE_COLORE1,
     _OFS_BANDIERE_FORMA1,
@@ -32,9 +33,11 @@ from retro_roster_patcher.games.we2002.rom_writer import (
     _SQUADRE_NAZ,
     RomWriter,
     _build_flag_data,
+    _edc_compute,
     _encode_player_carat,
     _link_chunks,
     _nat_carat_chunks,
+    _seal,
 )
 
 _FORMA_BASES = (
@@ -328,3 +331,54 @@ def test_a_written_squad_keeps_the_disc_bits_of_the_records_it_replaces(tmp_path
             f.seek(offset)
             record += f.read(size)
     assert record == _encode_player_carat(_players(1)[0], 1, b"\xff" * 12)
+
+
+def _sector(lba, submode=8):
+    """A Mode 2 sector of made-up data with no checksums."""
+    data = bytes((7 * i + lba) % 251 for i in range(2048))
+    head = b"\x00" + b"\xff" * 10 + b"\x00" + bytes((0, 2, lba, 2))
+    return head + bytes((0, 0, submode, 0)) * 2 + data + bytes(280)
+
+
+def _syndromes(symbols):
+    """The two Reed-Solomon syndromes of a codeword; both 0 for a valid one."""
+    plain = weighted = 0
+    for symbol in symbols:
+        plain ^= symbol
+        weighted = _GF2[weighted] ^ symbol
+    return plain, weighted
+
+
+def test_a_sealed_sector_checks_out_as_edc_and_as_every_parity_codeword():
+    sealed = _seal(_sector(5))
+    assert sealed[:2072] == _sector(5)[:2072]
+    assert int.from_bytes(sealed[2072:2076], "little") == _edc_compute(sealed[16:2072])
+    body = bytes(4) + sealed[16:]  # Mode 2 parity reads the header as zero
+    for column in range(86):
+        p = [body[column + 86 * k] for k in range(24)]
+        assert _syndromes(p + [body[2064 + column], body[2150 + column]]) == (0, 0)
+    for word in range(52):
+        start = (word >> 1) * 86 + (word & 1)
+        q = [body[(start + 88 * k) % 2236] for k in range(43)]
+        assert _syndromes(q + [body[2236 + word], body[2288 + word]]) == (0, 0)
+
+
+def test_a_form_2_sector_gets_its_edc_at_the_end_and_no_parity():
+    sector = _sector(6, submode=0x20)
+    sealed = _seal(sector)
+    assert sealed[:2348] == sector[:2348]
+    assert int.from_bytes(sealed[2348:], "little") == _edc_compute(sector[16:2348])
+
+
+def test_finalize_seals_the_sectors_the_patch_changed_and_no_other(tmp_path):
+    rom, out = tmp_path / "rom.bin", tmp_path / "out.bin"
+    rom.write_bytes(b"".join(_sector(lba) for lba in range(3)))
+    writer = RomWriter(str(rom), str(out))
+    with open(out, "r+b") as f:
+        f.seek(2352 + 100)
+        f.write(b"patched")
+    changed = out.read_bytes()[2352:4704]
+    writer.finalize()
+    written = out.read_bytes()
+    assert written[:2352] == _sector(0) and written[4704:] == _sector(2)
+    assert written[2352:4704] == _seal(changed) != changed
