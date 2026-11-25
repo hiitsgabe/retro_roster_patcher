@@ -338,6 +338,11 @@ def fetch_top_nations(
         if not roster.players:
             patcher.status(f"Skipped {team.name}: ESPN has no squad for it")
             continue
+        try:  # optional: a mapper rates a player without a line from his position
+            stats = api.get_player_stats(team.id, season)
+            roster.player_stats = {ps.player_id: ps for ps in stats}
+        except Exception:
+            patcher.status(f"No stats for {team.name}")
         try:
             lineup = api.get_lineup(
                 team.id, NATIONAL_LEAGUE, squad=roster.players, team=team, season=season

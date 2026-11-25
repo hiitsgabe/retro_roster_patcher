@@ -345,6 +345,11 @@ def fetch_top_clubs(
         if not roster.players:
             patcher.status(f"Skipped {team.name}: ESPN has no squad for it")
             continue
+        try:  # optional: a mapper rates a player without a line from his position
+            stats = api.get_player_stats(team.id, season, league_code=slug)
+            roster.player_stats = {ps.player_id: ps for ps in stats}
+        except Exception:
+            patcher.status(f"No stats for {team.name}")
         lineup = None
         league_id = league_id_of(slug)
         if league_id is not None:
