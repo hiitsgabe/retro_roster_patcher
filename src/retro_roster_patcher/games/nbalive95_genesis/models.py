@@ -40,7 +40,7 @@ JERSEY_DISPLAY_BYTES = bytes([0x42, 0x40, 0x4E, 0x71])
 
 # Field offsets within the 93-byte player record
 OFF_JERSEY = 0x00  # 1 byte
-OFF_POSITION = 0x01  # 1 byte (0=C, 1=PF, 2=SF, 3=PG, 4=SG)
+OFF_POSITION = 0x01  # 1 byte (0=C, 1=PF, 2=SF, 3=SG, 4=PG)
 OFF_HEIGHT = 0x02  # 1 byte (inches: the roster screen shows 84 as 7'0")
 OFF_WEIGHT = 0x03  # 1 byte (value + 100 = lbs)
 OFF_EXPERIENCE = 0x04  # 1 byte (years)
@@ -48,13 +48,33 @@ OFF_UNIVERSITY = 0x05  # 1 byte (index)
 OFF_SKIN = 0x06  # 1 byte (0x00-0x03)
 OFF_HAIR = 0x07  # 1 byte (0x00-0x26)
 OFF_STATS = 0x08  # 34 bytes (17 x 2-byte BE stats)
-# Play reads 0x3F-0x42 and 0x44 (the 68000 code) and never stamina, speed,
-# quickness, jumping, dribbling, strength, 0x3B-0x3E or 0x43 (mednafen read
-# breakpoints on one starter from power-on through a quarter); only the ratings
-# screen draws 0x36-0x3A. The writer derives 0x3F-0x44 as the cartridge does
-# (all 348 of its records fit) and leaves 0x3B-0x3E, which fit no rating.
+# The bytes around the ratings. Which code reads which was traced in MAME with a
+# read tap on every record the 34 team tables point at: an exhibition game the
+# CPU played into the second half and another under random input (Simulation
+# style, 3-minute quarters, with fatigue, fouls and substitutions), part of a
+# Playoffs game, twenty simulated Season games, and the Trades, Standings,
+# Leaders, Season Stats, Player Stats, Substitution and Strategy screens.
+#
+# Play reads 0x3F-0x42 and 0x44 and, of the ratings, 0x2B-0x33; never stamina,
+# either awareness, speed, quickness, jumping, dribbling or strength, which only
+# the ratings screens draw, nor 0x43. The writer derives 0x3F-0x44 as the
+# cartridge does (all 348 of its records fit).
+#
+# Unidentified. No code reads these three in any of that, and no instruction on
+# the cartridge addresses a record at 0x3B or 0x3D. The writer leaves each as
+# the record has it (the 1994 player's), which nothing shows or plays:
+#   0x3B  54-93 on the cartridge, most of them 75-86; within 2 of quickness for
+#         four players in five, as far off as Bogues (-15) and Manning (+11).
+#   0x3C  0 in every record.
+#   0x3D  55-98 in the 5-point steps of a hand-entered rating; nearest strength
+#         (r 0.78) and defensive rebounding (0.77): K. Malone 98, Rodman, Oakley
+#         and Ewing 97, Kerr and Ferry 60.
+# 0x3E from 12 up is unidentified as well: 60-98 on the cartridge, its stamina
+# for 226 of the 334 players who have one; the code only ever compares the byte
+# with 12 (`STAND_IN_ROWS`). The writer puts the stamina there.
 OFF_STAMINA = 0x2A  # 1 byte; the source of `OFF_FATIGUE`
 OFF_RATINGS = 0x2B  # 16 bytes (16 x 1 byte ratings)
+OFF_STAND_IN = 0x3E  # under 12: the stand-in whose season line the simulation plays
 OFF_RANGE = 0x3F  # 76 + 9.5 x a 0-15 level: past it a shot takes the 3-point rating
 OFF_FATIGUE = 0x40  # from stamina (`STAMINA_FATIGUE`); x 24 / quarter length = tiring rate
 OFF_OFF_REACTION = 0x41  # (100 - offensive awareness) // 2, frames added to a reaction
@@ -68,8 +88,11 @@ NAME_LENGTH = 24
 POSITION_C = 0
 POSITION_PF = 1
 POSITION_SF = 2
-POSITION_PG = 3
-POSITION_SG = 4
+# The cartridge's own label table (0x376C4) reads C, PF, SF, SG, PG, and its
+# guards bear it out: Starks, Maxwell and Hornacek are 3, Stockton, Blaylock
+# and Kenny Smith 4. Team-95's notes have the two swapped.
+POSITION_SG = 3
+POSITION_PG = 4
 
 POSITION_TO_BYTE = {
     "C": POSITION_C,
@@ -79,6 +102,19 @@ POSITION_TO_BYTE = {
     "SG": POSITION_SG,
 }
 BYTE_TO_POSITION = {v: k for k, v in POSITION_TO_BYTE.items()}
+
+#: Byte 0x3E under this is a row of the stand-in table, the twelve records the
+#: team table's entry 33 (0x1F823A) points at: "Hardaway, Tim, Fake", an empty
+#: "Select Player", then a "Pointer" (a starter's 1993-94 line) and a "Roster"
+#: (a reserve's) for each position. Season mode simulates a player whose byte
+#: is a row with that record's season line (0x34F1C, 0x35220, 0x39C08, 0x3A614,
+#: 0x3BE96): the cartridge's fourteen players without 1993-94 games (Eddie
+#: Jones, Wesley Person, the injured Tim Hardaway ...) all carry one.
+STAND_IN_ROWS = 12
+#: Each position's "Pointer" row; its "Roster" row is the next.
+STAND_IN = {POSITION_C: 6, POSITION_PF: 2, POSITION_SF: 4, POSITION_SG: 10, POSITION_PG: 8}
+#: The slots that take the "Pointer" row.
+STAND_IN_STARTERS = 5
 
 # Rating indices within the 16-byte ratings block
 RATING_NAMES = [
@@ -292,7 +328,7 @@ class NBALive95PlayerRecord:
     name_last: str = "PLAYER"
     name_first: str = "A"  # full first name or initial
     jersey: int = 0
-    position: int = POSITION_SF  # 0=C, 1=PF, 2=SF, 3=PG, 4=SG
+    position: int = POSITION_SF  # 0=C, 1=PF, 2=SF, 3=SG, 4=PG
     height_inches: int = 78  # 78 = 6'6"
     weight_lbs: int = 220
     experience: int = 0  # years in the NBA

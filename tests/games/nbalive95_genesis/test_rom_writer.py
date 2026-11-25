@@ -665,11 +665,48 @@ def test_the_university_byte_is_left_alone(rom, out):
     assert decoded["university"] == fixture.player_university(4, 2)
 
 
-def test_the_four_bytes_the_game_never_reads_are_left_alone(rom, out):
+def test_the_three_unidentified_bytes_are_left_alone(rom, out):
+    """0x3B-0x3D: no code reads them, so the record keeps what it had."""
     writer = _loaded(rom, out)
     writer.write_player(4, 2, _record())
     decoded = fixture.decode_player_record(writer.data, fixture.player_offset(4, 2))
-    assert decoded["after_ratings"][:4] == fixture.player_after_ratings(4, 2)[:4]
+    assert decoded["after_ratings"][:3] == fixture.player_after_ratings(4, 2)[:3]
+
+
+def _stand_in(writer, slot, **fields):
+    writer.write_player(4, slot, _record(**fields))
+    return fixture.decode_player_record(writer.data, fixture.player_offset(4, slot))[
+        "after_ratings"
+    ][3]
+
+
+def test_a_player_with_games_is_simulated_with_his_own_line(rom, out):
+    """Byte 0x3E of 12 or more: the season simulation reads his own totals. The
+    cartridge's value is its stamina for two players in three, so stamina it is."""
+    played = [70] + [0] * 16
+    writer = _loaded(rom, out)
+    assert _stand_in(writer, 2, season_stats=played, stamina=83) == 83
+    assert _stand_in(writer, 2, season_stats=played, stamina=5) == 12
+
+
+def test_a_player_without_games_takes_his_positions_stand_in(rom, out):
+    """The simulation divides by games played and the zero-divide vector halts, so
+    he is pointed at the cartridge's "Pointer" line for his position (C 6, PF 2,
+    SF 4, SG 10, PG 8), as its own players without 1993-94 games are."""
+    writer = _loaded(rom, out)
+    found = [_stand_in(writer, 2, position=position) for position in range(5)]
+    assert found == [6, 2, 4, 10, 8]
+
+
+def test_a_reserve_without_games_takes_the_roster_line_after_it(rom, out):
+    writer = _loaded(rom, out)
+    assert [_stand_in(writer, slot, position=0) for slot in (4, 5, 11)] == [6, 7, 7]
+
+
+def test_games_whose_low_byte_is_zero_count_as_none(rom, out):
+    """The simulation reads the low byte alone (`move.b $9(a4)`)."""
+    writer = _loaded(rom, out)
+    assert _stand_in(writer, 2, position=1, season_stats=[256] + [9] * 16) == 2
 
 
 def test_writing_one_record_leaves_the_next_records_first_byte_alone(rom, out):

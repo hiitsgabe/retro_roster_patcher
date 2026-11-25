@@ -297,7 +297,18 @@ def test_the_position_byte_is_rendered_as_this_games_own_name(rom):
     data = bytearray(rom.read_bytes())
     data[fixture.player_offset(2, 1) + fixture.OFF_POSITION] = 3
     rom.write_bytes(bytes(data))
-    assert _loaded(rom).read_player(2, 1)["position"] == "PG"
+    assert _loaded(rom).read_player(2, 1)["position"] == "SG"
+
+
+def test_the_five_position_bytes_read_as_the_cartridges_label_table_orders_them(rom):
+    """C, PF, SF, SG, PG at 0x376C4: Starks and Maxwell are 3, Stockton and Blaylock 4."""
+    data = bytearray(rom.read_bytes())
+    found = []
+    for byte in range(5):
+        data[fixture.player_offset(2, 1) + fixture.OFF_POSITION] = byte
+        rom.write_bytes(bytes(data))
+        found.append(_loaded(rom).read_player(2, 1)["position"])
+    assert found == ["C", "PF", "SF", "SG", "PG"]
 
 
 def test_a_position_byte_this_game_does_not_define_is_rendered_with_a_question_mark(rom):

@@ -584,8 +584,19 @@ The game plays bytes derived from the ratings rather than the ratings, and the w
 derives them as the cartridge does: the fatigue rate from stamina (byte 0x40), a reaction
 delay from each awareness (0x41, 0x42), a step from speed and quickness (0x43, 0x44), and the
 shooting range past which a shot takes the three-point rating (0x3F). Speed, jumping,
-dribbling and strength are shown on the ratings screen but read by nothing in play. Bytes
-0x3B-0x3E are read by nothing either and are left as they are.
+dribbling and strength are shown on the ratings screens but read by nothing in play.
+
+Season mode simulates a game from each player's season line, and byte 0x3E says whose:
+under 12 it is a row of the cartridge's twelve stand-in records (a starter's and a
+reserve's 1993-94 line for each position, which its own rookies and injured players
+point at). A player with games is simulated from his own line; one without takes his
+position's stand-in, because the simulation divides by games played and the cartridge
+halts on a division by zero.
+
+Not identified: bytes 0x3B, 0x3C and 0x3D of the player record, and what 0x3E holds from
+12 up. No code reads them in play, in the simulation or on any screen, so 0x3B-0x3D stay
+as the record has them and 0x3E takes the stamina (`models.py` lists what each holds on
+the cartridge).
 
 Height is ESPN's in inches, a position default (6'2" at point guard through 6'11" at centre)
 only when it sends none; weight is ESPN's, and experience is ESPN's years in the league.

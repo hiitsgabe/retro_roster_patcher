@@ -27,6 +27,7 @@ from .models import (
     OFF_SKIN,
     OFF_SPEED_STEP,
     OFF_STAMINA,
+    OFF_STAND_IN,
     OFF_STATS,
     OFF_WEIGHT,
     PLAYERS_PER_TEAM,
@@ -38,7 +39,11 @@ from .models import (
     RATING_QUICKNESS,
     RATING_SPEED,
     STAMINA_FATIGUE,
+    STAND_IN,
+    STAND_IN_ROWS,
+    STAND_IN_STARTERS,
     STAT_COUNT,
+    STAT_GAMES,
     TEAM_COUNT,
     TEAM_POINTER_SIZE,
     TEAM_ROSTER_ADDRESSES,
@@ -227,6 +232,15 @@ class NBALive95RomWriter:
         d[off + OFF_DEF_REACTION] = (100 - rated[RATING_DEF_AWARENESS]) // 2
         d[off + OFF_SPEED_STEP] = max(0, min(15, (rated[RATING_SPEED] - 50) // 3))
         d[off + OFF_QUICK_STEP] = max(0, min(15, (rated[RATING_QUICKNESS] - 50) // 3))
+
+        # The season simulation divides by the low byte of games played, and the
+        # cartridge's zero-divide vector halts the console: a player without
+        # games takes a stand-in's line, as the cartridge's own do.
+        if d[off + OFF_STATS + STAT_GAMES * 2 + 1]:
+            d[off + OFF_STAND_IN] = max(STAND_IN_ROWS, stamina)
+        else:
+            bench = player_slot >= STAND_IN_STARTERS
+            d[off + OFF_STAND_IN] = STAND_IN[d[off + OFF_POSITION]] + bench
 
         max_name = self._record_limits.get((team_index, player_slot), 24)
         name_bytes = _encode_name_variable(player.name_last, player.name_first, max_name)
