@@ -471,42 +471,45 @@ own arithmetic over a provider's season totals, and the three do it differently.
 attributes are measured; several are estimated from position and age, because no feed
 publishes them at all.
 
-### WE2002: ranked against the league, 1-9
+### WE2002: ranked against the league, on the disc's own spread
 
-Fifteen attributes per player. Ten are earned, five are always estimated.
+Sixteen abilities per player (the fifteen bars and reflexes), each stored 0-7 and shown 12-19.
+Each ranks one to three of the player's stats against his group (keepers, defenders,
+midfielders, forwards) in the *whole fetched league*, and takes the value at that rank of the
+disc's own 1,449 national players of the group: the league's best forward gets the offensive
+of the disc's best, its typical one the disc's typical. Counts are per game, pulled toward
+the group's rate by 10 games; shares (save %, goals per shot, accurate crosses) by their
+attempts.
 
-The ten are grouped into categories — offensive, defensive, body balance, stamina, pass
-accuracy, shoot power, shoot accuracy, technique, dribble, aggression — each a small formula
-over `PlayerStats` fields (`offensive` is goals + 0.7 x assists + 0.3 x shots on target, and
-so on). Every player in the *whole fetched league* is pooled, the formula is evaluated for
-each, and a player's percentile is the share of the pool scoring strictly below him. That
-percentile becomes the rating: 95th and up is a 9, then 85 → 8, 70 → 7, 50 → 6, 35 → 5,
-20 → 4, 10 → 3, 3 → 2, and the rest a 1. Position adjustments follow (a midfielder gains a
-point of passing, a goalkeeper is capped at 3 for shooting accuracy), then everything is
-clamped back into 1-9.
+| Ability | From |
+| --- | --- |
+| Offensive | goals + 0.7 x assists + 0.3 x shots on target |
+| Defensive | tackles, interceptions and blocks; tackles won per tackle. Keepers: goals conceded, clean sheets |
+| Body balance | fouls drawn, height (duels won when a provider has them) |
+| Stamina | minutes per game |
+| Speed | youth, attacking output |
+| Acceleration | youth, shortness |
+| Pass accuracy | pass %, long-ball % |
+| Shoot power | shots |
+| Shoot accuracy | goals per shot, shots on target per shot |
+| Jump | height, headed shots. Keepers: height, save % |
+| Heading | headed goals, headed shots |
+| Technique | pass %, passes (dribble % when a provider has it) |
+| Dribble | fouls drawn (dribbles when a provider has them) |
+| Curve | crosses, cross accuracy, free-kick goals |
+| Aggression | fouls + 2 x yellow + 5 x red |
+| Reflexes | interceptions, share of games started. Keepers: save % |
 
-So a 9 means top 5% *of the league you fetched*, not top 5% of the world. Patch the Premier
-League and the Chilean Primera División from the same tool and the two ROMs are not on a
-common scale.
+So a top value means top *of the league you fetched*. A stat the provider did not supply
+(`PlayerStats.unsupplied`: ESPN sends no duels or dribbles, FotMob only goals and assists) is
+left out rather than ranked as a zero, and an ability none of whose stats the player has is
+the group's median on the disc. No feed measures pace, so speed and acceleration lean on age.
 
-The five that are never measured — speed, acceleration, jump power, heading and curve — come
-from a position base nudged by age. A 24-year-old attacker is quick because attackers are
-quick and he is young, not because anyone timed him.
-
-**`unsupplied`, and why zero is not an answer.** Every count on `PlayerStats` is declared
-`int` or `float` and is never `None`, so a consumer can do arithmetic without a guard. That
-leaves a provider which does not measure duels nowhere to say so except by writing `0` — and
-a zero reads as a *measurement*, ranking the player below everyone who was measured and
-padding the denominator for everyone who was. `PlayerStats.unsupplied` names the fields
-carrying filler rather than data. A player whose provider did not measure a category's
-inputs is dropped from that category's ranking entirely, and his rating comes from a
-position-and-age estimator instead of a percentile he was never in. ESPN, the only soccer
-provider here, reports no duels and no dribbles, which is why body balance, technique and
-dribble have estimators and the other seven categories do not.
-
-A player with no stats at all, or with zero appearances, skips the percentiles and takes a
-position default adjusted for age: under 23 gains pace and stamina and loses technique; from
-31 it goes the other way.
+Preferred foot comes from shots taken with each foot (10 or more): the weaker foot taking 40%
+of them makes him two-footed. Byte 3 bit 7, set on every retail player, is kept set: the match
+engine allows a foot-side ball move only with it. The four bits the community editor leaves
+unnamed (the top bits of the game's 4-bit position, hair colour and beard fields, and one the
+game's own editor clears) are kept from the record each player replaces.
 
 ### NHL94 (Genesis and SNES): ranked onto the cartridge's own spread, 0-6
 

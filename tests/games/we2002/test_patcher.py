@@ -98,8 +98,8 @@ class FailingApi(FakeApi):
 def _stats(player_id, **overrides):
     """A `PlayerStats` with every counting field at zero.
 
-    `appearances` defaults to 1: `map_player` short-circuits to position defaults
-    when a player has none.
+    `appearances` defaults to 1: a player with none ranks on no stat, and takes his group's
+    medians on the disc.
     """
     fields = dict(
         player_id=player_id,
@@ -684,14 +684,10 @@ def test_every_espn_record_says_which_stats_were_not_measured(tmp_path):
     assert stats[15].passes_accuracy == 80.0
 
 
-def test_a_squad_fetched_from_espn_is_uniformly_clumsy_after_mapping(tmp_path):
-    """Pins upstream fidelity deliberately; the behaviour is known to be wrong.
-
-    All five records carry a filler zero for duels and dribbles, so the three
-    attributes derived from them percentile to the floor for the whole league.
-    `games/we2002/stat_mapper.py` argues why the fix was reverted. Do not
-    restore it here.
-    """
+def test_a_squad_fetched_from_espn_ranks_each_player_against_his_group(tmp_path):
+    # ESPN measures neither duels nor dribbles, which once floored body balance, technique and
+    # dribble for the whole league. Now each ability ranks what ESPN does send within the
+    # player's group: Szoboszlai (6 goals in 20) out-attacks Gravenberch (1 in 24).
     p = _espn_patcher(tmp_path)
     data = p.fetch(season=2025, league_id=2001)
 
@@ -700,36 +696,10 @@ def test_a_squad_fetched_from_espn_is_uniformly_clumsy_after_mapping(tmp_path):
 
     # Eight characters is the ROM's whole budget for a surname, hence the cuts.
     assert sorted(by_name) == ["A. Becke", "D. Szobo", "M. Salah", "R. Grave", "V. Dijk"]
-    # Goalkeeper 32, defender 28, midfielders 22 and 31, forward 26 -- five
-    # positions and five ages, and one rating between them.
-    assert {a.body_balance for a in by_name.values()} == {1}
-    assert {a.dribble for a in by_name.values()} == {1}
-    # `technique` is 1 for everyone but the two midfielders, whom
-    # `_apply_position_adjustments` gives a +1 after the floored percentile.
-    assert by_name["R. Grave"].technique == 2
-    assert by_name["A. Becke"].technique == 1
-    # And the attribute that was never affected still tracks the goals scored: 27
-    # against 0, 1, 3 and 6, so four of five below him -- the 80th percentile,
-    # rating 7, and the +1 `_apply_position_adjustments` gives a forward.
-    assert by_name["M. Salah"].offensive == 8
-    assert by_name["A. Becke"].offensive == 1
-
-
-def test_the_three_collapsed_attributes_take_one_value_across_the_squad(tmp_path):
-    """Pins upstream fidelity deliberately; the behaviour is known to be wrong.
-
-    `offensive` takes five values across the same five players, so this is a
-    collapse of three specific attributes and not of the mapper.
-    """
-    p = _espn_patcher(tmp_path)
-    data = p.fetch(season=2025, league_id=2001)
-    mapped = p.map_rosters(data, [SlotMapping(slot_index=0, team_id=364, team_name="Liverpool")])
-    attrs = [rec.attributes for rec in mapped.teams[0].players]
-
-    assert len({a.body_balance for a in attrs}) == 1
-    assert len({a.dribble for a in attrs}) == 1
-    assert len({a.technique for a in attrs}) == 2
-    assert len({a.offensive for a in attrs}) == 5
+    assert 1 not in {a.body_balance for a in by_name.values()}
+    assert 1 not in {a.dribble for a in by_name.values()}
+    assert by_name["D. Szobo"].offensive >= by_name["R. Grave"].offensive
+    assert by_name["A. Becke"].reflexes > by_name["V. Dijk"].reflexes
 
 
 def test_default_slot_mapping_is_sequential_and_serialisable(patcher):
@@ -914,9 +884,9 @@ def test_a_bad_away_colour_does_not_suppress_a_good_home_colour(patcher):
 
 
 def test_players_are_rated_against_the_whole_league_not_their_own_team(patcher):
-    # One scorer in a twelve-player league sits above eleven of twelve samples: a
-    # percentile of 91.7, which the 1-9 table rates 8. Rated against his own team
-    # he is the only sample, lands at percentile 0, and rates 1.
+    # One scorer among twelve midfielders ranks 23/24 of the way up: the disc's midfielders
+    # hold offensive 17 (stored 5) that high, shown 6. Rated against his own team he is the
+    # only sample, ranks in the middle, and takes the disc's median midfielder's 16 (5).
     star = Player(id=1, name="Star", position="Midfielder")
     rest = [Player(id=i, name=f"P{i}", position="Midfielder") for i in range(2, 13)]
     scorers = _roster(100, players=[star], player_stats={1: _stats(1, goals=10)})
@@ -925,9 +895,9 @@ def test_players_are_rated_against_the_whole_league_not_their_own_team(patcher):
 
     mapped = patcher.map_rosters(data, slot_mapping=[SlotMapping(slot_index=0, team_id=100)])
 
-    assert mapped.teams[0].players[0].attributes.offensive == 8
+    assert mapped.teams[0].players[0].attributes.offensive == 6
     own_team_only = patcher.mapper.map_team_with_league_context(scorers, [scorers])
-    assert own_team_only.players[0].attributes.offensive == 1
+    assert own_team_only.players[0].attributes.offensive == 5
 
 
 def test_analyzing_a_missing_rom_raises_rom_error(patcher, tmp_path):

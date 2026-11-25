@@ -293,8 +293,8 @@ class WE2002Patcher(Patcher):
                 # the first fetch of a team freezes its squad on disk forever.
                 roster.players = self.api.get_squad(team.id, season)
                 try:
-                    # Stats are optional: `map_player` falls back to position and
-                    # age, so this failure costs ratings and not the team.
+                    # Stats are optional: `map_player` falls back to the disc's position
+                    # medians, so this failure costs ratings and not the team.
                     stats = self.api.get_player_stats(team.id, season)
                     roster.player_stats = {ps.player_id: ps for ps in stats}
                 except Exception:

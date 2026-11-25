@@ -1,6 +1,8 @@
-"""Maps real-world player stats to WE2002's 1-9 attribute scale."""
+"""Maps real-world player stats onto WE2002's abilities, on the disc's own spread of each."""
 
-from collections import Counter
+from bisect import bisect_left, bisect_right
+from collections import Counter, defaultdict
+from collections.abc import Callable
 from itertools import zip_longest
 
 from ...sports.espn import LINEUP_GROUPS
@@ -135,94 +137,293 @@ def _side(y: int) -> float:
     return (y - _MIDDLE) / _HALF_WIDTH
 
 
-class StatMapper:
-    PERCENTILE_TABLE = [
-        (95, 9),
-        (85, 8),
-        (70, 7),
-        (50, 6),
-        (35, 5),
-        (20, 4),
-        (10, 3),
-        (3, 2),
-        (0, 1),
-    ]
+#: How many of the disc's 1,449 national players of each group store each value 0-7 (shown 12-19)
+#: of each ability: its 179 keepers (position code 0), 447 defenders (1-2), 506 midfielders (3-5)
+#: and 317 forwards (6-7). A player's ability is the value at his rank in his group of the league
+#: fetched, so a patched squad keeps the disc's spread; with nothing to rank, the group's median.
+DISC_SPREAD: dict[str, dict[str, tuple[int, ...]]] = {
+    "Goalkeeper": {
+        "offensive": (73, 97, 6, 2, 1, 0, 0, 0),
+        "defensive": (0, 0, 0, 0, 59, 92, 15, 13),
+        "body_balance": (0, 0, 0, 0, 13, 99, 60, 7),
+        "stamina": (0, 114, 46, 6, 13, 0, 0, 0),
+        "speed": (0, 0, 18, 137, 21, 3, 0, 0),
+        "acceleration": (0, 17, 68, 48, 36, 5, 5, 0),
+        "pass_accuracy": (2, 95, 59, 13, 9, 1, 0, 0),
+        "shoot_power": (0, 3, 8, 38, 106, 22, 2, 0),
+        "shoot_accuracy": (6, 135, 19, 14, 5, 0, 0, 0),
+        "jump_power": (0, 0, 0, 17, 62, 93, 6, 1),
+        "heading": (0, 167, 2, 3, 3, 4, 0, 0),
+        "technique": (1, 117, 38, 14, 9, 0, 0, 0),
+        "dribble": (0, 150, 18, 7, 3, 1, 0, 0),
+        "curve": (168, 1, 3, 0, 4, 3, 0, 0),
+        "aggression": (0, 13, 46, 20, 57, 38, 5, 0),
+        "reflexes": (0, 0, 0, 0, 8, 34, 88, 49),
+    },
+    "Defender": {
+        "offensive": (6, 58, 127, 135, 111, 9, 1, 0),
+        "defensive": (1, 0, 12, 68, 197, 132, 32, 5),
+        "body_balance": (0, 0, 0, 13, 157, 224, 48, 5),
+        "stamina": (0, 0, 1, 31, 267, 124, 22, 2),
+        "speed": (0, 0, 1, 131, 239, 70, 4, 2),
+        "acceleration": (0, 3, 162, 117, 139, 16, 10, 0),
+        "pass_accuracy": (0, 1, 56, 226, 132, 30, 1, 1),
+        "shoot_power": (0, 2, 2, 88, 248, 96, 9, 2),
+        "shoot_accuracy": (0, 1, 126, 240, 69, 10, 0, 1),
+        "jump_power": (0, 0, 7, 110, 147, 155, 23, 5),
+        "heading": (0, 107, 31, 137, 78, 83, 9, 2),
+        "technique": (0, 0, 16, 195, 196, 39, 1, 0),
+        "dribble": (0, 1, 29, 181, 163, 69, 4, 0),
+        "curve": (281, 91, 43, 16, 11, 1, 1, 3),
+        "aggression": (0, 14, 141, 79, 112, 95, 6, 0),
+        "reflexes": (0, 0, 69, 190, 132, 41, 15, 0),
+    },
+    "Midfielder": {
+        "offensive": (0, 0, 7, 113, 279, 88, 18, 1),
+        "defensive": (3, 50, 149, 158, 126, 20, 0, 0),
+        "body_balance": (0, 0, 2, 28, 257, 201, 18, 0),
+        "stamina": (0, 0, 0, 19, 244, 168, 71, 4),
+        "speed": (0, 0, 0, 85, 309, 106, 6, 0),
+        "acceleration": (0, 0, 131, 143, 180, 33, 19, 0),
+        "pass_accuracy": (0, 0, 3, 84, 190, 173, 45, 11),
+        "shoot_power": (0, 1, 0, 42, 215, 210, 36, 2),
+        "shoot_accuracy": (0, 0, 7, 158, 246, 82, 12, 1),
+        "jump_power": (0, 0, 14, 201, 170, 116, 3, 2),
+        "heading": (0, 168, 56, 170, 65, 42, 2, 3),
+        "technique": (0, 0, 0, 47, 204, 199, 47, 9),
+        "dribble": (0, 0, 0, 59, 187, 212, 43, 5),
+        "curve": (80, 97, 141, 81, 61, 32, 8, 6),
+        "aggression": (0, 0, 47, 46, 217, 178, 17, 1),
+        "reflexes": (0, 0, 68, 208, 172, 46, 7, 5),
+    },
+    "Attacker": {
+        "offensive": (0, 0, 0, 0, 49, 204, 51, 13),
+        "defensive": (97, 180, 28, 9, 3, 0, 0, 0),
+        "body_balance": (0, 0, 0, 12, 155, 123, 24, 3),
+        "stamina": (0, 0, 0, 17, 196, 92, 12, 0),
+        "speed": (0, 0, 0, 11, 165, 117, 19, 5),
+        "acceleration": (0, 0, 23, 39, 152, 45, 52, 6),
+        "pass_accuracy": (0, 0, 1, 78, 162, 61, 13, 2),
+        "shoot_power": (0, 0, 0, 7, 114, 159, 33, 4),
+        "shoot_accuracy": (0, 0, 0, 2, 83, 186, 36, 10),
+        "jump_power": (0, 0, 0, 59, 115, 117, 21, 5),
+        "heading": (0, 26, 12, 86, 75, 79, 27, 12),
+        "technique": (0, 0, 0, 16, 129, 139, 24, 9),
+        "dribble": (0, 0, 0, 23, 149, 101, 38, 6),
+        "curve": (86, 82, 72, 31, 23, 14, 7, 2),
+        "aggression": (0, 0, 0, 2, 63, 206, 42, 4),
+        "reflexes": (0, 0, 4, 52, 149, 67, 36, 9),
+    },
+}
 
-    FALLBACK_ATTRS = {
-        "Goalkeeper": dict(
-            offensive=2,
-            defensive=7,
-            body_balance=6,
-            stamina=6,
-            speed=4,
-            acceleration=4,
-            pass_accuracy=5,
-            shoot_power=3,
-            shoot_accuracy=2,
-            jump_power=7,
-            heading=5,
-            technique=4,
-            dribble=3,
-            curve=3,
-            aggression=4,
-        ),
-        "Defender": dict(
-            offensive=3,
-            defensive=7,
-            body_balance=6,
-            stamina=6,
-            speed=5,
-            acceleration=5,
-            pass_accuracy=5,
-            shoot_power=4,
-            shoot_accuracy=3,
-            jump_power=6,
-            heading=6,
-            technique=4,
-            dribble=3,
-            curve=3,
-            aggression=6,
-        ),
-        "Midfielder": dict(
-            offensive=5,
-            defensive=5,
-            body_balance=5,
-            stamina=7,
-            speed=5,
-            acceleration=5,
-            pass_accuracy=7,
-            shoot_power=5,
-            shoot_accuracy=5,
-            jump_power=5,
-            heading=5,
-            technique=6,
-            dribble=6,
-            curve=5,
-            aggression=5,
-        ),
-        "Attacker": dict(
-            offensive=7,
-            defensive=3,
-            body_balance=5,
-            stamina=5,
-            speed=6,
-            acceleration=6,
-            pass_accuracy=5,
-            shoot_power=7,
-            shoot_accuracy=7,
-            jump_power=5,
-            heading=5,
-            technique=6,
-            dribble=6,
-            curve=5,
-            aggression=5,
-        ),
+#: The stats each ability ranks: with several, the average of the player's ranks over those he
+#: has. No provider measures pace, and ESPN neither duels nor dribbles: speed ranks youth with
+#: attacking output, acceleration youth with shortness, body balance fouls drawn with height, and
+#: dribble fouls drawn (with dribbles and duels when a provider has them). Outfield reflexes rank
+#: interceptions and the share of games started.
+SOURCES: dict[str, tuple[str, ...]] = {
+    "offensive": ("attack",),
+    "defensive": ("defending", "tackle_pct"),
+    "body_balance": ("duels", "fouls_drawn", "height"),
+    "stamina": ("minutes",),
+    "speed": ("youth", "attack"),
+    "acceleration": ("youth", "shortness"),
+    "pass_accuracy": ("pass_pct", "long_ball_pct"),
+    "shoot_power": ("shots",),
+    "shoot_accuracy": ("finishing", "on_target"),
+    "jump_power": ("height", "headers"),
+    "heading": ("headed_goals", "headers"),
+    "technique": ("pass_pct", "dribble_pct", "passes"),
+    "dribble": ("dribbles", "fouls_drawn"),
+    "curve": ("crosses", "cross_pct", "free_kick_goals"),
+    "aggression": ("fouls",),
+    "reflexes": ("interceptions", "starts"),
+}
+#: A keeper's defence ranks goals conceded and clean sheets, his reflexes and jump save %.
+KEEPER_SOURCES = SOURCES | {
+    "defensive": ("conceded", "clean_sheets"),
+    "jump_power": ("height", "save_pct"),
+    "reflexes": ("save_pct",),
+}
+
+#: How far a stat is pulled toward his group's rate, in units of its denominator: a count per game
+#: by `GAMES` games, a share by that many attempts.
+GAMES = 10
+_Stat = tuple[Callable[[PlayerStats], tuple[float, float]], tuple[str, ...], float]
+
+
+def _per_game(name: str) -> _Stat:
+    return (lambda s: (getattr(s, name), s.appearances), (name, "appearances"), GAMES)
+
+
+def _share(made: str, tried: str, k: float = 20) -> _Stat:
+    return (lambda s: (getattr(s, made), getattr(s, tried)), (made, tried), k)
+
+
+#: Each stat of a season: (numerator, denominator), the `PlayerStats` fields it reads (one the
+#: provider did not supply leaves it out), and its pull toward the group's rate.
+STATS: dict[str, _Stat] = {
+    "attack": (
+        lambda s: (s.goals + 0.7 * s.assists + 0.3 * s.shots_on, s.appearances),
+        ("goals", "assists", "shots_on", "appearances"),
+        GAMES,
+    ),
+    "defending": (
+        lambda s: (s.tackles_total + s.interceptions + s.blocks, s.appearances),
+        ("tackles_total", "interceptions", "blocks", "appearances"),
+        GAMES,
+    ),
+    "tackle_pct": _share("tackles_won", "tackles_total", 10),
+    "fouls_drawn": _per_game("fouls_drawn"),
+    "duels": _share("duels_won", "duels_total"),
+    "minutes": (lambda s: (s.minutes, s.appearances), ("minutes", "appearances"), 0),
+    "pass_pct": (
+        lambda s: (s.passes_accuracy * s.passes_total / 100, s.passes_total),
+        ("passes_accuracy", "passes_total"),
+        100,
+    ),
+    "long_ball_pct": _share("long_balls_accurate", "long_balls_total"),
+    "passes": _per_game("passes_total"),
+    "shots": _per_game("shots_total"),
+    "finishing": _share("goals", "shots_total"),
+    "on_target": _share("shots_on", "shots_total"),
+    "headers": _per_game("shots_headed"),
+    "headed_goals": _per_game("headed_goals"),
+    "dribble_pct": _share("dribbles_success", "dribbles_attempts"),
+    "dribbles": _per_game("dribbles_success"),
+    "crosses": _per_game("crosses_total"),
+    "cross_pct": _share("crosses_accurate", "crosses_total"),
+    # Not free-kick shots: ESPN's freeKickShots is the free kicks he won, his fouls drawn.
+    "free_kick_goals": _per_game("free_kick_goals"),
+    "fouls": (
+        lambda s: (s.fouls_committed + 2 * s.cards_yellow + 5 * s.cards_red, s.appearances),
+        ("fouls_committed", "cards_yellow", "cards_red", "appearances"),
+        GAMES,
+    ),
+    "interceptions": _per_game("interceptions"),
+    "starts": _share("lineups", "appearances", GAMES),
+    # ESPN's shotsFaced is 0 for every keeper, so the shots on target are saves plus goals.
+    "save_pct": (
+        lambda s: (s.saves, s.saves + s.goals_conceded),
+        ("saves", "goals_conceded"),
+        30,
+    ),
+    "conceded": (
+        lambda s: (-s.goals_conceded, s.appearances),
+        ("goals_conceded", "appearances"),
+        GAMES,
+    ),
+    "clean_sheets": _per_game("clean_sheets"),
+}
+
+#: Preferred foot (0 right, 1 left, 2 both) needs this many shots with either foot; below it, or
+#: without the two counts, a player is right-footed like 81% of the disc's. Both feet when the
+#: weaker one took `BOTH_FEET` of them (2.6% of the disc's players are two-footed).
+FOOT_SHOTS = 10
+BOTH_FEET = 0.4
+
+
+def _group(player: Player) -> str:
+    return player.position if player.position in DISC_SPREAD else "Midfielder"
+
+
+def _raw(stats: PlayerStats | None) -> dict[str, tuple[float, float, float]]:
+    """(numerator, denominator, pull) of each stat the season has; none without a game."""
+    if not stats or stats.appearances <= 0:
+        return {}
+    return {
+        name: (*fn(stats), k)
+        for name, (fn, fields, k) in STATS.items()
+        if not set(fields) & set(stats.unsupplied)
     }
 
-    # Never gate on `PlayerStats.unsupplied` here: a provider's filler zero must
-    # rank like a measurement, even though that pins body_balance, technique and
-    # dribble to 1 for every player under ESPN. These are the bytes the game has
-    # been fed; do not "fix" them.
+
+def _rank(values: list[float], value: float) -> float:
+    """Where `value` ranks among sorted `values`, 0-1, ties at their middle."""
+    below = bisect_left(values, value)
+    return (below + (bisect_right(values, value) - below) / 2) / len(values)
+
+
+def on_spread(share: float, counts: tuple[int, ...]) -> int:
+    """The value at `share` (0-1) of the disc's spread `counts` (its players per value)."""
+    target, running = share * sum(counts), 0
+    for value, count in enumerate(counts):
+        running += count
+        if running > target:
+            return value
+    return max(value for value, count in enumerate(counts) if count)
+
+
+def preferred_foot(stats: PlayerStats | None) -> int:
+    """0 right, 1 left, 2 both, from the shots he took with each foot (`FOOT_SHOTS`)."""
+    if not stats or {"left_foot_shots", "right_foot_shots"} & set(stats.unsupplied):
+        return 0
+    left, right = stats.left_foot_shots, stats.right_foot_shots
+    if left + right < FOOT_SHOTS:
+        return 0
+    if min(left, right) >= BOTH_FEET * (left + right):
+        return 2
+    return 1 if left > right else 0
+
+
+class League:
+    """Every fetched player's stats, by group (`DISC_SPREAD`), to rank one player's against."""
+
+    def __init__(self, rosters: list[TeamRoster]):
+        pairs = [(p, r.player_stats.get(p.id)) for r in rosters for p in r.players]
+        totals: dict[tuple[str, str], list[float]] = defaultdict(lambda: [0.0, 0.0])
+        for player, stats in pairs:
+            for name, (num, den, _k) in _raw(stats).items():
+                totals[_group(player), name][0] += num
+                totals[_group(player), name][1] += den
+        self.rates = {key: num / den if den else 0.0 for key, (num, den) in totals.items()}
+        own = [(player, self.sources(player, stats)) for player, stats in pairs]
+        values: dict[tuple[str, str], list[float]] = defaultdict(list)
+        for player, mine in own:
+            for name, value in mine.items():
+                values[_group(player), name].append(value)
+        self.values = {key: sorted(v) for key, v in values.items()}
+        blends: dict[tuple[str, str], list[float]] = defaultdict(list)
+        for player, mine in own:
+            for ability in SOURCES:
+                if (blend := self._blend(player, ability, mine)) is not None:
+                    blends[_group(player), ability].append(blend)
+        self.blends = {key: sorted(v) for key, v in blends.items()}
+
+    def sources(self, player: Player, stats: PlayerStats | None) -> dict[str, float]:
+        """The player's value of each stat he has, higher the better: counts per game and
+        shares pulled toward his group's rate, and youth, height and shortness from his bio."""
+        out: dict[str, float] = {}
+        if player.age > 0:
+            out["youth"] = -player.age
+        if player.height > 0:
+            out["height"], out["shortness"] = player.height, -player.height
+        group = _group(player)
+        for name, (num, den, k) in _raw(stats).items():
+            rate = self.rates.get((group, name), 0.0)
+            out[name] = (num + rate * k) / (den + k) if den + k else rate
+        return out
+
+    def _blend(self, player: Player, ability: str, mine: dict[str, float]) -> float | None:
+        group = _group(player)
+        names = (KEEPER_SOURCES if group == "Goalkeeper" else SOURCES)[ability]
+        shares = [
+            _rank(self.values[group, name], mine[name])
+            for name in names
+            if name in mine and self.values.get((group, name))
+        ]
+        return sum(shares) / len(shares) if shares else None
+
+    def rating(self, player: Player, ability: str, mine: dict[str, float]) -> int:
+        """The disc's value (0-7) at the player's rank in his group for `ability`; the group's
+        median when he has none of its stats."""
+        blend = self._blend(player, ability, mine)
+        pool = self.blends.get((_group(player), ability))
+        share = 0.5 if blend is None else _rank(pool, blend) if pool else blend
+        return on_spread(share, DISC_SPREAD[_group(player)][ability])
+
+
+class StatMapper:
     POSITION_CODES = {
         "Goalkeeper": 0,
         "Defender": 1,
@@ -251,12 +452,7 @@ class StatMapper:
         index. Without a readable formation the order is the 4-4-2's and the record has no
         formation. A player with no role has the one his lineup code reads as.
         """
-        all_stats = {}
-        for roster in all_rosters:
-            for pid, ps in roster.player_stats.items():
-                all_stats[pid] = ps
-
-        percentiles = self._compute_percentiles(all_stats)
+        league = League(all_rosters)
 
         formation = team_formation(team_roster) or ""
         lineup = team_roster.extra.get("lineup")
@@ -284,7 +480,7 @@ class StatMapper:
         we_players = []
         for player in squad:
             stats = team_roster.player_stats.get(player.id)
-            attrs = self.map_player(player, stats, percentiles)
+            attrs = self.map_player(player, stats, league)
             rom_last, rom_first = self._format_player_name(player)
             we_players.append(
                 WEPlayerRecord(
@@ -299,6 +495,7 @@ class StatMapper:
                     height_cm=round(player.height * 2.54) if player.height > 0 else 0,
                     age=player.age or 0,
                     role=player.role or lineup_role(player.id, lineup),
+                    foot=preferred_foot(stats),
                 )
             )
 
@@ -316,189 +513,14 @@ class StatMapper:
         )
 
     def map_player(
-        self,
-        player: Player,
-        stats: PlayerStats | None,
-        percentiles: dict[str, dict[int, float]],
+        self, player: Player, stats: PlayerStats | None, league: League
     ) -> WEPlayerAttributes:
-        """Convert a real player's stats to WE2002 format.
-
-        Ten of the fifteen attributes are league percentiles; the other five have
-        no statistic behind them and are estimated from position and age.
-        """
-        if not stats or stats.appearances == 0:
-            return self._fallback_attributes(player)
-
-        attrs = WEPlayerAttributes(
-            offensive=self._rate(stats, percentiles, "offensive"),
-            defensive=self._rate(stats, percentiles, "defensive"),
-            body_balance=self._rate(stats, percentiles, "body_balance"),
-            stamina=self._rate(stats, percentiles, "stamina"),
-            speed=self._estimate_speed(player),
-            acceleration=self._estimate_speed(player),
-            pass_accuracy=self._rate(stats, percentiles, "pass_accuracy"),
-            shoot_power=self._rate(stats, percentiles, "shoot_power"),
-            shoot_accuracy=self._rate(stats, percentiles, "shoot_accuracy"),
-            jump_power=self._estimate_jump(player),
-            heading=self._estimate_heading(player),
-            technique=self._rate(stats, percentiles, "technique"),
-            dribble=self._rate(stats, percentiles, "dribble"),
-            curve=self._estimate_curve(player),
-            aggression=self._rate(stats, percentiles, "aggression"),
+        """His sixteen abilities, each ranked against his group in `league` (`SOURCES`) onto the
+        disc's spread of it (`DISC_SPREAD`), shown 1-8 (the stored 0-7 plus one)."""
+        mine = league.sources(player, stats)
+        return WEPlayerAttributes(
+            **{ability: league.rating(player, ability, mine) + 1 for ability in SOURCES}
         )
-        return self._apply_position_adjustments(attrs, player.position)
-
-    def _rate(
-        self,
-        stats: PlayerStats,
-        percentiles: dict[str, dict[int, float]],
-        category: str,
-    ) -> int:
-        """Rate one category from this player's league percentile.
-
-        The `50` default only applies when `_compute_percentiles` produced no
-        entry for this player, i.e. an empty league.
-        """
-        return self._percentile_to_rating(percentiles.get(category, {}).get(stats.player_id, 50))
-
-    def _compute_percentiles(
-        self, all_stats: dict[int, PlayerStats]
-    ) -> dict[str, dict[int, float]]:
-        """Compute league-wide percentiles for each stat category.
-
-        Every record is ranked in every category, filler zeros included: an
-        unmeasured player sorts below every measured one and still counts
-        towards `n`. Do not skip him — see the note above `POSITION_CODES`.
-        """
-        if not all_stats:
-            return {}
-
-        categories = {
-            "offensive": lambda s: (
-                s.goals + s.assists * 0.7 + (s.shots_on * 0.3 if s.shots_on else 0)
-            ),
-            "defensive": lambda s: s.tackles_total + s.interceptions + s.blocks,
-            "body_balance": lambda s: (s.duels_won / max(s.duels_total, 1)) * 100,
-            "stamina": lambda s: s.minutes / max(s.appearances, 1),
-            "pass_accuracy": lambda s: s.passes_accuracy,
-            "shoot_power": lambda s: s.shots_total + s.goals,
-            "shoot_accuracy": lambda s: (s.goals / max(s.shots_total, 1)) * 100,
-            "technique": lambda s: (s.dribbles_success / max(s.dribbles_attempts, 1)) * 100,
-            "dribble": lambda s: s.dribbles_success,
-            "aggression": lambda s: s.fouls_committed + s.cards_yellow * 2 + s.cards_red * 5,
-        }
-
-        percentiles: dict[str, dict[int, float]] = {}
-        for cat_name, extract_fn in categories.items():
-            raw_values = {}
-            for pid, stats in all_stats.items():
-                raw_values[pid] = extract_fn(stats)
-
-            sorted_values = sorted(raw_values.values())
-            n = len(sorted_values)
-            if n == 0:
-                percentiles[cat_name] = {}
-                continue
-
-            cat_percentiles = {}
-            for pid, value in raw_values.items():
-                below = sum(1 for v in sorted_values if v < value)
-                cat_percentiles[pid] = (below / n) * 100
-            percentiles[cat_name] = cat_percentiles
-
-        return percentiles
-
-    def _percentile_to_rating(self, percentile: float) -> int:
-        for threshold, rating in self.PERCENTILE_TABLE:
-            if percentile >= threshold:
-                return rating
-        return 1
-
-    def _apply_position_adjustments(
-        self, attrs: WEPlayerAttributes, position: str
-    ) -> WEPlayerAttributes:
-        if position == "Goalkeeper":
-            attrs.defensive = min(9, attrs.defensive + 2)
-            attrs.jump_power = min(9, attrs.jump_power + 2)
-            attrs.offensive = min(4, attrs.offensive)
-            attrs.shoot_accuracy = min(3, attrs.shoot_accuracy)
-        elif position == "Defender":
-            attrs.defensive = min(9, attrs.defensive + 1)
-            attrs.heading = min(9, attrs.heading + 1)
-        elif position == "Midfielder":
-            attrs.pass_accuracy = min(9, attrs.pass_accuracy + 1)
-            attrs.technique = min(9, attrs.technique + 1)
-            attrs.stamina = min(9, attrs.stamina + 1)
-        elif position == "Attacker":
-            attrs.offensive = min(9, attrs.offensive + 1)
-            attrs.shoot_accuracy = min(9, attrs.shoot_accuracy + 1)
-            attrs.shoot_power = min(9, attrs.shoot_power + 1)
-
-        for field_name in [
-            "offensive",
-            "defensive",
-            "body_balance",
-            "stamina",
-            "speed",
-            "acceleration",
-            "pass_accuracy",
-            "shoot_power",
-            "shoot_accuracy",
-            "jump_power",
-            "heading",
-            "technique",
-            "dribble",
-            "curve",
-            "aggression",
-        ]:
-            val = getattr(attrs, field_name)
-            setattr(attrs, field_name, max(1, min(9, val)))
-
-        return attrs
-
-    def _fallback_attributes(self, player: Player) -> WEPlayerAttributes:
-        """Position-and-age defaults for a player with no usable stats."""
-        defaults = self.FALLBACK_ATTRS.get(player.position, self.FALLBACK_ATTRS["Midfielder"])
-        attrs = WEPlayerAttributes(**defaults)
-
-        age = player.age
-        if age < 23:
-            attrs.speed = min(9, attrs.speed + 1)
-            attrs.acceleration = min(9, attrs.acceleration + 1)
-            attrs.stamina = min(9, attrs.stamina + 1)
-            attrs.technique = max(1, attrs.technique - 1)
-        elif 31 <= age <= 33:
-            attrs.speed = max(1, attrs.speed - 1)
-            attrs.acceleration = max(1, attrs.acceleration - 1)
-            attrs.stamina = max(1, attrs.stamina - 1)
-            attrs.technique = min(9, attrs.technique + 1)
-        elif age > 33:
-            attrs.speed = max(1, attrs.speed - 2)
-            attrs.stamina = max(1, attrs.stamina - 2)
-            attrs.technique = min(9, attrs.technique + 1)
-
-        return attrs
-
-    def _estimate_speed(self, player: Player) -> int:
-        base = {"Goalkeeper": 4, "Defender": 5, "Midfielder": 5, "Attacker": 6}
-        val = base.get(player.position, 5)
-        if player.age < 25:
-            val += 1
-        elif player.age > 32:
-            val -= 1
-        return max(1, min(9, val))
-
-    def _estimate_jump(self, player: Player) -> int:
-        base = {"Goalkeeper": 7, "Defender": 6, "Midfielder": 5, "Attacker": 5}
-        return base.get(player.position, 5)
-
-    def _estimate_heading(self, player: Player) -> int:
-        base = {"Goalkeeper": 5, "Defender": 6, "Midfielder": 5, "Attacker": 5}
-        return base.get(player.position, 5)
-
-    def _estimate_curve(self, player: Player) -> int:
-        base = {"Goalkeeper": 3, "Defender": 3, "Midfielder": 5, "Attacker": 5}
-        return base.get(player.position, 4)
 
     #: The ten outfield places of the first 11 slots, after the keeper's: a 4-4-2.
     XI_LINES = (("Defender", 4), ("Midfielder", 4), ("Attacker", 2))

@@ -21,6 +21,7 @@ import pytest
 
 from retro_roster_patcher.games.we2002.models import WELook, WEPlayerRecord, WETeamRecord
 from retro_roster_patcher.games.we2002.rom_writer import (
+    _DISC_BITS,
     _ML_COLOR_OFFSETS,
     _OFS_BANDIERE_COLORE1,
     _OFS_BANDIERE_FORMA1,
@@ -33,6 +34,7 @@ from retro_roster_patcher.games.we2002.rom_writer import (
     _build_flag_data,
     _encode_player_carat,
     _link_chunks,
+    _nat_carat_chunks,
 )
 
 _FORMA_BASES = (
@@ -291,3 +293,38 @@ def test_height_and_age_are_clamped_not_wrapped():
     short = _encode_player_carat(WEPlayerRecord("A", "B", 2, 1, height_cm=140, age=44))
     assert 148 + ((short[2] >> 4) | ((short[3] & 3) << 4)) == 155
     assert 15 + ((short[4] >> 5) | ((short[5] & 3) << 3)) == 40
+
+
+def test_reflexes_foot_and_the_set_bit_land_where_the_game_reads_them():
+    record = WEPlayerRecord("A", "B", 0, 1, foot=2)
+    record.attributes.reflexes, record.attributes.defensive = 8, 2
+    c = _encode_player_carat(record)
+    assert (c[5] >> 2) & 7 == 7 and c[8] & 7 == 1  # reflexes 19, no longer the defence's
+    assert c[11] >> 6 == 2  # both feet
+    assert c[3] >> 7 == 1  # set on every retail player
+
+
+def test_the_bits_the_patcher_does_not_write_are_kept_from_the_disc_record():
+    record = WEPlayerRecord("A", "B", 2, 9)
+    kept = _encode_player_carat(record, disc=b"\xff" * 12)
+    plain = _encode_player_carat(record)
+    assert bytes(k & m for k, m in zip(kept, _DISC_BITS, strict=True)) == _DISC_BITS
+    assert bytes(p & m for p, m in zip(plain, _DISC_BITS, strict=True)) == bytes(12)
+    assert bytes(k & ~m & 0xFF for k, m in zip(kept, _DISC_BITS, strict=True)) == plain
+
+
+def test_a_written_squad_keeps_the_disc_bits_of_the_records_it_replaces(tmp_path):
+    path = _synthetic_iso(tmp_path)
+    chunks = _nat_carat_chunks(5 * 23)
+    with open(path, "r+b") as f:
+        for offset, size in chunks:
+            f.seek(offset)
+            f.write(b"\xff" * size)
+    writer = RomWriter(str(path), str(path))
+    writer.write_nat_players(5, _players(1))
+    record = b""
+    with open(path, "rb") as f:
+        for offset, size in chunks:
+            f.seek(offset)
+            record += f.read(size)
+    assert record == _encode_player_carat(_players(1)[0], 1, b"\xff" * 12)

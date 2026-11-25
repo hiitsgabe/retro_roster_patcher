@@ -1145,11 +1145,25 @@ def _clamp(value: int, low: int, high: int) -> int:
     return min(high, max(low, value))
 
 
-def _encode_player_carat(player: WEPlayerRecord, number: int | None = None) -> bytes:
+#: The bits of a record the patcher does not write, kept from the record it replaces. The game
+#: reads three of them as the top bit of a 4-bit field the community editor gives 3: position
+#: (byte 0 bit 3), hair colour (byte 1 bit 4) and beard (byte 2 bit 0); byte 5 bit 5 is never
+#: read, and the game's own editor clears it. All four are 0 on every retail player.
+_DISC_BITS = bytes((0x08, 0x10, 0x01, 0, 0, 0x20, 0, 0, 0, 0, 0, 0))
+#: Byte 3 bit 7, the community editor's "out of role", is set on all 1,449 retail players. The
+#: match engine (GAME.BIN 0x14dc4, 0x187e4) lets a player make a foot-side ball move only with
+#: it set and the move on his preferred foot's side, so a cleared bit takes the move away.
+_OUT_OF_ROLE = 1
+
+
+def _encode_player_carat(
+    player: WEPlayerRecord, number: int | None = None, disc: bytes = bytes(_CARAT_SIZE)
+) -> bytes:
     """Encode WEPlayerRecord attributes into the 12-byte str_carat format.
 
     `number` is the shirt number his squad wears him in (`_squad_numbers`), the one both number
     tables get, so that his own record and the tables agree; without it, his own `shirt_number`.
+    `disc` is the record he replaces, whose `_DISC_BITS` he keeps.
 
     Bit layout (from giocatore::decodifica() in WE2002-editor-2.0):
       Byte  0: posizione[2:0], stile_capelli_low4[7:4]
@@ -1181,8 +1195,8 @@ def _encode_player_carat(player: WEPlayerRecord, number: int | None = None) -> b
     )
     eta = _clamp(player.age, AGE_RANGE[0], AGE_RANGE[1]) if player.age > 0 else 25
     scarpe = 0
-    piede = 0
-    fuori_ruolo = 0
+    piede = _clamp(player.foot, 0, 2)
+    fuori_ruolo = _OUT_OF_ROLE
     numero = _clamp(
         number if number is not None else player.shirt_number or 1, 1, _MAX_SHIRT_NUMBER
     )
@@ -1202,7 +1216,7 @@ def _encode_player_carat(player: WEPlayerRecord, number: int | None = None) -> b
     dribbling = _we_val(a.dribble)
     effetto = _we_val(a.curve)
     aggress = _we_val(a.aggression)
-    riflessi = _we_val(a.defensive)
+    riflessi = _we_val(a.reflexes)
 
     h = altezza - 148
     e = eta - 15
@@ -1230,7 +1244,7 @@ def _encode_player_carat(player: WEPlayerRecord, number: int | None = None) -> b
     )
     c[10] = ((testa >> 1) & 0x03) | ((salto & 0x07) << 2) | ((effetto & 0x07) << 5)
     c[11] = (aggress & 0x07) | ((scarpe & 0x07) << 3) | ((piede & 0x03) << 6)
-    return bytes(c)
+    return bytes(x | (d & keep) for x, d, keep in zip(c, disc, _DISC_BITS, strict=True))
 
 
 def _to_ascii(text: str) -> str:
@@ -2769,7 +2783,12 @@ class RomWriter:
             if i < len(players):
                 p = players[i]
                 name_bytes = _encode_player_name(p.last_name)
-                carat_bytes = _encode_player_carat(p, numbers[i])
+                chunks = _nat_carat_chunks(nat_player_idx)
+                disc = b""
+                for offset, size in chunks:
+                    f.seek(offset)
+                    disc += f.read(size)
+                carat_bytes = _encode_player_carat(p, numbers[i], disc.ljust(_CARAT_SIZE, b"\0"))
             else:
                 name_bytes = _DUMMY_NAME
                 carat_bytes = _DUMMY_CARAT

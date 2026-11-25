@@ -15,7 +15,7 @@ from ...sports.models import (  # noqa: F401
 
 @dataclass
 class WEPlayerAttributes:
-    """WE2002 player attributes on 1-9 scale."""
+    """WE2002 player abilities, 1-8: the stored 0-7 plus one (the game shows 12-19)."""
 
     offensive: int = 5
     defensive: int = 5
@@ -32,6 +32,7 @@ class WEPlayerAttributes:
     dribble: int = 5
     curve: int = 5
     aggression: int = 5
+    reflexes: int = 5
 
 
 @dataclass
@@ -68,6 +69,7 @@ class WEPlayerRecord:
     # His role (`sports.models.Player.role`: GK RB CB LB RWB LWB CDM CM CAM RM LM RW LW ST), ""
     # when he has none: it sets his position byte. `position` stays his squad group.
     role: str = ""
+    foot: int = 0  # 0 right, 1 left, 2 both
 
 
 @dataclass
