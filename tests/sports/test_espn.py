@@ -267,14 +267,20 @@ def test_a_basketball_squad_carries_height_and_experience(tmp_path):
 def test_a_baseball_squad_carries_height_weight_and_head_shot(tmp_path):
     body = json.loads(_grouped_roster("Cal Raleigh"))
     body["athletes"][0]["items"][0].update(
-        {"height": 74.0, "weight": 235.0, "headshot": {"href": "https://a.espncdn.com/c.png"}}
+        {
+            "height": 74.0,
+            "weight": 235.0,
+            "headshot": {"href": "https://a.espncdn.com/c.png"},
+            "dateOfBirth": "1996-11-26T07:00Z",
+        }
     )
     client = EspnClient(str(tmp_path), transport=_sequence_transport(json.dumps(body).encode()))
     (player,) = client.get_baseball_squad(12, 2026)
-    assert (player.height, player.weight, player.photo_url) == (
+    assert (player.height, player.weight, player.photo_url, player.birth_date) == (
         74.0,
         235.0,
         "https://a.espncdn.com/c.png",
+        "1996-11-26",
     )
 
 
@@ -486,6 +492,7 @@ NETWORK_CALLS = {
     "get_baseball_squad": ((1,), {}),
     "get_baseball_team_leaders": ((1,), {}),
     "get_baseball_athlete_stats": ((1, 2025), {}),
+    "get_baseball_splits": ((1, 2025), {}),
     # The game list is the first request; an empty one ends the lookup.
     "get_baseball_lineup": ((1, 2025), {}),
     "get_basketball_starters": ((1, 2025), {}),
@@ -1716,6 +1723,51 @@ def test_an_athletes_line_is_kept_by_category_with_the_first_repeat_winning(tmp_
     # Cached: a second ask makes no request.
     assert client.get_baseball_athlete_stats(30948, 2026) == line
     assert len(transport.calls) == 1
+
+
+def test_a_batters_season_line_carries_his_fielding_and_splits(tmp_path):
+    stats = json.dumps(
+        {
+            "splits": {
+                "categories": [
+                    {
+                        "name": "batting",
+                        "stats": [{"abbreviation": "GP", "name": "gamesPlayed", "value": 150}],
+                    },
+                    {
+                        "name": "fielding",
+                        "stats": [
+                            {"abbreviation": "PO", "name": "pickoffs", "value": 0},
+                            {"abbreviation": "PO", "name": "putouts", "value": 280},
+                        ],
+                    },
+                ]
+            }
+        }
+    ).encode()
+    splits = json.dumps(
+        {
+            "labels": ["AB", "H", "AVG"],
+            "splitCategories": [
+                {"splits": [{"displayName": "vs. Left", "stats": ["120", "40", ".333"]}]},
+                {
+                    "splits": [
+                        {"displayName": "As RF", "stats": ["400", "100", ".250"]},
+                        {"displayName": "Home", "stats": ["250", "70", ".280"]},
+                    ]
+                },
+            ],
+        }
+    ).encode()
+    transport = _url_transport({"/athletes/7/statistics": stats, "/athletes/7/splits": splits})
+    client = EspnClient(str(tmp_path), transport=transport)
+    line = client._season_line("baseball", Player(id=7, name="X", position="RF"), 2025)
+    assert line["GP"] == 150.0 and line["gamesPlayed"] == 150.0
+    assert line["fielding.putouts"] == 280.0 and line["fielding.pickoffs"] == 0.0
+    assert "fielding.PO" not in line
+    assert (line["vsL.AB"], line["vsL.H"], line["vsL.AVG"]) == (120.0, 40.0, 0.333)
+    assert line["pos.RF"] == 400.0
+    assert not any(key.startswith("Home") for key in line)
 
 
 def _game(*starters):

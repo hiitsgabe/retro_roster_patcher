@@ -227,6 +227,7 @@ HOCKEY_BASE_URL = "https://site.api.espn.com/apis/site/v2/sports/hockey"
 HOCKEY_CORE_URL = "https://sports.core.api.espn.com/v2/sports/hockey/leagues/nhl"
 BASEBALL_BASE_URL = "https://site.api.espn.com/apis/site/v2/sports/baseball"
 BASEBALL_CORE_URL = "https://sports.core.api.espn.com/v2/sports/baseball/leagues/mlb"
+BASEBALL_SPLITS_URL = "https://site.web.api.espn.com/apis/common/v3/sports/baseball/mlb/athletes"
 BASKETBALL_BASE_URL = "https://site.api.espn.com/apis/site/v2/sports/basketball"
 BASKETBALL_CORE_URL = "https://sports.core.api.espn.com/v2/sports/basketball/leagues/nba"
 
@@ -279,6 +280,30 @@ def _nationality(athlete: dict) -> str:
     born = athlete.get("birthPlace")
     country = born.get("country", "") if isinstance(born, dict) else ""
     return str(athlete.get("citizenship") or country or "")
+
+
+def _number(value: Any) -> Any:
+    """A split's figure as ESPN sends it, a string (".341"), as a number."""
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return value
+
+
+#: ESPN's split labels -> the prefix their figures take in a baseball season line.
+_SPLIT_PREFIXES = {"vs. Left": "vsL", "vs. Right": "vsR"}
+
+
+def _baseball_splits(splits: dict[str, dict[str, float]]) -> dict[str, float]:
+    """A batter's splits as season-line keys: `vsL.AVG`, `vsR.HR`, ..., and his
+    at-bats at each fielding position, `pos.2B`."""
+    out: dict[str, float] = {}
+    for label, figures in splits.items():
+        if label in _SPLIT_PREFIXES:
+            out |= {f"{_SPLIT_PREFIXES[label]}.{k}": v for k, v in figures.items()}
+        elif label.startswith("As ") and "AB" in figures:
+            out[f"pos.{label[3:]}"] = figures["AB"]
+    return out
 
 
 def _as_float(value: Any) -> float:
@@ -589,13 +614,14 @@ class EspnClient:
     def get_baseball_athlete_stats(self, athlete_id: int, season: int) -> dict[str, dict]:
         """One MLB player's regular-season line by category, `{"batting": {"AVG":
         0.284, "HR": 25.0, ...}, "pitching": {...}, "fielding": {...}}`, keyed by
-        ESPN's abbreviations (the first of a repeated one wins). `{}` when ESPN
-        has none.
+        ESPN's abbreviations (the first of a repeated one wins) and by each
+        stat's name, which does not repeat (fielding's `PO` is both `pickoffs`
+        and `putouts`). `{}` when ESPN has none.
 
         One request per player, so the line is cached; an empty answer is not,
         so a failed request is retried by the next fetch.
         """
-        cache_key = f"espn_baseball_stats_{athlete_id}_{season}"
+        cache_key = f"espn_baseball_stats_v2_{athlete_id}_{season}"
         cached = self._load_cache(cache_key)
         if cached:
             return cached
@@ -608,10 +634,38 @@ class EspnClient:
         for category in (data.get("splits") or {}).get("categories") or []:
             line = lines.setdefault(str(category.get("name", "")), {})
             for stat in category.get("stats") or []:
-                line.setdefault(str(stat.get("abbreviation", "")), _as_float(stat.get("value")))
+                value = _as_float(stat.get("value"))
+                line.setdefault(str(stat.get("abbreviation", "")), value)
+                if stat.get("name"):
+                    line.setdefault(str(stat["name"]), value)
         if lines:
             self._save_cache(cache_key, lines)
         return lines
+
+    def get_baseball_splits(self, athlete_id: int, season: int) -> dict[str, dict[str, float]]:
+        """One MLB batter's season split by split, `{"vs. Left": {"AB": 123.0,
+        "H": 42.0, ...}, "vs. Right": {...}, "As RF": {...}, ...}`, keyed by
+        ESPN's labels. `{}` when ESPN has none; cached like the season line.
+        """
+        cache_key = f"espn_baseball_splits_{athlete_id}_{season}"
+        cached = self._load_cache(cache_key)
+        if cached:
+            return cached
+        url = f"{BASEBALL_SPLITS_URL}/{athlete_id}/splits?season={season}"
+        try:
+            data = _http.get_json(url, transport=self._transport)
+        except Exception:
+            return {}
+        labels = [str(label) for label in data.get("labels") or []]
+        splits: dict[str, dict[str, float]] = {}
+        for category in data.get("splitCategories") or []:
+            for split in category.get("splits") or []:
+                values = [_as_float(_number(v)) for v in split.get("stats") or []]
+                figures = dict(zip(labels, values, strict=False))
+                splits.setdefault(str(split.get("displayName", "")), figures)
+        if splits:
+            self._save_cache(cache_key, splits)
+        return splits
 
     def get_baseball_lineup(
         self, team_id: int, season: int, today: date | None = None
@@ -840,6 +894,7 @@ class EspnClient:
                         position=pos_abbrev,
                         number=number,
                         photo_url=photo,
+                        birth_date=str(athlete.get("dateOfBirth") or "")[:10],
                         weight=float(weight),
                         height=float(height),
                         handedness=throw_hand,
@@ -981,7 +1036,14 @@ class EspnClient:
             if sport == "baseball":
                 cats = self.get_baseball_athlete_stats(player.id, year)
                 kind = "pitching" if player.position in ("P", "SP", "RP") else "batting"
-                return dict(cats.get(kind, {}))
+                out = dict(cats.get(kind, {}))
+                if not out:
+                    return out
+                fielding = cats.get("fielding", {})
+                out |= {f"fielding.{k}": v for k, v in fielding.items() if k[:1].islower()}
+                if kind == "batting":
+                    out |= _baseball_splits(self.get_baseball_splits(player.id, year))
+                return out
             named = self._athlete_named_stats(sport, player.id, year)
             keys = _MAPPER_KEYS[sport]
             return {**named, **{keys[n]: v for n, v in named.items() if n in keys}}
