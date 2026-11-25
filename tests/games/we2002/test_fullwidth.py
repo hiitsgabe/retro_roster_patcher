@@ -374,7 +374,9 @@ def test_every_ascii_entry_is_on_the_disc_and_fits_its_field():
 
 def _full_width(text: str) -> bytes:
     """`text` the way the community patch writes it: full-width letters, ASCII spaces."""
-    return fullwidth._encode(text)
+    encoded = fullwidth._encode(text)
+    assert encoded is not None
+    return encoded
 
 
 SECTOR, DATA = 2352, 24

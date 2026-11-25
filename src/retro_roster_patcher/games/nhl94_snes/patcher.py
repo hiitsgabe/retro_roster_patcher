@@ -692,6 +692,7 @@ class NHL94SNESPatcher(Patcher):
         # only `team_index >= TEAM_COUNT`: a negative key reads the bytes before
         # the pointer table and treats them as a team pointer.
         base = writer.reader.header_offset
+        assert writer.data is not None
         rom = writer.data[base:]
         if league.expand(rom):
             writer.data[base:] = rom

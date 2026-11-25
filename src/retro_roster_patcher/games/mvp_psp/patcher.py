@@ -1061,9 +1061,8 @@ def _split_fields(
     if None not in direction:
         left, right = round(direction[0]), round(direction[2])  # type: ignore[arg-type]
         fields.update(zip(LR_DIRECTION, map(str, (left, 100 - left - right, right)), strict=True))
-    mix = [rate(LR_HR_PCT, "hr"), rate(LR_LD_PCT, "ld"), rate(LR_GB_PCT, "gb")]
-    if None not in mix:
-        hr, ld, gb = mix  # type: ignore[misc]
+    hr, ld, gb = rate(LR_HR_PCT, "hr"), rate(LR_LD_PCT, "ld"), rate(LR_GB_PCT, "gb")
+    if hr is not None and ld is not None and gb is not None:
         gb = min(gb, 100 - hr - ld)
         fields |= {LR_HR_PCT: str(hr), LR_LD_PCT: str(ld), LR_GB_PCT: str(gb)}
         fields[LR_FB_PCT] = str(100 - hr - ld - gb)

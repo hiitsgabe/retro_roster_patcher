@@ -94,7 +94,7 @@ class Spreads:
     def of(cls, records: Mapping[str, Table], lhp_table: str, rhp_table: str) -> Spreads:
         """The spreads of a disc's parsed tables (`MVPPSPRomReader.records`)."""
         values: dict[Key, list[int]] = defaultdict(list)
-        bodies = []
+        bodies: list[tuple[int, int, int, int]] = []
         attrib = records.get("attrib", {})
         pitchattrib = records.get("pitchattrib", {})
         for pid, row in attrib.items():
@@ -105,10 +105,10 @@ class Spreads:
                 if (v := _int(value)) is not None:
                     for g in own:
                         values["attrib", col, g].append(v)
-            build = [_int(row.get(c)) for c in (ATTRIB_HEIGHT, ATTRIB_WEIGHT)]
-            build += [_int(row.get(c)) for c in (ATTRIB_BONE_PROFILE, ATTRIB_BODY_TYPE)]
-            if None not in build:
-                bodies.append(tuple(build))  # type: ignore[arg-type]
+            tall, heavy = _int(row.get(ATTRIB_HEIGHT)), _int(row.get(ATTRIB_WEIGHT))
+            bone, body = _int(row.get(ATTRIB_BONE_PROFILE)), _int(row.get(ATTRIB_BODY_TYPE))
+            if tall is not None and heavy is not None and bone is not None and body is not None:
+                bodies.append((tall, heavy, bone, body))
             bats = _int(row.get(ATTRIB_BATS)) or 0
             for table, lhp in ((lhp_table, True), (rhp_table, False)):
                 split = records.get(table, {}).get(pid)

@@ -147,8 +147,17 @@ BRACKET_COLOURS = Table(
 #: never reached a playoff), gets those; each new club shares the slots of a
 #: club of like colours, which it then shows.
 BRACKET_SHARES = {27: None, 28: 14, 29: 5, 30: 2, 31: 26}
-MOVED = (CENTER_ICE, LOGO_PALETTES, BANNER_PALETTES, SONGS, PHOTO_PALETTES)
-MOVED += (HOME_UNIFORMS, AWAY_UNIFORMS, PHOTOS, BRACKET_COLOURS)
+MOVED = (
+    CENTER_ICE,
+    LOGO_PALETTES,
+    BANNER_PALETTES,
+    SONGS,
+    PHOTO_PALETTES,
+    HOME_UNIFORMS,
+    AWAY_UNIFORMS,
+    PHOTOS,
+    BRACKET_COLOURS,
+)
 
 TEAM_LIST = 0x9CA5E7
 BANNER_POINTERS = 0x9C9649
@@ -231,8 +240,8 @@ def _state(rom: bytes | bytearray) -> str | None:
         for at, retail, moved in zip(
             _operands(table), _sites(table, table.retail), _sites(table, table.cpu), strict=True
         ):
-            here = bytes(rom[at : at + len(retail)])
-            states.add("retail" if here == retail else "expanded" if here == moved else None)
+            site = bytes(rom[at : at + len(retail)])
+            states.add("retail" if site == retail else "expanded" if site == moved else None)
     return states.pop() if len(states) == 1 else None
 
 
@@ -316,8 +325,8 @@ def expand(rom: bytearray) -> bool:
         rom[t.at : t.at + t.size * len(new)] = b"".join(new)
         for at, value in zip(_operands(t), _sites(t, t.cpu), strict=True):
             rom[at : at + len(value)] = value
-    for cpu, _old, new in CODE:
-        rom[_file(cpu) : _file(cpu) + len(new) // 2] = bytes.fromhex(new)
+    for cpu, _old, code in CODE:
+        rom[_file(cpu) : _file(cpu) + len(code) // 2] = bytes.fromhex(code)
 
     # The overlapped blocks out of the way of the longer team list.
     moves, at = {}, padding

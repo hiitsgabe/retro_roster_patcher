@@ -226,8 +226,8 @@ def batter_stats(line: Mapping[str, object]) -> dict[str, Stat]:
         "steal_attempts": _rate(attempts, singles_and_walks, 50),
         "steal_success": _rate(stat(line, "SB"), attempts, 5),
         "runs_scored": _rate(runs, on_base, 50),
-        "games": Stat(stat(line, "GP")) if stat(line, "GP") is not None else None,
-        "war": Stat(stat(line, "WAR")) if stat(line, "WAR") is not None else None,
+        "games": Stat(games) if (games := stat(line, "GP")) is not None else None,
+        "war": Stat(war) if (war := stat(line, "WAR")) is not None else None,
     }
     putouts_assists = _get(line, "fielding.putouts", "fielding.assists")
     chances = _get(line, "fielding.putouts", "fielding.assists", "fielding.errors")
@@ -290,7 +290,7 @@ def pitcher_stats(line: Mapping[str, object], starter: bool) -> dict[str, Stat]:
         # pickoff attempts, counts 0-7 a season, a pickoff count.
         "pickoffs": _rate(stat(line, "POA"), ip, 30),
         "runners_caught": _rate(stat(line, "CS"), _get(line, "SB", "CS"), 10),
-        "war": Stat(stat(line, "WAR")) if stat(line, "WAR") is not None else None,
+        "war": Stat(war) if (war := stat(line, "WAR")) is not None else None,
     }
     return {name: value for name, value in out.items() if value is not None}
 

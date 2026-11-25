@@ -44,6 +44,7 @@ from collections import defaultdict
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from functools import cache
+from typing import TypeGuard
 
 from ...core.assets import package_bytes
 from ...sports.lineup import slot_side
@@ -445,5 +446,5 @@ class LeagueStats:
         return out
 
 
-def _played(line: PlayerStats | None) -> bool:
+def _played(line: PlayerStats | None) -> TypeGuard[PlayerStats]:
     return line is not None and line.minutes > 0 and line.appearances > 0

@@ -527,9 +527,9 @@ def _code_state(rom: bytes | bytearray) -> str | None:
         states.add("retail" if here == old else "expanded" if here == new else None)
     for table in TABLES:
         for site in table.sites:
-            here = _u32(rom, site)
+            pointer = _u32(rom, site)
             states.add(
-                "retail" if here == table.retail else "expanded" if here == table.at else None
+                "retail" if pointer == table.retail else "expanded" if pointer == table.at else None
             )
     return states.pop() if len(states) == 1 else None
 
@@ -572,8 +572,8 @@ def expand(rom: bytearray) -> bool:
     banners = _frames(banner_sheet, 2)
     stripes = _frames(stripe_sheet, 2)
     palette = stripe_sheet[_u32(stripe_sheet, 0) :][:0x80]
-    for at, _old, new in CODE:
-        rom[at : at + len(new) // 2] = bytes.fromhex(new)
+    for at, _old, code in CODE:
+        rom[at : at + len(code) // 2] = bytes.fromhex(code)
     rom[SEEDS : SEEDS + SEED_TABLES * 16] = _seeds()
     _lay_out(
         rom,
@@ -701,7 +701,8 @@ def _rating(rom: bytes | bytearray, slot: int) -> int | None:
     """The slot's Matchups Overall from its Best line (line 0's six players)."""
     base = _u32(rom, TEAM_TABLE + 4 * slot)
     line0 = rom[base + _u16(rom, base + 6) :][:6]
-    stats, at = [], base + _u16(rom, base)
+    stats: list[bytes | bytearray] = []
+    at = base + _u16(rom, base)
     while (length := _u16(rom, at)) >= 3 and len(stats) < 40:
         stats.append(rom[at + length : at + length + 8])
         at += length + 8

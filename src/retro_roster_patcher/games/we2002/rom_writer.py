@@ -2070,7 +2070,7 @@ def _edc_compute(data: bytes) -> int:
 _SECTOR = 2352
 #: Doubling in GF(2^8), and the inverse of tripling: the sector parity's two multipliers.
 _GF2 = bytes(((i << 1) ^ (0x11D if i & 0x80 else 0)) & 0xFF for i in range(256))
-_GF3_INV = bytes(sorted(range(256), key=lambda i: i ^ _GF2[i]))
+_GF3_INV = bytes(sorted(range(256), key=lambda i: int(i) ^ _GF2[i]))
 
 
 def _xor(p: bytes, q: bytes) -> bytes:
