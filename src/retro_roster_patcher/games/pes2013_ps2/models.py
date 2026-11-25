@@ -6,7 +6,8 @@ Players: `0_TEXT.AFS` entry 47 part 0 (Latin names) and entry 46 part 0
 
     +0   UTF-16LE display name, 32 bytes
     +32  ASCII shirt name, 16 bytes
-    +48  packed abilities, 76 bytes (byte 53 high nibble = registered position)
+    +48  packed abilities, 44 bytes (`abilities.FIELDS`; byte 53 high nibble = registered
+         position), then the look from +92
 
 Squads, in both entries: part 2 = clubs, 139 rows x 32 u16 player index (row =
 club index); part 4 = shirt number - 1 per slot; part 1 = nationals, 75 rows x
@@ -230,7 +231,7 @@ class PESLook:
 
 @dataclass
 class PESPlayer:
-    """One player to write: names, and his look; the record's abilities are kept."""
+    """One player to write: names, his look and his abilities."""
 
     display_name: str
     shirt_name: str
@@ -256,6 +257,9 @@ class PESPlayer:
     #: His age today, 0 when the provider gives neither age nor birth date: the record's
     #: age (`AGE_BYTE`) is left as it is then.
     age: int = 0
+    #: The `abilities.FIELDS` his own data sets (`abilities.LeagueStats.abilities`), as stored;
+    #: every other field gets his group's default (`abilities.defaults`).
+    abilities: dict[str, int] = field(default_factory=dict)
 
 
 @dataclass

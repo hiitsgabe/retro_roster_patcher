@@ -5,10 +5,10 @@ What a slot write changes: the club's name and three-letter code in every
 language overlay, and the names and shirt numbers of the players its squad
 already points at. Each incoming player takes over a record of the same
 position group (goalkeeper, defender, midfielder, attacker), so the game keeps
-a plausible lineup; the record's abilities are left as they were. Slots the
-squad does not fill keep their original players. A national row that shares a
-record with a patched club gets its own copy of it first, so the nation keeps
-its player (`_unshare`).
+a plausible lineup, and gets his own abilities: his season ranked onto the
+disc's spread of each (`abilities`). Slots the squad does not fill keep their
+original players. A national row that shares a record with a patched club gets
+its own copy of it first, so the nation keeps its player (`_unshare`).
 
 A team's formation is its roster's (`extra["formation"]`, else its lineup's shape:
 `sports.lineup.team_formation`). A team with a readable formation is also written the
@@ -59,6 +59,7 @@ from ...sports.lineup import DEPTH, GROUP_ROLE, apply_lineup, parse_shape, team_
 from ...sports.lineup import lineup_role as lineup_role_name
 from ...sports.models import LeagueData, Player, Team, TeamRoster
 from . import kit_textures, looks
+from .abilities import LeagueStats, defaults
 from .formations import FORMATIONS, PRESETS, pick_preset, seats
 from .kits import (
     AWAY,
@@ -506,6 +507,12 @@ def seat_eleven(starters: list[PESPlayer], preset: bytes) -> list[PESPlayer | No
     return placed
 
 
+def own_abilities(player: PESPlayer) -> dict[str, int]:
+    """Every `abilities.FIELDS` value of the player: his own data's, his group's default for
+    the rest."""
+    return {**defaults(player.position), **player.abilities}
+
+
 def age_today(player: Player, today: date | None = None) -> int:
     """The age his birth date gives today, else the provider's (ESPN says 25 when it has
     none); 0 when neither is known."""
@@ -822,6 +829,13 @@ class PES2013PS2Patcher(Patcher):
             roster = TeamRoster(team=team)
             try:
                 roster.players = self.api.get_squad(team.id, season)
+                # The season's stats set every ability (`abilities`); optional, as in ISS: a
+                # player without a line gets his group's defaults.
+                try:
+                    stats = self.api.get_player_stats(team.id, season)
+                    roster.player_stats = {ps.player_id: ps for ps in stats}
+                except Exception:
+                    self.status(f"{team.name}: stats unavailable, abilities will use defaults")
                 # The club's starting XI from every match of the season (current
                 # squad only, positions from FotMob; README "Soccer lineups")
                 # fills the first squad places; optional, and plain data for the
@@ -861,6 +875,11 @@ class PES2013PS2Patcher(Patcher):
     ) -> MappedRosters:
         self.check_slot_mapping(slot_mapping)
         by_id = {roster.team.id: roster for roster in data.teams}
+        league = LeagueStats.of(
+            (p, lineup_group(p, r.extra.get("lineup")), r.player_stats.get(p.id))
+            for r in data.teams
+            for p in r.players
+        )
         teams: dict[int, PESTeamRecord] = {}
         for entry in slot_mapping or []:
             national = entry.slot_index >= NATIONAL_SLOT_BASE
@@ -913,6 +932,12 @@ class PES2013PS2Patcher(Patcher):
                         photo_url=p.photo_url or "",
                         nationality=p.nationality or "",
                         age=age_today(p),
+                        abilities=league.abilities(
+                            p,
+                            lineup_group(p, lineup),
+                            roster.player_stats.get(p.id),
+                            role_name_of(p, lineup),
+                        ),
                     )
                     for i, p in enumerate(
                         players[: NATIONAL_SQUAD_SIZE if national else CLUB_SQUAD_SIZE]
@@ -988,6 +1013,7 @@ class PES2013PS2Patcher(Patcher):
                         RomWriter.set_player_names(t, index, player.display_name, player.shirt_name)
                         self._write_look(t, index, player, disc)
                         self._write_position(t, index, player)
+                        RomWriter.set_abilities(t, index, own_abilities(player))
                         if player.number:
                             RomWriter.set_club_number(t, slot, squad_slot, player.number)
                 players_patched += len(assignments)
@@ -1406,6 +1432,7 @@ class PES2013PS2Patcher(Patcher):
                     RomWriter.set_player_names(t, idx, player.display_name, player.shirt_name)
                     self._write_look(t, idx, player, disc)
                     self._write_position(t, idx, player)
+                    RomWriter.set_abilities(t, idx, own_abilities(player))
                 written += 1
             row = take + [0] * (NATIONAL_SQUAD_SIZE - len(take))
             for t in tables.values():

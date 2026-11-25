@@ -597,23 +597,21 @@ def test_set_playable_leaves_the_roles_flag_the_only_one_lit_and_every_ability_b
 
 
 def test_a_role_writes_its_registered_position_and_its_flag(tmp_path, iso):
-    """A left winger gets nibble 10 and byte 63's bit 7; bits 0-6 of it, the low nibble of byte 53
-    and every other byte of the record stay."""
-    original = _read(iso).player_tables(PLAYER_ENTRIES[0])
+    """A left winger gets nibble 10 and byte 63's bit 7, the record's only playable flag."""
     out = _patch(tmp_path, iso, _map(tmp_path, _team(), order_as_given=True))
     for entry in PLAYER_ENTRIES:
         tables = _read(out).player_tables(entry)
         for place, index in enumerate(tables.club_squad(0)[:11]):
-            record, disc = tables.record(index), original.record(index)
+            record = tables.record(index)
             role = _role(_name(tables, index))
             nibble = ROLE_NIBBLE[role]
             flag = 54 if nibble == 0 else 53 + nibble
-            assert record[53] >> 4 == nibble and record[53] & 15 == disc[53] & 15, (place, role)
-            assert record[flag] & 0x80 and record[flag] & 0x7F == disc[flag] & 0x7F
-            same = [i for i in range(48, 92) if i not in (53, flag)]  # the look is the writer's
-            assert all(record[i] == disc[i] for i in same), (place, role)
+            assert record[53] >> 4 == nibble, (place, role)
+            assert [record[i] >> 7 for i in range(54, 66)] == [
+                int(i == flag) for i in range(54, 66)
+            ]
     lw = next(i for i in tables.club_squad(0)[:11] if _role(_name(tables, i)) == "LW")
-    assert tables.record(lw)[53] >> 4 == 10 and tables.record(lw)[63] == 0x11 | 0x80
+    assert tables.record(lw)[53] >> 4 == 10 and tables.record(lw)[63] & 0x80
 
 
 # --- the mapper: the readable formation and the eleven -------------------------------------

@@ -22,6 +22,7 @@ from retro_roster_patcher import get_patcher
 from retro_roster_patcher.core.errors import MappingError, RomError
 from retro_roster_patcher.core.models import SlotMapping
 from retro_roster_patcher.games.pes2013_ps2 import afs, looks
+from retro_roster_patcher.games.pes2013_ps2.abilities import read as read_abilities
 from retro_roster_patcher.games.pes2013_ps2.models import (
     CLUB_COUNT,
     DATABASE_OVERLAY_ENGLISH,
@@ -35,6 +36,7 @@ from retro_roster_patcher.games.pes2013_ps2.models import (
 from retro_roster_patcher.games.pes2013_ps2.patcher import (
     PES2013PS2Patcher,
     lineup_role,
+    own_abilities,
     squad_order,
 )
 from retro_roster_patcher.games.pes2013_ps2.rom_reader import RomReader
@@ -44,7 +46,14 @@ from retro_roster_patcher.games.pes2013_ps2.rom_writer import (
     display_name_bytes,
     shirt_name_bytes,
 )
-from retro_roster_patcher.sports.models import League, LeagueData, Player, Team, TeamRoster
+from retro_roster_patcher.sports.models import (
+    League,
+    LeagueData,
+    Player,
+    PlayerStats,
+    Team,
+    TeamRoster,
+)
 from tests.fixtures import synthetic_pes2013_iso as fixture
 
 
@@ -276,7 +285,12 @@ def test_patch_renames_the_squad_by_position_and_the_club_everywhere(iso, tmp_pa
         assert tables.record(squad[0])[32:48] == b"RAYA".ljust(16, b"\0")
         assert tables.record(squad[6])[32:48] == b"ODEGAARD".ljust(16, b"\0")
         assert tables.club_numbers(0)[0] == 21 and tables.club_numbers(0)[5] == 40
-        assert tables.record(squad[0])[48:] == tables.record(squad[0])[48:]  # abilities kept
+        # Every ability is the player's, his group's default where he has no data.
+        places = (0, 1, 2, None, None, 3, 4, None, None, 5, 6)
+        for i, player in zip(squad[:11], places, strict=True):
+            if player is not None:
+                written = rosters.teams[0].players[player]
+                assert read_abilities(tables.record(i)) == own_abilities(written)
     for overlay in (DATABASE_OVERLAY_ENGLISH, 5):
         clubs = reader.overlay_teams(overlay).clubs
         assert (clubs[0][0].text, clubs[0][1].text) == ("ARSENAL", "ARS")
@@ -1320,6 +1334,11 @@ class _LineupApi:
     def get_squad(self, team_id, season):
         return [Player(id=team_id * 10, name="Keeper", position="Goalkeeper")]
 
+    def get_player_stats(self, team_id, season):
+        if team_id == 2:
+            raise KeyError("leaders")
+        return [_keeper_line(team_id * 10)]
+
     def get_lineup(self, team_id, league_id, squad=None, team=None, season=None):
         self.lineup_args.append((squad, team, season))
         if team_id == 2:
@@ -1337,6 +1356,21 @@ def test_fetch_survives_a_failed_lineup(tmp_path):
     assert [t.error for t in data.teams] == ["", ""]
     # The failed lineup still leaves every player his group's role.
     assert all(p.role for t in data.teams for p in t.players)
+
+
+def _keeper_line(pid):
+    return PlayerStats(pid, 30, 2700, 0, 0, 0, 0, 900, 70.0, 0, 0, 0, 0, 0, 0, 0, 1, 2, 1, 0,
+                       None, 30, saves=90, shots_faced=120)  # fmt: skip
+
+
+def test_fetch_keeps_each_teams_stats_and_survives_a_failed_one(tmp_path):
+    patcher = PES2013PS2Patcher(tmp_path)
+    patcher.api = _LineupApi()
+    data = patcher.fetch(season=2026, league_id=7)
+    assert [list(t.player_stats) for t in data.teams] == [[10], []]
+    assert [t.error for t in data.teams] == ["", ""] and len(data.teams[1].players) == 1
+    mapped = patcher.map_rosters(data, [SlotMapping(slot_index=0, team_id=1)])
+    assert "goalkeeping" in mapped.teams[0].players[0].abilities
 
 
 def test_fetch_hands_each_teams_squad_team_and_season_to_the_lineup(tmp_path):

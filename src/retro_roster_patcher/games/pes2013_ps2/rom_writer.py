@@ -11,9 +11,10 @@ from __future__ import annotations
 import os
 import struct
 import unicodedata
-from collections.abc import Callable, Collection
+from collections.abc import Callable, Collection, Mapping
 
 from ...core.errors import RomError
+from . import abilities
 from .afs import Table, unwrap, wrap
 from .emblems import CLUB_TABLE, Atlas, copy_club_table, paint_logos
 from .formations import FormationTable
@@ -213,6 +214,17 @@ class RomWriter:
         at = index * PLAYER_RECORD_SIZE + AGE_BYTE
         value = max(0, min(AGE_MASK, age - AGE_BASE))
         players[at] = players[at] & ~(AGE_MASK << AGE_SHIFT) & 0xFF | value << AGE_SHIFT
+        tables.parts[PART_PLAYERS] = bytes(players)
+
+    @staticmethod
+    def set_abilities(tables: PlayerTables, index: int, values: Mapping[str, int]) -> None:
+        """Record `index`'s `abilities.FIELDS` named in `values`, as stored; every other bit,
+        the playable flags among them, stays."""
+        players = bytearray(tables.players)
+        at = index * PLAYER_RECORD_SIZE
+        record = memoryview(players)[at : at + PLAYER_RECORD_SIZE]
+        abilities.write(record, values)
+        record.release()
         tables.parts[PART_PLAYERS] = bytes(players)
 
     @staticmethod
