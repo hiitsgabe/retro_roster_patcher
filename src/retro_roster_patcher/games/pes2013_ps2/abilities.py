@@ -4,13 +4,14 @@ season sets them.
 The layout is PES 6's option file's (the PES Editor's `Stats.java`, PeterC10/PESEditor on
 GitHub), and the disc keeps it: read so, the records of 208 players of nine clubs give the PES
 2013 ratings pesmaster lists for them in 91.4% of 6448 values, and 96.6% within 2 (pesmaster
-shows a later data pack); height and age in all 208. Every field the patch writes is in
-`FIELDS`. The cards pesmaster lists that PES 6 has no flag for were matched to bits by the
-players that carry them:
-one-touch play 21 of 24 on byte 82 bit 0, outside curve 27 of 28 on bit 1, long throw 13 of 13
-on byte 84 bit 7, super-sub 3 of 3 on byte 83 bit 7, turning 31 of 32 on byte 85 bit 5, flip
-flap 3 of 3 on byte 85 bit 7, long-range drive 5 of 5 on byte 87 bit 1, roulette 37 of 37 on
-byte 87 bit 2.
+shows a later data pack); height and age in all 208. PCSX2's Edit Player shows the retail Messi
+as read here, every rating, form, weak foot, injury, special, position and favoured side, and a
+patched record as written (2026-11-25). Every field the patch writes is in `FIELDS`. The cards
+pesmaster lists that PES 6 has no flag for were matched to bits by the players that carry them
+(Edit Player shows none of these): one-touch play 21 of 24 on byte 82 bit 0, outside curve 27
+of 28 on bit 1, long throw 13 of 13 on byte 84 bit 7, super-sub 3 of 3 on byte 83 bit 7,
+turning 31 of 32 on byte 85 bit 5, flip flap 3 of 3 on byte 85 bit 7, long-range drive 5 of 5
+on byte 87 bit 1, roulette 37 of 37 on byte 87 bit 2.
 
 Not abilities, or not identified, and left as the record has them: bytes 48-49 (the call name
 the commentary uses), byte 50 bits 0-2 (edited flags, 0 on the disc), byte 51 bit 0 (set on 119
