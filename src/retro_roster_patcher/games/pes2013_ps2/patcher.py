@@ -17,9 +17,10 @@ the keeper, then the ten outfielders cut into its lines by index and each line s
 by role, side and depth. A player's role is his own or, for a rosters file from before
 the roles, the one his lineup code reads as (`sports.lineup.lineup_role`), and every
 player with a role is written that role's registered position and playable flag
-(`ROLE_NIBBLE`), whatever his team plays. Only a roster with no formation of its own
-and no lineup shape keeps the old placement: each starter takes the squad place whose
-record holds the position his lineup code gives him.
+(`ROLE_NIBBLE`), whatever his team plays; one without, his lineup position's or his
+group's. Only a roster with no formation of its own and no lineup shape keeps the old
+placement: each starter takes the squad place whose record holds the position his lineup
+code gives him.
 """
 
 from __future__ import annotations
@@ -1113,22 +1114,17 @@ class PES2013PS2Patcher(Patcher):
         self.status(f"Formations written: {len(presets)}")
 
     @staticmethod
-    def _write_position(
-        t: PlayerTables, index: int, player: PESPlayer, national: bool = False
-    ) -> None:
+    def _write_position(t: PlayerTables, index: int, player: PESPlayer) -> None:
         """Record `index`'s registered position and playable flag from the player's role
-        (`ROLE_NIBBLE`). A player with no role leaves a club record's position as it is, and a
-        national team's record takes his lineup position or his group's, as before."""
+        (`ROLE_NIBBLE`), else from his lineup position or his group's: never the record's old
+        player's."""
         nibble = ROLE_NIBBLE.get(player.role_name)
-        if nibble is not None:
-            RomWriter.set_position(t, index, nibble)
-            RomWriter.set_playable(t, index, nibble)
-        elif national:
-            RomWriter.set_position(
-                t,
-                index,
-                player.role if player.role is not None else GROUP_POSITIONS.get(player.position, 7),
+        if nibble is None:
+            nibble = (
+                player.role if player.role is not None else GROUP_POSITIONS.get(player.position, 7)
             )
+        RomWriter.set_position(t, index, nibble)
+        RomWriter.set_playable(t, index, nibble)
 
     @staticmethod
     def _write_look(t: PlayerTables, index: int, player: PESPlayer, disc: _Disc) -> None:
@@ -1409,7 +1405,7 @@ class PES2013PS2Patcher(Patcher):
                 for t in tables.values():
                     RomWriter.set_player_names(t, idx, player.display_name, player.shirt_name)
                     self._write_look(t, idx, player, disc)
-                    self._write_position(t, idx, player, national=True)
+                    self._write_position(t, idx, player)
                 written += 1
             row = take + [0] * (NATIONAL_SQUAD_SIZE - len(take))
             for t in tables.values():

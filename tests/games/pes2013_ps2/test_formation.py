@@ -42,6 +42,7 @@ from retro_roster_patcher.games.pes2013_ps2.models import (
     FORMATION_PART,
     FORMATION_RECORD,
     FORMATION_TEAMS,
+    GROUP_POSITIONS,
     NATIONAL_SLOT_BASE,
     PLAYER_ENTRIES,
     POSITION_GROUPS,
@@ -861,14 +862,20 @@ def test_a_roster_with_neither_a_formation_nor_a_lineup_patches_as_today(tmp_pat
         "ST9",
         "ST10",
     ]
-    # No player's registered position or flags changed: bytes 53-65 of every record are the disc's
-    # (the free records now hold the national rows' copies of the club's shared ones).
+    # Without a role each player's registered position is his group's, not the record's old
+    # player's; no other record's position or flags changed (the free records now hold the
+    # national rows' copies of the club's shared ones).
     before, after = _read(iso).player_tables(), _read(out).player_tables()
+    squad = after.club_squad(0)
+    groups = {p.display_name: p.position for p in mapped.teams[0].players}
+    for i in squad:
+        if i:
+            assert after.record(i)[53] >> 4 == GROUP_POSITIONS[groups[_name(after, i)]]
     free = before.free_records()
     assert all(
         before.record(i)[53:66] == after.record(i)[53:66]
         for i in range(before.player_count)
-        if i not in free
+        if i not in free and i not in squad
     )
 
 
