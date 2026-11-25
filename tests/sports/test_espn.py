@@ -740,6 +740,22 @@ _CATEGORY_OF = {
     "totalTackles": "defensive",
     "interceptions": "defensive",
     "blockedShots": "defensive",
+    "effectiveTackles": "defensive",
+    "totalClearance": "defensive",
+    "saves": "goalKeeping",
+    "shotsFaced": "goalKeeping",
+    "goalsConceded": "goalKeeping",
+    "cleanSheet": "goalKeeping",
+    "headedGoals": "offensive",
+    "shotsHeaded": "offensive",
+    "totalCrosses": "offensive",
+    "accurateCrosses": "offensive",
+    "totalLongBalls": "offensive",
+    "accurateLongBalls": "offensive",
+    "freeKickShots": "offensive",
+    "freeKickGoals": "offensive",
+    "leftFootedShots": "offensive",
+    "rightFootedShots": "offensive",
 }
 
 
@@ -947,6 +963,33 @@ def test_three_athletes_with_three_documents_get_three_different_records(tmp_pat
     assert [s.lineups for s in stats] == [30, 8, 1]
     assert [s.goals for s in stats] == [24, 3, 0]
     assert [s.passes_accuracy for s in stats] == [83.0, 71.0, 60.0]
+
+
+def test_keeping_heading_crossing_and_footedness_are_read(tmp_path):
+    names = {
+        "saves": "saves",
+        "shotsFaced": "shots_faced",
+        "goalsConceded": "goals_conceded",
+        "cleanSheet": "clean_sheets",
+        "headedGoals": "headed_goals",
+        "shotsHeaded": "shots_headed",
+        "totalCrosses": "crosses_total",
+        "accurateCrosses": "crosses_accurate",
+        "totalLongBalls": "long_balls_total",
+        "accurateLongBalls": "long_balls_accurate",
+        "freeKickShots": "free_kick_shots",
+        "freeKickGoals": "free_kick_goals",
+        "leftFootedShots": "left_foot_shots",
+        "rightFootedShots": "right_foot_shots",
+        "effectiveTackles": "tackles_won",
+        "totalClearance": "clearances",
+    }
+    body = _athlete_stats_body(**{espn_name: float(k + 1) for k, espn_name in enumerate(names)})
+    transport = _soccer_transport(_soccer_leaders_body(1), {1: body})
+    (stats,) = EspnClient(str(tmp_path), transport=transport).get_player_stats(
+        364, 2025, league_code="eng.1"
+    )
+    assert [getattr(stats, field) for field in names.values()] == list(range(1, len(names) + 1))
 
 
 def test_a_populated_rating_field_is_kept(tmp_path):

@@ -1278,6 +1278,7 @@ class EspnClient:
         general = groups.get("general", {})
         offensive = groups.get("offensive", {})
         defensive = groups.get("defensive", {})
+        keeping = groups.get("goalKeeping", {})
 
         rating = None
         for name in _RATING_FIELDS:
@@ -1310,6 +1311,22 @@ class EspnClient:
             # `starts`, not `appearances`: consumers order a squad by times in
             # the starting XI.
             lineups=int(general.get("starts", 0)),
+            saves=int(keeping.get("saves", 0)),
+            shots_faced=int(keeping.get("shotsFaced", 0)),
+            goals_conceded=int(keeping.get("goalsConceded", 0)),
+            clean_sheets=int(keeping.get("cleanSheet", 0)),
+            headed_goals=int(offensive.get("headedGoals", 0)),
+            shots_headed=int(offensive.get("shotsHeaded", 0)),
+            crosses_total=int(offensive.get("totalCrosses", 0)),
+            crosses_accurate=int(offensive.get("accurateCrosses", 0)),
+            long_balls_total=int(offensive.get("totalLongBalls", 0)),
+            long_balls_accurate=int(offensive.get("accurateLongBalls", 0)),
+            free_kick_shots=int(offensive.get("freeKickShots", 0)),
+            free_kick_goals=int(offensive.get("freeKickGoals", 0)),
+            left_foot_shots=int(offensive.get("leftFootedShots", 0)),
+            right_foot_shots=int(offensive.get("rightFootedShots", 0)),
+            tackles_won=int(defensive.get("effectiveTackles", 0)),
+            clearances=int(defensive.get("totalClearance", 0)),
             # Marks the four zeroes above as filler, not as a measurement.
             unsupplied=SOCCER_UNSUPPLIED_STATS,
         )
