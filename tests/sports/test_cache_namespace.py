@@ -34,7 +34,8 @@ from tests.sports.test_nhl import NETWORK_CALLS as NHL_CALLS
 # `categories` for ESPN leaders, `skaters` for NHL club stats, `athletes` for
 # the roster parsers, `events` plus `rosters` for the lineup lookup, which
 # caches one file per completed match it finds on the schedule, `splits` for
-# one baseball player's line, `items` plus `entries` for the baseball
+# one baseball player's line, `labels` plus `splitCategories` for his splits
+# by hand and position, `items` plus `entries` for the baseball
 # lineup, which caches one file per game it finds, and `team` for one team.
 OMNIBUS = json.dumps(
     {
@@ -49,6 +50,8 @@ OMNIBUS = json.dumps(
         "splits": {
             "categories": [{"name": "batting", "stats": [{"abbreviation": "AVG", "value": 1}]}]
         },
+        "labels": ["AB"],
+        "splitCategories": [{"splits": [{"displayName": "vs. Left", "stats": ["1"]}]}],
         "items": [{"$ref": "https://example.test/events/1?lang=en"}],
         "entries": [{"playerId": 1, "starter": True, "batOrder": 1}],
         "skaters": [{"playerId": 1, "goals": 1}],
@@ -104,8 +107,9 @@ def _drive(build, calls, cache_dir):
 # The three team leaders methods are one-to-many too: each also caches the
 # team's squad and one season line per squad player, for the season asked and,
 # the fake line having no games, the season before (`MIN_GAMES`). Baseball's
-# line for the season asked is `get_baseball_athlete_stats`'s own file.
-ESPN_EXTRA_FILES = 1 + 3 + 3 + 2
+# line and splits for the season asked are `get_baseball_athlete_stats`'s and
+# `get_baseball_splits`'s own files; the season before adds both.
+ESPN_EXTRA_FILES = 1 + 3 + 3 + 3
 
 
 def _espn(cache_dir):
