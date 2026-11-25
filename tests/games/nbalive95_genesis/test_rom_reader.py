@@ -282,9 +282,10 @@ def test_a_record_reads_back_every_field_the_fixture_wrote(rom):
     assert player["offset"] == fixture.player_offset(7, 4)
 
 
-def test_height_is_reported_five_inches_above_the_stored_byte(rom):
+def test_height_is_the_stored_byte_in_inches(rom):
+    """The roster screen shows a stored 84 as 7'0" (Koncak and Willis, mednafen)."""
     player = _loaded(rom).read_player(7, 4)
-    assert player["height_inches"] == fixture.player_height_byte(7, 4) + 5
+    assert player["height_inches"] == fixture.player_height_byte(7, 4)
 
 
 def test_weight_is_reported_a_hundred_pounds_above_the_stored_byte(rom):

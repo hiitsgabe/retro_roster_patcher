@@ -195,7 +195,7 @@ class NBALive95RomReader:
             "jersey": d[off + OFF_JERSEY],
             "position": position,
             "position_byte": position_byte,
-            "height_inches": d[off + OFF_HEIGHT] + 5,
+            "height_inches": d[off + OFF_HEIGHT],
             "weight_lbs": d[off + OFF_WEIGHT] + 100,
             "experience": d[off + OFF_EXPERIENCE],
             "skin_color": d[off + OFF_SKIN],
