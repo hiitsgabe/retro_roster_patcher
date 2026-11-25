@@ -9,6 +9,36 @@ Players: `0_TEXT.AFS` entry 47 part 0 (Latin names) and entry 46 part 0
     +48  packed abilities, 44 bytes (`abilities.FIELDS`; byte 53 high nibble = registered
          position), then the look from +92
 
+Bytes 48-123, bit by bit (counts over the 4790 records the disc's squads use):
+
+    48-49    commentary name (`CALL_NAME_BYTE`): written, his own or none
+    50       bits 0-2 the edited flags (name, shirt name, commentary name; PES 6's layout),
+             bits 3-7 unused: 0 on every record; left as they are
+    51       bit 0 `NATIONAL_DOUBLE_FLAG`: cleared on a written player; bits 1-7 unused (0)
+    52-89    `abilities.FIELDS`, the registered position (53 bits 4-7) and the playable
+             flags (bit 7 of 54-65); the bits of 85, 87, 88 and 89 that no field names are
+             listed in `abilities`
+    90-91    Unidentified (the abilities module's "shirt and body shape" is PES 6's reading,
+             not checked here): 90 holds 54 values (120 on 1948 records, 88 on 837), 91 holds
+             151 (119 on 1697); kept as the record has them
+    92-104   the look `RomWriter.set_look` writes (below), and in the gaps: 93 bits 3-7
+             (0-22, 2 on 2153), 97 (0 on 4740, else 4, 8 or 32), 98 (0 on 4608, else 16-160 in
+             steps of 16), 99 bits 0-5 (0 on 4770) and bit 7 (set on 138), 100 (bits 0-3 15 on
+             4688; bits 4-7 0 on 3830) and 101 (0 on 3770, else 1-111: with 100 bits 4-7 the
+             12-bit face model number of FVitor7's PES-EDITOR-PS2, used by the 1027 records
+             whose face type is 2), 103 bits 6-7 and 104 bits 6-7: Unidentified, kept, or
+             copied with the rest of the look region from a disc player's own record
+    105-108  Unidentified: 0x77 on most records (3033, 2250, 3684, 3611), two nibbles of 7 each,
+             the middle of a 0-14 slider; plausibly PES's physique sliders, not checked; kept
+    109-111  Unidentified: 109 holds 38 values (23 on 1931, 7 on 1799), 110 is 0 on 4785, 111
+             is 0 on every record; kept
+    112      nationality (`NATIONALITY_BYTE`): written
+    113      bit 0 unused (0), bits 1-5 age (written), bits 6-7 0 on every record
+    114      Unidentified: 0 on 4725, else 1-48; kept
+    115      bits 0-2 skin (written); bits 3-7 Unidentified (all 32 values, 25 on 472); kept
+    116-123  Unidentified: each 28-192 values over the whole range, no value on more than
+             524 records (face-part parameters, by PES 6's look layout; not checked); kept
+
 Squads, in both entries: part 2 = clubs, 139 rows x 32 u16 player index (row =
 club index); part 4 = shirt number - 1 per slot; part 1 = nationals, 75 rows x
 23 u16; part 3 = the national shirt numbers (number - 1, 23 per row). The game
@@ -89,6 +119,20 @@ BEARD_COLOUR_BYTE = 96
 #: then nations without a squad) and age (bits 1-5 of byte 113, plus 15), as
 #: the disc's national squads and known players showed them (2026-10-25).
 NATIONALITY_BYTE = 112
+#: A player whose nationality the disc has no flag for, or who has none, takes his team's most
+#: common one; a team with none known at all, this (0, Austria, the first of the list).
+DEFAULT_NATIONALITY = 0
+#: The commentary name, bytes 48-49 (u16): an id of `0_TEXT.AFS` entry 9531's table, the name
+#: Edit Player's "Commentary Name" shows and the commentator says (`CALL_NAMES_FILE`, the 2109
+#: ids that list names); `NO_CALL_NAME` is its "---", which 1149 disc records have.
+CALL_NAME_BYTE = 48
+NO_CALL_NAME = 0xFFFF
+CALL_NAMES_FILE = "pes2013_call_names.json"
+#: Byte 51 bit 0: set on the 119 club records (Ramsey, Ivanović, Mikel, Dempsey...) that have a
+#: fake-named copy in an unlicensed national row (Wales' "RAZROUGH"), on no other record, and on
+#: none of the copies. A written player is a new person with no such copy: it is cleared.
+NATIONAL_DOUBLE_BYTE = 51
+NATIONAL_DOUBLE_FLAG = 0x01
 AGE_BYTE = 113
 AGE_SHIFT = 1
 AGE_MASK = 0x1F
@@ -252,6 +296,10 @@ class PESPlayer:
     player_id: int = 0
     photo_url: str = ""
     nationality: str = ""
+    #: His nationality on the disc (`NATIONALITY_BYTE`), set by `Patcher.patch`: his own when
+    #: the disc has a flag for it, else his team's default; None for a player who is on the
+    #: disc already and keeps the nationality of his disc record.
+    nation: int | None = None
     #: Set by `looks.dress`; None leaves the record's look alone.
     look: PESLook | None = None
     #: His age today, 0 when the provider gives neither age nor birth date: the record's

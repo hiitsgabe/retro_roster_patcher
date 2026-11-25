@@ -57,7 +57,7 @@ def test_writing_every_field_changes_no_bit_a_field_does_not_own():
     record = bytearray(CASILLAS)
     write(record, read(RONALDO))
     assert read(record) == read(RONALDO)
-    # Bits no field owns stay: the playable flags (bit 7 of 54-65), byte 85 bits 0-4 and 6,
+    # Bits no field owns stay: the playable flags (bit 7 of 54-65), byte 85 bits 3-4 and 6,
     # byte 87 bits 0 and 4, the call name, the shirt flag of byte 89, bytes 90-91.
     owned = bytearray(124)
     for at, shift, mask in FIELDS.values():
@@ -65,7 +65,7 @@ def test_writing_every_field_changes_no_bit_a_field_does_not_own():
     assert all((record[i] ^ CASILLAS[i]) & ~owned[i] & 0xFF == 0 for i in range(48, 92)), (
         "a bit no field owns changed"
     )
-    assert owned[85] == 0xA0 and owned[87] == 0x06 and owned[54] == 0x7F and owned[51] == 0
+    assert owned[85] == 0xA7 and owned[87] == 0x06 and owned[54] == 0x7F and owned[51] == 0
 
 
 def test_a_value_is_clamped_to_its_field():
@@ -152,7 +152,7 @@ def test_a_player_without_a_line_is_set_by_his_body_and_role_alone():
     assert own["favoured_side"] == SIDE_BOTH
     assert set(own) <= {"height", "weight", "favoured_side", "jump", "balance", "top_speed",
                         "acceleration", "agility", "mentality", "response", "dribble_speed",
-                        "post_player", "heading"}  # fmt: skip
+                        "post_player", "heading", "fame"}  # fmt: skip
 
 
 def test_the_foot_is_the_one_he_shoots_with_and_the_side_his_roles():

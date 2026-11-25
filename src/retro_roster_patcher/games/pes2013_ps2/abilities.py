@@ -13,14 +13,31 @@ of 28 on bit 1, long throw 13 of 13 on byte 84 bit 7, super-sub 3 of 3 on byte 8
 turning 31 of 32 on byte 85 bit 5, flip flap 3 of 3 on byte 85 bit 7, long-range drive 5 of 5
 on byte 87 bit 1, roulette 37 of 37 on byte 87 bit 2.
 
-Not abilities, or not identified, and left as the record has them: bytes 48-49 (the call name
-the commentary uses), byte 50 bits 0-2 (edited flags, 0 on the disc), byte 51 bit 0 (set on 119
-English-league players; unidentified), the registered position (byte 53 bits 4-7) and the
-playable flags (bit 7 of bytes 54-65), which the patcher writes from the role, byte 85 bits 0-4
-and 6 (bits 0-2 a 0-7 value that rises with age, teamwork and form; unidentified), byte 87 bit 0
-(set with a left foot on 1052 of 1083 left-footers and 8 right-footers; unidentified) and bit 4
-(unidentified), byte 89 bit 7 and bytes 90-91 (shirt and body shape), and the look from byte 92
-(`models`).
+Fame (byte 85 bits 0-2, 0-7) is the "Fama" of FVitor7's PES-EDITOR-PS2 (GitHub), whose own
+values for it (A 7, B 6, C 5, D 3, off 1) are in these bits; on the disc 7 is the stars (Messi,
+C. Ronaldo, Rooney, Iniesta, Buffon), and among players of 24-28 the mean of a player's best 12
+ratings rises from 75.1 at 0 to 87.8 at 7. Nothing on screen shows it; it is ranked like a
+rating, on the player's match rating, minutes and age.
+
+Written elsewhere, not here: bytes 48-49, the commentary name, byte 51 bit 0 (`models`), the
+registered position (byte 53 bits 4-7) and the playable flags (bit 7 of bytes 54-65), which the
+patcher writes from the role, and the look from byte 92 (`models`).
+
+Unidentified, and left as the record has them:
+
+- byte 85 bit 3: set on 3976 records, 98% of those with fame 0 and 59% of those with fame 7,
+  and falling with age (100% at 17, 57% at 35). Tried: correlation with every field, age,
+  position and the pesmaster cards of 208 matched players; editors (PES 6, FVitor7) treat it as
+  part of the 16-bit "Fama" word.
+- byte 85 bit 4 (set on 288) and bit 6 (set on 131): no field, card or category of pesmaster
+  goes with either; same attempts.
+- byte 87 bit 0: set on 1043 records, with a left foot on 1052 of the 1083 left-footers and on
+  8 right-footers; no left-footer's card, free-kick or penalty motion explains the exceptions.
+- byte 87 bit 4: set on 459 records. PES 6's and FVitor7's editors call bit 4 of this byte
+  "Ability Edited", but on a retail disc no record has been edited.
+- byte 87 bits 3 and 5-7 and byte 88 bits 6-7: 0 on every record.
+- byte 89 bit 7 (set on 832) and bytes 90-91: PES 6 reads them as shirt and body shape; not
+  checked in this game (`models`).
 
 Each rating ranks one or more of the player's stats (`SOURCES`, `KEEPER_SOURCES`) against his
 group (goalkeepers, defenders, midfielders, attackers) in the league fetched and takes the value
@@ -130,6 +147,7 @@ FIELDS: dict[str, tuple[int, int, int]] = {
     "super_sub": (83, 7, 1),
     "celebration_2": (84, 0, 0x7F),
     "long_throw": (84, 7, 1),
+    "fame": (85, 0, 0x07),
     "turning": (85, 5, 1),
     "flip_flap": (85, 7, 1),
     "growth_type": (86, 0, 0xFF),
@@ -170,6 +188,7 @@ SOURCES: dict[str, tuple[str, ...]] = {
     "technique": ("pass_accuracy", "dribble_success", "fouls_drawn"),
     "aggression": ("shots", "crosses", "fouls_drawn"),
     "mentality": ("experience", "starts"),
+    "fame": ("rating", "minutes", "experience"),
     "consistency": ("starts",),
     "condition": ("rating",),
     "injury_tolerance": ("appearances",),
@@ -209,6 +228,7 @@ KEEPER_SOURCES: dict[str, tuple[str, ...]] = {
     "long_pass_accuracy": ("long_ball_accuracy",),
     "long_pass_speed": ("long_balls",),
     "mentality": ("experience", "clean_sheets"),
+    "fame": ("rating", "minutes", "experience"),
     "consistency": ("starts",),
     "condition": ("rating",),
     "injury_tolerance": ("appearances",),

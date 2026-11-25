@@ -27,17 +27,21 @@ from retro_roster_patcher.games.pes2013_ps2.models import (
     CLUB_COUNT,
     DATABASE_OVERLAY_ENGLISH,
     NATIONAL_SLOT_BASE,
+    NO_CALL_NAME,
     PLAYER_ENTRIES,
     PLAYER_RECORD_SIZE,
     POSITION_BYTE,
     TEXT_AFS,
+    PESLook,
     PESPlayer,
 )
 from retro_roster_patcher.games.pes2013_ps2.patcher import (
     PES2013PS2Patcher,
+    call_name,
     lineup_role,
     own_abilities,
     squad_order,
+    with_nations,
 )
 from retro_roster_patcher.games.pes2013_ps2.rom_reader import RomReader
 from retro_roster_patcher.games.pes2013_ps2.rom_writer import (
@@ -1724,3 +1728,50 @@ def test_on_the_disc_the_copies_leave_the_national_rows_level(disc, clubs, small
         sizes = [sum(1 for i in t.national_squad(r) if i) for r in range(67)]
         assert min(sizes) == smallest, sizes
     assert min(players for _, players in short.values()) == smallest
+
+
+def test_a_player_is_called_by_his_own_name_or_by_none():
+    assert call_name(PESPlayer("THIAGO SILVA", "SILVA"), None) == 3158
+    assert call_name(PESPlayer("BERNARDO SILVA", "SILVA"), None) == 1815
+    assert call_name(PESPlayer("LIONEL MESSI", "MESSI"), None) == 1007
+    assert call_name(PESPlayer("JUDE BELLINGHAM", "BELLINGHAM"), None) == NO_CALL_NAME
+    disc = bytearray(PLAYER_RECORD_SIZE)
+    disc[48:50] = (52).to_bytes(2, "little")
+    assert call_name(PESPlayer("NOT XAVI", "NOBODY"), bytes(disc)) == 52
+    disc[48:50] = b"\xff\xff"
+    assert call_name(PESPlayer("LIONEL MESSI", "MESSI"), bytes(disc)) == 1007
+
+
+def test_a_player_gets_his_nations_flag_else_his_teams_most_common():
+    nations = [("SPAIN", "ESP"), ("TURKEY", "TUR"), ("CÔTE D'IVOIRE", "CIV"), ("ENGLAND", "ENG")]
+    team = [
+        PESPlayer("A", "A", nationality=n)
+        for n in ("Spain", "Türkiye", "Ivory Coast", "England", "Spain", "Dominican Republic", "")
+    ]
+    team.append(PESPlayer("B", "B", look=PESLook(disc_record=5)))
+    assert [p.nation for p in with_nations(team, nations)] == [0, 1, 2, 3, 0, 0, 0, None]
+    assert with_nations([PESPlayer("C", "C")], nations)[0].nation == 0
+
+
+def test_patch_writes_nationality_and_call_name_of_the_player_not_the_record(iso, tmp_path):
+    patcher = PES2013PS2Patcher(tmp_path)
+    rosters = patcher.map_rosters(LEAGUE, [SlotMapping(slot_index=0, team_id=10)])
+    players = rosters.teams[0].players
+    for p in players:
+        p.nationality = "NATION 5"
+    players[0].nationality = "Atlantis"
+    players[1].shirt_name = "MESSI"
+    out = tmp_path / "out.iso"
+    patcher.patch(rom_path=iso, output_path=out, rosters=rosters, looks=False)
+    reader = RomReader(str(out))
+    reader.load()
+    for entry in PLAYER_ENTRIES:
+        tables = reader.player_tables(entry)
+        written = {
+            tables.record(i)[32:48].rstrip(b"\0").decode(): tables.record(i)
+            for i in tables.club_squad(0)
+        }
+        raya, saliba = written["RAYA"], written["MESSI"]
+        assert raya[112] == saliba[112] == 5 and written["SAKA"][112] == 5
+        assert raya[48:50] == b"\xff\xff" and saliba[48:50] == (1007).to_bytes(2, "little")
+        assert all(written[n][51] & 1 == 0 for n in ("RAYA", "MESSI", "RICE", "SAKA"))

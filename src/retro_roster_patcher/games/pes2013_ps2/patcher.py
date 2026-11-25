@@ -28,15 +28,17 @@ from __future__ import annotations
 import base64
 import hashlib
 import heapq
+import json
 from collections import Counter
 from collections.abc import Callable, Collection
 from copy import deepcopy
 from dataclasses import dataclass, replace
 from datetime import date
-from functools import partial
+from functools import cache, partial
 from pathlib import Path
 from typing import Any
 
+from ...core.assets import package_bytes
 from ...core.errors import ApiError, CapabilityError, MappingError, RomError, as_rom_error
 from ...core.headshots import measure_faces
 from ...core.kits import KitSpec, default_kits, kit_from_image
@@ -74,10 +76,13 @@ from .kits import (
     retail_national,
 )
 from .models import (
+    CALL_NAME_BYTE,
+    CALL_NAMES_FILE,
     CLUB_COUNT,
     CLUB_SQUAD_SIZE,
     DATABASE_OVERLAY_ENGLISH,
     DATABASE_OVERLAYS,
+    DEFAULT_NATIONALITY,
     DISPLAY_NAME_CHARS,
     FIRST_CLUB_FORMATION,
     FORMATION_TEAMS,
@@ -93,6 +98,7 @@ from .models import (
     NATIONAL_NAMED,
     NATIONAL_SLOT_BASE,
     NATIONAL_SQUAD_SIZE,
+    NO_CALL_NAME,
     PART_PLAYERS,
     PLAYER_ENTRIES,
     PLAYER_RECORD_SIZE,
@@ -134,6 +140,18 @@ NATIONAL_ALIASES = {
     "KOREA REPUBLIC": "SOUTH KOREA",
     "UNITED STATES": "USA",
     "UAE": "UNITED ARAB EMIRATES",
+    "BOSNIA AND HERZEGOVINA": "BOSNIA-HERZEGOVINA",
+    "COTE D'IVOIRE": "IVORY COAST",
+    "SOUTH KOREA": "KOREA REPUBLIC",
+    "TURKEY": "TURKIYE",
+    "IRELAND": "REPUBLIC OF IRELAND",
+    "DR CONGO": "CONGO DR",
+    "MACEDONIA": "NORTH MACEDONIA",
+    "CAPE VERDE": "CAPE VERDE ISLANDS",
+    "REPUBLIC OF THE GAMBIA": "GAMBIA",
+    "THE COMOROS": "COMOROS",
+    "CENTRAL AFRICAN REP.": "CENTRAL AFRICAN REPUBLIC",
+    "CHINA": "CHINA PR",
 }
 #: The ESPN team id of each disc club ESPN has (slots 0-125; the English group's 19 are
 #: unlicensed): a club fill puts the club back in its own slot (`own_club_slot`).
@@ -251,15 +269,16 @@ def pes_name(player: Player) -> str:
 
 def nation_ident(nationalities: list[tuple[str, str]], name: str, code: str) -> int | None:
     """The disc's nationality (its flag) of the nation called `name` (`code`): the one of
-    `nationalities` (the English names and codes) whose name is `name` (`NATIONAL_ALIASES`
-    turning the disc's spelling into ESPN's), else whose code is `code` when no other has
-    it. A placeholder without a name (101-103) is none."""
+    `nationalities` (the English names and codes) whose name, or its ESPN spelling
+    (`NATIONAL_ALIASES`), is `name`, else whose code is `code` when no other has it. A
+    placeholder without a name (101-103) is none."""
 
     def key(text: str) -> str:
         return ascii_fold(text).upper()
 
     real = [(k, n, c.upper()) for k, (n, c) in enumerate(nationalities) if any(map(str.isalpha, n))]
-    by_name = {key(NATIONAL_ALIASES.get(key(n), n)): k for k, n, _ in real}
+    by_name = {key(n): k for k, n, _ in real}
+    by_name.update({key(NATIONAL_ALIASES.get(key(n), n)): k for k, n, _ in real})
     codes = Counter(c for _, _, c in real)
     by_code = {c: k for k, _, c in real if codes[c] == 1}
     ident = by_name.get(key(name))
@@ -511,6 +530,53 @@ def own_abilities(player: PESPlayer) -> dict[str, int]:
     """Every `abilities.FIELDS` value of the player: his own data's, his group's default for
     the rest."""
     return {**defaults(player.position), **player.abilities}
+
+
+def with_nations(players: list[PESPlayer], nationalities: list[tuple[str, str]]) -> list[PESPlayer]:
+    """`players` with their `nation`: the disc's flag of their nationality (`nation_ident`),
+    else the team's most common such flag (`DEFAULT_NATIONALITY` when none has one); a
+    player on the disc already whose nationality is not known keeps his record's."""
+    idents = [nation_ident(nationalities, p.nationality, "") for p in players]
+    known = Counter(i for i in idents if i is not None)
+    default = known.most_common(1)[0][0] if known else DEFAULT_NATIONALITY
+    return [
+        replace(p, nation=default if i is None and not _on_disc(p) else i)
+        for p, i in zip(players, idents, strict=True)
+    ]
+
+
+def _on_disc(player: PESPlayer) -> bool:
+    return player.look is not None and player.look.disc_record is not None
+
+
+def _call_key(text: str) -> str:
+    return " ".join("".join(c if c.isalpha() else " " for c in ascii_fold(text).upper()).split())
+
+
+@cache
+def call_names() -> dict[str, int]:
+    """The commentary names Edit Player offers, folded, to their call id (the lower of two
+    that say the same name)."""
+    raw = json.loads(package_bytes("retro_roster_patcher.assets", CALL_NAMES_FILE))["names"]
+    out: dict[str, int] = {}
+    for ident, name in sorted(raw.items(), key=lambda kv: int(kv[0])):
+        out.setdefault(_call_key(name), int(ident))
+    return out
+
+
+def call_name(player: PESPlayer, disc_record: bytes | None) -> int:
+    """The commentary name for the player: his disc record's when he is on the disc and it
+    has one, else the one that says his display name (THIAGO SILVA), else his shirt name
+    (SILVA), else `NO_CALL_NAME`: never another man's."""
+    if disc_record is not None:
+        own = int.from_bytes(disc_record[CALL_NAME_BYTE : CALL_NAME_BYTE + 2], "little")
+        if own != NO_CALL_NAME:
+            return own
+    names = call_names()
+    for name in (player.display_name, player.shirt_name):
+        if (ident := names.get(_call_key(name))) is not None:
+            return ident
+    return NO_CALL_NAME
 
 
 def age_today(player: Player, today: date | None = None) -> int:
@@ -970,12 +1036,12 @@ class PES2013PS2Patcher(Patcher):
         if not Path(rom_path).exists():
             raise RomError(f"ROM not found: {rom_path}")
         blank_kinds = _blank_kinds(options.get("blank_unused", False))
+        # Looks, on a copy: the caller's records are left as mapped.
+        rosters = self._dress(rosters, bool(options.get("looks", True)))
         rosters = self._with_nations(rom_path, rosters)
         # Every kit choice is read and checked before the disc is copied, so a
         # bad picture is refused up front instead of after a 2 GB write.
         kit_choices = self._resolve_kits(rosters, options.get("kits", True))
-        # Looks, on a copy: the caller's records are left as mapped.
-        rosters = self._dress(rosters, bool(options.get("looks", True)))
         with as_rom_error(rom_path):
             writer = RomWriter(str(rom_path), str(output_path))
             self.status("Copying ISO...")
@@ -1012,6 +1078,7 @@ class PES2013PS2Patcher(Patcher):
                     for t in tables.values():
                         RomWriter.set_player_names(t, index, player.display_name, player.shirt_name)
                         self._write_look(t, index, player, disc)
+                        self._write_identity(t, index, player, disc)
                         self._write_position(t, index, player)
                         RomWriter.set_abilities(t, index, own_abilities(player))
                         if player.number:
@@ -1096,14 +1163,18 @@ class PES2013PS2Patcher(Patcher):
 
     def _with_nations(self, rom_path: Path, rosters: MappedRosters) -> MappedRosters:
         """A copy of `rosters` whose national teams carry their nationality on the disc
-        (`PESTeamRecord.nation`). A team the disc has no flag for (no nation the fill
-        reaches) keeps the row's name, flag and kits, as before the fill, with a status line."""
-        national = [s for s in rosters.teams if s >= NATIONAL_SLOT_BASE]
-        if not national:
-            return rosters
+        (`PESTeamRecord.nation`) and whose players carry theirs (`with_nations`). A team the
+        disc has no flag for (no nation the fill reaches) keeps the row's name, flag and kits,
+        as before the fill, with a status line. On a disc whose nationality table is not
+        found, nothing changes."""
         nationalities = self._nationalities(rom_path)
-        teams = dict(rosters.teams)
-        for slot in national:
+        if not nationalities:
+            return rosters
+        teams = {
+            slot: replace(record, players=with_nations(record.players, nationalities))
+            for slot, record in rosters.teams.items()
+        }
+        for slot in [s for s in teams if s >= NATIONAL_SLOT_BASE]:
             record = teams[slot]
             ident = nation_ident(nationalities, record.name, record.code)
             if ident is None:
@@ -1165,6 +1236,15 @@ class PES2013PS2Patcher(Patcher):
             else:
                 RomWriter.set_look(t, index, player.look)
         RomWriter.set_age(t, index, player.age)
+
+    @staticmethod
+    def _write_identity(t: PlayerTables, index: int, player: PESPlayer, disc: _Disc) -> None:
+        """Record `index`'s commentary name (`call_name`) and nationality (`PESPlayer.nation`;
+        None keeps what the look copied from his disc record)."""
+        source = disc.record(player.look.disc_record) if player.look is not None else None
+        RomWriter.set_call_name(t, index, call_name(player, source))
+        if player.nation is not None:
+            RomWriter.set_nationality(t, index, player.nation)
 
     def _fit_player_tables(
         self,
@@ -1431,6 +1511,7 @@ class PES2013PS2Patcher(Patcher):
                 for t in tables.values():
                     RomWriter.set_player_names(t, idx, player.display_name, player.shirt_name)
                     self._write_look(t, idx, player, disc)
+                    self._write_identity(t, idx, player, disc)
                     self._write_position(t, idx, player)
                     RomWriter.set_abilities(t, idx, own_abilities(player))
                 written += 1

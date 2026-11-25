@@ -26,6 +26,7 @@ from .models import (
     AGE_SHIFT,
     BEARD_BYTE,
     BEARD_COLOUR_BYTE,
+    CALL_NAME_BYTE,
     CLUB_SQUAD_SIZE,
     COLOUR_RGB,
     DISPLAY_NAME_BYTES,
@@ -40,7 +41,10 @@ from .models import (
     LEAGUE_NAME_ENTRIES,
     LOOK_END,
     LOOK_START,
+    NATIONAL_DOUBLE_BYTE,
+    NATIONAL_DOUBLE_FLAG,
     NATIONAL_SLOT_BASE,
+    NATIONALITY_BYTE,
     OVER_AFS,
     PART_CLUB_NUMBERS,
     PART_PLAYERS,
@@ -140,6 +144,20 @@ class RomWriter:
         players[start : start + DISPLAY_NAME_BYTES] = display_name_bytes(display)
         shirt_at = start + DISPLAY_NAME_BYTES
         players[shirt_at : shirt_at + SHIRT_NAME_BYTES] = shirt_name_bytes(shirt)
+        players[start + NATIONAL_DOUBLE_BYTE] &= ~NATIONAL_DOUBLE_FLAG & 0xFF
+        tables.parts[PART_PLAYERS] = bytes(players)
+
+    @staticmethod
+    def set_call_name(tables: PlayerTables, index: int, call: int) -> None:
+        """Record `index`'s commentary name (`CALL_NAME_BYTE`, `NO_CALL_NAME` for none)."""
+        players = bytearray(tables.players)
+        struct.pack_into("<H", players, index * PLAYER_RECORD_SIZE + CALL_NAME_BYTE, call)
+        tables.parts[PART_PLAYERS] = bytes(players)
+
+    @staticmethod
+    def set_nationality(tables: PlayerTables, index: int, nation: int) -> None:
+        players = bytearray(tables.players)
+        players[index * PLAYER_RECORD_SIZE + NATIONALITY_BYTE] = nation
         tables.parts[PART_PLAYERS] = bytes(players)
 
     @staticmethod
