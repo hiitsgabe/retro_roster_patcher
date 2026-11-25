@@ -22,7 +22,8 @@ from retro_roster_patcher.games.nhl05_ps2.patcher import (
     _MasterTables,
 )
 from retro_roster_patcher.games.nhl05_ps2.rom_writer import NHL05PS2RomWriter
-from retro_roster_patcher.sports.models import League, LeagueData, Player
+from retro_roster_patcher.games.nhl05_ps2.stat_mapper import SPREAD
+from retro_roster_patcher.sports.models import League, LeagueData, Player, Team, TeamRoster
 from tests.fixtures import synthetic_nhl05_iso as fx
 from tests.fixtures.synthetic_tdb import TYPE_UINT, FieldSpec, TableSpec, build_tdb, pack_bits
 
@@ -203,12 +204,16 @@ def test_mapping_puts_the_free_agents_under_their_own_key(tmp_path):
     assert [r.last_name for r in mapped.teams[FREE_AGENTS]] == ["Leddy"]
 
 
-def test_a_free_agents_line_rates_him(tmp_path):
+def test_a_free_agents_line_ranks_him_against_the_clubs_players(tmp_path):
     data = league_with_free_agents(
         [Player(id=7, name="Nick Leddy", position="D")], {"7": {"PTS": 90, "GP": 82}}
     )
+    club = [Player(id=100 + i, name=f"D {i}", position="D") for i in range(20)]
+    lines = {str(p.id): {"GP": 82, "PTS": i} for i, p in enumerate(club)}
+    team = Team(id=1, name="Anaheim", code="ANA", logo_url="")
+    data.teams.append(TeamRoster(team=team, players=club, extra={"leaders": lines}))
     mapped = NHL05PS2Patcher(tmp_path / "cache").map_rosters(data)
-    assert mapped.teams[FREE_AGENTS][0].skater_attrs.deking == 63
+    assert mapped.teams[FREE_AGENTS][0].skater_attrs.balance == SPREAD["D"]["balance"][-1]
 
 
 def test_a_league_without_free_agents_maps_none(tmp_path):

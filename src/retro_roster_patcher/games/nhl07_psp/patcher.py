@@ -18,8 +18,9 @@ him.
 
 The writes are mirrored across three TDB files. `nhl2007.tdb` is the master and
 holds every table; `nhlbioatt.tdb` holds a second copy of SPBT/SPAI/SGAI and
-`nhlrost.tdb` a second copy of ROST. Mirror every master write at the same
-index, when the mirror has one.
+`nhlrost.tdb` a second copy of ROST. Mirror every bio and ratings write at the
+mirror's own row of that player id (the same index on the retail disc, but
+checked), and every ROST write at the same index, when the mirror has one.
 
 `analyze_rom` and `patch` deliberately do not apply the same checks; do not
 harmonise them. See `analyze_rom`.
@@ -35,7 +36,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from ...core import nhl_clubs
+from ...core import hockey_ratings, nhl_clubs
 from ...core.assets import crest_png
 from ...core.concurrency import parallel_map
 from ...core.errors import ApiError, CapabilityError, RomError, as_rom_error
@@ -104,7 +105,7 @@ from .screens import (
     read_picture,
     slot_archives,
 )
-from .stat_mapper import MAX_PLAYERS, NHL07StatMapper
+from .stat_mapper import MAX_PLAYERS, SOURCES, NHL07StatMapper
 from .strings import (
     FMISC_VIV_PATH,
     LOCAL_BH_NAME,
@@ -295,12 +296,19 @@ class _MirrorTables:
 
     bioatt: TDBFile | None
     roster_rost: TDBTable | None
+    #: The mirror's own row of each player id, per table: SPBT, SPAI, SGAI.
+    rows: dict[str, dict[int, int]]
 
     @classmethod
     def of(cls, bioatt: TDBFile | None, roster: TDBFile | None) -> _MirrorTables:
+        rows = {}
+        for name in ("SPBT", "SPAI", "SGAI"):
+            table = bioatt.get_table(name) if bioatt is not None else None
+            rows[name] = _index_map(table) if table is not None else {}
         return cls(
             bioatt=bioatt,
             roster_rost=roster.get_table("ROST") if roster is not None else None,
+            rows=rows,
         )
 
     def write_rost(self, index: int, values: Mapping[str, object]) -> None:
@@ -727,6 +735,16 @@ class NHL07PSPPatcher(Patcher):
         Sparse: a key exists only for a slot some fetched team mapped to.
         """
         self.check_slot_mapping(slot_mapping)
+        # Every fetched player is the league each one's ratings rank against
+        # (`stat_mapper.SOURCES`), those whose team has no slot among them.
+        league = hockey_ratings.League.from_lines(
+            (
+                (player, (roster.extra.get("leaders") or {}).get(str(player.id)) or {})
+                for roster in data.teams
+                for player in roster.players
+            ),
+            SOURCES,
+        )
         teams: dict[int, list[NHL07PlayerRecord]] = {}
         for roster in data.teams:
             slot = self.mapper.get_team_slot(roster.team.code)
@@ -741,7 +759,9 @@ class NHL07PSPPatcher(Patcher):
                 else self.mapper.select_roster(roster.players, leaders, max_players=MAX_PLAYERS)
             )
             records = [
-                self.mapper.map_player(player, roster.team.code, leaders.get(str(player.id), {}))
+                self.mapper.map_player(
+                    player, roster.team.code, leaders.get(str(player.id), {}), league
+                )
                 for player in selected
             ]
 
@@ -1179,7 +1199,9 @@ class NHL07PSPPatcher(Patcher):
             )
             if roster_slot.sgai_index is not None:
                 goalie_slots.append(roster_slot)
-            else:
+            elif roster_slot.spai_index is not None:
+                # A row with no ratings row of its own would keep the disc
+                # player's, so it takes no one and is undressed with the rest.
                 skater_slots.append(roster_slot)
 
         return team_rows, goalie_slots, skater_slots
@@ -1198,21 +1220,19 @@ class NHL07PSPPatcher(Patcher):
         `write_goalie_attrs` each test the index against the table's capacity and
         return without writing.
         """
+        mirror = mirrors.rows
+        pid = roster_slot.player_id
         writer.write_player_bio(tables.tdb, roster_slot.bio_index, player)
-        if mirrors.bioatt is not None:
-            writer.write_player_bio(mirrors.bioatt, roster_slot.bio_index, player)
+        if mirrors.bioatt is not None and (row := mirror["SPBT"].get(pid)) is not None:
+            writer.write_player_bio(mirrors.bioatt, row, player)
 
         if player.is_goalie and player.goalie_attrs is not None:
             if roster_slot.sgai_index is not None:
                 writer.write_goalie_attrs(tables.tdb, roster_slot.sgai_index, player.goalie_attrs)
-                if mirrors.bioatt is not None:
-                    writer.write_goalie_attrs(
-                        mirrors.bioatt, roster_slot.sgai_index, player.goalie_attrs
-                    )
+                if mirrors.bioatt is not None and (row := mirror["SGAI"].get(pid)) is not None:
+                    writer.write_goalie_attrs(mirrors.bioatt, row, player.goalie_attrs)
         elif player.skater_attrs is not None:
             if roster_slot.spai_index is not None:
                 writer.write_skater_attrs(tables.tdb, roster_slot.spai_index, player.skater_attrs)
-                if mirrors.bioatt is not None:
-                    writer.write_skater_attrs(
-                        mirrors.bioatt, roster_slot.spai_index, player.skater_attrs
-                    )
+                if mirrors.bioatt is not None and (row := mirror["SPAI"].get(pid)) is not None:
+                    writer.write_skater_attrs(mirrors.bioatt, row, player.skater_attrs)

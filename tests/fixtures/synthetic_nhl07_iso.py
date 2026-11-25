@@ -88,7 +88,8 @@ MEMBER_SLACK = 8192
 # several straddle a byte boundary. A layout of byte-aligned bytes would let a
 # writer that ignored `bit_width` pass every test here.
 
-# 47 bytes: two 20-byte names, then eight integers packed into the tail.
+# 70 bytes: two 20-byte names, eight integers packed into the tail, then the
+# birth fields the writer also takes (`INTL` to `DAY_`, and `CITY`).
 #   bits   0..159  FNME  20 ASCII bytes
 #   bits 160..319  LNME  20 ASCII bytes
 #   bits 320..335  INDX  16 bits, byte-aligned
@@ -110,8 +111,14 @@ SPBT_FIELDS = [
     FieldSpec("WEIG", TYPE_UINT, 353, 8),
     FieldSpec("HEIG", TYPE_UINT, 361, 5),
     FieldSpec("SKIN", TYPE_UINT, 366, 3),
+    FieldSpec("INTL", TYPE_UINT, 369, 7),
+    FieldSpec("STAT", TYPE_UINT, 376, 7),
+    FieldSpec("YEAR", TYPE_UINT, 383, 6),
+    FieldSpec("MONT", TYPE_UINT, 389, 4),
+    FieldSpec("DAY_", TYPE_UINT, 393, 5),
+    FieldSpec("CITY", TYPE_STRING, 400, 160),
 ]
-SPBT_RECORD_SIZE = 47
+SPBT_RECORD_SIZE = 70
 
 # The 21 six-bit skater ratings, in the order the writer lists them. `FIGH` is
 # two bits and is appended after them, so no rating is at a multiple of eight
@@ -139,11 +146,14 @@ SKATER_ATTR_NAMES = [
     "SPOW",
     "WPOW",
 ]
+# The three four-bit AI biases, after `FIGH`.
+SKATER_BIASES = ["PCBI", "ODBI", "SPBI"]
 SPAI_FIELDS = [FieldSpec("INDX", TYPE_UINT, 0, 16)] + [
     FieldSpec(name, TYPE_UINT, 16 + i * 6, 6) for i, name in enumerate(SKATER_ATTR_NAMES)
 ]
 SPAI_FIELDS.append(FieldSpec("FIGH", TYPE_UINT, 16 + len(SKATER_ATTR_NAMES) * 6, 2))
-SPAI_RECORD_SIZE = 18  # 16 + 21*6 + 2 = 144 bits
+SPAI_FIELDS += [FieldSpec(name, TYPE_UINT, 144 + i * 4, 4) for i, name in enumerate(SKATER_BIASES)]
+SPAI_RECORD_SIZE = 20  # 16 + 21*6 + 2 + 3*4 = 156 bits
 
 GOALIE_ATTR_NAMES = [
     "BRKA",
@@ -163,11 +173,14 @@ GOALIE_ATTR_NAMES = [
     "GSL_",
     "SSL_",
 ]
+# The five two-bit goalie style fields, after `FIGH`.
+GOALIE_STYLE = ["POSI", "PADL", "STYL", "FLOP", "CONS"]
 SGAI_FIELDS = [FieldSpec("INDX", TYPE_UINT, 0, 16)] + [
     FieldSpec(name, TYPE_UINT, 16 + i * 6, 6) for i, name in enumerate(GOALIE_ATTR_NAMES)
 ]
 SGAI_FIELDS.append(FieldSpec("FIGH", TYPE_UINT, 16 + len(GOALIE_ATTR_NAMES) * 6, 2))
-SGAI_RECORD_SIZE = 15  # 16 + 16*6 + 2 = 114 bits
+SGAI_FIELDS += [FieldSpec(name, TYPE_UINT, 114 + i * 2, 2) for i, name in enumerate(GOALIE_STYLE)]
+SGAI_RECORD_SIZE = 16  # 16 + 16*6 + 2 + 5*2 = 124 bits
 
 # The sixty-four single-bit line flags of the retail disc's ROST (ULUS10131),
 # in the disc's order. Restated here rather than imported: importing the list
@@ -402,6 +415,12 @@ def disc_bio_values(team: int, row: int, height: int = DEFAULT_DISC_HEIGHT) -> d
         "WEIG": 120 + row,
         "HEIG": height,
         "SKIN": 1 + row % 7,
+        "INTL": 60 + team,
+        "STAT": 70 + team,
+        "YEAR": 20 + row % 10,
+        "MONT": 1 + row % 12,
+        "DAY_": 1 + row % 28,
+        "CITY": f"DiscCity{row}",
     }
 
 

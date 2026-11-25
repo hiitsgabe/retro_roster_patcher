@@ -420,6 +420,15 @@ def test_a_key_naming_no_field_is_ignored():
     assert "NOPE" not in table.read_record(0)
 
 
+def test_a_strict_write_reports_a_key_naming_no_field_and_writes_nothing():
+    # A misspelled rating name must not be dropped in silence.
+    table = TDBFile.parse(_build("single")).tables["SPBT"]
+    before = table.read_record(0)
+    with pytest.raises(RomError, match="SPBT has no field NOPE"):
+        table.write_record(0, {"NOPE": 1, "SACC": 7}, strict=True)
+    assert table.read_record(0) == before
+
+
 def test_a_value_too_wide_for_its_field_saturates_rather_than_wrapping():
     # SACC is 7 bits. Wrapping would give 200 & 127 == 72, which is a plausible
     # rating and therefore the worse failure; clamping gives the ceiling.

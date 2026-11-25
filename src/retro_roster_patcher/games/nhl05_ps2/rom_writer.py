@@ -31,8 +31,10 @@ from ...formats.ea_tdb import (
     refpack_compress,
 )
 from .models import (
+    GOALIE_FIELDS,
     NAME_FIELD_CHARS,
     POSITION_REVERSE,
+    SKATER_FIELDS,
     NHL05GoalieAttributes,
     NHL05PlayerRecord,
     NHL05SkaterAttributes,
@@ -257,7 +259,7 @@ class NHL05PS2RomWriter:
         if player.height > 0:
             values["HEIG"] = player.height
 
-        spbt.write_record(record_idx, values)
+        spbt.write_record(record_idx, values, strict=True)
 
     def write_skater_attrs(
         self,
@@ -266,7 +268,7 @@ class NHL05PS2RomWriter:
         attrs: NHL05SkaterAttributes,
         player_id: int = 0,
     ) -> None:
-        """Update one SPAI record from a skater's 22 ratings.
+        """Update one SPAI record from a skater's ratings, every field but `INDX`.
 
         Write `INDX` only for a positive `player_id`: the record was found *by*
         its `INDX`, and rewriting it with a wrong id detaches the attributes
@@ -277,32 +279,11 @@ class NHL05PS2RomWriter:
             return
 
         values: dict[str, object] = {
-            "BALA": attrs.balance,
-            "PENA": attrs.penalty,
-            "SACC": attrs.shot_accuracy,
-            "WACC": attrs.wrist_accuracy,
-            "FACE": attrs.faceoffs,
-            "ACCE": attrs.acceleration,
-            "SPEE": attrs.speed,
-            "POTE": attrs.potential,
-            "DEKG": attrs.deking,
-            "CHKG": attrs.checking,
-            "TOUG": attrs.toughness,
-            "FIGH": attrs.fighting,
-            "PUCK": attrs.puck_control,
-            "AGIL": attrs.agility,
-            "HERO": attrs.hero,
-            "AGGR": attrs.aggression,
-            "PRES": attrs.pressure,
-            "PASS": attrs.passing,
-            "ENDU": attrs.endurance,
-            "INJU": attrs.injury,
-            "SPOW": attrs.slap_power,
-            "WPOW": attrs.wrist_power,
+            code: getattr(attrs, name) for name, code in SKATER_FIELDS.items()
         }
         if player_id > 0:
             values["INDX"] = player_id
-        spai.write_record(record_idx, values)
+        spai.write_record(record_idx, values, strict=True)
 
     def write_goalie_attrs(
         self,
@@ -311,39 +292,17 @@ class NHL05PS2RomWriter:
         attrs: NHL05GoalieAttributes,
         player_id: int = 0,
     ) -> None:
-        """Update one SGAI record from a goalie's 17 ratings.
-
-        `SPEE`, `POTE`, `TOUG`, `FIGH`, `AGIL`, `PASS` and `ENDU` are spelled
-        the same here as in SPAI and are different fields in a different table;
-        the five save zones and `BRKA`, `REBC`, `SREC`, `POKE` and `INTE` have
-        no skater counterpart.
-        """
+        """Update one SGAI record from a goalie's ratings, every field but `INDX`."""
         sgai = tdb.get_table("SGAI")
         if sgai is None or record_idx >= sgai.capacity:
             return
 
         values: dict[str, object] = {
-            "BRKA": attrs.breakaway,
-            "REBC": attrs.rebound_ctrl,
-            "SREC": attrs.shot_recovery,
-            "SPEE": attrs.speed,
-            "POKE": attrs.poke_check,
-            "INTE": attrs.intensity,
-            "POTE": attrs.potential,
-            "TOUG": attrs.toughness,
-            "FIGH": attrs.fighting,
-            "AGIL": attrs.agility,
-            "5HOL": attrs.five_hole,
-            "PASS": attrs.passing,
-            "ENDU": attrs.endurance,
-            "GSH_": attrs.glove_high,
-            "SSH_": attrs.stick_high,
-            "GSL_": attrs.glove_low,
-            "SSL_": attrs.stick_low,
+            code: getattr(attrs, name) for name, code in GOALIE_FIELDS.items()
         }
         if player_id > 0:
             values["INDX"] = player_id
-        sgai.write_record(record_idx, values)
+        sgai.write_record(record_idx, values, strict=True)
 
     @staticmethod
     def roster_values(

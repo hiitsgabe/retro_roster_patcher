@@ -1,20 +1,19 @@
-"""Turn provider roster and stat data into NHL 2005's 0-63 attribute scale.
+"""Turn provider roster and stat data into NHL 2005 records.
 
-This module and `games/nhl07_psp/stat_mapper.py` are the same arithmetic, and
-they stay unshared on purpose: these numbers are a rating policy, not a format,
-and a change made for one game must not reach the other. The one number that
-already differs is the name truncation width, 15 here against 19 there.
-
-The formulas, the scaling windows and the position defaults are transcribed
-unchanged, including where they are visibly rough: changing them changes every
-rating on every patched disc and there is no reference to check against.
+Every rating, the three AI biases and the goalie style fields included, ranks
+the player's own stats against his group in the league fetched and takes the
+value at that rank of the retail disc's own spread (`core.hockey_ratings`,
+`SOURCES`, `SPREAD`). A rating his line has no stat for keeps his position's
+default, the median of the disc's NHL players at that position.
 """
 
 from __future__ import annotations
 
 from dataclasses import replace
+from typing import Any
 
 from ...core.hockey import deployment
+from ...core.hockey_ratings import League, Sources, Spread, age_of, rate
 from ...sports.models import Player
 from .models import (
     BIRTH_YEAR_BASE,
@@ -28,11 +27,6 @@ from .models import (
     NHL05PlayerRecord,
     NHL05SkaterAttributes,
 )
-
-# Attribute floor and ceiling. Six bits, so 0-63 for everything except `FIGH`,
-# which is two bits and is clamped separately where it is computed.
-ATTR_MIN = 0
-ATTR_MAX = 63
 
 # The most ROST rows the disc gives a club (they ship 30 to 40), and
 # `select_roster`'s default size. `patcher.map_rosters` keeps the whole squad:
@@ -91,134 +85,305 @@ SLOT_ROLES = {
     "S": ("L1LW", "L1RW", "L1C_", "L2LW", "L2RW"),
 }
 
-# Per-position starting points, used whole when a player has no stats and as the
-# base for several derived ratings when he does. Copied, not shared: every read
-# goes through `dataclasses.replace`, so the module constant never reaches a
-# record. See `_defaults_for`.
-SKATER_DEFAULTS = {
-    "C": NHL05SkaterAttributes(
-        balance=35,
-        penalty=30,
-        shot_accuracy=35,
-        wrist_accuracy=35,
-        faceoffs=40,
-        acceleration=35,
-        speed=35,
-        potential=35,
-        deking=35,
-        checking=30,
-        toughness=25,
-        fighting=1,
-        puck_control=35,
-        agility=35,
-        hero=30,
-        aggression=25,
-        pressure=30,
-        passing=38,
-        endurance=35,
-        injury=35,
-        slap_power=30,
-        wrist_power=30,
-    ),
-    "LW": NHL05SkaterAttributes(
-        balance=33,
-        penalty=30,
-        shot_accuracy=35,
-        wrist_accuracy=33,
-        faceoffs=20,
-        acceleration=35,
-        speed=35,
-        potential=35,
-        deking=33,
-        checking=33,
-        toughness=30,
-        fighting=1,
-        puck_control=33,
-        agility=35,
-        hero=30,
-        aggression=30,
-        pressure=30,
-        passing=30,
-        endurance=35,
-        injury=35,
-        slap_power=33,
-        wrist_power=33,
-    ),
-    "RW": NHL05SkaterAttributes(
-        balance=33,
-        penalty=30,
-        shot_accuracy=35,
-        wrist_accuracy=33,
-        faceoffs=20,
-        acceleration=35,
-        speed=35,
-        potential=35,
-        deking=33,
-        checking=33,
-        toughness=30,
-        fighting=1,
-        puck_control=33,
-        agility=35,
-        hero=30,
-        aggression=30,
-        pressure=30,
-        passing=30,
-        endurance=35,
-        injury=35,
-        slap_power=33,
-        wrist_power=33,
-    ),
-    "D": NHL05SkaterAttributes(
-        balance=38,
-        penalty=30,
-        shot_accuracy=25,
-        wrist_accuracy=25,
-        faceoffs=15,
-        acceleration=30,
-        speed=30,
-        potential=30,
-        deking=25,
-        checking=40,
-        toughness=35,
-        fighting=1,
-        puck_control=28,
-        agility=30,
-        hero=28,
-        aggression=33,
-        pressure=35,
-        passing=33,
-        endurance=38,
-        injury=35,
-        slap_power=35,
-        wrist_power=25,
-    ),
+#: The stats each rating ranks (`core.hockey_ratings`), chosen on the retail
+#: disc: each is the blend of the provider's stats that best ranks the disc's
+#: own players by their 2003-04 seasons (rank correlation 0.3 to 0.9; NHL stats
+#: API, 422 forwards, 228 defencemen, 55 goalies matched by name). `-` ranks the
+#: other way. Several differ from NHL 07: potential is youth, injury is games
+#: missed (higher is frailer), `PCBI` is high on playmakers and toughness is
+#: penalties and fights. Aggression, `SPBI`, `PADL` and `FLOP` follow nothing
+#: a provider counts (no stat ranks them above 0.25) and keep the defaults, as
+#: does `STYL`: butterfly (2), as every goalie plays today. A goalie's ratings
+#: follow his workload, wins and games, then save %; no provider counts saves
+#: by zone, so the four corner zones rank wins and save %, each on its own
+#: spread, and the five-hole games and wins.
+SKATER_SOURCES: dict[str, tuple[str, ...]] = {
+    "balance": ("points", "ice_time"),
+    "penalty": ("pim",),
+    "shot_accuracy": ("goals", "points"),
+    "wrist_accuracy": ("goals", "points"),
+    "faceoffs": ("faceoffs", "faceoff_pct"),
+    "acceleration": ("points", "-size"),
+    "speed": ("points", "-size"),
+    "potential": ("-age",),
+    "deking": ("points", "-size"),
+    "checking": ("hits", "size", "pim"),
+    "toughness": ("pim", "fights"),
+    "fighting": ("fights",),
+    "pc_bias": ("points", "assists"),
+    "offence_bias": ("ppg", "points"),
+    "puck_control": ("points", "assists"),
+    "agility": ("points", "-size"),
+    "hero": ("points", "ice_time"),
+    "pressure": ("ice_time", "age"),
+    "passing": ("assists",),
+    "endurance": ("ice_time",),
+    "injury": ("-games",),
+    "slap_power": ("goals", "shots"),
+    "wrist_power": ("goals", "shots"),
+}
+SOURCES: Sources = {
+    "F": SKATER_SOURCES,
+    "D": SKATER_SOURCES
+    | {
+        "shot_accuracy": ("points", "assists"),
+        "wrist_accuracy": ("points", "assists"),
+        "faceoffs": ("points",),
+        "acceleration": ("points", "-height"),
+        "speed": ("points", "-height"),
+        "deking": ("points", "-height"),
+        "agility": ("points", "-height"),
+        "slap_power": ("points", "shots"),
+        "wrist_power": ("points", "shots"),
+    },
+    "G": {
+        "breakaway": ("save", "wins"),
+        "rebound_ctrl": ("wins", "save"),
+        "shot_recovery": ("wins", "games"),
+        "speed": ("wins", "games"),
+        "poke_check": ("wins", "games"),
+        "intensity": ("wins", "save"),
+        "potential": ("-age",),
+        "toughness": ("pim",),
+        "fighting": ("pim",),
+        "positioning": ("wins", "games"),
+        "agility": ("wins", "save"),
+        "five_hole": ("games", "wins"),
+        "consistency": ("save",),
+        "passing": ("wins", "pim"),
+        "endurance": ("games",),
+        "glove_high": ("wins", "save"),
+        "stick_high": ("wins", "save"),
+        "glove_low": ("wins", "save"),
+        "stick_low": ("wins", "save"),
+    },
 }
 
-# The position `SKATER_DEFAULTS` falls back to. Left wing and right wing are
-# identical to each other and centre is not, so a player whose position string
-# the provider spelled some other way gets a centre's faceoff rating of 40
-# rather than a winger's 20.
-DEFAULT_POSITION = "C"
-
+# fmt: off
+#: The retail disc's 640 forwards, 332 defencemen, 89 goalies
+#: on NHL rosters: each rating's values at 0%, 5%, ... 100% of them.
+SPREAD: Spread = {
+    "F": {
+        "balance": (0,14,17,19,21,22,23,25,26,27,28,29,30,31,33,34,36,38,40,44,49),
+        "penalty": (0,7,9,10,12,14,15,17,18,20,21,23,24,25,27,28,29,32,36,41,49),
+        "shot_accuracy": (0,4,9,10,12,13,14,15,15,16,17,18,19,21,23,24,27,29,31,36,45),
+        "wrist_accuracy": (0,6,11,14,15,17,18,19,19,20,21,22,23,25,26,29,31,33,36,41,49),
+        "faceoffs": (0,0,1,5,7,8,9,9,10,11,12,13,15,17,19,21,24,27,31,37,49),
+        "acceleration": (0,13,16,20,21,24,25,26,28,29,31,32,33,34,36,37,40,42,44,47,49),
+        "speed": (0,12,18,20,22,23,24,26,28,30,31,32,33,35,36,37,39,41,42,46,49),
+        "potential": (1,8,14,17,18,20,21,22,23,23,24,25,26,27,28,30,33,36,39,42,48),
+        "deking": (0,8,12,16,17,19,21,22,23,24,26,27,28,30,32,33,35,38,39,43,49),
+        "checking": (0,8,12,15,17,19,21,22,24,26,28,30,32,33,35,37,38,41,43,45,49),
+        "toughness": (2,5,6,8,9,10,12,13,15,16,18,19,21,22,24,26,29,35,38,41,49),
+        "fighting": (0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,2,3,3),
+        "pc_bias": (0,2,3,5,5,6,6,6,7,7,7,7,8,8,9,9,10,11,12,13,15),
+        "offence_bias": (0,3,4,4,5,5,6,6,7,8,8,9,9,10,10,11,11,12,12,13,15),
+        "shoot_bias": (0,2,3,4,4,5,5,5,6,7,7,8,8,10,10,11,11,12,13,13,15),
+        "puck_control": (0,5,11,14,16,17,18,19,20,22,23,24,26,28,30,31,33,35,39,41,49),
+        "agility": (0,13,17,20,22,24,25,26,27,29,30,31,32,33,35,37,38,40,42,45,49),
+        "hero": (0,4,9,12,14,15,16,17,18,20,21,23,24,26,28,30,32,33,36,40,49),
+        "aggression": (0,7,9,12,14,15,17,18,19,20,22,23,25,26,28,29,31,33,35,38,49),
+        "pressure": (0,5,7,9,10,12,13,14,15,17,19,20,22,24,25,28,29,32,35,39,49),
+        "passing": (0,9,15,17,18,20,21,21,22,23,24,26,26,28,29,31,33,35,38,41,49),
+        "endurance": (0,7,12,14,16,17,19,21,22,23,24,26,27,29,31,34,35,37,40,42,49),
+        "injury": (0,0,1,2,3,4,7,9,11,14,17,20,25,25,25,25,25,29,32,38,49),
+        "slap_power": (0,5,8,10,11,12,13,14,15,16,17,18,19,20,22,24,26,28,31,37,44),
+        "wrist_power": (0,9,13,15,17,18,19,21,21,23,24,25,26,27,29,31,32,35,38,43,49),
+    },
+    "D": {
+        "balance": (2,15,19,22,24,25,26,28,28,29,30,31,32,33,34,36,37,38,41,43,49),
+        "penalty": (1,6,8,10,11,13,15,17,18,20,21,23,24,26,27,28,29,32,35,38,44),
+        "shot_accuracy": (0,9,10,12,14,15,16,18,19,20,21,22,24,24,26,27,29,31,33,39,47),
+        "wrist_accuracy": (0,3,4,5,5,6,6,6,7,7,8,8,8,9,9,10,10,11,13,15,34),
+        "faceoffs": (0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,2,3,4,5,9),
+        "acceleration": (4,14,16,19,20,21,23,25,26,27,29,30,31,32,33,35,36,37,38,41,49),
+        "speed": (5,14,17,19,20,22,24,25,26,27,29,30,31,32,34,35,36,37,38,40,47),
+        "potential": (2,9,12,15,17,18,20,22,22,23,24,25,25,26,27,29,30,32,34,40,49),
+        "deking": (0,7,11,14,16,18,19,21,22,23,25,26,27,28,30,30,32,33,35,37,45),
+        "checking": (5,14,17,20,23,25,26,28,29,30,32,33,35,36,37,38,40,41,42,45,49),
+        "toughness": (2,7,9,11,13,14,16,18,19,21,22,24,25,26,28,31,34,36,38,39,47),
+        "fighting": (0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,1,1,1,2,3),
+        "pc_bias": (0,1,2,2,3,3,4,4,5,5,5,6,6,7,7,7,8,8,9,10,13),
+        "offence_bias": (1,2,2,2,3,3,3,4,4,4,5,5,6,7,8,8,10,10,11,12,14),
+        "shoot_bias": (1,4,5,5,6,6,6,7,7,7,8,9,9,10,10,11,11,12,12,13,15),
+        "puck_control": (2,8,10,12,14,16,17,18,19,21,22,23,24,25,27,28,30,31,33,35,44),
+        "agility": (5,15,18,20,22,23,25,26,27,28,29,30,32,32,33,34,35,37,39,41,49),
+        "hero": (0,0,9,13,15,17,18,19,21,22,23,25,26,28,29,31,32,34,36,38,47),
+        "aggression": (0,8,12,14,15,17,18,18,20,21,22,23,25,25,28,29,31,32,34,38,49),
+        "pressure": (0,6,7,9,10,12,14,15,17,18,20,23,25,26,27,29,30,32,34,38,47),
+        "passing": (0,13,16,18,19,21,22,23,24,26,27,28,28,29,31,32,33,36,38,40,46),
+        "endurance": (0,9,14,16,19,21,22,24,25,26,29,30,32,33,35,37,39,42,45,47,49),
+        "injury": (0,0,2,2,3,5,8,10,12,15,20,23,25,25,25,25,25,30,34,39,48),
+        "slap_power": (0,12,13,16,18,20,21,23,25,25,27,28,30,32,33,35,38,38,41,44,49),
+        "wrist_power": (3,8,10,12,14,15,16,18,18,19,21,21,22,24,25,26,28,29,32,36,46),
+    },
+    "G": {
+        "breakaway": (12,15,18,20,22,24,25,25,26,26,27,28,29,30,32,32,33,33,35,37,41),
+        "rebound_ctrl": (6,11,14,18,20,22,23,24,25,26,28,30,31,32,33,34,35,37,39,42,46),
+        "shot_recovery": (0,6,11,14,17,20,22,24,25,26,28,31,32,33,35,35,38,42,44,47,49),
+        "speed": (9,11,13,15,18,20,21,23,26,28,29,30,31,33,34,36,38,39,42,46,49),
+        "poke_check": (0,11,13,14,15,15,17,19,20,22,23,24,26,27,28,29,31,35,38,43,47),
+        "intensity": (0,8,12,13,17,18,19,20,22,24,25,27,28,29,30,32,33,38,40,44,49),
+        "potential": (7,12,16,19,20,23,25,25,27,28,29,30,30,32,33,34,36,38,40,42,45),
+        "toughness": (0,0,1,1,3,3,3,4,5,6,8,9,10,11,13,15,18,22,25,34,41),
+        "fighting": (0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,1,1),
+        "positioning": (0,0,0,1,1,1,1,1,1,1,1,1,1,1,2,2,2,2,2,2,2),
+        "paddle_down": (0,0,0,0,0,0,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1),
+        "agility": (11,15,17,18,19,20,24,26,28,30,33,33,33,34,36,37,39,42,43,46,49),
+        "five_hole": (10,13,20,20,22,24,25,25,25,27,28,29,30,31,33,35,36,40,41,44,47),
+        "style": (0,0,0,0,0,0,0,0,0,2,2,2,2,2,2,2,2,2,2,2,2),
+        "flop": (0,0,0,0,0,0,1,1,1,1,1,1,1,1,1,1,1,2,2,2,2),
+        "consistency": (0,0,1,1,1,1,1,1,1,2,2,2,2,2,2,2,2,2,2,2,2),
+        "passing": (0,8,10,11,14,17,18,18,19,20,20,21,22,22,24,27,28,30,32,43,49),
+        "endurance": (0,10,11,12,14,15,18,20,21,24,24,26,29,31,34,36,38,40,45,48,49),
+        "glove_high": (11,15,19,21,25,26,26,28,30,31,31,32,34,35,36,37,39,40,42,45,47),
+        "stick_high": (10,12,18,20,22,23,24,25,27,29,30,30,32,33,34,35,36,39,41,44,46),
+        "glove_low": (10,13,19,21,24,25,27,29,30,31,31,33,34,35,36,37,38,40,41,42,45),
+        "stick_low": (11,13,16,19,20,20,21,23,24,25,26,27,29,30,31,33,35,38,40,43,49),
+    },
+}
+# fmt: on
+#: What a skater without a stat line gets, and keeps for a rating his line has
+#: no stat for: the median of the disc's NHL players at his position. Copied,
+#: never handed out (`_defaults_for`).
+SKATER_DEFAULTS = {
+    "C": NHL05SkaterAttributes(
+        balance=29,
+        penalty=20,
+        shot_accuracy=17,
+        wrist_accuracy=21,
+        faceoffs=23,
+        acceleration=31,
+        speed=32,
+        potential=25,
+        deking=27,
+        checking=24,
+        toughness=15,
+        fighting=0,
+        pc_bias=8,
+        offence_bias=8,
+        shoot_bias=10,
+        puck_control=25,
+        agility=31,
+        hero=22,
+        aggression=23,
+        pressure=19,
+        passing=26,
+        endurance=27,
+        injury=14,
+        slap_power=16,
+        wrist_power=23,
+    ),
+    "LW": NHL05SkaterAttributes(
+        balance=27,
+        penalty=21,
+        shot_accuracy=16,
+        wrist_accuracy=20,
+        faceoffs=9,
+        acceleration=29,
+        speed=28,
+        potential=24,
+        deking=23,
+        checking=30,
+        toughness=19,
+        fighting=0,
+        pc_bias=7,
+        offence_bias=7,
+        shoot_bias=6,
+        puck_control=22,
+        agility=28,
+        hero=20,
+        aggression=20,
+        pressure=17,
+        passing=23,
+        endurance=22,
+        injury=20,
+        slap_power=17,
+        wrist_power=24,
+    ),
+    "RW": NHL05SkaterAttributes(
+        balance=28,
+        penalty=22,
+        shot_accuracy=18,
+        wrist_accuracy=21,
+        faceoffs=9,
+        acceleration=31,
+        speed=32,
+        potential=24,
+        deking=26,
+        checking=30,
+        toughness=20,
+        fighting=0,
+        pc_bias=7,
+        offence_bias=9,
+        shoot_bias=5,
+        puck_control=22,
+        agility=30,
+        hero=21,
+        aggression=23,
+        pressure=19,
+        passing=23,
+        endurance=23,
+        injury=17,
+        slap_power=18,
+        wrist_power=25,
+    ),
+    "D": NHL05SkaterAttributes(
+        balance=30,
+        penalty=21,
+        shot_accuracy=21,
+        wrist_accuracy=8,
+        faceoffs=0,
+        acceleration=29,
+        speed=29,
+        potential=24,
+        deking=25,
+        checking=32,
+        toughness=22,
+        fighting=0,
+        pc_bias=5,
+        offence_bias=5,
+        shoot_bias=8,
+        puck_control=22,
+        agility=29,
+        hero=23,
+        aggression=22,
+        pressure=20,
+        passing=27,
+        endurance=28,
+        injury=20,
+        slap_power=27,
+        wrist_power=21,
+    ),
+}
 GOALIE_DEFAULTS = NHL05GoalieAttributes(
-    breakaway=35,
-    rebound_ctrl=35,
-    shot_recovery=35,
-    speed=25,
-    poke_check=30,
-    intensity=35,
-    potential=35,
-    toughness=25,
+    breakaway=27,
+    rebound_ctrl=28,
+    shot_recovery=28,
+    speed=29,
+    poke_check=23,
+    intensity=25,
+    potential=29,
+    toughness=8,
     fighting=0,
-    agility=40,
-    five_hole=35,
-    passing=25,
-    endurance=40,
-    glove_high=35,
-    stick_high=35,
-    glove_low=35,
-    stick_low=35,
+    positioning=1,
+    paddle_down=1,
+    agility=33,
+    five_hole=28,
+    style=2,
+    flop=1,
+    consistency=2,
+    passing=20,
+    endurance=24,
+    glove_high=31,
+    stick_high=30,
+    glove_low=31,
+    stick_low=26,
 )
+
+# The position `SKATER_DEFAULTS` falls back to: a player whose position string
+# the provider spelled some other way gets a centre's faceoffs.
+DEFAULT_POSITION = "C"
 
 # `WEIG` is pounds over 150 and `HEIG` inches over 54, as on NHL 07 (checked on
 # the retail disc: Chara 6'9", 260 lb is 27 and 110; Gionta 5'7", 175 lb is 13
@@ -239,48 +404,18 @@ HAND_LEFT = 0
 HAND_RIGHT = 1
 
 
-def _clamp(val: int, lo: int = ATTR_MIN, hi: int = ATTR_MAX) -> int:
-    return max(lo, min(hi, val))
-
-
-def _scale(value: float, low: float, high: float) -> int:
-    """Map `value` from the window [low, high] onto 0-63.
-
-    An empty or inverted window answers 32, the midpoint, rather than dividing
-    by zero. Values outside the window are clamped, so the window's ends are
-    where the scale saturates and not where it starts to lie.
-    """
-    if high <= low:
-        return 32
-    ratio = (value - low) / (high - low)
-    return _clamp(round(ratio * 63))
-
-
-def _stat(stats: dict, *names: str, default: float = 0.0) -> float:
-    """The first of `names` present and non-zero in `stats`, as a float.
-
-    `or` rather than `in`: a stat reported as `0`, `""` or `None` falls through
-    to the next name and finally to `default`, so a genuine zero and an absent
-    stat both take the position default rather than a rating of zero.
-    """
-    for name in names:
-        value = stats.get(name)
-        if value:
-            return float(value)
-    return default
-
-
-def _set_birth(record: NHL05PlayerRecord, player: Player) -> None:
+def set_birth(record: Any, player: Player, game_year: int = GAME_YEAR) -> None:
     """The record's birth fields: flag, place and a birthday that makes the
-    game, counting from `GAME_YEAR`, show the player's real age."""
+    game, counting from `game_year`, show the player's real age (from his birth
+    date when the provider gives no age, as the NHL API does)."""
     country = COUNTRY_CODES.get(player.nationality.strip())
     if country is not None:
         record.country = country
         # A province or state when the game has it, else the country itself.
         record.state = STATE_CODES.get(player.birth_state.upper(), country)
     record.city = player.birth_city[:CITY_CHARS]
-    if player.age > 0:
-        record.birth_year = max(0, min(63, GAME_YEAR - player.age - BIRTH_YEAR_BASE))
+    if age := player.age or age_of(player):
+        record.birth_year = max(0, min(63, game_year - int(age) - BIRTH_YEAR_BASE))
     parts = player.birth_date.split("-")
     if len(parts) == 3 and all(p.isdigit() for p in parts):
         record.birth_month, record.birth_day = int(parts[1]), int(parts[2])
@@ -304,6 +439,7 @@ class NHL05StatMapper:
         player: Player,
         team_abbrev: str,
         stats: dict | None = None,
+        league: League | None = None,
     ) -> NHL05PlayerRecord:
         """Build one `NHL05PlayerRecord` from a provider `Player`.
 
@@ -312,7 +448,8 @@ class NHL05StatMapper:
         shorter than NHL 07's field, so a name that survives there is cut here.
 
         `stats` empty or absent is not an error: it selects the position
-        defaults, which is what a player with no games played gets.
+        defaults, which is what a player with no games played gets. `league`
+        ranks his stats; without one his line is ranked alone.
         """
         pos = player.position.upper() if player.position else DEFAULT_POSITION
         is_goalie = pos == "G"
@@ -352,124 +489,22 @@ class NHL05StatMapper:
             photo_url=player.photo_url,
             nationality=player.nationality,
         )
-        _set_birth(record, player)
+        set_birth(record, player)
 
+        attrs: NHL05SkaterAttributes | NHL05GoalieAttributes
         if is_goalie:
-            record.goalie_attrs = (
-                self._map_goalie_stats(stats) if stats else replace(GOALIE_DEFAULTS)
-            )
+            attrs = record.goalie_attrs = replace(GOALIE_DEFAULTS)
         else:
-            record.skater_attrs = (
-                self._map_skater_stats(stats, pos) if stats else _defaults_for(pos)
+            attrs = record.skater_attrs = _defaults_for(pos)
+        if stats:
+            rate(
+                attrs,
+                player,
+                stats,
+                league or League.from_lines([(player, stats)], SOURCES),
+                SPREAD,
             )
         return record
-
-    def _map_skater_stats(self, stats: dict, pos: str) -> NHL05SkaterAttributes:
-        """Derive 22 skater ratings from a season line.
-
-        The scaling windows are one season's production, not a career:
-        90 points, 40 goals and 55 assists each saturate their scale, and
-        `+/-` is shifted by 30 so that -30 is the floor and +40 the ceiling.
-        `PIM` drives toughness *and* aggression *and* fighting, so a penalty
-        total is three of the twenty-two ratings on its own.
-        """
-        g = _stat(stats, "G")
-        a = _stat(stats, "A")
-        pts = _stat(stats, "PTS")
-        pm = _stat(stats, "+/-")
-        pim = _stat(stats, "PIM")
-        shots = _stat(stats, "SOG", "Shots", "S")
-        fop = _stat(stats, "FO%", "FOW%")
-        if fop <= 1:  # the NHL API sends a fraction, ESPN a percentage
-            fop *= 100
-
-        base = _defaults_for(pos)
-
-        off_rating = _scale(pts, 0, 90)
-        goal_rating = _scale(g, 0, 40)
-        assist_rating = _scale(a, 0, 55)
-
-        # Shooting percentage, and 10% -- roughly league average -- assumed for a
-        # player with no shots recorded.
-        shoot_pct = (g / max(shots, 1)) * 100 if shots > 0 else 10
-        accuracy_rating = _scale(shoot_pct, 5, 20)
-
-        def_rating = _scale(pm + 30, 0, 70)
-        tough_rating = _scale(pim, 0, 80)
-
-        speed_boost = 5 if pts > 50 else (3 if pts > 30 else 0)
-
-        return NHL05SkaterAttributes(
-            balance=_clamp(base.balance + (3 if pos == "D" else 0)),
-            penalty=_clamp(base.penalty),
-            shot_accuracy=_clamp(max(goal_rating, accuracy_rating)),
-            wrist_accuracy=_clamp(max(goal_rating - 2, accuracy_rating)),
-            faceoffs=_clamp(_scale(fop, 30, 60) if fop > 0 else base.faceoffs),
-            acceleration=_clamp(base.acceleration + speed_boost),
-            speed=_clamp(base.speed + speed_boost),
-            potential=_clamp(off_rating + 5),
-            deking=off_rating,
-            checking=_clamp(def_rating if pos == "D" else base.checking),
-            toughness=tough_rating,
-            # Two bits, so 0-3, and clamped here rather than by `_clamp`, whose
-            # ceiling is the six-bit 63. 40 penalty minutes to the point.
-            fighting=min(3, max(0, int(pim / 40))),
-            puck_control=off_rating,
-            agility=_clamp(base.agility + speed_boost),
-            hero=_clamp(off_rating),
-            aggression=tough_rating,
-            pressure=_clamp(def_rating),
-            passing=assist_rating,
-            endurance=_clamp(base.endurance + (3 if pts > 40 else 0)),
-            injury=_clamp(base.injury),
-            slap_power=goal_rating,
-            wrist_power=_clamp(goal_rating - 3),
-        )
-
-    def _map_goalie_stats(self, stats: dict) -> NHL05GoalieAttributes:
-        """Derive 17 goalie ratings from a season line.
-
-        `SV%` scales over 0.880 to 0.930, the whole practical range of NHL save
-        percentages, and it drives ten of the seventeen. `GAA` is inverted --
-        3.5 minus the average, over a 1.5 window -- so a lower average is a
-        higher rating. Wins add a flat bonus of up to 10, capped at 40 wins.
-
-        Upstream behaviour, known wrong, preserved deliberately: `SV%` is read
-        as a bare float against a window written as a fraction, so a line
-        reporting `91.2` rather than `0.912` saturates ten of the seventeen
-        ratings. Do not add the comparison against 1.0 here alone; a guard in one
-        of the two games and not the other would be a game-shaped trap.
-
-        `toughness`, `fighting` and `passing` are constants: no provider here
-        supplies a goalie input for them, so do not invent a derivation.
-        """
-        svp = _stat(stats, "SV%")
-        gaa = _stat(stats, "GAA", default=3.0)
-        wins = _stat(stats, "W", "Wins")
-
-        save_rating = _scale(svp, 0.880, 0.930)
-        gaa_rating = _scale(3.5 - gaa, 0, 1.5)
-        win_bonus = min(10, int(wins / 4))
-
-        return NHL05GoalieAttributes(
-            breakaway=_clamp(gaa_rating + win_bonus),
-            rebound_ctrl=save_rating,
-            shot_recovery=_clamp(save_rating - 3),
-            speed=_clamp(25 + win_bonus),
-            poke_check=_clamp(gaa_rating),
-            intensity=_clamp(save_rating - 5 + win_bonus),
-            potential=_clamp(save_rating + win_bonus),
-            toughness=25,
-            fighting=0,
-            agility=save_rating,
-            five_hole=save_rating,
-            passing=25,
-            endurance=_clamp(35 + win_bonus),
-            glove_high=save_rating,
-            stick_high=_clamp(save_rating - 2),
-            glove_low=save_rating,
-            stick_low=_clamp(save_rating - 2),
-        )
 
     def select_roster(
         self,

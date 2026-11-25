@@ -14,8 +14,9 @@ The six tables this package touches, and how they chain:
           rather than in SPAI is what makes his slot a goalie slot
     STEA  the team table, read for `RomSlot.current_name` and nothing else
 
-The field names and widths below are transcribed from the source package and
-have never been checked against a retail disc.
+`SKATER_FIELDS` and `GOALIE_FIELDS` are every rating field of the retail
+disc's SPAI and SGAI (SLUS-21001, read 2026-11); the writer refuses a field the
+disc's table does not have.
 """
 
 from __future__ import annotations
@@ -219,14 +220,22 @@ NAME_FIELD_BYTES = 16
 # never re-spell it as a literal 15.
 NAME_FIELD_CHARS = NAME_FIELD_BYTES - 1
 
+# SPBT's other fields on the retail disc, which the writer leaves as they are:
+# `ART_` the portrait (rewritten through `portraits`), `AUDI` the commentary's
+# name clip (no silent clip is known), `YEAD` the draft year less 1959 and
+# `POSD` the overall pick (no provider here fetches the draft), `ROOK` the
+# rookie flag, and the equipment: `STIC`, `NECK`, `TUCK`, `SKAT`, `HELM`,
+# `HBRA`.
+
 
 @dataclass
 class NHL05SkaterAttributes:
-    """Skater ratings on NHL 2005's 0-63 scale, one six-bit TDB field each.
+    """Skater ratings, one SPAI field each (`SKATER_FIELDS`).
 
-    `FIGH` is the exception at two bits, so 0-3. Every other default is 30, the
-    middle of the six-bit range; `stat_mapper.SKATER_DEFAULTS` overrides them per
-    position.
+    Six-bit fields rated 0-49: every NHL player on the retail disc is 49 or
+    less, and the game shows a stored value plus 50. `FIGH` holds 0-3 and the
+    three biases 0-15. The defaults stand in for nothing; `stat_mapper`'s
+    position defaults are what a player without a stat line gets.
     """
 
     balance: int = 30  # BALA
@@ -240,7 +249,7 @@ class NHL05SkaterAttributes:
     deking: int = 30  # DEKG
     checking: int = 30  # CHKG
     toughness: int = 30  # TOUG
-    fighting: int = 1  # FIGH, two bits
+    fighting: int = 0  # FIGH, 0-3
     puck_control: int = 30  # PUCK
     agility: int = 30  # AGIL
     hero: int = 30  # HERO
@@ -251,11 +260,18 @@ class NHL05SkaterAttributes:
     injury: int = 30  # INJU
     slap_power: int = 30  # SPOW
     wrist_power: int = 30  # WPOW
+    #: Four-bit AI tendencies whose EA names are unknown: what each tracks on
+    #: the retail disc's players is in `stat_mapper.SKATER_SOURCES`.
+    pc_bias: int = 7  # PCBI
+    offence_bias: int = 8  # ODBI, high on scorers
+    shoot_bias: int = 8  # SPBI
 
 
 @dataclass
 class NHL05GoalieAttributes:
-    """Goalie ratings on the same 0-63 scale, and the same two-bit `FIGH`.
+    """Goalie ratings, one SGAI field each (`GOALIE_FIELDS`), on the skaters'
+    0-49 scale; `FIGH` holds 0-1 on the retail disc and the five style fields
+    0-2.
 
     `5HOL`, `GSH_`, `SSH_`, `GSL_` and `SSL_` are the five save zones: five-hole,
     glove high, stick high, glove low, stick low.
@@ -269,7 +285,7 @@ class NHL05GoalieAttributes:
     intensity: int = 30  # INTE
     potential: int = 30  # POTE
     toughness: int = 30  # TOUG
-    fighting: int = 1  # FIGH, two bits
+    fighting: int = 0  # FIGH
     agility: int = 30  # AGIL
     five_hole: int = 30  # 5HOL
     passing: int = 30  # PASS
@@ -278,6 +294,69 @@ class NHL05GoalieAttributes:
     stick_high: int = 30  # SSH_
     glove_low: int = 30  # GSL_
     stick_low: int = 30  # SSL_
+    positioning: int = 1  # POSI
+    paddle_down: int = 1  # PADL
+    style: int = 2  # STYL: 2 butterfly (Kiprusoff), 0 stand-up (Brodeur)
+    flop: int = 1  # FLOP
+    consistency: int = 2  # CONS
+
+
+#: Every SPAI field of the retail disc but `INDX`, which keys the row to the
+#: bio, and the attribute that holds it.
+SKATER_FIELDS = {
+    "balance": "BALA",
+    "penalty": "PENA",
+    "shot_accuracy": "SACC",
+    "wrist_accuracy": "WACC",
+    "faceoffs": "FACE",
+    "acceleration": "ACCE",
+    "speed": "SPEE",
+    "potential": "POTE",
+    "deking": "DEKG",
+    "checking": "CHKG",
+    "toughness": "TOUG",
+    "fighting": "FIGH",
+    "pc_bias": "PCBI",
+    "offence_bias": "ODBI",
+    "shoot_bias": "SPBI",
+    "puck_control": "PUCK",
+    "agility": "AGIL",
+    "hero": "HERO",
+    "aggression": "AGGR",
+    "pressure": "PRES",
+    "passing": "PASS",
+    "endurance": "ENDU",
+    "injury": "INJU",
+    "slap_power": "SPOW",
+    "wrist_power": "WPOW",
+}
+#: Every SGAI field of the retail disc but `INDX`, and its attribute. `SPEE`,
+#: `POTE`, `TOUG`, `FIGH`, `AGIL`, `PASS` and `ENDU` are spelled as in SPAI and
+#: are this table's own.
+GOALIE_FIELDS = {
+    "breakaway": "BRKA",
+    "rebound_ctrl": "REBC",
+    "shot_recovery": "SREC",
+    "speed": "SPEE",
+    "poke_check": "POKE",
+    "intensity": "INTE",
+    "potential": "POTE",
+    "toughness": "TOUG",
+    "fighting": "FIGH",
+    "positioning": "POSI",
+    "paddle_down": "PADL",
+    "agility": "AGIL",
+    "five_hole": "5HOL",
+    "style": "STYL",
+    "flop": "FLOP",
+    "consistency": "CONS",
+    "passing": "PASS",
+    "endurance": "ENDU",
+    "glove_high": "GSH_",
+    "stick_high": "SSH_",
+    "glove_low": "GSL_",
+    "stick_low": "SSL_",
+}
 
 
 @dataclass

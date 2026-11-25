@@ -691,11 +691,13 @@ class TDBTable:
                 result[f.name] = self._read_bits(rec_data, f.bit_offset, f.bit_width)
         return result
 
-    def write_record(self, index: int, values: Mapping[str, object]) -> None:
+    def write_record(self, index: int, values: Mapping[str, object], strict: bool = False) -> None:
         """Update the named fields of one record, leaving the others alone.
 
         A key naming no field of this table is ignored, not reported: callers
         hand the same value dictionary to tables with different layouts.
+        `strict` reports it instead, for a caller whose keys are meant to be
+        exactly this table's.
 
         Strings are encoded ASCII, truncated to the field width and NUL-padded
         to fill it. Integers are clamped into the field's width rather than
@@ -705,9 +707,12 @@ class TDBTable:
             IndexError: `index` is outside `0 .. capacity - 1`.
             TypeError: A value for an integer field is not something `int()`
                 accepts.
+            EaTdbError: `strict`, and a key names no field of this table.
         """
         if index < 0 or index >= self.capacity:
             raise IndexError(f"Record {index} out of range (capacity={self.capacity})")
+        if strict and (unknown := set(values) - {f.name for f in self.fields}):
+            raise EaTdbError(f"{self.name} has no field {', '.join(sorted(unknown))}")
 
         rec_start = index * self.record_size
 

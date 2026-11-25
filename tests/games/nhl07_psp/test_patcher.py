@@ -7,6 +7,7 @@ produced it.
 
 from __future__ import annotations
 
+import dataclasses
 import sys
 
 import pytest
@@ -14,6 +15,7 @@ import pytest
 from retro_roster_patcher.core.errors import ApiError, CapabilityError, MappingError, RomError
 from retro_roster_patcher.core.models import MappedRosters, PatchResult, RomSlot
 from retro_roster_patcher.core.registry import get_patcher
+from retro_roster_patcher.formats.ea_tdb import TDBFile
 from retro_roster_patcher.games.nhl07_psp import looks
 from retro_roster_patcher.games.nhl07_psp.models import (
     MODERN_NHL_TO_NHL07,
@@ -23,6 +25,7 @@ from retro_roster_patcher.games.nhl07_psp.models import (
     TDB_MASTER,
     TDB_ROSTER,
     NHL07PlayerRecord,
+    NHL07SkaterAttributes,
 )
 from retro_roster_patcher.games.nhl07_psp.patcher import (
     NHL07PSPPatcher,
@@ -31,9 +34,13 @@ from retro_roster_patcher.games.nhl07_psp.patcher import (
     _db_viv_extent_fits,
     _index_map,
     _live_records,
+    _MasterTables,
+    _MirrorTables,
     _play_id_by_indx,
+    _RosterSlot,
 )
 from retro_roster_patcher.games.nhl07_psp.rom_reader import ISO_SECTOR_SIZE, NHL07PSPRomReader
+from retro_roster_patcher.games.nhl07_psp.rom_writer import NHL07PSPRomWriter
 from retro_roster_patcher.games.nhl07_psp.stat_mapper import MAX_PLAYERS
 from retro_roster_patcher.sports.espn import EspnClient
 from retro_roster_patcher.sports.models import League, LeagueData, Player, Team, TeamRoster
@@ -762,11 +769,13 @@ def test_leaders_reach_the_mapped_attributes(tmp_path):
         league(
             teams=[Team(id=3, name="B", code="BOS", logo_url="")],
             squads={"BOS": players},
-            leaders={"BOS": {str(p.id): {"PTS": 95, "G": 40, "PIM": 120} for p in players}},
+            leaders={"BOS": {str(p.id): {"GP": 82, "PTS": 5 * i} for i, p in enumerate(players)}},
         )
     )
     slot = MODERN_NHL_TO_NHL07["BOS"]
-    assert rated.teams[slot][2].skater_attrs.deking != plain.teams[slot][2].skater_attrs.deking
+    assert [r.skater_attrs for r in rated.teams[slot]] != [
+        r.skater_attrs for r in plain.teams[slot]
+    ]
 
 
 def test_patching_returns_a_patch_result(tmp_path):
@@ -1473,8 +1482,8 @@ class StubMapper:
     def select_roster(self, players, stats=None, max_players=25):
         return self._inner.select_roster(players, stats, max_players)
 
-    def map_player(self, player, code, stats=None):
-        return self._inner.map_player(player, code, stats)
+    def map_player(self, player, code, stats=None, league=None):
+        return self._inner.map_player(player, code, stats, league)
 
     def generate_team_line_flags(self, players):
         return self._inner.generate_team_line_flags(players)
@@ -1881,3 +1890,37 @@ def test_every_written_bio_gets_a_face_in_its_shade(tmp_path, monkeypatch):
     assert {by_bio[bio]["SKIN"] for bio in seen} <= set(looks.SKIN_VALUES)
     assert all(seen[bio] == by_bio[bio]["SKIN"] for bio in seen)
     assert 5 in seen.values() or 6 in seen.values()
+
+
+def test_the_bio_mirror_is_written_at_its_own_row_of_the_player():
+    # A mirror whose SPAI orders two skaters the other way round: the write
+    # must follow the player id, not the master's row.
+    master = TDBFile.parse(fixture.build_master_tdb())
+    bioatt = TDBFile.parse(fixture.build_bioatt_tdb())
+    pid, other = fixture.player_id_for(0, 5), fixture.player_id_for(0, 6)
+    here, there = fixture.spai_position(pid), fixture.spai_position(other)
+    spai = bioatt.get_table("SPAI")
+    his, others = spai.read_record(here), spai.read_record(there)
+    spai.write_record(here, others)
+    spai.write_record(there, his)
+
+    tables = _MasterTables.of(master)
+    slot = _RosterSlot(0, pid, tables.spbt_by_indx[pid], tables.spai_by_indx[pid], None)
+    record = NHL07PlayerRecord(skater_attrs=NHL07SkaterAttributes(balance=41))
+    NHL07PSPPatcher._write_player(
+        NHL07PSPRomWriter("", ""), record, slot, tables, _MirrorTables.of(bioatt, None)
+    )
+    assert (spai.read_record(there)["INDX"], spai.read_record(there)["BALA"]) == (pid, 41)
+    assert spai.read_record(here) == others
+
+
+def test_a_skater_row_with_no_ratings_row_takes_no_one():
+    # He would keep the disc player's ratings; the row is still undressed.
+    tables = _MasterTables.of(TDBFile.parse(fixture.build_master_tdb()))
+    pid = fixture.player_id_for(0, 5)
+    without = {k: v for k, v in tables.spai_by_indx.items() if k != pid}
+    rows, _goalies, skaters = NHL07PSPPatcher._classify_slots(
+        0, dataclasses.replace(tables, spai_by_indx=without)
+    )
+    assert pid not in [slot.player_id for slot in skaters]
+    assert fixture.rost_position(0, 5) in rows

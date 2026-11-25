@@ -41,6 +41,7 @@ from datetime import date
 from pathlib import Path
 from typing import Any
 
+from ...core import hockey_ratings
 from ...core.assets import crest_png
 from ...core.concurrency import parallel_map
 from ...core.errors import ApiError, CapabilityError, RomError, as_rom_error
@@ -89,6 +90,7 @@ from .stat_mapper import (
     FORWARDS_PER_TEAM,
     GOALIES_PER_TEAM,
     MAX_PLAYERS,
+    SOURCES,
     NHL05StatMapper,
 )
 
@@ -499,6 +501,16 @@ class NHL05PS2Patcher(Patcher):
         clubs alone, as the slots a user would pick from.
         """
         self.check_slot_mapping(slot_mapping)
+        # Every fetched player is the league each one's ratings rank against
+        # (`stat_mapper.SOURCES`), those whose team has no slot among them.
+        league = hockey_ratings.League.from_lines(
+            (
+                (player, (roster.extra.get("leaders") or {}).get(str(player.id)) or {})
+                for roster in data.teams
+                for player in roster.players
+            ),
+            SOURCES,
+        )
         teams: dict[int, list[NHL05PlayerRecord]] = {}
         for roster in data.teams:
             slot = self.mapper.get_team_slot(roster.team.code)
@@ -518,7 +530,9 @@ class NHL05PS2Patcher(Patcher):
                 )
             )
             records = [
-                self.mapper.map_player(player, roster.team.code, leaders.get(str(player.id), {}))
+                self.mapper.map_player(
+                    player, roster.team.code, leaders.get(str(player.id), {}), league
+                )
                 for player in selected
             ]
 
@@ -540,6 +554,7 @@ class NHL05PS2Patcher(Patcher):
                     Player(**{k: v for k, v in raw.items() if k in known}),
                     "",
                     lines.get(str(raw.get("id")), {}),
+                    league,
                 )
                 for raw in free["players"]
             ]
@@ -1348,6 +1363,8 @@ class NHL05PS2Patcher(Patcher):
             slot = _RosterSlot(
                 i, pid, bio, tables.spai_by_indx.get(pid), tables.sgai_by_indx.get(pid)
             )
+            if slot.spai_index is None and slot.sgai_index is None:
+                continue
             slots[slot.sgai_index is not None].append((i, slot))
 
         written: set[int] = set()
@@ -1416,7 +1433,9 @@ class NHL05PS2Patcher(Patcher):
             )
             if roster_slot.sgai_index is not None:
                 goalie_slots.append(roster_slot)
-            else:
+            elif roster_slot.spai_index is not None:
+                # A row with no ratings row of its own would keep the disc
+                # player's, so it takes no one and is undressed with the rest.
                 skater_slots.append(roster_slot)
 
         return team_rows, goalie_slots, skater_slots

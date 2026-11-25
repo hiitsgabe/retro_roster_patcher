@@ -36,8 +36,10 @@ from ...formats.ea_tdb import (
 )
 from .faces import FACES_BH_NAME, FACES_PATH
 from .models import (
+    GOALIE_FIELDS,
     NAME_FIELD_CHARS,
     POSITION_REVERSE,
+    SKATER_FIELDS,
     WEIGHT_BASE_POUNDS,
     NHL07GoalieAttributes,
     NHL07PlayerRecord,
@@ -210,11 +212,13 @@ class NHL07PSPRomWriter:
         return self._db_viv is not None
 
     def write_player_bio(self, tdb: TDBFile, record_idx: int, player: NHL07PlayerRecord) -> None:
-        """Update one SPBT record's name, number, hand, team and position.
+        """Update one SPBT record's name, number, hand, team, position, size
+        and birth fields.
 
         A missing table, or an index past its allocation, is a no-op rather than
         an error: the same player is written to the master TDB and to
-        `nhlbioatt.tdb`, which need not have the same capacity.
+        `nhlbioatt.tdb`, which need not have the same capacity. A field the
+        table does not have is an error.
 
         Write `WEIG` and `HEIG` only when positive, so a provider that reports
         no weight leaves the disc's own value alone rather than flattening the
@@ -239,8 +243,19 @@ class NHL07PSPRomWriter:
             values["HEIG"] = player.height
         if player.skin is not None:
             values["SKIN"] = player.skin
+        for name, value in (
+            ("INTL", player.country),
+            ("STAT", player.state),
+            ("YEAR", player.birth_year),
+            ("MONT", player.birth_month),
+            ("DAY_", player.birth_day),
+        ):
+            if value >= 0:
+                values[name] = value
+        if player.city:
+            values["CITY"] = player.city
 
-        spbt.write_record(record_idx, values)
+        spbt.write_record(record_idx, values, strict=True)
 
     def write_skater_attrs(
         self,
@@ -249,7 +264,7 @@ class NHL07PSPRomWriter:
         attrs: NHL07SkaterAttributes,
         player_id: int = 0,
     ) -> None:
-        """Update one SPAI record from a skater's 22 ratings.
+        """Update one SPAI record from a skater's ratings, every field but `INDX`.
 
         Write `INDX` only for a positive `player_id`: the record was found *by*
         its `INDX`, and rewriting it with a wrong id detaches the attributes
@@ -260,32 +275,11 @@ class NHL07PSPRomWriter:
             return
 
         values: dict[str, object] = {
-            "BALA": attrs.balance,
-            "PENA": attrs.penalty,
-            "SACC": attrs.shot_accuracy,
-            "WACC": attrs.wrist_accuracy,
-            "FACE": attrs.faceoffs,
-            "ACCE": attrs.acceleration,
-            "SPEE": attrs.speed,
-            "POTE": attrs.potential,
-            "DEKG": attrs.deking,
-            "CHKG": attrs.checking,
-            "TOUG": attrs.toughness,
-            "FIGH": attrs.fighting,
-            "PUCK": attrs.puck_control,
-            "AGIL": attrs.agility,
-            "HERO": attrs.hero,
-            "AGGR": attrs.aggression,
-            "PRES": attrs.pressure,
-            "PASS": attrs.passing,
-            "ENDU": attrs.endurance,
-            "INJU": attrs.injury,
-            "SPOW": attrs.slap_power,
-            "WPOW": attrs.wrist_power,
+            code: getattr(attrs, name) for name, code in SKATER_FIELDS.items()
         }
         if player_id > 0:
             values["INDX"] = player_id
-        spai.write_record(record_idx, values)
+        spai.write_record(record_idx, values, strict=True)
 
     def write_goalie_attrs(
         self,
@@ -294,39 +288,17 @@ class NHL07PSPRomWriter:
         attrs: NHL07GoalieAttributes,
         player_id: int = 0,
     ) -> None:
-        """Update one SGAI record from a goalie's 17 ratings.
-
-        `SPEE`, `POTE`, `TOUG`, `FIGH`, `AGIL`, `PASS` and `ENDU` are spelled
-        the same here as in SPAI and are different fields in a different table;
-        the five save zones and `BRKA`, `REBC`, `SREC`, `POKE` and `INTE` have
-        no skater counterpart.
-        """
+        """Update one SGAI record from a goalie's ratings, every field but `INDX`."""
         sgai = tdb.get_table("SGAI")
         if sgai is None or record_idx >= sgai.capacity:
             return
 
         values: dict[str, object] = {
-            "BRKA": attrs.breakaway,
-            "REBC": attrs.rebound_ctrl,
-            "SREC": attrs.shot_recovery,
-            "SPEE": attrs.speed,
-            "POKE": attrs.poke_check,
-            "INTE": attrs.intensity,
-            "POTE": attrs.potential,
-            "TOUG": attrs.toughness,
-            "FIGH": attrs.fighting,
-            "AGIL": attrs.agility,
-            "5HOL": attrs.five_hole,
-            "PASS": attrs.passing,
-            "ENDU": attrs.endurance,
-            "GSH_": attrs.glove_high,
-            "SSH_": attrs.stick_high,
-            "GSL_": attrs.glove_low,
-            "SSL_": attrs.stick_low,
+            code: getattr(attrs, name) for name, code in GOALIE_FIELDS.items()
         }
         if player_id > 0:
             values["INDX"] = player_id
-        sgai.write_record(record_idx, values)
+        sgai.write_record(record_idx, values, strict=True)
 
     @staticmethod
     def roster_values(

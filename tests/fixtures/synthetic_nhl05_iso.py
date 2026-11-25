@@ -107,7 +107,8 @@ MEMBER_SLACK = 8192
 # 20**, which is what makes `models.NAME_FIELD_CHARS` 15 rather than 19.
 NAME_FIELD_BYTES = 16
 
-# 38 bytes: two 16-byte names, then seven integers packed into the tail.
+# 62 bytes: two 16-byte names, seven integers packed into the tail, then the
+# fields the writer also takes (`SKIN`, `INTL` to `DAY_`, and `CITY`).
 #   bits   0..127  FNME  16 ASCII bytes
 #   bits 128..255  LNME  16 ASCII bytes
 #   bits 256..271  INDX  16 bits, byte-aligned
@@ -127,8 +128,15 @@ SPBT_FIELDS = [
     FieldSpec("POS_", TYPE_UINT, 286, 3),
     FieldSpec("WEIG", TYPE_UINT, 289, 8),
     FieldSpec("HEIG", TYPE_UINT, 297, 5),
+    FieldSpec("SKIN", TYPE_UINT, 302, 3),
+    FieldSpec("INTL", TYPE_UINT, 305, 7),
+    FieldSpec("STAT", TYPE_UINT, 312, 7),
+    FieldSpec("YEAR", TYPE_UINT, 319, 6),
+    FieldSpec("MONT", TYPE_UINT, 325, 4),
+    FieldSpec("DAY_", TYPE_UINT, 329, 5),
+    FieldSpec("CITY", TYPE_STRING, 336, 160),
 ]
-SPBT_RECORD_SIZE = 38
+SPBT_RECORD_SIZE = 62
 
 # The 21 six-bit skater ratings, in the order the writer lists them. `FIGH` is
 # two bits and is appended after them, so no rating is at a multiple of eight
@@ -156,11 +164,14 @@ SKATER_ATTR_NAMES = [
     "SPOW",
     "WPOW",
 ]
+# The three four-bit AI biases, after `FIGH`.
+SKATER_BIASES = ["PCBI", "ODBI", "SPBI"]
 SPAI_FIELDS = [FieldSpec("INDX", TYPE_UINT, 0, 16)] + [
     FieldSpec(name, TYPE_UINT, 16 + i * 6, 6) for i, name in enumerate(SKATER_ATTR_NAMES)
 ]
 SPAI_FIELDS.append(FieldSpec("FIGH", TYPE_UINT, 16 + len(SKATER_ATTR_NAMES) * 6, 2))
-SPAI_RECORD_SIZE = 18  # 16 + 21*6 + 2 = 144 bits
+SPAI_FIELDS += [FieldSpec(name, TYPE_UINT, 144 + i * 4, 4) for i, name in enumerate(SKATER_BIASES)]
+SPAI_RECORD_SIZE = 20  # 16 + 21*6 + 2 + 3*4 = 156 bits
 
 GOALIE_ATTR_NAMES = [
     "BRKA",
@@ -180,11 +191,14 @@ GOALIE_ATTR_NAMES = [
     "GSL_",
     "SSL_",
 ]
+# The five two-bit goalie style fields, after `FIGH`.
+GOALIE_STYLE = ["POSI", "PADL", "STYL", "FLOP", "CONS"]
 SGAI_FIELDS = [FieldSpec("INDX", TYPE_UINT, 0, 16)] + [
     FieldSpec(name, TYPE_UINT, 16 + i * 6, 6) for i, name in enumerate(GOALIE_ATTR_NAMES)
 ]
 SGAI_FIELDS.append(FieldSpec("FIGH", TYPE_UINT, 16 + len(GOALIE_ATTR_NAMES) * 6, 2))
-SGAI_RECORD_SIZE = 15  # 16 + 16*6 + 2 = 114 bits
+SGAI_FIELDS += [FieldSpec(name, TYPE_UINT, 114 + i * 2, 2) for i, name in enumerate(GOALIE_STYLE)]
+SGAI_RECORD_SIZE = 16  # 16 + 16*6 + 2 + 5*2 = 124 bits
 
 # The sixty-four single-bit line flags, in the order `rom_writer.LINE_FLAGS`
 # gives them. Restated here rather than imported: importing the list under test
@@ -434,6 +448,13 @@ def disc_bio_values(team: int, row: int, height: int = DEFAULT_DISC_HEIGHT) -> d
         "POS_": 4 if is_goalie_row(row) else (row % 4),
         "WEIG": 120 + row,
         "HEIG": height,
+        "SKIN": 1 + row % 7,
+        "INTL": 60 + team,
+        "STAT": 70 + team,
+        "YEAR": 20 + row % 10,
+        "MONT": 1 + row % 12,
+        "DAY_": 1 + row % 28,
+        "CITY": f"DiscCity{row}",
     }
 
 

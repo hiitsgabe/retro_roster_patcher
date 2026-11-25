@@ -40,7 +40,7 @@ from retro_roster_patcher.games.nhl05_ps2.patcher import (
 )
 from retro_roster_patcher.games.nhl05_ps2.rom_reader import ISO_SECTOR_SIZE, NHL05PS2RomReader
 from retro_roster_patcher.games.nhl05_ps2.rom_writer import NHL05PS2RomWriter
-from retro_roster_patcher.games.nhl05_ps2.stat_mapper import MAX_PLAYERS
+from retro_roster_patcher.games.nhl05_ps2.stat_mapper import MAX_PLAYERS, SKATER_DEFAULTS
 from retro_roster_patcher.sports.espn import EspnClient
 from retro_roster_patcher.sports.models import League, LeagueData, Player, Team, TeamRoster
 from retro_roster_patcher.sports.nhl import NhlApiClient, current_season
@@ -825,20 +825,21 @@ def test_an_empty_roster_that_collides_with_nothing_still_takes_its_slot(tmp_pat
 
 
 def test_mapping_reads_the_leaders_out_of_the_roster(tmp_path):
-    # A 90-point season saturates the offensive scale; without the leaders the player
-    # takes the centre's default of 35 for `deking`.
+    # The best scorer of twelve ranks near the top of the disc's spread; without the
+    # leaders the same player takes the centre's default.
     top = squad(1000)
-    leaders = {"ANA": {str(top[2].id): {"PTS": 90}}}
+    forwards = [p for p in top if p.position not in ("G", "D")]
+    leaders = {"ANA": {str(p.id): {"GP": 82, "PTS": 90 - 5 * i} for i, p in enumerate(forwards)}}
     data = league(squads={"ANA": top}, leaders=leaders)
     mapped = build(tmp_path).map_rosters(data)
     best = next(r for r in mapped.teams[0] if r.position == "C")
-    assert best.skater_attrs.deking == 63
+    assert best.skater_attrs.balance > SKATER_DEFAULTS["C"].balance + 10
 
 
 def test_without_leaders_the_same_player_takes_the_position_default(tmp_path):
     mapped = build(tmp_path).map_rosters(league())
     best = next(r for r in mapped.teams[0] if r.position == "C")
-    assert best.skater_attrs.deking == 35
+    assert best.skater_attrs == SKATER_DEFAULTS["C"]
 
 
 def test_patching_reports_the_output_path(tmp_path):

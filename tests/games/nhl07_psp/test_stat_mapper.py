@@ -1,26 +1,25 @@
-"""`NHL07StatMapper`: provider data onto NHL 07's 0-63 scale.
+"""`NHL07StatMapper`: provider data onto NHL 07 records.
 
-A faithful port, so almost nothing here is a claim about what the numbers
-*should* be -- there is no reference for that and no disc to check against.
-What is pinned is what the arithmetic actually does at the ends and in the
-middle of each window, that every derived attribute moves with the stat it
-claims to come from, and the two structural properties the ported code has to
-have and did not: no shared mutable defaults, and a line assignment that fills
-four complete forward lines.
+The ratings themselves rank through `core.hockey_ratings` (tested there); what
+is pinned here is this game's policy against its retail disc -- every SPAI and
+SGAI field named, every spread the disc's own -- plus the roster shaping, the
+bio fields and no shared mutable defaults.
 """
 
 from __future__ import annotations
 
 import pytest
 
+from retro_roster_patcher.core.hockey_ratings import COUNTS, League
 from retro_roster_patcher.games.nhl07_psp.models import (
+    GOALIE_FIELDS,
     MODERN_NHL_TO_NHL07,
+    SKATER_FIELDS,
     NHL07GoalieAttributes,
     NHL07PlayerRecord,
     NHL07SkaterAttributes,
 )
 from retro_roster_patcher.games.nhl07_psp.stat_mapper import (
-    ATTR_MAX,
     DEFAULT_HEIGHT,
     DEFAULT_JERSEY,
     DEFAULT_WEIGHT,
@@ -31,11 +30,10 @@ from retro_roster_patcher.games.nhl07_psp.stat_mapper import (
     HEIGHT_MAX,
     MAX_PLAYERS,
     SKATER_DEFAULTS,
+    SOURCES,
+    SPREAD,
     NHL07StatMapper,
-    _clamp,
     _defaults_for,
-    _scale,
-    _stat,
 )
 from retro_roster_patcher.sports.models import Player
 
@@ -60,97 +58,8 @@ def player(pid=1, name="Connor McDavid", position="C", **kw):
     return Player(**fields)
 
 
-def test_clamp_leaves_a_value_inside_the_range():
-    assert _clamp(31) == 31
-
-
-def test_clamp_raises_a_negative_to_zero():
-    assert _clamp(-9) == 0
-
-
-def test_clamp_lowers_an_over_range_value_to_the_six_bit_maximum():
-    assert _clamp(400) == ATTR_MAX
-
-
-def test_the_attribute_maximum_is_the_games_own_49():
-    # The fields are six bits, but every skater on the retail disc is 49 or
-    # less and the game shows a stored value plus 50.
-    assert ATTR_MAX == 49
-
-
-def test_scale_maps_the_bottom_of_the_window_to_zero():
-    assert _scale(0, 0, 90) == 0
-
-
-def test_scale_maps_the_top_of_the_window_to_the_maximum():
-    assert _scale(90, 0, 90) == 49
-
-
-def test_scale_maps_the_middle_of_the_window_to_about_half():
-    # 45/90 of 49 is 24.5, which rounds to 24 under banker's rounding.
-    assert _scale(45, 0, 90) == 24
-
-
-def test_scale_clamps_a_value_above_the_window():
-    assert _scale(200, 0, 90) == 49
-
-
-def test_scale_clamps_a_value_below_the_window():
-    assert _scale(-40, 0, 90) == 0
-
-
-def test_an_empty_window_answers_the_midpoint():
-    # Rather than dividing by zero: the midpoint of 0..49, rounded up.
-    assert _scale(5, 7, 7) == 25
-
-
-def test_an_inverted_window_answers_the_midpoint():
-    assert _scale(5, 9, 4) == 25
-
-
-def test_a_narrow_window_still_spans_the_whole_scale():
-    # The goalie save-percentage window is 0.05 wide, so a scale that lost
-    # precision here would flatten every goalie.
-    assert _scale(0.905, 0.880, 0.930) == 24
-
-
-def test_a_stat_present_and_non_zero_is_returned():
-    assert _stat({"G": 21}, "G") == 21.0
-
-
-def test_a_stat_reported_as_zero_falls_through_to_the_default():
-    # `or` and not `in`, matching the source: a genuine zero and an absent stat
-    # are the same thing here, and that is deliberate -- a player with no
-    # recorded shots should take the position default, not a rating of zero.
-    assert _stat({"GAA": 0}, "GAA", default=3.0) == 3.0
-
-
-def test_a_stat_reported_as_none_falls_through():
-    assert _stat({"PTS": None}, "PTS", default=7.0) == 7.0
-
-
-def test_the_second_name_is_used_when_the_first_is_absent():
-    assert _stat({"Shots": 140}, "SOG", "Shots") == 140.0
-
-
-def test_the_first_name_wins_when_both_are_present():
-    assert _stat({"SOG": 140, "Shots": 999}, "SOG", "Shots") == 140.0
-
-
-def test_a_missing_stat_answers_the_default():
-    assert _stat({}, "W", "Wins", default=-1.0) == -1.0
-
-
 def test_every_position_has_its_own_defaults():
     assert sorted(SKATER_DEFAULTS) == ["C", "D", "LW", "RW"]
-
-
-def test_a_centre_starts_with_the_best_faceoffs():
-    assert SKATER_DEFAULTS["C"].faceoffs == 40
-
-
-def test_a_defenceman_starts_with_the_worst_faceoffs():
-    assert SKATER_DEFAULTS["D"].faceoffs == 15
 
 
 def test_the_default_fighting_rating_fits_two_bits():
@@ -354,267 +263,6 @@ def test_someone_shorter_than_the_base_is_floored_at_zero():
 
 
 ELITE = {"G": 40, "A": 55, "PTS": 95, "+/-": 40, "PIM": 80, "SOG": 300, "FO%": 60}
-POOR = {"G": 1, "A": 1, "PTS": 2, "+/-": -30, "PIM": 0, "SOG": 40, "FO%": 32}
-
-
-def test_an_elite_scorer_saturates_the_offensive_ratings():
-    assert MAPPER.map_player(player(), "BOS", ELITE).skater_attrs.deking == 49
-
-
-def test_a_poor_scorer_does_not():
-    assert MAPPER.map_player(player(), "BOS", POOR).skater_attrs.deking == 1
-
-
-def test_the_two_scorers_differ_on_every_points_derived_rating():
-    elite = MAPPER.map_player(player(), "BOS", ELITE).skater_attrs
-    poor = MAPPER.map_player(player(), "BOS", POOR).skater_attrs
-    assert [
-        name
-        for name in ("deking", "puck_control", "hero", "potential")
-        if getattr(elite, name) == getattr(poor, name)
-    ] == []
-
-
-def test_penalty_minutes_drive_toughness():
-    assert MAPPER.map_player(player(), "BOS", ELITE).skater_attrs.toughness == 49
-
-
-def test_penalty_minutes_also_drive_aggression():
-    # One stat feeding three ratings, which is the source's design and worth
-    # naming: `PIM` decides toughness, aggression and fighting on its own.
-    assert MAPPER.map_player(player(), "BOS", ELITE).skater_attrs.aggression == 49
-
-
-def test_penalty_minutes_drive_the_two_bit_fighting_rating():
-    assert MAPPER.map_player(player(), "BOS", {"PIM": 120}).skater_attrs.fighting == 3
-
-
-def test_the_fighting_rating_is_capped_at_three():
-    assert MAPPER.map_player(player(), "BOS", {"PIM": 4000}).skater_attrs.fighting == 3
-
-
-def test_forty_penalty_minutes_is_one_fighting_point():
-    assert MAPPER.map_player(player(), "BOS", {"PIM": 40}).skater_attrs.fighting == 1
-
-
-def test_thirty_nine_penalty_minutes_is_none():
-    assert MAPPER.map_player(player(), "BOS", {"PIM": 39}).skater_attrs.fighting == 0
-
-
-def test_a_reported_faceoff_percentage_overrides_the_position_default():
-    record = MAPPER.map_player(player(position="D"), "BOS", {"FO%": 55, "PTS": 1})
-    assert record.skater_attrs.faceoffs == _scale(55, 30, 60)
-
-
-def test_an_unreported_faceoff_percentage_keeps_the_position_default():
-    record = MAPPER.map_player(player(position="D"), "BOS", {"PTS": 1})
-    assert record.skater_attrs.faceoffs == SKATER_DEFAULTS["D"].faceoffs
-
-
-def test_the_two_faceoff_answers_differ():
-    # Pins the pair above: with the same number either way, neither means
-    # anything.
-    assert _scale(55, 30, 60) != SKATER_DEFAULTS["D"].faceoffs
-
-
-def test_a_defenceman_takes_his_checking_from_plus_minus():
-    record = MAPPER.map_player(player(position="D"), "BOS", {"+/-": 40, "PTS": 1})
-    assert record.skater_attrs.checking == 49
-
-
-def test_a_forward_keeps_his_positional_checking():
-    record = MAPPER.map_player(player(position="C"), "BOS", {"+/-": 40, "PTS": 1})
-    assert record.skater_attrs.checking == SKATER_DEFAULTS["C"].checking
-
-
-def test_a_defenceman_gets_a_balance_bonus():
-    record = MAPPER.map_player(player(position="D"), "BOS", {"PTS": 1})
-    assert record.skater_attrs.balance == SKATER_DEFAULTS["D"].balance + 3
-
-
-def test_a_forward_gets_no_balance_bonus():
-    record = MAPPER.map_player(player(position="C"), "BOS", {"PTS": 1})
-    assert record.skater_attrs.balance == SKATER_DEFAULTS["C"].balance
-
-
-@pytest.mark.parametrize("points,bonus", [(0, 0), (30, 0), (31, 3), (50, 3), (51, 5), (200, 5)])
-def test_the_speed_bonus_steps_at_thirty_and_fifty_points(points, bonus):
-    record = MAPPER.map_player(player(position="C"), "BOS", {"PTS": points})
-    assert record.skater_attrs.speed == SKATER_DEFAULTS["C"].speed + bonus
-
-
-def test_a_player_with_no_shots_is_given_a_ten_per_cent_shooting_rate():
-    # And so lands at `_scale(10, 5, 20)`, the middle of the accuracy window,
-    # rather than at the bottom.
-    record = MAPPER.map_player(player(), "BOS", {"G": 0, "SOG": 0})
-    assert record.skater_attrs.shot_accuracy == _scale(10, 5, 20)
-
-
-def test_shot_accuracy_takes_the_better_of_goals_and_shooting_rate():
-    record = MAPPER.map_player(player(), "BOS", {"G": 40, "SOG": 400})
-    assert record.skater_attrs.shot_accuracy == 49
-
-
-def test_the_nhl_apis_shots_key_counts():
-    # The NHL API calls shots `S`. 10 goals on 50 shots is 20%, the top of the
-    # accuracy window, where 10 goals alone rate 12.
-    record = MAPPER.map_player(player(), "BOS", {"G": 10, "S": 50})
-    assert record.skater_attrs.shot_accuracy == 49
-
-
-def test_a_faceoff_fraction_reads_as_a_percentage():
-    # The NHL API sends 0.6 where ESPN sends 60; both are the top of the window.
-    as_fraction = MAPPER.map_player(player(), "BOS", {"PTS": 1, "FO%": 0.6})
-    as_percent = MAPPER.map_player(player(), "BOS", {"PTS": 1, "FO%": 60})
-    assert as_fraction.skater_attrs.faceoffs == as_percent.skater_attrs.faceoffs == 49
-
-
-def test_wrist_accuracy_sits_two_below_the_goal_rating_when_that_wins():
-    record = MAPPER.map_player(player(), "BOS", {"G": 20, "SOG": 400})
-    assert record.skater_attrs.wrist_accuracy == _scale(20, 0, 40) - 2
-
-
-def test_wrist_power_sits_three_below_the_goal_rating():
-    record = MAPPER.map_player(player(), "BOS", {"G": 20})
-    assert record.skater_attrs.wrist_power == _scale(20, 0, 40) - 3
-
-
-def test_no_derived_skater_rating_exceeds_the_six_bit_range():
-    record = MAPPER.map_player(
-        player(), "BOS", {"G": 999, "A": 999, "PTS": 999, "+/-": 999, "PIM": 999, "SOG": 1}
-    )
-    attrs = record.skater_attrs
-    over = [
-        name
-        for name, value in vars(attrs).items()
-        if name != "fighting" and not 0 <= value <= ATTR_MAX
-    ]
-    assert over == []
-
-
-def test_no_derived_skater_rating_falls_below_zero():
-    record = MAPPER.map_player(player(), "BOS", {"G": 0, "A": 0, "PTS": 0, "+/-": -999, "PIM": 0})
-    assert [name for name, value in vars(record.skater_attrs).items() if value < 0] == []
-
-
-def test_an_elite_save_percentage_saturates_the_save_ratings():
-    record = MAPPER.map_player(player(position="G"), "BOS", {"SV%": 0.930})
-    assert record.goalie_attrs.rebound_ctrl == 49
-
-
-def test_a_poor_save_percentage_bottoms_them_out():
-    record = MAPPER.map_player(player(position="G"), "BOS", {"SV%": 0.870})
-    assert record.goalie_attrs.rebound_ctrl == 0
-
-
-def test_all_five_save_zones_move_together():
-    record = MAPPER.map_player(player(position="G"), "BOS", {"SV%": 0.905})
-    attrs = record.goalie_attrs
-    assert [attrs.five_hole, attrs.glove_high, attrs.glove_low] == [24, 24, 24]
-
-
-def test_the_stick_zones_sit_two_below_the_glove_zones():
-    record = MAPPER.map_player(player(position="G"), "BOS", {"SV%": 0.905})
-    assert record.goalie_attrs.stick_high == record.goalie_attrs.glove_high - 2
-
-
-def test_a_low_goals_against_average_raises_the_poke_check():
-    assert (
-        MAPPER.map_player(player(position="G"), "BOS", {"GAA": 2.0}).goalie_attrs.poke_check == 49
-    )
-
-
-def test_a_high_goals_against_average_lowers_it():
-    assert MAPPER.map_player(player(position="G"), "BOS", {"GAA": 3.5}).goalie_attrs.poke_check == 0
-
-
-def test_an_unreported_goals_against_average_assumes_three():
-    a = MAPPER.map_player(player(position="G"), "BOS", {"SV%": 0.9}).goalie_attrs
-    b = MAPPER.map_player(player(position="G"), "BOS", {"SV%": 0.9, "GAA": 3.0}).goalie_attrs
-    assert a.poke_check == b.poke_check
-
-
-def test_the_win_bonus_is_one_point_per_four_wins():
-    assert MAPPER.map_player(player(position="G"), "BOS", {"W": 20}).goalie_attrs.speed == 25 + 5
-
-
-def test_the_win_bonus_is_capped_at_ten():
-    assert MAPPER.map_player(player(position="G"), "BOS", {"W": 400}).goalie_attrs.speed == 25 + 10
-
-
-def test_the_alternative_wins_key_is_read():
-    assert MAPPER.map_player(player(position="G"), "BOS", {"Wins": 20}).goalie_attrs.speed == 30
-
-
-def test_a_percentage_save_line_saturates_the_scale():
-    # PINS UPSTREAM FIDELITY DELIBERATELY. Stated with the module's own `_scale`
-    # so the tests below are a consequence and not a claim: the window is a
-    # fraction and `91.2` is far off the top of it.
-    assert _scale(91.2, 0.880, 0.930) == 49
-
-
-def test_a_percentage_save_line_maxes_the_five_ratings_that_take_it_raw():
-    # PINS UPSTREAM FIDELITY DELIBERATELY, and this is the bug: a save
-    # percentage written the way every human-facing source prints it saturates
-    # the goalie. `_save_percentage` used to divide by 100 here and does not any
-    # more -- do not put it back. A rating byte the source did not write is a
-    # hardware risk, and no disc has ever checked this port's output.
-    attrs = MAPPER.map_player(player(position="G"), "BOS", {"SV%": 91.2}).goalie_attrs
-    assert [
-        attrs.rebound_ctrl,
-        attrs.agility,
-        attrs.five_hole,
-        attrs.glove_high,
-        attrs.glove_low,
-    ] == [49, 49, 49, 49, 49]
-
-
-def test_the_offset_save_ratings_saturate_at_their_own_offsets():
-    # The other five of the **ten** `SV%` drives. They are not all 49: three
-    # have a constant subtracted.
-    attrs = MAPPER.map_player(player(position="G"), "BOS", {"SV%": 91.2}).goalie_attrs
-    assert [
-        attrs.shot_recovery,
-        attrs.stick_high,
-        attrs.stick_low,
-        attrs.intensity,
-        attrs.potential,
-    ] == [46, 47, 47, 44, 49]
-
-
-def test_exactly_ten_goalie_ratings_move_with_the_save_percentage():
-    # The count the divergence note under-reported. Derived by moving `SV%` and
-    # nothing else, so it cannot be satisfied by naming the ratings.
-    low = MAPPER.map_player(player(position="G"), "BOS", {"SV%": 0.880}).goalie_attrs
-    high = MAPPER.map_player(player(position="G"), "BOS", {"SV%": 0.930}).goalie_attrs
-    moved = sorted(k for k, v in vars(low).items() if v != getattr(high, k))
-    assert moved == [
-        "agility",
-        "five_hole",
-        "glove_high",
-        "glove_low",
-        "intensity",
-        "potential",
-        "rebound_ctrl",
-        "shot_recovery",
-        "stick_high",
-        "stick_low",
-    ]
-
-
-def test_the_two_conventions_produce_different_goalies():
-    # Same season, two ways of writing it, two records. The fraction is the one
-    # the window was written for; the percentage is the saturated one above.
-    percent = MAPPER.map_player(player(position="G"), "BOS", {"SV%": 91.2}).goalie_attrs
-    fraction = MAPPER.map_player(player(position="G"), "BOS", {"SV%": 0.912}).goalie_attrs
-    assert percent != fraction
-
-
-def test_a_fraction_save_line_still_lands_in_the_middle_of_the_window():
-    # Pins the test above: the fraction reading is unchanged by this revert, so
-    # "they differ" is not satisfied by a mapper that broke both.
-    attrs = MAPPER.map_player(player(position="G"), "BOS", {"SV%": 0.912}).goalie_attrs
-    assert attrs.rebound_ctrl == 31
 
 
 def test_goalies_reported_in_percentages_outrank_every_fraction_goalie():
@@ -632,64 +280,6 @@ def test_goalies_reported_in_one_convention_still_sort_best_first():
     goalies = [player(pid=1, position="G"), player(pid=2, position="G")]
     stats = {"1": {"SV%": 0.880}, "2": {"SV%": 0.920}}
     assert [p.id for p in MAPPER.select_roster(goalies, stats)] == [2, 1]
-
-
-def test_a_goalie_never_fights():
-    assert MAPPER.map_player(player(position="G"), "BOS", {"SV%": 0.9}).goalie_attrs.fighting == 0
-
-
-def test_a_goalies_toughness_is_a_constant():
-    # INHERITED DEFECT, PRESERVED. Written from no stat at all, which is the
-    # source's behaviour: every patched goalie has the same toughness whatever
-    # his season looked like. Not fixed because there is nothing to fix it from
-    # -- no provider here reports a goalie toughness input and inventing a
-    # derivation would be new behaviour dressed as a bug fix. `_map_goalie_stats`
-    # carries the argument.
-    a = MAPPER.map_player(player(position="G"), "BOS", {"SV%": 0.93, "W": 60}).goalie_attrs
-    b = MAPPER.map_player(player(position="G"), "BOS", {"SV%": 0.87, "W": 0}).goalie_attrs
-    assert a.toughness == b.toughness
-
-
-def test_a_goalies_toughness_is_the_one_the_defaults_give_him():
-    # And the constant is `GOALIE_DEFAULTS`', so a goalie the provider has no
-    # line for and a Vezina winner come out equal on it. Stated against the
-    # defaults rather than against `25`, so the two cannot drift apart silently.
-    attrs = MAPPER.map_player(player(position="G"), "BOS", {"SV%": 0.93, "W": 60}).goalie_attrs
-    assert attrs.toughness == GOALIE_DEFAULTS.toughness
-
-
-def test_three_goalie_ratings_are_written_from_no_stat_at_all():
-    """The defect's real width: toughness is one of three, not one of one.
-
-    Every key `_map_goalie_stats` reads, set to values that move each of the
-    other fourteen ratings off its default. These three do not move, and the
-    list is asserted whole so a fourth constant appearing here fails rather than
-    passing unnoticed.
-    """
-    attrs = MAPPER.map_player(
-        player(position="G"), "BOS", {"SV%": 0.93, "GAA": 1.0, "W": 60}
-    ).goalie_attrs
-    unmoved = [
-        name for name, value in vars(attrs).items() if value == getattr(GOALIE_DEFAULTS, name)
-    ]
-    assert unmoved == ["toughness", "fighting", "passing"]
-
-
-def test_the_two_goalies_do_differ_elsewhere():
-    # Pins the test above: if every rating were constant, it would be vacuous.
-    a = MAPPER.map_player(player(position="G"), "BOS", {"SV%": 0.93, "W": 60}).goalie_attrs
-    b = MAPPER.map_player(player(position="G"), "BOS", {"SV%": 0.87, "W": 0}).goalie_attrs
-    assert a.agility != b.agility
-
-
-def test_no_derived_goalie_rating_exceeds_the_six_bit_range():
-    record = MAPPER.map_player(player(position="G"), "BOS", {"SV%": 9.9, "GAA": -50, "W": 999})
-    over = [
-        name
-        for name, value in vars(record.goalie_attrs).items()
-        if name != "fighting" and not 0 <= value <= ATTR_MAX
-    ]
-    assert over == []
 
 
 def test_every_abbreviation_in_the_table_resolves():
@@ -1058,3 +648,109 @@ def test_the_three_highest_leftovers_would_be_three_centres():
     # line four, the mutant would produce the same list and the assertion would
     # hold for both.
     assert sorted(_TAILORED_POINTS["C"][3:], reverse=True)[:3] == [60, 59, 58]
+
+
+#: The retail disc's SPAI and SGAI fields, in its order (ULUS10131).
+RETAIL_SPAI = (
+    "BALA PENA SACC WACC FACE ACCE SPEE POTE DEKG CHKG TOUG FIGH PCBI ODBI SPBI PUCK AGIL "
+    "HERO AGGR PRES PASS ENDU INJU SPOW WPOW INDX"
+).split()
+RETAIL_SGAI = (
+    "BRKA REBC SREC SPEE POKE INTE POTE TOUG FIGH POSI PADL AGIL 5HOL STYL FLOP CONS PASS "
+    "ENDU INDX GSH_ SSH_ GSL_ SSL_"
+).split()
+STATS = set(COUNTS) | {"age", "size", "height", "save", "goals_against", "games"}
+STATS |= {"ice_time", "faceoff_pct"}
+
+
+def test_every_retail_ratings_field_but_the_key_is_named():
+    assert sorted(SKATER_FIELDS.values()) == sorted(f for f in RETAIL_SPAI if f != "INDX")
+    assert sorted(GOALIE_FIELDS.values()) == sorted(f for f in RETAIL_SGAI if f != "INDX")
+
+
+@pytest.mark.parametrize("group", ["F", "D", "G"])
+def test_every_rating_has_the_discs_spread_and_ranks_only_stats_there_are(group):
+    fields = GOALIE_FIELDS if group == "G" else SKATER_FIELDS
+    assert set(SPREAD[group]) == set(fields)
+    assert set(SOURCES[group]) <= set(fields)
+    for quantiles in SPREAD[group].values():
+        assert len(quantiles) == 21 and list(quantiles) == sorted(quantiles)
+        assert 0 <= quantiles[0] and quantiles[-1] <= 49
+    for names in SOURCES[group].values():
+        assert {name.lstrip("-") for name in names} <= STATS
+
+
+def test_a_centre_has_the_best_default_faceoffs_and_a_defenceman_the_worst():
+    by_faceoffs = sorted(SKATER_DEFAULTS, key=lambda pos: SKATER_DEFAULTS[pos].faceoffs)
+    assert (by_faceoffs[0], by_faceoffs[-1]) == ("D", "C")
+
+
+def forwards(n=41):
+    return [
+        (
+            player(pid=i, name=f"Forward {i}", weight=220 - i),
+            {"GP": 82, "G": i, "A": 2 * i, "PTS": 3 * i, "S": 80 + 5 * i, "TOI": 700 + 15 * i},
+        )
+        for i in range(n)
+    ]
+
+
+def test_the_leagues_best_and_worst_take_the_ends_of_the_discs_spread():
+    lines = forwards()
+    league = League.from_lines(lines, SOURCES)
+    best = MAPPER.map_player(lines[-1][0], "BOS", lines[-1][1], league).skater_attrs
+    worst = MAPPER.map_player(lines[0][0], "BOS", lines[0][1], league).skater_attrs
+    for rating in ("passing", "shot_accuracy", "endurance", "speed", "potential"):
+        assert getattr(best, rating) == SPREAD["F"][rating][-1], rating
+        assert getattr(worst, rating) == SPREAD["F"][rating][0], rating
+
+
+def test_a_rating_the_line_has_no_stat_for_keeps_the_position_default():
+    # ESPN's team leaders list a player only under the categories he leads.
+    attrs = MAPPER.map_player(player(), "BOS", {"PIM": 120}).skater_attrs
+    assert attrs.passing == SKATER_DEFAULTS["C"].passing
+    assert attrs.shot_accuracy == SKATER_DEFAULTS["C"].shot_accuracy
+    assert attrs.endurance == SKATER_DEFAULTS["C"].endurance
+
+
+def test_a_wingers_faceoff_percentage_without_a_count_ranks_below_every_centre():
+    # The NHL API sends a winger's FO% over his handful of draws, and no count.
+    centres = [(player(pid=i), {"GP": 82, "FO%": 0.40 + i / 100}) for i in range(20)]
+    winger = (player(pid=99, position="LW"), {"GP": 82, "FO%": 1.0})
+    league = League.from_lines([*centres, winger], SOURCES)
+    faceoffs = [
+        MAPPER.map_player(p, "BOS", line, league).skater_attrs.faceoffs
+        for p, line in [winger, *centres]
+    ]
+    assert faceoffs[0] < min(faceoffs[1:])
+
+
+def test_a_playmaker_leans_away_from_the_physical_bias():
+    lines = forwards()
+    league = League.from_lines(lines, SOURCES)
+    playmaker = MAPPER.map_player(lines[-1][0], "BOS", lines[-1][1], league).skater_attrs
+    grinder = MAPPER.map_player(lines[0][0], "BOS", lines[0][1], league).skater_attrs
+    assert playmaker.pc_bias < grinder.pc_bias
+    assert playmaker.offence_bias > grinder.offence_bias
+
+
+def test_a_busy_goalie_with_a_good_save_rate_outrates_a_backup_and_both_play_butterfly():
+    goalies = [
+        (
+            player(pid=i, name=f"Goalie {i}", position="G"),
+            {"GP": 10 + 2 * i, "W": i, "SV%": 0.880 + i / 1000, "GAA": 3.4 - i / 30, "SO": i // 5},
+        )
+        for i in range(30)
+    ]
+    league = League.from_lines(goalies, SOURCES)
+    starter = MAPPER.map_player(goalies[-1][0], "BOS", goalies[-1][1], league).goalie_attrs
+    backup = MAPPER.map_player(goalies[0][0], "BOS", goalies[0][1], league).goalie_attrs
+    for rating in ("glove_high", "stick_low", "five_hole", "rebound_ctrl", "endurance"):
+        assert getattr(starter, rating) > getattr(backup, rating), rating
+    assert starter.style == backup.style == 2
+
+
+def test_the_birth_fields_show_his_real_age_in_2006():
+    record = MAPPER.map_player(player(age=27, nationality="CAN", birth_city="Kingston"), "BOS")
+    assert record.birth_year == 2006 - 27 - 1959
+    assert (record.country, record.city) == (85, "Kingston")

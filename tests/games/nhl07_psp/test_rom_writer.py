@@ -13,6 +13,7 @@ satisfied by a field that was already right.
 
 from __future__ import annotations
 
+import dataclasses
 import os
 import struct
 
@@ -23,6 +24,7 @@ from retro_roster_patcher.formats.ea_tdb import TDBFile
 from retro_roster_patcher.games.nhl07_psp.models import (
     NAME_FIELD_CHARS,
     POSITION_REVERSE,
+    SKATER_FIELDS,
     TDB_BIOATT,
     TDB_MASTER,
     TDB_ROSTER,
@@ -95,6 +97,9 @@ SKATER = NHL07PlayerRecord(
         injury=19,
         slap_power=20,
         wrist_power=21,
+        pc_bias=9,
+        offence_bias=14,
+        shoot_bias=5,
     ),
 )
 
@@ -126,6 +131,11 @@ GOALIE = NHL07PlayerRecord(
         stick_high=14,
         glove_low=15,
         stick_low=16,
+        positioning=2,
+        paddle_down=0,
+        style=1,
+        flop=2,
+        consistency=3,
     ),
 )
 
@@ -510,6 +520,38 @@ GOALIE_EXPECTED = {
 @pytest.mark.parametrize("field,value", sorted(GOALIE_EXPECTED.items()))
 def test_each_goalie_rating_lands_in_its_own_field(tmp_path, field, value):
     assert _write_attrs_and_read(tmp_path, 2, "goalie")[field] == value
+
+
+def test_the_three_biases_land_in_their_own_fields(tmp_path):
+    record = _write_attrs_and_read(tmp_path, 4, "skater")
+    assert [record[f] for f in ("PCBI", "ODBI", "SPBI")] == [9, 14, 5]
+
+
+def test_the_goalie_style_fields_land_in_their_own_fields(tmp_path):
+    record = _write_attrs_and_read(tmp_path, 2, "goalie")
+    assert [record[f] for f in ("POSI", "PADL", "STYL", "FLOP", "CONS")] == [2, 0, 1, 2, 3]
+
+
+def test_a_misspelled_rating_field_is_refused_not_skipped(tmp_path, monkeypatch):
+    monkeypatch.setitem(SKATER_FIELDS, "balance", "BALL")
+    writer = prepared(tmp_path)
+    with pytest.raises(RomError, match="SPAI has no field BALL"):
+        writer.write_skater_attrs(master(writer), 4, SKATER.skater_attrs)
+
+
+def test_a_bio_write_lands_the_birth_fields(tmp_path):
+    born = dataclasses.replace(
+        SKATER, country=18, state=19, city="Tampere", birth_year=11, birth_month=9, birth_day=2
+    )
+    record = _write_and_read(tmp_path, 3, born)
+    assert [record[f] for f in ("INTL", "STAT", "CITY", "YEAR", "MONT", "DAY_")] == [
+        18,
+        19,
+        "Tampere",
+        11,
+        9,
+        2,
+    ]
 
 
 def test_a_skater_write_does_not_change_the_records_index(tmp_path):
