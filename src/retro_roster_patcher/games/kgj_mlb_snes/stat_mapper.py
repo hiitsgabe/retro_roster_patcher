@@ -186,6 +186,10 @@ RECENT_START_WEIGHT = 10
 PITCHER_BATTING = KGJBatterAttributes(batting=2, power=1, speed=3, defense=3)
 
 
+#: Where a left-handed thrower plays, and the DH, who does not field (`_throws`).
+_LEFT_HANDERS_PLAY = frozenset({"1B", "LF", "CF", "RF", "OF", "DH"})
+
+
 class KGJStatMapper:
     def league(self, lines: Iterable[tuple[Player, Mapping, Mapping]]) -> KGJLeague:
         """What DEF and FAT rank against: every fetched (player, season line,
@@ -477,8 +481,15 @@ class KGJStatMapper:
 
     def _throws(self, player: Player) -> int:
         """0x0D's low nibble (and a pitcher's 0x15): 0 right, 1 left. ESPN's
-        occasional 'B' is written as right."""
-        return 1 if (player.handedness or "").upper() == "L" else 0
+        'B' is a player who throws with either arm (Carlos Cortes and Anthony
+        Seigler in 2026). Both throw left in the outfield and right at catcher,
+        second and third, where nobody throws left, so 'B' is left at the
+        positions a left-hander plays and right at the others, the mound
+        included."""
+        hand = (player.handedness or "").upper()
+        if hand == "B":
+            return int((player.position or "").upper() in _LEFT_HANDERS_PLAY)
+        return int(hand == "L")
 
     def _split_name(self, full_name: str) -> tuple[str, str]:
         """Split "First Last" into (initial, surname): 'J.D. Martinez' -> ('J',

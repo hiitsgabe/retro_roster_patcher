@@ -328,9 +328,23 @@ def test_bats_is_right_left_or_switch(mapper, bats, code):
     assert mapper.map_batter(_player(bats=bats)).bats == code
 
 
-@pytest.mark.parametrize("throws,code", [("R", 0), ("L", 1), ("B", 0), ("", 0)])
-def test_throws_is_right_or_left_and_espns_both_is_right(mapper, throws, code):
+@pytest.mark.parametrize("throws,code", [("R", 0), ("L", 1), ("", 0)])
+def test_throws_is_right_or_left(mapper, throws, code):
     assert mapper.map_batter(_player(handedness=throws)).throws == code
+
+
+@pytest.mark.parametrize(
+    "position,code",
+    [("RF", 1), ("LF", 1), ("1B", 1), ("DH", 1), ("C", 0), ("2B", 0), ("3B", 0), ("SS", 0)],
+)
+def test_espns_both_throws_left_only_where_a_left_hander_plays(mapper, position, code):
+    # Carlos Cortes (RF, bats L) and Anthony Seigler (2B, bats B), ESPN's two of
+    # 2026: each throws left in the outfield and right in the infield.
+    assert mapper.map_batter(_player(position=position, handedness="B")).throws == code
+
+
+def test_a_pitcher_espn_lists_as_throwing_with_both_arms_throws_right(mapper):
+    assert mapper.map_pitcher(_player(position="SP", bats="B", handedness="B")).throws == 0
 
 
 def test_a_left_handed_hitter_who_throws_right_keeps_both(mapper):
