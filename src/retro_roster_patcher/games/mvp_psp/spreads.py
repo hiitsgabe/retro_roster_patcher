@@ -6,9 +6,9 @@ stealer gets the stealing of the disc's best, its typical one the disc's
 typical, so a patched roster keeps the game's distribution. A player the
 mapper has no stat for gets his position's median. Groups are a player's
 position (`pos5`), his kind (`B` batters, `SP`, `RP`), a pitcher's role and
-throwing hand (`SP1` a left-handed starter), and in the split tables the side
-a batter swings from (`R`, `L`). The MVP Legends (`ATTRIB_HIDDEN`) and the
-`Default` template are left out.
+throwing hand (`SP1` a left-handed starter), his age in the disc's season
+(`age31`), and in the split tables the side a batter swings from (`R`, `L`).
+The MVP Legends (`ATTRIB_HIDDEN`) and the `Default` template are left out.
 
 The spreads are read from the disc being patched, not written down: its own
 column ranges (stealing 0-15, speed 39-99, fastball 78-101 mph) come with them.
@@ -17,12 +17,14 @@ column ranges (stealing 0-15, speed 39-99, fastball 78-101 mph) come with them.
 from __future__ import annotations
 
 from collections import Counter, defaultdict
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
+from datetime import timedelta
 from statistics import mean
 
 from .models import (
     ATTRIB_BATS,
+    ATTRIB_BIRTHDAY,
     ATTRIB_BODY_TYPE,
     ATTRIB_BONE_PROFILE,
     ATTRIB_FIRST_NAME,
@@ -31,6 +33,8 @@ from .models import (
     ATTRIB_PRIMARY_POS,
     ATTRIB_THROWS,
     ATTRIB_WEIGHT,
+    BIRTHDAY_EPOCH,
+    DISC_SEASON,
     LR_ZONES,
     NO_PITCH,
     PA_PITCH1_VELOCITY,
@@ -74,6 +78,8 @@ def groups(attrib_row: Mapping[int, str]) -> list[str]:
     out = [f"pos{pos}", kind, "all"]
     if kind != "B":
         out.append(f"{kind}{attrib_row.get(ATTRIB_THROWS, '0')}")
+    if (born := _int(attrib_row.get(ATTRIB_BIRTHDAY))) is not None:
+        out.append(f"age{DISC_SEASON - (BIRTHDAY_EPOCH + timedelta(born)).year}")
     return out
 
 
@@ -145,9 +151,11 @@ class Spreads:
                     velocity = _int(pitches.get(base + PA_PITCH_VELOCITY_OFFSET))
                     if velocity is not None and fastball is not None:
                         figures["drop"] = fastball - velocity
+                    # By hand too: a left-hander's pitches break the other way.
                     for name, v in figures.items():
                         if v is not None:
-                            values["pitchattrib", f"{name}{kind}", "all"].append(v)
+                            for g in ("all", f"throws{row.get(ATTRIB_THROWS, '0')}"):
+                                values["pitchattrib", f"{name}{kind}", g].append(v)
         return cls({k: sorted(v) for k, v in values.items()}, bodies)
 
     def at(self, table: str, column: int | str, group: str, share: float) -> int | None:
@@ -157,6 +165,11 @@ class Spreads:
         if not pool:
             return None
         return pool[min(int(share * len(pool)), len(pool) - 1)]
+
+    def middle(self, table: str, column: int | str, groups: Iterable[str]) -> int | None:
+        """The median of several groups' values together; None when they have none."""
+        pool = sorted(v for g in groups for v in self.values.get((table, column, g), ()))
+        return pool[len(pool) // 2] if pool else None
 
     def mean(self, table: str, column: int | str, group: str) -> float | None:
         pool = self.values.get((table, column, group))

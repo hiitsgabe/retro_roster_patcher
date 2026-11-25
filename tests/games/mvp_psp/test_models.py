@@ -143,8 +143,13 @@ def test_the_roster_table_is_the_one_rebuilt_wholesale():
     assert ROSTER_TABLE == "roster"
 
 
-def test_the_modified_tables_are_the_player_tables_plus_the_roster():
-    assert MODIFIED_TABLES == (*PLAYER_TABLES, ROSTER_TABLE)
+def test_the_modified_tables_are_the_player_and_statistics_tables_plus_the_roster():
+    assert MODIFIED_TABLES == (*PLAYER_TABLES, *models.STAT_TABLES, ROSTER_TABLE)
+
+
+def test_only_pitchers_have_a_row_in_the_four_pitching_statistics_tables():
+    assert set(models.PITCHER_STAT_TABLES) < set(models.STAT_TABLES)
+    assert all("pitch" in name for name in models.PITCHER_STAT_TABLES)
 
 
 @pytest.mark.parametrize("name", MODIFIED_TABLES)

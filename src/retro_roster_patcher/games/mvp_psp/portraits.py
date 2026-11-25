@@ -3,17 +3,22 @@
 `PORTRAIT.BIG` is on the disc twice (`PATHS`), a BIGF archive of `NNNN.msh`
 pictures, each a 78x96 8-bit SHPM: a head-and-shoulders photo, cap on, on a
 white ground. The picture a player shows is named by his `attrib` column 7
-(`playerattrib_audioid`, which also names his speech), four digits; `0000` is
-the silhouette of a player without one.
+(`playerattrib_audioid`, which also names his speech), four digits, when his
+column 8 (`playerattrib_photo`) is 1; with 2 the game draws his 3D head
+instead, as for its own players without a photo. `0000` is the silhouette.
 
-A patched player keeps his record's id, so `edits` draws his ESPN head shot
-over that id's picture in both archives, in place and the same size; without a
-head shot he gets the silhouette, not the old player's face.
+A patched player takes an audio id no recorded name answers to (`speech`), so
+`edits` renames the picture of his record's old id to the new one in the
+archive's directory, which stays in name order, and draws his ESPN head shot over it, in
+place and the same size, in both archives; without a head shot he gets the
+silhouette, not the old player's face. The silhouette itself is never drawn
+over.
 """
 
 from __future__ import annotations
 
 import io
+import struct
 from collections.abc import Callable, Mapping
 from typing import BinaryIO
 
@@ -67,20 +72,46 @@ def _archives(f: BinaryIO) -> list[tuple[int, bytes]]:
     return out
 
 
+def ids(f: BinaryIO) -> set[int]:
+    """The audio ids the disc has a portrait for; the silhouette is none."""
+    archives = _archives(f)
+    names = [e.name for e in bigf_parse(archives[0][1])] if archives else []
+    return {int(n[:4]) for n in names if n[:4].isdigit() and n == name(n[:4])} - {0}
+
+
+def _directory(archive: bytes, renames: Mapping[str, str]) -> bytes:
+    """The archive's directory from its first entry, `renames` applied and in
+    name order: the game finds a picture only where that order puts it, so a
+    renamed entry left in its old place shows no portrait."""
+    entries = sorted((renames.get(e.name, e.name), e) for e in bigf_parse(archive))
+    return b"".join(
+        struct.pack(">II", e.offset, e.size) + n.encode("ascii") + b"\0" for n, e in entries
+    )
+
+
 def edits(
-    f: BinaryIO, pictures: Mapping[str, bytes | None], status: Callable[[str], None]
+    f: BinaryIO,
+    pictures: Mapping[str, bytes | None],
+    status: Callable[[str], None],
+    moves: Mapping[int, int] | None = None,
 ) -> list[tuple[int, bytes]]:
     """(disc offset, bytes) writes giving each `{attrib column 7: head shot or
-    None}` its picture, None the silhouette, in every copy of the archive."""
+    None}` its picture, None the silhouette, in every copy of the archive. An
+    id in `moves` takes over the picture of the id it maps to, renamed to it."""
     out: list[tuple[int, bytes]] = []
     drawn = 0
+    moves = moves or {}
     for start, archive in _archives(f):
         entries = {e.name: e for e in bigf_parse(archive)}
+        renames: dict[str, str] = {}
         blank = bigf_extract(archive, SILHOUETTE)
         for audio_id, png in pictures.items():
-            entry = entries.get(name(audio_id))
-            if entry is None:
+            source = name(str(moves.get(int(audio_id), audio_id)))
+            entry = entries.get(source)
+            if entry is None or source == SILHOUETTE:
                 continue
+            if source != name(audio_id):
+                renames[source] = name(audio_id)
             data = blank
             if png is not None:
                 try:
@@ -92,5 +123,7 @@ def edits(
                     data = blank
             if data is not None and len(data) == entry.size:
                 out.append((start + entry.offset, data))
+        if renames:
+            out.append((start + 16, _directory(archive, renames)))
     status(f"Portraits drawn from head shots: {drawn // max(1, len(PATHS))}")
     return out

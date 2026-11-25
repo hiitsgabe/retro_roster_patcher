@@ -625,3 +625,23 @@ def test_a_batter_carries_his_birth_date():
 
 def test_the_record_type_is_the_models_one():
     assert isinstance(MAPPER.map_batter(player()), MVPPlayerRecord)
+
+
+def test_a_player_who_throws_with_both_hands_throws_right_where_he_must():
+    # The game has no code for both. Carlos Cortes bats left and throws left
+    # in the outfield; an infielder or a pitcher who throws with both is
+    # right-handed.
+    assert MAPPER.map_throw_hand("B", "L", "RF") == THROWS_LEFT
+    assert MAPPER.map_throw_hand("B", "L", "2B") == THROWS_RIGHT
+    assert MAPPER.map_throw_hand("B", "B", "RF") == THROWS_RIGHT
+    assert MAPPER.map_throw_hand("B") == THROWS_RIGHT
+    cortes = player(position="RF", bats="L", handedness="B")
+    assert MAPPER.map_batter(cortes).throws == THROWS_LEFT
+    switch = player(position="SP", bats="L", handedness="B")
+    assert MAPPER.map_pitcher(switch).throws == THROWS_RIGHT
+
+
+def test_a_record_carries_its_season_line():
+    line = batter_line()
+    assert MAPPER.map_batter(player(), line).line == line
+    assert MAPPER.map_batter(player()).line == {}

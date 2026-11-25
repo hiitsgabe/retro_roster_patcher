@@ -21,6 +21,7 @@ import os
 import pytest
 
 from retro_roster_patcher.core.errors import RomError
+from retro_roster_patcher.games.mvp_psp import rom_writer
 from retro_roster_patcher.games.mvp_psp.models import (
     ATTRIB_BIRTHDAY,
     ATTRIB_FIRST_NAME,
@@ -450,6 +451,21 @@ def test_a_staged_table_whose_header_is_empty_is_not_rebuilt(tmp_path):
     offset, allocation = SECTION_ALLOCATIONS["team"]
     rebuilt = writer.rebuild_database_big()
     assert rebuilt[offset : offset + allocation] == original[offset : offset + allocation]
+
+
+def test_a_table_that_misses_its_allocation_is_packed_again_the_slower_way(tmp_path, monkeypatch):
+    # The statistics tables fit their allocations by a few bytes.
+    writer = make_writer(tmp_path)
+    _, allocation = SECTION_ALLOCATIONS["team"]
+    parses = []
+
+    def pack(raw, tight=False):
+        parses.append(tight)
+        return bytes(allocation if tight else allocation + 1)
+
+    monkeypatch.setattr(rom_writer, "refpack_compress", pack)
+    assert len(writer._rebuild_section_bytes("team")) == allocation
+    assert parses == [False, True]
 
 
 def test_a_table_the_reader_never_parsed_rebuilds_to_nothing(tmp_path):

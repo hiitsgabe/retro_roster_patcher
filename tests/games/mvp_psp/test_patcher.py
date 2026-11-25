@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import random
+from datetime import timedelta
 
 import pytest
 
@@ -20,6 +21,7 @@ from retro_roster_patcher.games.mvp_psp import models as mvp_models
 from retro_roster_patcher.games.mvp_psp.models import (
     AL_SLOT_COUNT,
     ATTRIB_BIRTHDAY,
+    ATTRIB_CONTRACT_LENGTH,
     ATTRIB_FIRST_NAME,
     ATTRIB_HEIGHT,
     ATTRIB_HIDDEN,
@@ -30,7 +32,9 @@ from retro_roster_patcher.games.mvp_psp.models import (
     ATTRIB_SECONDARY_POS,
     ATTRIB_SPEED,
     ATTRIB_WEIGHT,
+    BIRTHDAY_EPOCH,
     BULLPEN_POSITIONS,
+    DISC_SEASON,
     HASH_ID_CHARS,
     LINEUP_POSITIONS,
     LR_DIRECTION,
@@ -47,6 +51,7 @@ from retro_roster_patcher.games.mvp_psp.models import (
     PA_PITCH2_TYPE,
     PA_PITCH_STRIDE,
     PA_PITCHER_DELIVERY,
+    PITCHER_STAT_TABLES,
     ROSTER_LH_AL_ORDER,
     ROSTER_LH_NL_ORDER,
     ROSTER_PLAYERID,
@@ -175,7 +180,8 @@ FULL_DISC = fixture.DiscSpec(teams=4, players_per_team=6, attrib_headroom_bytes=
 
 
 def long_named_squad():
-    """Twenty-five players with long names that do not compress.
+    """Twenty-five players with long names that do not compress, even by the
+    slower parse a table that misses its allocation is given.
 
     Repeating a word twenty-five times would not do: RefPack is LZ77, so the
     second copy of a long name costs almost nothing and the section would not
@@ -186,9 +192,9 @@ def long_named_squad():
     return [
         Player(
             id=5000 + i,
-            name="".join(rng.choice("0123456789abcdef") for _ in range(40))
+            name="".join(rng.choice("0123456789abcdef") for _ in range(60))
             + " "
-            + "".join(rng.choice("0123456789abcdef") for _ in range(40)),
+            + "".join(rng.choice("0123456789abcdef") for _ in range(60)),
             position=p,
         )
         for i, p in enumerate(FULL_SQUAD_POSITIONS)
@@ -996,27 +1002,12 @@ def test_a_patched_player_takes_his_name(tmp_path):
 
 
 def test_a_patched_player_keeps_the_columns_nothing_wrote(tmp_path):
-    # The merge is what preserves salary, contract length and birthday: this
-    # patcher has no source for any of them.
+    # The merge preserves what this patcher has no source for: a player without
+    # a birth date keeps the birthday of the id he took.
     _, out = patch_one(tmp_path, {1: full_squad(1000)})
     table = patched_table(out, "attrib")
     written = [cols for cols in table.values() if cols.get(ATTRIB_LAST_NAME) == "Family1000"]
     assert ATTRIB_BIRTHDAY in written[0]
-
-
-def test_a_patched_player_keeps_the_discs_salary(tmp_path):
-    source = write_iso(tmp_path, DISC)
-    patcher = make_patcher(tmp_path)
-    rosters = patcher.map_rosters(league(squads={1: full_squad(1000)}))
-    patcher.patch(rom_path=source, output_path=tmp_path / "out.iso", rosters=rosters)
-    before = fixture.parse_table(
-        fixture.decompress_section_at(
-            fixture.read_database_big(source.read_bytes(), lba=fixture.SMALL_LBA), "attrib"
-        )
-    )
-    after = patched_table(tmp_path / "out.iso", "attrib")
-    changed = [pid for pid, cols in after.items() if cols.get(ATTRIB_LAST_NAME) == "Family1000"]
-    assert after[changed[0]][ATTRIB_SALARY] == before[changed[0]][ATTRIB_SALARY]
 
 
 def test_the_teams_roster_rows_are_replaced_by_the_new_squad(tmp_path):
@@ -1439,8 +1430,7 @@ def test_a_run_that_only_crosses_still_reports(tmp_path):
         rosters=rosters,
     )
     assert [m for m in seen if "position pool" in m] == [
-        "1 player(s) took an id from the other position pool and 0 were given a "
-        "synthesised id; their career statistics in this game will not be their own"
+        "1 player(s) took an id from the other position pool and 0 were given a synthesised id"
     ]
 
 
@@ -1754,3 +1744,94 @@ def test_a_players_build_is_the_disc_profile_nearest_his_height_and_weight():
     assert spreads.build(25, 85) == (26, 1)
     assert spreads.build(27, 140) == (36, 2)
     assert Spreads().build(25, 85) is None
+
+
+def disc_ages(records):
+    """Each disc player's age in the disc's season, by id."""
+    return {
+        pid: DISC_SEASON - (BIRTHDAY_EPOCH + timedelta(int(row[ATTRIB_BIRTHDAY]))).year
+        for pid, row in records["attrib"].items()
+    }
+
+
+def test_a_player_is_paid_what_the_discs_players_of_his_age_are(tmp_path):
+    records, spreads = disc_spreads(tmp_path)
+    ages = disc_ages(records)
+    born = "1975-06-01"  # 30 in 2005
+    for column in (ATTRIB_SALARY, ATTRIB_CONTRACT_LENGTH):
+        peers = sorted(
+            int(row[column]) for pid, row in records["attrib"].items() if 29 <= ages[pid] <= 31
+        )
+        fields = _attrib_fields(batter(birth_date=born, experience=8), spreads)
+        assert int(fields[column]) == peers[len(peers) // 2]
+
+
+def test_a_player_before_arbitration_is_paid_the_discs_lowest_salary_for_a_year(tmp_path):
+    records, spreads = disc_spreads(tmp_path)
+    fields = _attrib_fields(batter(birth_date="1975-06-01", experience=2), spreads)
+    for column in (ATTRIB_SALARY, ATTRIB_CONTRACT_LENGTH):
+        lowest = min(int(row[column]) for row in records["attrib"].values())
+        assert int(fields[column]) == lowest
+
+
+def test_a_player_without_a_birth_date_is_paid_his_positions_median(tmp_path):
+    records, spreads = disc_spreads(tmp_path)
+    shortstops = disc_values(records, "attrib", ATTRIB_SALARY, {"5"})
+    fields = _attrib_fields(batter(experience=8), spreads)
+    assert int(fields[ATTRIB_SALARY]) == shortstops[len(shortstops) // 2]
+
+
+def test_a_left_handers_pitches_take_the_discs_left_handers_description(tmp_path):
+    # The fixture's left-handers hold the mirror image of its right-handers'.
+    _, spreads = disc_spreads(tmp_path)
+
+    def description(throws):
+        pitcher = MVPPlayerRecord(
+            primary_position="SP", is_pitcher=True, pitch_types=(6,), throws=throws
+        )
+        return _pitch_fields(pitcher, spreads)[PA_PITCH2_TYPE + 2]
+
+    assert (description(0), description(1)) == ("3", "5")
+
+
+def test_a_left_hander_winds_up_in_one_of_the_discs_left_handers_deliveries(tmp_path):
+    _, spreads = disc_spreads(tmp_path)
+
+    def delivery(throws):
+        pitcher = MVPPlayerRecord(primary_position="SP", is_pitcher=True, throws=throws)
+        return _pitch_fields(pitcher, spreads)[PA_PITCHER_DELIVERY]
+
+    assert (delivery(0) in {"0", "1", "2"}, delivery(1) in {"3", "4", "5"}) == (True, True)
+
+
+def test_a_patched_players_statistics_are_his_own(tmp_path):
+    squad = full_squad(1000)
+    line = {"GP": 150, "AB": 500, "H": 150, "2B": 30, "3B": 5, "HR": 20, "R": 80, "SB": 9, "CS": 2}
+    line |= {"RBI": 70, "SO": 100, "BB": 50, "HBP": 3, "IBB": 0, "SH": 0, "SF": 4}
+    _, out = patch_one(tmp_path, {1: squad}, {1: {str(squad[0].id): line}})
+    attrib = patched_table(out, "attrib")
+    ids = {row[ATTRIB_FIRST_NAME]: pid for pid, row in attrib.items()}
+    with_line, without = ids[f"Given{squad[0].id}"], ids[f"Given{squad[1].id}"]
+    batstat = patched_table(out, "batstat")
+    assert [batstat[with_line][c] for c in range(6)] == [
+        f"Given{squad[0].id}",
+        f"Family{squad[0].id}",
+        "150",
+        "80",
+        "9",
+        "2",
+    ]
+    # No line: zeros under his own name, not the 500s the old player had.
+    assert [batstat[without][c] for c in (0, 2, 3)] == [f"Given{squad[1].id}", "0", "0"]
+    assert patched_table(out, "lrbatstat_rhp")[with_line][13] == "557"
+    assert patched_table(out, "careerstats")[with_line][3] == "500"
+
+
+def test_a_batter_given_a_pitchers_id_loses_the_pitchers_statistics(tmp_path):
+    _, out = patch_one(tmp_path, {1: full_squad(1000)})
+    attrib = patched_table(out, "attrib")
+    patched = {pid for pid, row in attrib.items() if row[ATTRIB_FIRST_NAME].startswith("Given")}
+    pitchers = {pid for pid in patched if attrib[pid][ATTRIB_PRIMARY_POS] in ("0", "10")}
+    for table in PITCHER_STAT_TABLES:
+        assert set(patched_table(out, table)) & patched == pitchers
+    assert patched <= set(patched_table(out, "fieldstat"))

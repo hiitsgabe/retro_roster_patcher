@@ -269,18 +269,9 @@ def _attrib_columns(team: int, slot: int) -> list[tuple[int, str]]:
     Every value encodes the team and the slot, so a record written to the wrong
     id is visible. Height and weight are *plausible and distinct per player*,
     which is what makes the height and weight behaviour testable: the patcher
-    stamps one constant over each of them, and that shows up here.
-
-    Column 43 (birthday) and column 39 (salary) are here and are never written
-    by the patcher, so they are the two that prove the merge preserves what it
-    was not asked about.
-
-    Column 6, the second position, is here for a narrower reason.
-    `_build_attrib_fields` writes it only when the mapper produced one, which it
-    never does, and writing an empty string instead would erase the disc's own
-    value and leave the player unable to be moved in the field. Without a
-    disc-side value there is nothing for that guard to protect and dropping it
-    was invisible.
+    stamps one constant over each of them, and that shows up here. Salaries
+    and birthdays spread over the ages, for the pay a patched player takes
+    from the disc's players of his age.
     """
     return [
         (mvp_models.ATTRIB_FIRST_NAME, f"Disc{team:02d}"),
@@ -299,10 +290,12 @@ def _attrib_columns(team: int, slot: int) -> list[tuple[int, str]]:
         *((col, str(4 + (team * 2 + slot + col) % 12)) for col in range(23, 28)),
         (mvp_models.ATTRIB_BATTING_STANCE, str(slot % 2)),
         (mvp_models.ATTRIB_SWING_TYPE, "0"),
-        (mvp_models.ATTRIB_SALARY, f"{team}{slot}00000"),
+        (mvp_models.ATTRIB_SALARY, str((team * 7 + slot * 13) % 250)),
+        (mvp_models.ATTRIB_CONTRACT_LENGTH, str(1 + slot % 3)),
         (mvp_models.ATTRIB_STARPOWER, str((team + slot) % 5)),
         (mvp_models.ATTRIB_HIDDEN, "0"),
-        (mvp_models.ATTRIB_BIRTHDAY, str(9000 + team * 30 + slot)),
+        # Born 1964 to 1980: ages 24 to 41 in the disc's season.
+        (mvp_models.ATTRIB_BIRTHDAY, str(6000 + (team * 37 + slot * 301) % 6000)),
     ]
 
 
@@ -336,7 +329,8 @@ def _pitchattrib_columns(team: int, slot: int) -> list[tuple[int, str]]:
         pitches += [
             str(kind),
             str((team + slot + n) % 16),
-            str(2 + kind % 5),
+            # A left-hander's (odd slots throw left) is the mirror image.
+            str(2 + kind % 5 if slot % 2 == 0 else 6 - kind % 5),
             str(50 + (team * 3 + slot + n) % 45),
             str(fastball - (14, 9, 3)[n]),
         ]
@@ -353,7 +347,8 @@ def _pitchattrib_columns(team: int, slot: int) -> list[tuple[int, str]]:
         *zip(
             range(mvp_models.PA_PITCH2_TYPE, mvp_models.PA_PITCHER_DELIVERY), pitches, strict=True
         ),
-        (mvp_models.PA_PITCHER_DELIVERY, str((team + slot) % 3)),
+        # Left-handers (odd slots) wind up in styles of their own.
+        (mvp_models.PA_PITCHER_DELIVERY, str((team + slot) % 3 + 3 * (slot % 2))),
     ]
 
 
@@ -408,6 +403,7 @@ def _build_sections(spec: DiscSpec) -> dict[str, bytes]:
     lr_rhp: list[tuple[str, list[tuple[int, str]]]] = []
     lr_lhp: list[tuple[str, list[tuple[int, str]]]] = []
     pitchattrib: list[tuple[str, list[tuple[int, str]]]] = []
+    stat_rows: dict[str, list[tuple[str, list[tuple[int, str]]]]] = {}
     roster: list[tuple[str, list[tuple[int, str]]]] = []
 
     for team in range(spec.teams):
@@ -423,6 +419,12 @@ def _build_sections(spec: DiscSpec) -> dict[str, bytes]:
             attrib.append((pid, columns))
             lr_rhp.append((pid, _lr_columns(team, slot, "rhp")))
             lr_lhp.append((pid, _lr_columns(team, slot, "lhp")))
+            # The old player's statistics: one count each, so a patched
+            # player's rows are visibly his own or not.
+            old_line = [(0, f"Disc{team:02d}"), (1, f"Player{slot:02d}"), (2, str(500 + slot))]
+            for table in mvp_models.STAT_TABLES:
+                if table not in mvp_models.PITCHER_STAT_TABLES or _is_disc_pitcher(slot):
+                    stat_rows.setdefault(table, []).append((pid, old_line))
             if _is_disc_pitcher(slot):
                 pitchattrib.append((pid, _pitchattrib_columns(team, slot)))
             roster.append((roster_row_id(team, slot), _roster_columns(team_hash, pid, slot)))
@@ -454,6 +456,7 @@ def _build_sections(spec: DiscSpec) -> dict[str, bytes]:
         ]
 
     contents = {
+        **stat_rows,
         "attrib": attrib,
         "lrattrib_rhp": lr_rhp,
         "lrattrib_lhp": lr_lhp,

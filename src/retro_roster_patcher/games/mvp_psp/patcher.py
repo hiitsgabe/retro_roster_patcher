@@ -8,10 +8,9 @@ meaning, and a table that compresses worse after the edit than before cannot be
 stored at all (`rom_writer.SectionTooLargeError`).
 
 Player ids are recycled from the disc, not invented. MVP's tables link by
-nine-hex-digit ids, and eight tables this patcher never writes -- `batstat`,
-`fieldstat`, `careerstats`, `pitchcareer` and the four left/right split-stat
-tables -- key on the same ids, so a new player inherits the statistical history
-of the id he is given. See `_HashPool`.
+nine-hex-digit ids: the four attribute tables and the nine statistics tables
+(`stats`) all key on them, and every written player's row in each is his own.
+See `_HashPool`.
 
 `analyze_rom` and `patch` do not apply the same checks, deliberately:
 `MVPPSPRomReader.validate_deep` is a heuristic and guards `analyze_rom` only,
@@ -45,7 +44,7 @@ from ...core.registry import register
 from ...sports import _http
 from ...sports.espn import EspnClient
 from ...sports.models import League, LeagueData, Player, TeamRoster
-from . import logos, looks, portraits
+from . import logos, looks, portraits, stats
 from .models import (
     ATTRIB_AUDIO_ID,
     ATTRIB_BASERUNNING,
@@ -55,6 +54,7 @@ from .models import (
     ATTRIB_BODY_TYPE,
     ATTRIB_BONE_PROFILE,
     ATTRIB_BUNTING,
+    ATTRIB_CONTRACT_LENGTH,
     ATTRIB_DURABILITY,
     ATTRIB_FIELDING,
     ATTRIB_FIRST_NAME,
@@ -62,9 +62,11 @@ from .models import (
     ATTRIB_HIDDEN,
     ATTRIB_JERSEY,
     ATTRIB_LAST_NAME,
+    ATTRIB_PHOTO,
     ATTRIB_PLATE_DISCIPLINE,
     ATTRIB_PRIMARY_POS,
     ATTRIB_RANGE,
+    ATTRIB_SALARY,
     ATTRIB_SECONDARY_POS,
     ATTRIB_SPEED,
     ATTRIB_STARPOWER,
@@ -112,6 +114,7 @@ from .models import (
     PA_PITCH_STRIDE,
     PA_PITCHER_DELIVERY,
     PA_STAMINA,
+    PITCHER_STAT_TABLES,
     PITCHERS_PER_TEAM,
     PLAYERS_PER_TEAM,
     POS_STRING_TO_NUM,
@@ -138,6 +141,7 @@ from .models import (
 )
 from .rom_reader import MVPPSPRomReader, Table
 from .rom_writer import MVPPSPRomWriter
+from .speech import Voices, named_ids
 from .spreads import Spreads, batting_group
 from .stat_mapper import LeagueStats, MVPStatMapper
 
@@ -151,6 +155,9 @@ TEAM_ARTID = 6  # `team` column: the club's logo is `logos` file l{artid - 1:03d
 
 #: The split tables, against a left- and a right-handed pitcher.
 LR_TABLES = {"lhp": "lrattrib_lhp", "rhp": "lrattrib_rhp"}
+
+# Seasons of service before MLB's salary arbitration; ESPN's `experience`.
+PRE_ARBITRATION_YEARS = 3
 
 #: `attrib` ratings (`stat_mapper.BATTER_SOURCES`) and their columns.
 ATTRIB_RATINGS = {
@@ -251,12 +258,11 @@ def _is_starter(slot: int) -> bool:
 class _HashPool:
     """Hands one club the player ids of its own disc rows, a player his own kind's.
 
-    Ids matter because eight tables this patcher never writes key on them --
-    `batstat`, `pitchstat`, `fieldstat`, `careerstats`, `pitchcareer` and the
-    four split-stat tables. Reusing an id gives the new player the old player's
-    entire statistical history, which is why kinds are matched: a pitcher
-    handed a batter's id gets a batter's career line and appears in the game's
-    own leaderboards as a hitter.
+    Thirteen tables key on a player's id, and a pitcher's has a row in the
+    five only pitchers have (`pitchattrib` and the four pitching statistics
+    tables), which is why kinds are matched: a batter handed a pitcher's id
+    has those rows dropped, a pitcher handed a batter's has them added at the
+    tables' end.
 
     The ids are the club's own (issue #18). Rows the patch keeps list players by
     id too: the retail disc has 36 sides of 25 rows, the 30 clubs then the AL
@@ -275,7 +281,7 @@ class _HashPool:
 
       1. An id of the player's own kind, the same position first.
       2. Cross-fall: the club has none of his kind left, so he takes the other
-         kind's and inherits the wrong kind of career line. Counted as `crossed`.
+         kind's. Counted as `crossed`.
       3. Synthesis: the club's ids are spent (a squad longer than its disc
          block) and an id is manufactured from the team and player index.
          Counted as `synthesised`.
@@ -370,6 +376,8 @@ class MVPPSPPatcher(Patcher):
         self._transport = transport
         # Faces measured from head shots by `patch`, by provider player id.
         self._faces: dict[int, Face] = {}
+        # Which audio id each written player takes (`speech`), set by `patch`.
+        self._voices = Voices()
         self.mapper = MVPStatMapper()
         # The client creates its cache directory in its own constructor, so
         # constructing this patcher can raise `StorageError`.
@@ -681,6 +689,16 @@ class MVPPSPPatcher(Patcher):
             self._faces = (
                 measure_faces(self.cache_dir, urls, self._transport, self.status) if measure else {}
             )
+            with open(rom_path, "rb") as f:
+                self._voices = Voices(
+                    named_ids(f),
+                    portraits.ids(f) if options.get("portraits", True) else set(),
+                    [
+                        int(row[ATTRIB_AUDIO_ID])
+                        for row in writer.reader.records.get("attrib", {}).values()
+                        if row.get(ATTRIB_AUDIO_ID, "").isdigit()
+                    ],
+                )
             self.status("Writing rosters...")
             teams_patched, players_patched = self._write_all_teams(writer, rosters, on_progress)
             if options.get("portraits", True):
@@ -815,8 +833,7 @@ class MVPPSPPatcher(Patcher):
             # drops a player. See `_HashPool`.
             self.status(
                 f"{crossed} player(s) took an id from the other position pool and "
-                f"{synthesised} were given a synthesised id; their career statistics "
-                f"in this game will not be their own"
+                f"{synthesised} were given a synthesised id"
             )
         if short:
             self.status(
@@ -867,7 +884,7 @@ class MVPPSPPatcher(Patcher):
             if attrib[p.hash_id].get(ATTRIB_AUDIO_ID, "").strip().isdigit()
         }
         with open(rom_path, "rb") as f:
-            writer.edits += portraits.edits(f, pictures, self.status)
+            writer.edits += portraits.edits(f, pictures, self.status, self._voices.moves)
 
     def _write_player(
         self, writer: MVPPSPRomWriter, player: MVPPlayerRecord, spreads: Spreads
@@ -880,6 +897,12 @@ class MVPPSPPatcher(Patcher):
         face = self._faces.get(player.player_id)
         looked = looks.columns(face, player.nationality, str(player.player_id or player.hash_id))
         fields.update({col: str(value) for col, value in looked.items()})
+        old = writer.reader.records.get("attrib", {}).get(player.hash_id, {})
+        if self._voices.named and old.get(ATTRIB_AUDIO_ID, "").isdigit():
+            # No 2005 player's name for him, and a photo only if he has a picture.
+            audio = self._voices.assign(int(old[ATTRIB_AUDIO_ID])) or 0
+            fields[ATTRIB_AUDIO_ID] = str(audio)
+            fields[ATTRIB_PHOTO] = "1" if self._voices.pictured(audio) else "2"
         writer.update_player_record("attrib", player.hash_id, fields)
         for side, table in LR_TABLES.items():
             writer.update_player_record(
@@ -887,12 +910,15 @@ class MVPPSPPatcher(Patcher):
                 player.hash_id,
                 _split_fields(player, spreads, table, side, writer.columns(table)),
             )
+        for table, row in stats.rows(player).items():
+            writer.update_player_record(table, player.hash_id, row)
         if player.is_pitcher:
             writer.update_player_record(
                 "pitchattrib", player.hash_id, _pitch_fields(player, spreads)
             )
         else:
-            writer.delete_player_record("pitchattrib", player.hash_id)
+            for table in ("pitchattrib", *PITCHER_STAT_TABLES):
+                writer.delete_player_record(table, player.hash_id)
 
     @staticmethod
     def _benched_row(team_hash: str, player_id: str, is_pitcher: bool) -> dict[int, str]:
@@ -997,8 +1023,9 @@ def _put(fields: dict[int, str], column: int, value: int | str | None) -> None:
 
 
 def _attrib_fields(player: MVPPlayerRecord, spreads: Spreads) -> dict[int, str]:
-    """The `attrib` columns this patcher sets; the rest (speech, photo,
-    equipment, walk-up music, salary) are merged through."""
+    """The `attrib` columns this patcher sets from the player; speech and
+    photo are `_write_player`'s, equipment and walk-up music are merged
+    through."""
     kind = _kind(player)
     pos = _position(player)
     height, weight = player.height - HEIGHT_BASE, player.weight - WEIGHT_BASE
@@ -1024,11 +1051,23 @@ def _attrib_fields(player: MVPPlayerRecord, spreads: Spreads) -> dict[int, str]:
         values, weights = spreads.common("attrib", column, kind)
         if values:
             fields[column] = str(values[pick(weights, f"{_key(player)}/{column}")])
+    # No provider has his contract (ESPN's roster lists early-career salaries
+    # for 35 players, the latest of them 2017's): under three years of service
+    # he is paid the disc's lowest salary for a year, as MLB's pre-arbitration
+    # players are; otherwise what the disc's players within a year of his age
+    # are, on a contract as long as theirs.
+    paid_as = [f"pos{pos}"]
     try:
         born = date.fromisoformat(player.birth_date)
         fields[ATTRIB_BIRTHDAY] = str((born - BIRTHDAY_EPOCH).days)
+        paid_as = [f"age{DISC_SEASON - born.year + d}" for d in (-1, 0, 1)]
     except (TypeError, ValueError):
         pass
+    for column in (ATTRIB_SALARY, ATTRIB_CONTRACT_LENGTH):
+        if player.experience < PRE_ARBITRATION_YEARS:
+            _put(fields, column, spreads.at("attrib", column, "all", 0.0))
+        else:
+            _put(fields, column, spreads.middle("attrib", column, paid_as))
     for rating, column in ATTRIB_RATINGS.items():
         name = f"pitch_{rating}" if player.is_pitcher else rating
         group = f"pos{pos}" if rating in BY_POSITION else kind
@@ -1097,7 +1136,9 @@ def _pitch_fields(player: MVPPlayerRecord, spreads: Spreads) -> dict[int, str]:
         if slot < len(player.pitch_types):
             kind_code = player.pitch_types[slot]
             drop = spreads.mean("pitchattrib", f"drop{kind_code}", "all")
-            descs, _ = spreads.common("pitchattrib", f"desc{kind_code}", "all")
+            descs, _ = spreads.common("pitchattrib", f"desc{kind_code}", f"throws{player.throws}")
+            if not descs:
+                descs, _ = spreads.common("pitchattrib", f"desc{kind_code}", "all")
             figures = [
                 kind_code,
                 rate(f"move{kind_code}", "movement", "all"),
@@ -1108,7 +1149,11 @@ def _pitch_fields(player: MVPPlayerRecord, spreads: Spreads) -> dict[int, str]:
             if None in figures:
                 figures = [NO_PITCH] * PA_PITCH_STRIDE
         fields |= {base + i: str(v) for i, v in enumerate(figures)}
-    values, weights = spreads.common("pitchattrib", PA_PITCHER_DELIVERY, kind)
+    # The shared windups are mirrored for a left-hander; his own hand's
+    # commonest ones all the same.
+    values, weights = spreads.common("pitchattrib", PA_PITCHER_DELIVERY, f"{kind}{player.throws}")
+    if not values:
+        values, weights = spreads.common("pitchattrib", PA_PITCHER_DELIVERY, kind)
     if values:
         fields[PA_PITCHER_DELIVERY] = str(values[pick(weights, _key(player))])
     return fields

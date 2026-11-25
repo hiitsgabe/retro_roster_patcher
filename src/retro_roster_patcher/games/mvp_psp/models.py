@@ -104,12 +104,27 @@ def _section_allocations() -> dict[str, tuple[int, int]]:
 
 SECTION_ALLOCATIONS = _section_allocations()
 
-# The tables this patcher rewrites. `roster` is rebuilt wholesale and the other
-# four are merged into per record. Not a control-flow input: `rom_writer` writes
-# whatever `update_*` marked modified.
+# The tables this patcher rewrites. `roster` is rebuilt wholesale and the
+# others are merged into per record: the four attribute tables, then the nine
+# statistics tables (`stats`), the last four of them pitchers' only. Not a
+# control-flow input: `rom_writer` writes whatever `update_*` marked modified.
 PLAYER_TABLES: tuple[str, ...] = ("attrib", "lrattrib_rhp", "lrattrib_lhp", "pitchattrib")
+PITCHER_STAT_TABLES: tuple[str, ...] = (
+    "pitchstat",
+    "lrpitchstat_lhp",
+    "lrpitchstat_rhp",
+    "pitchcareer",
+)
+STAT_TABLES: tuple[str, ...] = (
+    "batstat",
+    "fieldstat",
+    "lrbatstat_lhp",
+    "lrbatstat_rhp",
+    "careerstats",
+    *PITCHER_STAT_TABLES,
+)
 ROSTER_TABLE = "roster"
-MODIFIED_TABLES: tuple[str, ...] = (*PLAYER_TABLES, ROSTER_TABLE)
+MODIFIED_TABLES: tuple[str, ...] = (*PLAYER_TABLES, *STAT_TABLES, ROSTER_TABLE)
 
 # The archive's directory: `C0 FB`, its length (2 bytes), the file count (2),
 # then per file a 3-byte offset, a 3-byte compressed length and a NUL-ended
@@ -130,8 +145,8 @@ ATTRIB_BATS = 3  # 0=R, 1=L, 2=S
 ATTRIB_THROWS = 4  # 0=R, 1=L
 ATTRIB_PRIMARY_POS = 5
 ATTRIB_SECONDARY_POS = 6  # a position code or `SECONDARY_*`; his own when he has none
-ATTRIB_AUDIO_ID = 7  # names the player's speech and portrait (`portraits`)
-ATTRIB_PHOTO = 8  # 1, or 2 on 26 rookies the disc has no photo of; not written
+ATTRIB_AUDIO_ID = 7  # names the player's speech and portrait (`speech`, `portraits`)
+ATTRIB_PHOTO = 8  # 1 shows his portrait, 2 (26 rookies the disc has no photo of) his 3D head
 ATTRIB_HEIGHT = 9  # inches above `HEIGHT_BASE`
 ATTRIB_WEIGHT = 10  # pounds above `WEIGHT_BASE`
 ATTRIB_BONE_PROFILE = 11  # the 3D body's build, 26-37 (`spreads.Spreads.build`)
@@ -152,8 +167,19 @@ ATTRIB_THROW_STRENGTH = 25
 ATTRIB_THROW_ACCURACY = 26
 ATTRIB_DURABILITY = 27
 ATTRIB_BATTING_STANCE = 28  # 0-5 the shared stances ("Open"), the rest a star's own
-ATTRIB_SWING_TYPE = 29  # 0 or 1; no screen names it
-ATTRIB_BAT_COLOUR = 30  # 30-37 equipment, as the Equipment screen shows it; not written
+# Unidentified: `playerattrib_swingtype`. The retail disc holds 0 on 705
+# players and 1 on 84, all batters (Abreu, Bagwell, Damon, Ortiz, Garciaparra,
+# Giambi, Griffey Jr.): of either side, with more power (both splits' power
+# summed, 135 against 120) and weight. Tried: no Edit Player, Player Info or
+# in-game screen shows it; in PPSSPP Damon was given 0 (with Ortiz's stance)
+# and Renteria 1 (with Manny's) and their swings filmed frame by frame, which
+# showed no difference that could be told from the stance's own; no community
+# doc or editor names it. The patcher writes a weighted pick of the disc's
+# batters' values, so about a tenth of them take 1.
+ATTRIB_SWING_TYPE = 29
+# 30-37 equipment and 38 walk-up music, as the Equipment screen shows them: kept
+# from the record, since nothing about them is any one player's (no name, no face).
+ATTRIB_BAT_COLOUR = 30
 ATTRIB_BATTING_GLOVE = 31
 ATTRIB_WRISTBAND = 32
 ATTRIB_ELBOW_GUARD = 33
@@ -161,9 +187,9 @@ ATTRIB_SHIN_GUARD = 34
 ATTRIB_SOCKS = 35
 ATTRIB_CATCHER_MASK = 36
 ATTRIB_FIELD_GLOVE_COLOUR = 37
-ATTRIB_DITTY = 38  # walk-up music, 0-6; not written
-ATTRIB_SALARY = 39  # not written: ESPN's rosters carry a contract for 35 of 1146
-ATTRIB_CONTRACT_LENGTH = 40  # not written
+ATTRIB_DITTY = 38  # 0-6, one of the stadium's tunes
+ATTRIB_SALARY = 39  # hundreds of thousands of dollars: A-Rod's 251, the minimum 2
+ATTRIB_CONTRACT_LENGTH = 40  # years
 ATTRIB_STARPOWER = 41
 ATTRIB_HIDDEN = 42  # 1 on the MVP Legends
 ATTRIB_BIRTHDAY = 43  # days from `BIRTHDAY_EPOCH`
@@ -209,7 +235,7 @@ PA_LAST_NAME = 1
 PA_STAMINA = 2  # 40-99
 PA_PICKOFF = 3  # 0-15
 PA_PITCH1_MOVEMENT = 4  # 0 on every retail pitcher
-PA_PITCH1_DESC = 5  # 0 on every retail pitcher
+PA_PITCH1_DESC = 5  # 0 on every retail pitcher (`PA_PITCH_DESC_OFFSET`)
 PA_PITCH1_CONTROL = 6
 PA_PITCH1_VELOCITY = 7  # miles an hour
 PA_PITCH2_TYPE = 8
@@ -224,7 +250,15 @@ PA_PITCHER_DELIVERY = 28  # 0-8 shared windups, the rest a pitcher's own ("Schil
 PA_PITCH_STRIDE = 5
 PA_PITCH_TYPE_OFFSET = 0
 PA_PITCH_MOVEMENT_OFFSET = 1  # 0-15
-PA_PITCH_DESC_OFFSET = 2  # 0-7 by pitch type; no screen shows it
+# `pitchattrib_pitchN_description`: the way the pitch breaks, in eighths of a
+# turn: 0 up, 2 in on a right-handed batter, 4 down, 6 away from him. The retail
+# disc's right-handers throw the slider 6, the two-seamer 2, the splitter and
+# forkball 4, the cutter 7; its left-handers the mirror image, 8 less it (the
+# slider 2, the two-seamer 6, the cutter 1). Read from that symmetry, not seen
+# on screen: the pitch menu names a pitch by its type whatever this holds
+# (Schilling given four sliders of 2, 6, 0 and 4 showed SLD), and the ball's
+# break in PPSSPP was too small to measure.
+PA_PITCH_DESC_OFFSET = 2
 PA_PITCH_CONTROL_OFFSET = 3
 PA_PITCH_VELOCITY_OFFSET = 4  # miles an hour
 PA_PITCH_SLOTS = 4  # pitches 2-5
@@ -555,8 +589,11 @@ class MVPPlayerRecord:
     height: int = 72  # inches
     weight: int = 190  # pounds
     birth_date: str = ""  # ISO; "" keeps the disc's
+    experience: int = 0  # seasons in the majors, ESPN's
 
     ratings: dict[str, float] = field(default_factory=dict)
+    #: His season line as the provider sent it, for the statistics tables (`stats`).
+    line: dict[str, float] = field(default_factory=dict)
 
     is_pitcher: bool = False
     pitch_types: tuple[int, ...] = ()

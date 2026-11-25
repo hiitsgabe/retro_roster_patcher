@@ -223,7 +223,14 @@ class MVPPSPRomWriter:
             return None
         order = self.reader.record_order.get(name)
         _, allocation = SECTION_ALLOCATIONS[name]
-        return refpack_compress(build_csv_section(header, records, order), room=allocation)
+        raw = build_csv_section(header, records, order)
+        packed = refpack_compress(raw)
+        if len(packed) > allocation:
+            # The slower parse is some 2% smaller, and the statistics tables
+            # have little to spare: `batstat` fits its allocation by 18 bytes
+            # with the 2025 season.
+            packed = refpack_compress(raw, tight=True)
+        return packed
 
     def rebuild_database_big(self) -> bytes:
         """The whole of `database.big`, with every modified section rewritten.

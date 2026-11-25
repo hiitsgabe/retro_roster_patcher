@@ -294,8 +294,30 @@ def _number(value: Any) -> Any:
 _SPLIT_PREFIXES = {"vs. Left": "vsL", "vs. Right": "vsR"}
 
 
+#: What a baseball season line carries of the player's career, by category.
+_CAREER_KEYS = {
+    "batting": ("GP", "AB", "H", "HR", "RBI", "R", "SB"),
+    "pitching": ("GP", "IP", "ER", "W", "L", "SV", "K", "BB"),
+}
+
+
+def _stat_lines(data: dict) -> dict[str, dict]:
+    """An ESPN statistics document as `{category: {abbreviation and name:
+    value}}`; the first of a repeated abbreviation wins."""
+    lines: dict[str, dict] = {}
+    for category in (data.get("splits") or {}).get("categories") or []:
+        line = lines.setdefault(str(category.get("name", "")), {})
+        for stat in category.get("stats") or []:
+            value = _as_float(stat.get("value"))
+            line.setdefault(str(stat.get("abbreviation", "")), value)
+            if stat.get("name"):
+                line.setdefault(str(stat["name"]), value)
+    return lines
+
+
 def _baseball_splits(splits: dict[str, dict[str, float]]) -> dict[str, float]:
-    """A batter's splits as season-line keys: `vsL.AVG`, `vsR.HR`, ..., and his
+    """A player's splits as season-line keys: `vsL.AVG`, `vsR.HR`, ... (a
+    pitcher's are the batters' he faced, by their hand), and a batter's
     at-bats at each fielding position, `pos.2B`."""
     out: dict[str, float] = {}
     for label, figures in splits.items():
@@ -630,22 +652,36 @@ class EspnClient:
             data = _http.get_json(url, transport=self._transport)
         except Exception:
             return {}
-        lines: dict[str, dict] = {}
-        for category in (data.get("splits") or {}).get("categories") or []:
-            line = lines.setdefault(str(category.get("name", "")), {})
-            for stat in category.get("stats") or []:
-                value = _as_float(stat.get("value"))
-                line.setdefault(str(stat.get("abbreviation", "")), value)
-                if stat.get("name"):
-                    line.setdefault(str(stat["name"]), value)
+        lines = _stat_lines(data)
+        if lines:
+            self._save_cache(cache_key, lines)
+        return lines
+
+    def get_baseball_career(self, athlete_id: int, season: int) -> dict[str, dict]:
+        """One MLB player's career totals to date by category, shaped like
+        `get_baseball_athlete_stats`. `season` only names the cache file, so
+        another season's fetch asks again. `{}` when ESPN has none.
+        """
+        cache_key = f"espn_baseball_career_{athlete_id}_{season}"
+        cached = self._load_cache(cache_key)
+        if cached:
+            return cached
+        try:
+            data = _http.get_json(
+                f"{BASEBALL_CORE_URL}/athletes/{athlete_id}/statistics", transport=self._transport
+            )
+        except Exception:
+            return {}
+        lines = _stat_lines(data)
         if lines:
             self._save_cache(cache_key, lines)
         return lines
 
     def get_baseball_splits(self, athlete_id: int, season: int) -> dict[str, dict[str, float]]:
-        """One MLB batter's season split by split, `{"vs. Left": {"AB": 123.0,
+        """One MLB player's season split by split, `{"vs. Left": {"AB": 123.0,
         "H": 42.0, ...}, "vs. Right": {...}, "As RF": {...}, ...}`, keyed by
-        ESPN's labels. `{}` when ESPN has none; cached like the season line.
+        ESPN's labels. A pitcher's splits by hand are the batting line of the
+        batters he faced. `{}` when ESPN has none; cached like the season line.
         """
         cache_key = f"espn_baseball_splits_{athlete_id}_{season}"
         cached = self._load_cache(cache_key)
@@ -656,9 +692,13 @@ class EspnClient:
             data = _http.get_json(url, transport=self._transport)
         except Exception:
             return {}
-        labels = [str(label) for label in data.get("labels") or []]
+        # A pitcher's document is labelled for his pitching line; the
+        # categories that hold batting lines against him name their own labels.
+        extra = data.get("extraPlayerPageAthleteSplits") or {}
         splits: dict[str, dict[str, float]] = {}
         for category in data.get("splitCategories") or []:
+            own = (extra.get(category.get("extraAthleteSplitsType")) or {}).get("labels")
+            labels = [str(label) for label in own or data.get("labels") or []]
             for split in category.get("splits") or []:
                 values = [_as_float(_number(v)) for v in split.get("stats") or []]
                 figures = dict(zip(labels, values, strict=False))
@@ -882,6 +922,7 @@ class EspnClient:
                 height = athlete.get("height", 0) or 0
                 headshot = athlete.get("headshot")
                 photo = headshot.get("href", "") if isinstance(headshot, dict) else ""
+                exp = athlete.get("experience")
 
                 players.append(
                     Player(
@@ -899,6 +940,7 @@ class EspnClient:
                         height=float(height),
                         handedness=throw_hand,
                         bats=bat_hand,
+                        experience=int(exp.get("years", 0) or 0) if isinstance(exp, dict) else 0,
                     )
                 )
         return players
@@ -1026,7 +1068,9 @@ class EspnClient:
         """One player's regular-season line for the game mappers: every ESPN stat
         under its `name` (season totals, `avg...` per game) plus the
         abbreviations the mappers read (`_MAPPER_KEYS`). For baseball, the
-        pitching line of a pitcher and the batting line of anyone else.
+        pitching line of a pitcher and the batting line of anyone else, with
+        his fielding (`fielding.putouts`), splits by hand (`vsL.AB`) and career
+        (`career.GP`).
 
         A season under `MIN_GAMES` games old is a handful of games, so the
         previous season stands in when it has more. `{}` when ESPN has neither.
@@ -1041,8 +1085,9 @@ class EspnClient:
                     return out
                 fielding = cats.get("fielding", {})
                 out |= {f"fielding.{k}": v for k, v in fielding.items() if k[:1].islower()}
-                if kind == "batting":
-                    out |= _baseball_splits(self.get_baseball_splits(player.id, year))
+                out |= _baseball_splits(self.get_baseball_splits(player.id, year))
+                career = self.get_baseball_career(player.id, season).get(kind, {})
+                out |= {f"career.{k}": career[k] for k in _CAREER_KEYS[kind] if k in career}
                 return out
             named = self._athlete_named_stats(sport, player.id, year)
             keys = _MAPPER_KEYS[sport]

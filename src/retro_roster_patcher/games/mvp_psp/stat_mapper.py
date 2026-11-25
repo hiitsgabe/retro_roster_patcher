@@ -94,6 +94,9 @@ BATS_SWITCH = 2
 THROWS_RIGHT = 0
 THROWS_LEFT = 1
 
+#: Where a left-handed thrower plays the field.
+LEFT_HANDED_POSITIONS = frozenset({"1B", "LF", "CF", "RF", "DH"})
+
 #: The two hands a batter faces, as the split keys (`vsL.AVG`) and the rating
 #: names (`contact_lhp`) spell them.
 SIDES = {"lhp": "vsL", "rhp": "vsR"}
@@ -447,6 +450,7 @@ def _person(player: Player) -> dict[str, Any]:
         "photo_url": player.photo_url,
         "nationality": player.nationality,
         "birth_date": player.birth_date or "",
+        "experience": player.experience,
     }
     if player.height > 0:
         out["height"] = int(player.height)
@@ -477,10 +481,11 @@ class MVPStatMapper:
             last_name=self.last_name(player.name),
             jersey=player.number or 0,
             bats=self.map_bat_hand(player.bats or player.handedness),
-            throws=self.map_throw_hand(player.handedness),
+            throws=self.map_throw_hand(player.handedness, player.bats, pos),
             primary_position=pos,
             secondary_position=secondary_position(stats, pos),
             ratings=self._shares(player, stats, False, league),
+            line=dict(stats),  # type: ignore[arg-type]
             is_pitcher=False,
             **_person(player),
         )
@@ -505,6 +510,7 @@ class MVPStatMapper:
             primary_position=STARTER_POSITION if is_starter else "RP",
             secondary_position=POS_STRING_TO_NUM["RP" if is_starter else "SP"],
             ratings=self._shares(player, stats, is_starter, league),
+            line=dict(stats),  # type: ignore[arg-type]
             is_pitcher=True,
             pitch_types=STARTER_ARSENAL if is_starter else RELIEVER_ARSENAL,
             **_person(player),
@@ -647,11 +653,16 @@ class MVPStatMapper:
         return BATS_RIGHT
 
     @staticmethod
-    def map_throw_hand(handedness: str | None) -> int:
-        """0 right, 1 left. There is no switch-throwing code."""
-        if not handedness:
-            return THROWS_RIGHT
-        return THROWS_LEFT if handedness.upper() == "L" else THROWS_RIGHT
+    def map_throw_hand(handedness: str | None, bats: str = "", position: str = "") -> int:
+        """0 right, 1 left. There is no code for both: a player ESPN lists as
+        throwing with either hand (`B`) throws right, as he must at catcher,
+        second, third and short, unless he bats left and plays first base or
+        the outfield (Carlos Cortes, who throws left there). A pitcher who
+        throws with both is right-handed."""
+        hand = (handedness or "").upper()
+        if hand == "B" and (bats or "").upper() == "L" and position in LEFT_HANDED_POSITIONS:
+            return THROWS_LEFT
+        return THROWS_LEFT if hand == "L" else THROWS_RIGHT
 
     @staticmethod
     def first_name(full_name: str) -> str:

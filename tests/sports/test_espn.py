@@ -264,7 +264,7 @@ def test_a_basketball_squad_carries_height_and_experience(tmp_path):
     assert (rookie.height, rookie.experience) == (0.0, 0)
 
 
-def test_a_baseball_squad_carries_height_weight_and_head_shot(tmp_path):
+def test_a_baseball_squad_carries_height_weight_head_shot_and_service(tmp_path):
     body = json.loads(_grouped_roster("Cal Raleigh"))
     body["athletes"][0]["items"][0].update(
         {
@@ -272,6 +272,7 @@ def test_a_baseball_squad_carries_height_weight_and_head_shot(tmp_path):
             "weight": 235.0,
             "headshot": {"href": "https://a.espncdn.com/c.png"},
             "dateOfBirth": "1996-11-26T07:00Z",
+            "experience": {"years": 5},
         }
     )
     client = EspnClient(str(tmp_path), transport=_sequence_transport(json.dumps(body).encode()))
@@ -282,12 +283,13 @@ def test_a_baseball_squad_carries_height_weight_and_head_shot(tmp_path):
         "https://a.espncdn.com/c.png",
         "1996-11-26",
     )
+    assert player.experience == 5
 
 
 def test_a_baseball_squad_without_them_reports_zero_and_no_photo(tmp_path):
     client = EspnClient(str(tmp_path), transport=_sequence_transport(_grouped_roster("Nobody")))
     (player,) = client.get_baseball_squad(12, 2026)
-    assert (player.height, player.weight, player.photo_url) == (0.0, 0.0, "")
+    assert (player.height, player.weight, player.photo_url, player.experience) == (0.0, 0.0, "", 0)
 
 
 def test_the_hockey_squad_key_names_the_season_on_disk(tmp_path):
@@ -493,6 +495,7 @@ NETWORK_CALLS = {
     "get_baseball_team_leaders": ((1,), {}),
     "get_baseball_athlete_stats": ((1, 2025), {}),
     "get_baseball_splits": ((1, 2025), {}),
+    "get_baseball_career": ((1, 2025), {}),
     # The game list is the first request; an empty one ends the lookup.
     "get_baseball_lineup": ((1, 2025), {}),
     "get_basketball_starters": ((1, 2025), {}),
@@ -1768,6 +1771,56 @@ def test_a_batters_season_line_carries_his_fielding_and_splits(tmp_path):
     assert (line["vsL.AB"], line["vsL.H"], line["vsL.AVG"]) == (120.0, 40.0, 0.333)
     assert line["pos.RF"] == 400.0
     assert not any(key.startswith("Home") for key in line)
+
+
+def test_a_pitchers_splits_by_hand_are_the_batting_line_against_him(tmp_path):
+    """His document is labelled for his pitching line; the Right / Left
+    category names its own labels."""
+    splits = json.dumps(
+        {
+            "labels": ["ERA", "W", "L"],
+            "extraPlayerPageAthleteSplits": {"batting": {"labels": ["AB", "H", "SO"]}},
+            "splitCategories": [
+                {
+                    "name": "split",
+                    "splits": [{"displayName": "All Splits", "stats": ["2.76", "7", "4"]}],
+                },
+                {
+                    "name": "byRightLeft",
+                    "extraAthleteSplitsType": "batting",
+                    "splits": [
+                        {"displayName": "vs. Left", "stats": ["190", "35", "69"]},
+                        {"displayName": "vs. Right", "stats": ["201", "40", "63"]},
+                    ],
+                },
+            ],
+        }
+    ).encode()
+    client = EspnClient(str(tmp_path), transport=_url_transport({"/athletes/9/splits": splits}))
+    figures = client.get_baseball_splits(9, 2025)
+    assert figures["All Splits"] == {"ERA": 2.76, "W": 7.0, "L": 4.0}
+    assert figures["vs. Left"] == {"AB": 190.0, "H": 35.0, "SO": 69.0}
+    assert figures["vs. Right"]["SO"] == 63.0
+
+
+def test_a_season_line_carries_the_career(tmp_path):
+    def document(games, innings):
+        stats = [{"abbreviation": "GP", "value": games}, {"abbreviation": "IP", "value": innings}]
+        return json.dumps(
+            {"splits": {"categories": [{"name": "pitching", "stats": stats}]}}
+        ).encode()
+
+    transport = _url_transport(
+        {
+            "/seasons/2025/types/2/athletes/9/statistics": document(19, 107.2),
+            "/mlb/athletes/9/statistics": document(96, 523.1),
+        }
+    )
+    client = EspnClient(str(tmp_path), transport=transport)
+    line = client._season_line("baseball", Player(id=9, name="X", position="SP"), 2025)
+    assert (line["GP"], line["IP"]) == (19.0, 107.2)
+    assert (line["career.GP"], line["career.IP"]) == (96.0, 523.1)
+    assert client.get_baseball_career(9, 2025)["pitching"]["GP"] == 96.0
 
 
 def _game(*starters):
