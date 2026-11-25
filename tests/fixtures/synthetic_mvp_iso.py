@@ -4,8 +4,9 @@
               -> 19 CSV tables linked by nine-hex-digit ids
 
 Nothing here comes from a real disc; no ISO may enter this repository. Every byte
-is generated, and the column layouts are this file's invention -- the real ones
-have never been seen by anything in this project, upstream included.
+is generated. The header lines of the four player tables name their columns as
+the retail disc's do (`0 first_name,1 last_name,...`), because the writer finds
+the split tables' approach columns by name; the values are this file's.
 
 A real PSP UMD image is hundreds of megabytes and this one is under 500 KB. The
 patcher touches exactly one region, `[lba * 2048, lba * 2048 + 386977)`, so the
@@ -193,21 +194,35 @@ def parse_table_order(data: bytes) -> list[str]:
 
 # Header lines, one per section. Each names its columns, and no first token is
 # nine hex characters, so `_looks_like_record_id` rejects every one of them.
-# `attrib`'s names its real columns; the tables the patcher never rewrites get a
-# short generic header, because their contents only have to survive being copied
-# through.
-ATTRIB_HEADER = (
-    "firstname,lastname,jersey,bats,throws,primarypos,secondarypos,"
-    "unused7,unused8,height,weight,pad11,pad12,pad13,pad14,pad15,pad16,pad17,"
-    "discipline,bunting,stealing,baserunning,speed,fielding,armrange,"
-    "throwpower,throwacc,durability,pad28,pad29,pad30,pad31,pad32,pad33,"
-    "pad34,pad35,pad36,pad37,pad38,salary,contract,starpower,pad42,birthday"
+# The player tables' name their columns as the retail disc's do; the tables the
+# patcher never rewrites get a short generic header, because their contents
+# only have to survive being copied through.
+
+
+def _numbered(*names: str) -> str:
+    return ",".join(f"{i} {name}" for i, name in enumerate(names))
+
+
+ATTRIB_HEADER = _numbered("first_name", "last_name", *(f"playerattrib_{i}" for i in range(2, 44)))
+_LR_COLUMNS = (
+    "first_name",
+    "last_name",
+    *(f"lrattrib_{i}" for i in range(2, 20)),
+    "lrattrib_chasefb",
+    "lrattrib_chaseslowbreak",
 )
-LR_HEADER = "firstname,lastname,contact,power,sprayul,spraycm,fieldlf,hrpct,groundball"
-PITCHATTRIB_HEADER = (
-    "firstname,lastname,stamina,pickoff,p1move,p1desc,p1ctrl,p1velo,"
-    "p2type,p2move,p2desc,p2ctrl,p2velo,p3type,p3move,p3desc,p3ctrl,p3velo,"
-    "p4type,p4move,p4desc,p4ctrl,p4velo,p5type,p5move,p5desc,p5ctrl,p5velo,delivery"
+# The left-handers' table has no `chasehardbreak`, as on the retail disc.
+LR_LHP_HEADER = _numbered(
+    *_LR_COLUMNS,
+    *(f"lrattrib_{k}{p}" for k in ("take", "miss") for p in ("fb", "slowbreak", "hardbreak")),
+)
+LR_RHP_HEADER = _numbered(
+    *_LR_COLUMNS,
+    "lrattrib_chasehardbreak",
+    *(f"lrattrib_{k}{p}" for k in ("take", "miss") for p in ("fb", "slowbreak", "hardbreak")),
+)
+PITCHATTRIB_HEADER = _numbered(
+    "first_name", "last_name", *(f"pitchattrib_{i}" for i in range(2, 29))
 )
 ROSTER_HEADER = (
     "teamid,playerid,rhalpos,rhalorder,rhnlpos,rhnlorder,lhalpos,lhalorder,lhnlpos,lhnlorder"
@@ -217,10 +232,9 @@ GENERIC_HEADER = "keyone,keytwo,keythree"
 
 # Which sections get which header. Every name in `models.SECTION_MAP` appears.
 SECTION_HEADERS: dict[str, str] = {
-    "attrib_compact": GENERIC_HEADER,
     "attrib": ATTRIB_HEADER,
-    "lrattrib_rhp": LR_HEADER,
-    "lrattrib_lhp": LR_HEADER,
+    "lrattrib_lhp": LR_LHP_HEADER,
+    "lrattrib_rhp": LR_RHP_HEADER,
     "batstat": GENERIC_HEADER,
     "fieldstat": GENERIC_HEADER,
     "lrbatstat_rhp": GENERIC_HEADER,
@@ -276,36 +290,70 @@ def _attrib_columns(team: int, slot: int) -> list[tuple[int, str]]:
         (mvp_models.ATTRIB_THROWS, str(slot % 2)),
         (mvp_models.ATTRIB_PRIMARY_POS, str(slot % 9)),
         (mvp_models.ATTRIB_SECONDARY_POS, str((slot + 4) % 9)),
-        (mvp_models.ATTRIB_HEIGHT, str(68 + (team + slot) % 11)),
-        (mvp_models.ATTRIB_WEIGHT, str(150 + (team * 3 + slot * 7) % 91)),
-        (mvp_models.ATTRIB_SPEED, str((team + slot) % 100)),
+        (mvp_models.ATTRIB_HEIGHT, str(20 + (team + slot) % 11)),
+        (mvp_models.ATTRIB_WEIGHT, str(50 + (team * 3 + slot * 7) % 91)),
+        (mvp_models.ATTRIB_BONE_PROFILE, str(26 + slot % 4)),
+        (mvp_models.ATTRIB_BODY_TYPE, "1"),
+        *((col, str((team + slot * 3 + col) % 16)) for col in range(18, 22)),
+        (mvp_models.ATTRIB_SPEED, str(39 + (team + slot) % 61)),
+        *((col, str(4 + (team * 2 + slot + col) % 12)) for col in range(23, 28)),
+        (mvp_models.ATTRIB_BATTING_STANCE, str(slot % 2)),
+        (mvp_models.ATTRIB_SWING_TYPE, "0"),
         (mvp_models.ATTRIB_SALARY, f"{team}{slot}00000"),
-        (mvp_models.ATTRIB_BIRTHDAY, f"19{70 + (team + slot) % 20}0101"),
+        (mvp_models.ATTRIB_STARPOWER, str((team + slot) % 5)),
+        (mvp_models.ATTRIB_HIDDEN, "0"),
+        (mvp_models.ATTRIB_BIRTHDAY, str(9000 + team * 30 + slot)),
     ]
 
 
 def _lr_columns(team: int, slot: int, vs: str) -> list[tuple[int, str]]:
-    """A split-attribute record. The spray columns are never written by the patcher."""
+    """A split-attribute record: contact and power, the zone, where his fly
+    balls go, his balls in play, and of his approach only `chasefb` (column
+    20): a fuller row costs every patch test its recompression."""
     bump = 0 if vs == "rhp" else 7
+    hr, ld, gb = 2 + slot % 4, 15 + team % 6, 40 + (team + slot) % 10
     return [
         (mvp_models.LR_FIRST_NAME, f"Disc{team:02d}"),
         (mvp_models.LR_LAST_NAME, f"Player{slot:02d}"),
-        (mvp_models.LR_CONTACT, str((team * 5 + slot + bump) % 100)),
-        (mvp_models.LR_POWER, str((team * 7 + slot + bump) % 100)),
-        (mvp_models.LR_SPRAY_UL, str((team + slot + bump) % 100)),
-        (mvp_models.LR_GB, str((team * 11 + slot + bump) % 100)),
+        (mvp_models.LR_CONTACT, str(20 + (team * 5 + slot + bump) % 80)),
+        (mvp_models.LR_POWER, str(20 + (team * 7 + slot + bump) % 80)),
+        *((col, str(min(2, (team + slot * col + bump) % 4))) for col in mvp_models.LR_ZONES),
+        *zip(mvp_models.LR_DIRECTION, ("40", "25", "35"), strict=True),
+        (mvp_models.LR_HR_PCT, str(hr)),
+        (mvp_models.LR_FB_PCT, str(100 - hr - ld - gb)),
+        (mvp_models.LR_LD_PCT, str(ld)),
+        (mvp_models.LR_GB_PCT, str(gb)),
+        (20, str((team + slot) % 16)),
     ]
 
 
 def _pitchattrib_columns(team: int, slot: int) -> list[tuple[int, str]]:
-    """A pitching record, including the delivery column the patcher never writes."""
+    """A whole pitching record: a fastball, then three pitches (types 1, 6 and
+    8 or 2) and an empty fifth slot."""
+    fastball = 85 + (team * 17 + slot) % 15
+    pitches = []
+    for n, kind in enumerate((1, 6, 8 if team % 2 else 2)):
+        pitches += [
+            str(kind),
+            str((team + slot + n) % 16),
+            str(2 + kind % 5),
+            str(50 + (team * 3 + slot + n) % 45),
+            str(fastball - (14, 9, 3)[n]),
+        ]
+    pitches += [mvp_models.NO_PITCH] * mvp_models.PA_PITCH_STRIDE
     return [
         (mvp_models.PA_FIRST_NAME, f"Disc{team:02d}"),
         (mvp_models.PA_LAST_NAME, f"Player{slot:02d}"),
-        (mvp_models.PA_STAMINA, str((team * 3 + slot) % 100)),
-        (mvp_models.PA_PICKOFF, str((team * 13 + slot) % 100)),
-        (mvp_models.PA_PITCH1_VELOCITY, str((team * 17 + slot) % 100)),
-        (mvp_models.PA_PITCHER_DELIVERY, str((team + slot) % 8)),
+        (mvp_models.PA_STAMINA, str(40 + (team * 3 + slot) % 60)),
+        (mvp_models.PA_PICKOFF, str((team * 13 + slot) % 16)),
+        (mvp_models.PA_PITCH1_MOVEMENT, "0"),
+        (mvp_models.PA_PITCH1_DESC, "0"),
+        (mvp_models.PA_PITCH1_CONTROL, str(50 + (team + slot * 7) % 48)),
+        (mvp_models.PA_PITCH1_VELOCITY, str(fastball)),
+        *zip(
+            range(mvp_models.PA_PITCH2_TYPE, mvp_models.PA_PITCHER_DELIVERY), pitches, strict=True
+        ),
+        (mvp_models.PA_PITCHER_DELIVERY, str((team + slot) % 3)),
     ]
 
 
@@ -329,10 +377,6 @@ class DiscSpec:
             also what sizes the id pool `patch` draws from, so a test that wants
             the pool to run out sets it low and one that wants it not to sets it
             high.
-        compact_flag_c0: give section 0 the `0xC0` first byte a real disc is
-            reported to have, rather than the ordinary `0x10`. Both are accepted
-            by `validate` and handled by `decompress_section`, along different
-            branches.
         team_records: write the `team` table with MVP Baseball's own 30 team
             ids. False leaves the table populated with ids that are not this
             game's, which is what `validate_deep` must reject.
@@ -351,7 +395,6 @@ class DiscSpec:
 
     teams: int = 30
     players_per_team: int = 8
-    compact_flag_c0: bool = True
     team_records: bool = True
     extra_attrib_columns: int = 0
     duplicate_first_player: bool = False
@@ -420,7 +463,7 @@ def _build_sections(spec: DiscSpec) -> dict[str, bytes]:
     }
 
     sections: dict[str, bytes] = {}
-    for index, (_, name) in enumerate(mvp_models.SECTION_MAP):
+    for index, (_, name) in enumerate(mvp_models.SECTION_MAP[1:], 1):
         header = spec.header_overrides.get(name, SECTION_HEADERS[name])
         records = contents.get(
             name,
@@ -499,7 +542,6 @@ def _spec_key(spec: DiscSpec) -> tuple:
     return (
         spec.teams,
         spec.players_per_team,
-        spec.compact_flag_c0,
         spec.team_records,
         spec.extra_attrib_columns,
         spec.duplicate_first_player,
@@ -529,21 +571,24 @@ def build_database_big(spec: DiscSpec | None = None) -> bytes:
         return cached
     sections = _build_sections(spec)
     blob = bytearray(DATABASE_BIG_SIZE)
-    for _, name in mvp_models.SECTION_MAP:
-        offset, allocation = mvp_models.SECTION_ALLOCATIONS[name]
-        compressed = bytearray(refpack_compress(sections[name]))
+    entries = b""
+    for offset, name in mvp_models.SECTION_MAP[1:]:
+        _, allocation = mvp_models.SECTION_ALLOCATIONS[name]
+        compressed = refpack_compress(sections[name])
         if len(compressed) > allocation:
             raise ValueError(
                 f"synthetic {name} is {len(compressed)} compressed bytes "
                 f"and its allocation is {allocation}"
             )
-        if offset == 0 and spec.compact_flag_c0:
-            # A real disc is reported to flag section 0 with 0xC0 where every
-            # other section uses 0x10. `decompress_section` rewrites the first
-            # two bytes back to `10 FB` and passes the rest through, so this
-            # round-trips exactly.
-            compressed[0] = 0xC0
         blob[offset : offset + len(compressed)] = compressed
+        entries += offset.to_bytes(3, "big") + len(compressed).to_bytes(3, "big")
+        entries += name.encode() + b"\0"
+    # The directory, as the retail disc's: magic, its length, the file count,
+    # then (offset, compressed length, name) per file.
+    count = len(mvp_models.SECTION_MAP) - 1
+    directory = mvp_models.DIRECTORY_MAGIC + (6 + len(entries)).to_bytes(2, "big")
+    directory += count.to_bytes(2, "big") + entries
+    blob[: len(directory)] = directory
     result = bytes(blob)
     _BLOB_CACHE[key] = result
     return result
@@ -552,15 +597,24 @@ def build_database_big(spec: DiscSpec | None = None) -> bytes:
 def decompress_section_at(blob: bytes, name: str) -> bytes:
     """One section's decompressed bytes, read straight out of a `database.big`.
 
-    Used to read a *patched* blob back. It repeats the `0xC0` fixup rather than
-    calling `decompress_section`, so a test is not reading through the method it
-    is checking.
+    Used to read a *patched* blob back, not through `decompress_section`, so a
+    test is not reading through the method it is checking.
     """
     offset, _ = mvp_models.SECTION_ALLOCATIONS[name]
-    raw = blob[offset:]
-    if raw[0] == 0xC0:
-        raw = b"\x10\xfb" + raw[2:]
-    return refpack_decompress(raw)
+    return refpack_decompress(blob[offset:])
+
+
+def directory_entries(blob: bytes) -> dict[str, tuple[int, int]]:
+    """The directory's `{file name: (offset, compressed length)}`, read the long way."""
+    out = {}
+    at = 6
+    for _ in range(int.from_bytes(blob[4:6], "big")):
+        offset = int.from_bytes(blob[at : at + 3], "big")
+        length = int.from_bytes(blob[at + 3 : at + 6], "big")
+        end = blob.index(b"\0", at + 6)
+        out[blob[at + 6 : end].decode()] = (offset, length)
+        at = end + 1
+    return out
 
 
 def _filler(length: int, seed: int) -> bytes:

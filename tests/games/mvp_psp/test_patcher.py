@@ -1,9 +1,5 @@
 """`MVPPSPPatcher` against the unified interface.
 
-Three inherited bugs reach the disc here: the section that does not fit, which
-this port fixes, and the pitcher arsenal and the height and weight, which it
-preserves. The tests for those two say so at the assertion.
-
 Every read-back of a patched image goes through the fixture's own
 `read_database_big`, `decompress_section_at` and `parse_table`, never through
 the reader and writer that produced it.
@@ -19,12 +15,14 @@ import pytest
 from retro_roster_patcher.core.errors import ApiError, CapabilityError, MappingError, RomError
 from retro_roster_patcher.core.models import MappedRosters, PatchResult, RomInfo, RomSlot
 from retro_roster_patcher.core.registry import get_patcher
+from retro_roster_patcher.formats.ea_tdb import refpack_decompress
 from retro_roster_patcher.games.mvp_psp import models as mvp_models
 from retro_roster_patcher.games.mvp_psp.models import (
     AL_SLOT_COUNT,
     ATTRIB_BIRTHDAY,
     ATTRIB_FIRST_NAME,
     ATTRIB_HEIGHT,
+    ATTRIB_HIDDEN,
     ATTRIB_JERSEY,
     ATTRIB_LAST_NAME,
     ATTRIB_PRIMARY_POS,
@@ -35,22 +33,20 @@ from retro_roster_patcher.games.mvp_psp.models import (
     BULLPEN_POSITIONS,
     HASH_ID_CHARS,
     LINEUP_POSITIONS,
-    LR_CONTACT,
-    LR_FIRST_NAME,
-    LR_POWER,
-    LR_SPRAY_UL,
-    MAX_EXTRA_PITCHES,
+    LR_DIRECTION,
+    LR_FB_PCT,
+    LR_GB_PCT,
+    LR_HR_PCT,
+    LR_LD_PCT,
+    LR_ZONES,
     MVP_TEAM_ABBREVS,
     MVP_TEAM_ORDER,
+    NO_PITCH,
     NOT_IN_LINEUP,
     PA_PITCH1_VELOCITY,
     PA_PITCH2_TYPE,
     PA_PITCH_STRIDE,
     PA_PITCHER_DELIVERY,
-    PA_STAMINA,
-    PITCH_CHANGEUP,
-    PITCH_FASTBALL,
-    PITCH_SLIDER,
     ROSTER_LH_AL_ORDER,
     ROSTER_LH_NL_ORDER,
     ROSTER_PLAYERID,
@@ -62,21 +58,23 @@ from retro_roster_patcher.games.mvp_psp.models import (
     ROTATION_POSITIONS,
     TEAM_COUNT,
     TEAM_HASHES,
-    MVPPitch,
+    ZONE_HOT,
     MVPPlayerRecord,
     database_big_extent,
 )
 from retro_roster_patcher.games.mvp_psp.patcher import (
-    HITTING,
     PROGRESS_RECORDS_END,
-    SPEED,
-    STAMINA,
     MVPPSPPatcher,
+    _as_of_disc,
+    _attrib_fields,
     _database_big_extent_fits,
     _HashPool,
-    _on,
+    _pitch_fields,
+    _split_fields,
 )
+from retro_roster_patcher.games.mvp_psp.rom_reader import MVPPSPRomReader
 from retro_roster_patcher.games.mvp_psp.rom_writer import MVPPSPRomWriter, SectionTooLargeError
+from retro_roster_patcher.games.mvp_psp.spreads import Spreads
 from retro_roster_patcher.sports.espn import EspnClient
 from retro_roster_patcher.sports.models import League, LeagueData, Player, Team, TeamRoster
 from tests.fixtures import synthetic_mvp_iso as fixture
@@ -397,7 +395,7 @@ def test_two_populated_slots_show_different_players(tmp_path):
 
 def test_the_extra_reports_how_many_sections_were_read(tmp_path):
     info = make_patcher(tmp_path).analyze_rom(write_iso(tmp_path))
-    assert info.extra["sections_read"] == mvp_models.SECTION_COUNT
+    assert info.extra["sections_read"] == mvp_models.SECTION_COUNT - 1
 
 
 def test_the_extra_reports_the_size_of_the_id_pool(tmp_path):
@@ -670,14 +668,11 @@ def test_that_reliever_still_takes_the_first_rotation_position(tmp_path):
 
 def test_the_leaders_reach_the_mapper(tmp_path):
     # Without `TeamRoster.extra` every player would silently take position defaults.
-    #
-    # Read through `starpower` and not through the arsenal: the arsenal is
-    # overwritten with the 50/50 default on every pitcher whether the leaders arrived
-    # or not, which is upstream's behaviour and preserved deliberately.
     squad = [make_player(1, "SP")]
     plain = mapped(tmp_path, {1: squad})
-    with_stats = mapped(tmp_path, {1: squad}, {1: {"1": {"K": 250, "WHIP": 0.9, "ERA": 2.0}}})
-    assert plain.teams[0][0].starpower != with_stats.teams[0][0].starpower
+    with_stats = mapped(tmp_path, {1: squad}, {1: {"1": {"K": 250, "TBF": 800, "WAR": 5.0}}})
+    assert plain.teams[0][0].ratings == {}
+    assert {"pitch_velocity", "pitch_starpower"} <= set(with_stats.teams[0][0].ratings)
 
 
 def test_an_empty_alias_does_not_wipe_a_populated_slot(tmp_path):
@@ -1024,39 +1019,6 @@ def test_a_patched_player_keeps_the_discs_salary(tmp_path):
     assert after[changed[0]][ATTRIB_SALARY] == before[changed[0]][ATTRIB_SALARY]
 
 
-def test_a_patched_player_keeps_the_discs_second_position(tmp_path):
-    # `_build_attrib_fields` writes column 6 only when the mapper produced a second
-    # position, and it never does -- `MVPPlayerRecord.secondary_position` has no
-    # producer. The guard is there because writing an empty string erases the disc's
-    # own value and leaves the player unable to be moved in the field.
-    source = write_iso(tmp_path, DISC)
-    patcher = make_patcher(tmp_path)
-    rosters = patcher.map_rosters(league(squads={1: full_squad(1000)}))
-    patcher.patch(rom_path=source, output_path=tmp_path / "out.iso", rosters=rosters)
-    before = fixture.parse_table(
-        fixture.decompress_section_at(
-            fixture.read_database_big(source.read_bytes(), lba=fixture.SMALL_LBA), "attrib"
-        )
-    )
-    after = patched_table(tmp_path / "out.iso", "attrib")
-    changed = [pid for pid, cols in after.items() if cols.get(ATTRIB_LAST_NAME) == "Family1000"]
-    assert after[changed[0]][ATTRIB_SECONDARY_POS] == before[changed[0]][ATTRIB_SECONDARY_POS]
-
-
-def test_a_patched_split_record_keeps_the_discs_spray_chart(tmp_path):
-    _, out = patch_one(tmp_path, {1: full_squad(1000)})
-    table = patched_table(out, "lrattrib_rhp")
-    written = [cols for cols in table.values() if cols.get(LR_FIRST_NAME) == "Given1000"]
-    assert LR_SPRAY_UL in written[0]
-
-
-def test_a_patched_pitcher_keeps_the_discs_delivery(tmp_path):
-    _, out = patch_one(tmp_path, {1: full_squad(1000)})
-    table = patched_table(out, "pitchattrib")
-    written = [cols for cols in table.values() if cols.get(ATTRIB_FIRST_NAME) == "Given1015"]
-    assert PA_PITCHER_DELIVERY in written[0]
-
-
 def test_the_teams_roster_rows_are_replaced_by_the_new_squad(tmp_path):
     _, out = patch_one(tmp_path, {1: full_squad(1000)})
     assert len(roster_rows(out, 0)) == 25
@@ -1275,34 +1237,8 @@ def test_a_patched_players_position_code_reaches_the_disc(tmp_path):
     assert written[0][ATTRIB_PRIMARY_POS] == "1"
 
 
-def test_an_unmapped_primary_position_falls_back_to_centre_field():
-    # Unreachable through `map_rosters`: `normalize_position` only ever returns keys
-    # of `POS_STRING_TO_NUM`, and `map_pitcher` sets `SP` or `RP`, which are keys too.
-    # Only a hand-built record reaches the fallback.
-    fields = MVPPSPPatcher._build_attrib_fields(MVPPlayerRecord(primary_position="QB"))
-    assert fields[ATTRIB_PRIMARY_POS] == "7"
-
-
 def test_the_progress_bar_gives_the_copy_its_last_tenth():
     assert PROGRESS_RECORDS_END == 0.9
-
-
-def test_a_patched_players_speed_reaches_the_disc(tmp_path):
-    # A catcher with no statistics takes the catcher default of 35, so this
-    # would not pass on a patcher that wrote the record's own 50.
-    _, out = patch_one(tmp_path, {1: full_squad(1000)})
-    table = patched_table(out, "attrib")
-    written = [c for c in table.values() if c.get(ATTRIB_LAST_NAME) == "Family1000"]
-    assert written[0][ATTRIB_SPEED] == _on(35, SPEED)
-
-
-def test_a_patched_batters_contact_reaches_the_split_table(tmp_path):
-    # The catcher default again, 55, and a different number from his speed --
-    # so a writer that put one rating in every column would fail one of the two.
-    _, out = patch_one(tmp_path, {1: full_squad(1000)})
-    table = patched_table(out, "lrattrib_rhp")
-    written = [c for c in table.values() if c.get(LR_FIRST_NAME) == "Given1000"]
-    assert written[0][LR_CONTACT] == _on(55, HITTING)
 
 
 # A batter with no statistics takes his position's default for both splits, and a
@@ -1315,50 +1251,6 @@ def test_a_patched_batters_contact_reaches_the_split_table(tmp_path):
 # fifth id a switch hitter's `bats`, and a switch hitter's two splits are averaged.
 
 LR_SPLIT_LEADERS = {1: {"1001": {"AVG": 0.330, "OBP": 0.420, "SLG": 0.600, "HR": 45}}}
-
-
-def _lr_split(tmp_path, table_name):
-    _, out = patch_one(tmp_path, {1: full_squad(1000)}, LR_SPLIT_LEADERS)
-    table = patched_table(out, table_name)
-    return [c for c in table.values() if c.get(LR_FIRST_NAME) == "Given1001"][0]
-
-
-def test_the_right_handed_split_table_holds_the_right_handed_contact(tmp_path):
-    assert _lr_split(tmp_path, "lrattrib_rhp")[LR_CONTACT] == _on(99, HITTING)
-
-
-def test_the_left_handed_split_table_holds_the_left_handed_contact(tmp_path):
-    assert _lr_split(tmp_path, "lrattrib_lhp")[LR_CONTACT] == _on(94, HITTING)
-
-
-def test_the_right_handed_split_table_holds_the_right_handed_power(tmp_path):
-    assert _lr_split(tmp_path, "lrattrib_rhp")[LR_POWER] == _on(99, HITTING)
-
-
-def test_the_left_handed_split_table_holds_the_left_handed_power(tmp_path):
-    assert _lr_split(tmp_path, "lrattrib_lhp")[LR_POWER] == _on(94, HITTING)
-
-
-def test_a_patched_starters_stamina_reaches_the_pitching_table(tmp_path):
-    # A starter with no statistics takes 70, a reliever 35.
-    squad = full_squad(1000)
-    _, out = patch_one(tmp_path, {1: squad})
-    table = patched_table(out, "pitchattrib")
-    written = [c for c in table.values() if c.get(ATTRIB_FIRST_NAME) == f"Given{squad[15].id}"]
-    assert written[0][PA_STAMINA] == _on(70, STAMINA)
-
-
-def test_a_patched_relievers_stamina_differs_from_a_starters(tmp_path):
-    squad = full_squad(1000)
-    _, out = patch_one(tmp_path, {1: squad})
-    table = patched_table(out, "pitchattrib")
-    written = [c for c in table.values() if c.get(ATTRIB_FIRST_NAME) == f"Given{squad[20].id}"]
-    assert written[0][PA_STAMINA] == _on(35, STAMINA)
-
-
-def test_a_mapped_pitchers_arsenal_is_the_frozen_pitch_type(tmp_path):
-    result = mapped(tmp_path, {1: full_squad(1000)})
-    assert type(result.teams[0][15].pitches[0]) is MVPPitch
 
 
 def test_the_lineup_positions_reach_the_roster_table(tmp_path):
@@ -1441,122 +1333,6 @@ def test_the_two_handedness_variants_agree_in_the_national_columns_too(tmp_path)
     assert [r[ROSTER_RH_NL_ORDER] for r in rows] == [r[ROSTER_LH_NL_ORDER] for r in rows]
 
 
-def test_every_patched_player_is_written_at_six_feet(tmp_path):
-    """PINS UPSTREAM FIDELITY DELIBERATELY, on the disc.
-
-    Column 9 is written for every player from a `MVPPlayerRecord.height` that
-    nothing ever sets, so the whole squad comes out at 72 inches and the disc's
-    own heights are gone. Do not drop the column; see the label on
-    `_build_attrib_fields`.
-    """
-    _, out = patch_one(tmp_path, {1: full_squad(1000)})
-    table = patched_table(out, "attrib")
-    patched = [c for c in table.values() if c.get(ATTRIB_LAST_NAME) == "Family1000"]
-    assert {c[ATTRIB_HEIGHT] for c in patched} == {"72"}
-
-
-def test_the_height_the_disc_shipped_is_overwritten(tmp_path):
-    # The other half: the disc's own value for one of those players is not 72.
-    source = write_iso(tmp_path, DISC)
-    patcher = make_patcher(tmp_path)
-    rosters = patcher.map_rosters(league(squads={1: full_squad(1000)}))
-    patcher.patch(rom_path=source, output_path=tmp_path / "out.iso", rosters=rosters)
-    before = fixture.parse_table(
-        fixture.decompress_section_at(
-            fixture.read_database_big(source.read_bytes(), lba=fixture.SMALL_LBA), "attrib"
-        )
-    )
-    after = patched_table(tmp_path / "out.iso", "attrib")
-    changed = [pid for pid, cols in after.items() if cols.get(ATTRIB_LAST_NAME) == "Family1000"]
-    assert after[changed[0]][ATTRIB_HEIGHT] != before[changed[0]][ATTRIB_HEIGHT]
-
-
-def test_the_disc_holds_more_than_one_height(tmp_path):
-    source = write_iso(tmp_path, DISC)
-    table = fixture.parse_table(
-        fixture.decompress_section_at(
-            fixture.read_database_big(source.read_bytes(), lba=fixture.SMALL_LBA), "attrib"
-        )
-    )
-    assert len({cols[ATTRIB_HEIGHT] for cols in table.values()}) > 1
-
-
-def test_the_provider_weight_reaches_the_disc(tmp_path):
-    _, out = patch_one(tmp_path, {1: full_squad(1000, weight=217.0)})
-    table = patched_table(out, "attrib")
-    patched = [c for c in table.values() if c.get(ATTRIB_LAST_NAME) == "Family1000"]
-    assert {c[ATTRIB_WEIGHT] for c in patched} == {"217"}
-
-
-def test_the_weight_the_disc_shipped_is_overwritten(tmp_path):
-    # The other half: the disc's own value for one of those players is not 190.
-    source = write_iso(tmp_path, DISC)
-    patcher = make_patcher(tmp_path)
-    rosters = patcher.map_rosters(league(squads={1: full_squad(1000)}))
-    patcher.patch(rom_path=source, output_path=tmp_path / "out.iso", rosters=rosters)
-    before = fixture.parse_table(
-        fixture.decompress_section_at(
-            fixture.read_database_big(source.read_bytes(), lba=fixture.SMALL_LBA), "attrib"
-        )
-    )
-    after = patched_table(tmp_path / "out.iso", "attrib")
-    changed = [pid for pid, cols in after.items() if cols.get(ATTRIB_LAST_NAME) == "Family1000"]
-    assert after[changed[0]][ATTRIB_WEIGHT] != before[changed[0]][ATTRIB_WEIGHT]
-
-
-def test_the_disc_holds_more_than_one_weight(tmp_path):
-    source = write_iso(tmp_path, DISC)
-    table = fixture.parse_table(
-        fixture.decompress_section_at(
-            fixture.read_database_big(source.read_bytes(), lba=fixture.SMALL_LBA), "attrib"
-        )
-    )
-    assert len({cols[ATTRIB_WEIGHT] for cols in table.values()}) > 1
-
-
-def test_two_pitchers_with_different_statistics_get_the_same_velocity(tmp_path):
-    """PINS UPSTREAM FIDELITY DELIBERATELY, end to end, on the disc.
-
-    Every pitcher gets the same 50/50 arsenal whatever his statistics are,
-    because `map_pitcher` overwrites the derived one on the way out. A Cy Young
-    season and a 6.00 ERA are written with identical velocity. Do not delete
-    that assignment; see the label on `stat_mapper.map_pitcher`.
-    """
-    squad = full_squad(1000)
-    leaders = {
-        1: {
-            str(squad[15].id): {"K": 250, "WHIP": 0.90, "ERA": 2.00},
-            str(squad[16].id): {"K": 61, "WHIP": 1.60, "ERA": 6.00},
-        }
-    }
-    _, out = patch_one(tmp_path, {1: squad}, leaders)
-    table = patched_table(out, "pitchattrib")
-    first = [c for c in table.values() if c.get(ATTRIB_FIRST_NAME) == f"Given{squad[15].id}"]
-    second = [c for c in table.values() if c.get(ATTRIB_FIRST_NAME) == f"Given{squad[16].id}"]
-    assert first[0][PA_PITCH1_VELOCITY] == second[0][PA_PITCH1_VELOCITY]
-
-
-def test_a_pitcher_with_statistics_gets_the_default_velocity(tmp_path):
-    # PINS UPSTREAM FIDELITY DELIBERATELY. 250 strikeouts tops the starter
-    # velocity scale at 99; the disc gets 60, which is `default_pitches`'
-    # `50 + 50 // 5`.
-    squad = full_squad(1000)
-    leaders = {1: {str(squad[15].id): {"K": 250, "WHIP": 0.90, "ERA": 2.00}}}
-    _, out = patch_one(tmp_path, {1: squad}, leaders)
-    table = patched_table(out, "pitchattrib")
-    written = [c for c in table.values() if c.get(ATTRIB_FIRST_NAME) == f"Given{squad[15].id}"]
-    assert written[0][PA_PITCH1_VELOCITY] == "60"
-
-
-def test_that_velocity_is_the_one_a_pitcher_with_no_statistics_gets(tmp_path):
-    # "60" is the default arsenal's velocity and not a number this file invented.
-    squad = full_squad(1000)
-    _, out = patch_one(tmp_path, {1: squad})
-    table = patched_table(out, "pitchattrib")
-    written = [c for c in table.values() if c.get(ATTRIB_FIRST_NAME) == f"Given{squad[15].id}"]
-    assert written[0][PA_PITCH1_VELOCITY] == "60"
-
-
 def test_a_starters_second_pitch_reaches_the_repeating_block(tmp_path):
     squad = full_squad(1000)
     _, out = patch_one(tmp_path, {1: squad})
@@ -1569,29 +1345,6 @@ def test_a_starters_second_pitch_reaches_the_repeating_block(tmp_path):
 # one -- always a fastball, four columns, no type column of its own -- so the
 # repeating block starts at the arsenal's *second* entry, and slicing it from the
 # first instead puts a fastball in the slider's type column.
-
-
-def _starter_pitch_record(tmp_path):
-    squad = full_squad(1000)
-    _, out = patch_one(tmp_path, {1: squad})
-    table = patched_table(out, "pitchattrib")
-    return [c for c in table.values() if c.get(ATTRIB_FIRST_NAME) == f"Given{squad[15].id}"][0]
-
-
-def test_the_first_entry_of_the_repeating_block_is_the_slider(tmp_path):
-    assert _starter_pitch_record(tmp_path)[PA_PITCH2_TYPE] == str(PITCH_SLIDER)
-
-
-def test_the_second_entry_of_the_repeating_block_is_the_changeup(tmp_path):
-    record = _starter_pitch_record(tmp_path)
-    assert record[PA_PITCH2_TYPE + PA_PITCH_STRIDE] == str(PITCH_CHANGEUP)
-
-
-def test_the_fastball_never_reaches_a_type_column(tmp_path):
-    # Its own columns are 4, 6 and 7, and column 8 is the first type column.
-    record = _starter_pitch_record(tmp_path)
-    types = {record[PA_PITCH2_TYPE + i * PA_PITCH_STRIDE] for i in range(MAX_EXTRA_PITCHES - 1)}
-    assert str(PITCH_FASTBALL) not in types
 
 
 def test_a_batter_gets_no_pitching_record_of_his_own(tmp_path):
@@ -1817,12 +1570,6 @@ def test_order_as_given_sends_spare_batters_to_the_bench(tmp_path):
     assert len(records) == 25
 
 
-def test_a_rating_lands_on_its_columns_range():
-    from retro_roster_patcher.games.mvp_psp.patcher import SKILL
-
-    assert (_on(0, SPEED), _on(99, SPEED), _on(0, SKILL), _on(99, SKILL)) == ("39", "99", "0", "15")
-
-
 def test_the_nine_bat_in_the_order_the_club_has_used_them():
     from retro_roster_patcher.games.mvp_psp.models import MVPPlayerRecord
     from retro_roster_patcher.games.mvp_psp.patcher import _bat_in_lineup_order
@@ -1859,3 +1606,151 @@ def test_the_editors_list_handed_back_bats_as_the_patch_alone_would(tmp_path):
 
     assert nine(edited) == nine(alone)
     assert nine(alone)[0][1] == batters[5].id
+
+
+# What a player's ratings become on the disc: the value at his rank of the disc's
+# own spread (`spreads`), his position's median without one.
+
+
+def disc_spreads(tmp_path):
+    reader = MVPPSPRomReader(str(write_iso(tmp_path, DISC)))
+    reader.load()
+    reader.decompress_all()
+    reader.parse_all()
+    return reader.records, Spreads.of(reader.records, "lrattrib_lhp", "lrattrib_rhp")
+
+
+def disc_values(records, table, column, positions):
+    """Every value the disc's players at `positions` hold in one column, sorted."""
+    attrib = records["attrib"]
+    return sorted(
+        int(row[column])
+        for pid, row in records[table].items()
+        if attrib[pid][ATTRIB_PRIMARY_POS] in positions and row.get(column, "-").isdigit()
+    )
+
+
+BATTER_CODES = {str(code) for code in range(1, 9)}
+
+
+def batter(**kw):
+    record = MVPPlayerRecord(primary_position="SS", player_id=7, **kw)
+    return record
+
+
+def test_the_leagues_best_gets_the_discs_best_and_its_worst_the_discs_worst(tmp_path):
+    records, spreads = disc_spreads(tmp_path)
+    speeds = disc_values(records, "attrib", ATTRIB_SPEED, BATTER_CODES)
+    top = _attrib_fields(batter(ratings={"speed": 1.0}), spreads)
+    bottom = _attrib_fields(batter(ratings={"speed": 0.0}), spreads)
+    assert (int(top[ATTRIB_SPEED]), int(bottom[ATTRIB_SPEED])) == (speeds[-1], speeds[0])
+
+
+def test_a_rating_without_a_rank_is_his_positions_median(tmp_path):
+    records, spreads = disc_spreads(tmp_path)
+    shortstops = disc_values(records, "attrib", ATTRIB_SPEED, {"5"})
+    fields = _attrib_fields(batter(), spreads)
+    assert int(fields[ATTRIB_SPEED]) == shortstops[len(shortstops) // 2]
+
+
+def test_height_and_weight_are_written_above_48_inches_and_100_pounds(tmp_path):
+    _, spreads = disc_spreads(tmp_path)
+    fields = _attrib_fields(batter(height=79, weight=282), spreads)
+    assert (fields[ATTRIB_HEIGHT], fields[ATTRIB_WEIGHT]) == ("31", "182")
+    assert fields[ATTRIB_HIDDEN] == "0"
+
+
+def test_a_birthday_is_days_from_1948(tmp_path):
+    _, spreads = disc_spreads(tmp_path)
+    fields = _attrib_fields(batter(birth_date="1966-11-14"), spreads)
+    assert fields[ATTRIB_BIRTHDAY] == "6892"
+
+
+def test_a_birth_date_moves_back_to_the_discs_calendar():
+    # The game ages players by 2005: born 1999, he would be 5.
+    assert _as_of_disc("1999-06-21", 2025) == "1979-06-21"
+    assert _as_of_disc("2000-02-29", 2025) == "1980-02-28"
+    assert _as_of_disc("", 2025) == ""
+
+
+def test_a_player_without_a_second_position_takes_his_positions_commonest(tmp_path):
+    records, spreads = disc_spreads(tmp_path)
+    seconds = [
+        row[ATTRIB_SECONDARY_POS]
+        for row in records["attrib"].values()
+        if row[ATTRIB_PRIMARY_POS] == "5"
+    ]
+    fields = _attrib_fields(batter(), spreads)
+    assert fields[ATTRIB_SECONDARY_POS] == max(set(seconds), key=seconds.count)
+    assert _attrib_fields(batter(secondary_position=4), spreads)[ATTRIB_SECONDARY_POS] == "4"
+
+
+def test_a_split_rows_balls_in_play_and_fly_balls_each_sum_to_a_hundred(tmp_path):
+    _, spreads = disc_spreads(tmp_path)
+    for side, table in (("lhp", "lrattrib_lhp"), ("rhp", "lrattrib_rhp")):
+        names = {"lrattrib_chasefb": 20}
+        fields = _split_fields(batter(ratings={f"hr_{side}": 1.0}), spreads, table, side, names)
+        assert sum(int(fields[c]) for c in (LR_HR_PCT, LR_FB_PCT, LR_LD_PCT, LR_GB_PCT)) == 100
+        assert sum(int(fields[c]) for c in LR_DIRECTION) == 100
+        assert 20 in fields
+
+
+def test_the_best_hitter_has_more_hot_zones_than_the_worst(tmp_path):
+    _, spreads = disc_spreads(tmp_path)
+
+    def hot(share):
+        record = batter(ratings={"zones_rhp": share})
+        fields = _split_fields(record, spreads, "lrattrib_rhp", "rhp", {})
+        return [fields[c] for c in LR_ZONES].count(str(ZONE_HOT))
+
+    assert hot(1.0) > hot(0.0)
+
+
+def test_a_pitchers_row_is_whole(tmp_path):
+    records, spreads = disc_spreads(tmp_path)
+    pitcher = MVPPlayerRecord(
+        primary_position="SP", is_pitcher=True, pitch_types=(1, 6), ratings={"pitch_velocity": 1.0}
+    )
+    fields = _pitch_fields(pitcher, spreads)
+    fastballs = disc_values(records, "pitchattrib", PA_PITCH1_VELOCITY, {"0"})
+    assert int(fields[PA_PITCH1_VELOCITY]) <= fastballs[-1]
+    assert fields[PA_PITCH2_TYPE] == "1"
+    assert fields[PA_PITCH2_TYPE + PA_PITCH_STRIDE] == "6"
+    # The disc's changeups are 14 slower than the fastball, its sliders 9.
+    assert int(fields[PA_PITCH2_TYPE + 4]) == int(fields[PA_PITCH1_VELOCITY]) - 14
+    # No third or fourth pitch: the two slots hold nothing, not the old pitcher's.
+    third = PA_PITCH2_TYPE + 2 * PA_PITCH_STRIDE
+    assert {fields[c] for c in range(third, PA_PITCHER_DELIVERY)} == {NO_PITCH}
+    assert fields[PA_PITCHER_DELIVERY] in {"0", "1", "2"}
+    assert set(fields) == set(range(PA_PITCHER_DELIVERY + 1))
+
+
+def test_a_batter_given_a_pitchers_id_loses_the_pitchers_row(tmp_path):
+    # Squads hold one more batter than the club's disc block has batter ids, so
+    # the spare batter takes a pitcher's.
+    _, out = patch_one(tmp_path, {1: full_squad(1000)})
+    attrib = patched_table(out, "attrib")
+    batters = {
+        pid
+        for pid, row in attrib.items()
+        if row[ATTRIB_FIRST_NAME].startswith("Given") and row[ATTRIB_PRIMARY_POS] not in ("0", "10")
+    }
+    assert len(batters) == 15
+    assert not batters & set(patched_table(out, "pitchattrib"))
+
+
+def test_a_patched_tables_directory_entry_is_its_new_length(tmp_path):
+    _, out = patch_one(tmp_path, {1: full_squad(1000)})
+    blob = fixture.read_database_big(out.read_bytes(), lba=fixture.SMALL_LBA)
+    offset, length = fixture.directory_entries(blob)["attrib"]
+    assert fixture.parse_table(refpack_decompress(blob[offset : offset + length]))
+    assert blob[offset + length : offset + length + 4] == bytes(4)
+
+
+def test_a_players_build_is_the_disc_profile_nearest_his_height_and_weight():
+    light = [(24, 80, 26, 1)] * 5
+    heavy = [(27, 135, 36, 2)] * 5
+    spreads = Spreads(bodies=light + heavy + [(24, 80, 99, 1)])
+    assert spreads.build(25, 85) == (26, 1)
+    assert spreads.build(27, 140) == (36, 2)
+    assert Spreads().build(25, 85) is None

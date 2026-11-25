@@ -21,6 +21,7 @@ of the id he is given. See `_HashPool`.
 from __future__ import annotations
 
 import os
+from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -28,6 +29,7 @@ from ...core.assets import crest_png
 from ...core.concurrency import parallel_map
 from ...core.errors import ApiError, RomError, as_rom_error
 from ...core.headshots import Face, load_headshot, measure_faces
+from ...core.looks import pick
 from ...core.models import (
     MappedRosters,
     PartialFn,
@@ -48,11 +50,16 @@ from .models import (
     ATTRIB_AUDIO_ID,
     ATTRIB_BASERUNNING,
     ATTRIB_BATS,
+    ATTRIB_BATTING_STANCE,
+    ATTRIB_BIRTHDAY,
+    ATTRIB_BODY_TYPE,
+    ATTRIB_BONE_PROFILE,
     ATTRIB_BUNTING,
     ATTRIB_DURABILITY,
     ATTRIB_FIELDING,
     ATTRIB_FIRST_NAME,
     ATTRIB_HEIGHT,
+    ATTRIB_HIDDEN,
     ATTRIB_JERSEY,
     ATTRIB_LAST_NAME,
     ATTRIB_PLATE_DISCIPLINE,
@@ -62,36 +69,48 @@ from .models import (
     ATTRIB_SPEED,
     ATTRIB_STARPOWER,
     ATTRIB_STEALING_AGGRESSIVE,
+    ATTRIB_SWING_TYPE,
     ATTRIB_THROW_ACCURACY,
     ATTRIB_THROW_STRENGTH,
     ATTRIB_THROWS,
     ATTRIB_WEIGHT,
     BATTERS_PER_TEAM,
     BENCH_POSITION,
+    BIRTHDAY_EPOCH,
     BULLPEN_POSITIONS,
     DEFAULT_POS_NUM,
+    DISC_SEASON,
     HASH_ID_CHARS,
+    HEIGHT_BASE,
     LINEUP_POSITIONS,
+    LR_CHASE,
     LR_CONTACT,
+    LR_DIRECTION,
+    LR_FB_PCT,
     LR_FIRST_NAME,
+    LR_GB_PCT,
+    LR_HR_PCT,
     LR_LAST_NAME,
+    LR_LD_PCT,
+    LR_MISS,
     LR_POWER,
-    MAX_EXTRA_PITCHES,
+    LR_TAKE,
+    LR_ZONES,
     MVP_TEAM_ABBREVS,
     MVP_TEAM_ORDER,
+    NO_PITCH,
     NOT_IN_LINEUP,
     PA_FIRST_NAME,
     PA_LAST_NAME,
     PA_PICKOFF,
     PA_PITCH1_CONTROL,
+    PA_PITCH1_DESC,
     PA_PITCH1_MOVEMENT,
     PA_PITCH1_VELOCITY,
     PA_PITCH2_TYPE,
-    PA_PITCH_CONTROL_OFFSET,
-    PA_PITCH_MOVEMENT_OFFSET,
+    PA_PITCH_SLOTS,
     PA_PITCH_STRIDE,
-    PA_PITCH_TYPE_OFFSET,
-    PA_PITCH_VELOCITY_OFFSET,
+    PA_PITCHER_DELIVERY,
     PA_STAMINA,
     PITCHERS_PER_TEAM,
     PLAYERS_PER_TEAM,
@@ -111,12 +130,16 @@ from .models import (
     TEAM_COUNT,
     TEAM_HASHES,
     TEAM_RENAMES,
+    WEIGHT_BASE,
+    ZONE_COLD,
+    ZONE_HOT,
     MVPPlayerRecord,
     database_big_extent,
 )
 from .rom_reader import MVPPSPRomReader, Table
 from .rom_writer import MVPPSPRomWriter
-from .stat_mapper import MVPStatMapper
+from .spreads import Spreads, batting_group
+from .stat_mapper import LeagueStats, MVPStatMapper
 
 # Where the roster-writing phase of `patch` ends on the progress bar. The copy
 # is the slowest step -- a PSP UMD image is hundreds of megabytes -- but it runs
@@ -126,20 +149,25 @@ PROGRESS_RECORDS_END = 0.9
 
 TEAM_ARTID = 6  # `team` column: the club's logo is `logos` file l{artid - 1:03d}
 
-# The ranges the disc's own ratings take (min, max over its 851 players): the
-# mapper rates on 0-99 and `_on` puts a rating onto its column's range.
-SKILL = (0, 15)  # plate discipline, bunting, steal, baserunning, durability, pickoff, movement
-DEFENCE = (4, 15)  # fielding, range, arm strength and accuracy
-SPEED = (39, 99)
-STARPOWER = (0, 4)
-HITTING = (20, 100)  # contact and power, each split
-STAMINA = (40, 99)
+#: The split tables, against a left- and a right-handed pitcher.
+LR_TABLES = {"lhp": "lrattrib_lhp", "rhp": "lrattrib_rhp"}
 
-
-def _on(rating: int, scale: tuple[int, int]) -> str:
-    """A 0-99 rating on the column's own range, as the CSV holds it."""
-    lo, hi = scale
-    return str(lo + round(max(0, min(99, rating)) * (hi - lo) / 99))
+#: `attrib` ratings (`stat_mapper.BATTER_SOURCES`) and their columns.
+ATTRIB_RATINGS = {
+    "plate_discipline": ATTRIB_PLATE_DISCIPLINE,
+    "bunting": ATTRIB_BUNTING,
+    "stealing": ATTRIB_STEALING_AGGRESSIVE,
+    "baserunning": ATTRIB_BASERUNNING,
+    "speed": ATTRIB_SPEED,
+    "fielding": ATTRIB_FIELDING,
+    "range": ATTRIB_RANGE,
+    "throw_strength": ATTRIB_THROW_STRENGTH,
+    "throw_accuracy": ATTRIB_THROW_ACCURACY,
+    "durability": ATTRIB_DURABILITY,
+    "starpower": ATTRIB_STARPOWER,
+}
+#: Ranked, and spread, over his position rather than all batters.
+BY_POSITION = frozenset({"fielding", "range", "throw_strength", "throw_accuracy"})
 
 
 def _database_big_extent_fits(rom_path: Path) -> bool:
@@ -199,6 +227,25 @@ def _lineup_positions(own: list[str], wanted: tuple[str, ...]) -> list[str]:
         out[i] = next((pos for pos in _NEAR.get(own[i], ()) if pos in free), free[0])
         free.remove(out[i])
     return out
+
+
+def _as_of_disc(birth_date: str, season: int) -> str:
+    """A birth date moved back by the seasons since the disc's: the game's
+    calendar stands in 2005, so a player born in 1999 would be 5 (and its Edit
+    Player screen shows 1961), where this way he is his age in `season`."""
+    try:
+        born = date.fromisoformat(birth_date)
+    except ValueError:
+        return birth_date
+    year = born.year - ((season or date.today().year) - DISC_SEASON)
+    return born.replace(
+        year=year, day=min(born.day, 28) if born.month == 2 else born.day
+    ).isoformat()
+
+
+def _is_starter(slot: int) -> bool:
+    """Slots 15-19 are the rotation."""
+    return BATTERS_PER_TEAM <= slot < BATTERS_PER_TEAM + STARTERS_PER_TEAM
 
 
 class _HashPool:
@@ -478,6 +525,7 @@ class MVPPSPPatcher(Patcher):
         """
         self.check_slot_mapping(slot_mapping)
         teams: dict[int, list[MVPPlayerRecord]] = {}
+        squads = []
         for roster in data.teams:
             slot = self.mapper.get_team_slot(roster.team.code)
             # The range test cannot fire here, and is kept: `_write_all_teams`
@@ -508,10 +556,26 @@ class MVPPSPPatcher(Patcher):
             pitchers = [p for p in selected if self.mapper.is_pitcher(p)]
             slots = [min(i, BATTERS_PER_TEAM - 1) for i in range(len(batters))]
             slots += [BATTERS_PER_TEAM + j for j in range(len(pitchers))]
-            records = [
-                self._map_one(player, leaders.get(str(player.id), {}), slot)
-                for slot, player in zip(slots, batters + pitchers, strict=True)
-            ]
+            squads.append(
+                (
+                    slot,
+                    roster,
+                    batters,
+                    [
+                        (player, leaders.get(str(player.id), {}), s)
+                        for s, player in zip(slots, batters + pitchers, strict=True)
+                    ],
+                )
+            )
+        # Every selected player's line, so each rating ranks a player against
+        # the league's, not his club's.
+        league = LeagueStats.from_lines(
+            (player, line, _is_starter(s)) for *_, members in squads for player, line, s in members
+        )
+        for slot, roster, batters, members in squads:
+            records = [self._map_one(player, line, s, league) for player, line, s in members]
+            for record in records:
+                record.birth_date = _as_of_disc(record.birth_date, data.league.season)
             if not order_as_given:
                 _bat_in_lineup_order(records, roster.extra.get("lineup") or [])
             if order_as_given:
@@ -535,6 +599,7 @@ class MVPPSPPatcher(Patcher):
         player: Player,
         stats: dict[str, Any],
         slot: int,
+        league: LeagueStats | None = None,
     ) -> MVPPlayerRecord:
         """Map one selected player, given his slot in the 25-slot layout.
 
@@ -542,11 +607,12 @@ class MVPPSPPatcher(Patcher):
         whether he is mapped as a *starting* pitcher comes from his slot -- 15
         to 19 is the rotation.
         """
-        is_starter = BATTERS_PER_TEAM <= slot < BATTERS_PER_TEAM + STARTERS_PER_TEAM
         if self.mapper.is_pitcher(player):
-            record = self.mapper.map_pitcher(player, stats, is_starter=is_starter)
+            record = self.mapper.map_pitcher(
+                player, stats, is_starter=_is_starter(slot), league=league
+            )
         else:
-            record = self.mapper.map_batter(player, stats)
+            record = self.mapper.map_batter(player, stats, league)
         record.roster_position = self._slot_to_position(slot)
         record.batting_order = slot + 1 if slot < len(LINEUP_POSITIONS) else NOT_IN_LINEUP
         return record
@@ -657,6 +723,8 @@ class MVPPSPPatcher(Patcher):
         )
         pitcher_ids = set(writer.reader.records.get("pitchattrib", {}))
         attrib = writer.reader.records.get("attrib", {})
+        # Read before any player is written, so the spreads are the disc's.
+        spreads = Spreads.of(writer.reader.records, LR_TABLES["lhp"], LR_TABLES["rhp"])
         positions = {h: cols.get(ATTRIB_PRIMARY_POS, "") for h, cols in attrib.items()}
 
         patched_team_hashes = {TEAM_HASHES[MVP_TEAM_ABBREVS[slot]] for slot in targets}
@@ -706,7 +774,7 @@ class MVPPSPPatcher(Patcher):
                     player_index=player_index,
                     position=str(POS_STRING_TO_NUM.get(player.primary_position, DEFAULT_POS_NUM)),
                 )
-                self._write_player(writer, player)
+                self._write_player(writer, player, spreads)
                 if ids:
                     rec_id = ids.pop(0)
                 else:
@@ -801,112 +869,30 @@ class MVPPSPPatcher(Patcher):
         with open(rom_path, "rb") as f:
             writer.edits += portraits.edits(f, pictures, self.status)
 
-    def _write_player(self, writer: MVPPSPRomWriter, player: MVPPlayerRecord) -> None:
-        """Stage one player's four table records.
-
-        Three tables for a batter and four for a pitcher: `pitchattrib` gets a
-        row only for a pitcher, so a batter given a pitcher's recycled id keeps
-        that pitcher's arsenal in the table. Inherited, and the mirror of the
-        `_HashPool` cross-fall.
+    def _write_player(
+        self, writer: MVPPSPRomWriter, player: MVPPlayerRecord, spreads: Spreads
+    ) -> None:
+        """Stage one player's records: `attrib`, both split tables, and
+        `pitchattrib` for a pitcher. A batter given a pitcher's recycled id
+        loses that pitcher's `pitchattrib` row, as the disc's batters have none.
         """
-        fields = self._build_attrib_fields(player)
+        fields = _attrib_fields(player, spreads)
         face = self._faces.get(player.player_id)
         looked = looks.columns(face, player.nationality, str(player.player_id or player.hash_id))
         fields.update({col: str(value) for col, value in looked.items()})
         writer.update_player_record("attrib", player.hash_id, fields)
-        writer.update_player_record(
-            "lrattrib_rhp", player.hash_id, self._build_lr_attrib_fields(player, vs_rhp=True)
-        )
-        writer.update_player_record(
-            "lrattrib_lhp", player.hash_id, self._build_lr_attrib_fields(player, vs_rhp=False)
-        )
+        for side, table in LR_TABLES.items():
+            writer.update_player_record(
+                table,
+                player.hash_id,
+                _split_fields(player, spreads, table, side, writer.columns(table)),
+            )
         if player.is_pitcher:
             writer.update_player_record(
-                "pitchattrib", player.hash_id, self._build_pitchattrib_fields(player)
+                "pitchattrib", player.hash_id, _pitch_fields(player, spreads)
             )
-
-    @staticmethod
-    def _build_attrib_fields(player: MVPPlayerRecord) -> dict[int, str]:
-        """The `attrib` columns this patcher sets. Everything else is merged through.
-
-        The secondary position is written only when the mapper produced one,
-        which it never does today. Keep the guard: writing an empty string would
-        erase the disc's own second position and leave the player unable to be
-        moved in the field.
-        """
-        fields = {
-            ATTRIB_FIRST_NAME: player.first_name,
-            ATTRIB_LAST_NAME: player.last_name,
-            ATTRIB_JERSEY: str(player.jersey),
-            ATTRIB_BATS: str(player.bats),
-            ATTRIB_THROWS: str(player.throws),
-            ATTRIB_PRIMARY_POS: str(
-                POS_STRING_TO_NUM.get(player.primary_position, DEFAULT_POS_NUM)
-            ),
-            ATTRIB_HEIGHT: str(player.height),
-            ATTRIB_WEIGHT: str(player.weight),
-            ATTRIB_PLATE_DISCIPLINE: _on(player.plate_discipline, SKILL),
-            ATTRIB_BUNTING: _on(player.bunting, SKILL),
-            ATTRIB_STEALING_AGGRESSIVE: _on(player.stealing, SKILL),
-            ATTRIB_BASERUNNING: _on(player.baserunning, SKILL),
-            ATTRIB_SPEED: _on(player.speed, SPEED),
-            ATTRIB_FIELDING: _on(player.fielding, DEFENCE),
-            ATTRIB_RANGE: _on(player.arm_range, DEFENCE),
-            ATTRIB_THROW_STRENGTH: _on(player.throw_strength, DEFENCE),
-            ATTRIB_THROW_ACCURACY: _on(player.throw_accuracy, DEFENCE),
-            ATTRIB_DURABILITY: _on(player.durability, SKILL),
-            ATTRIB_STARPOWER: _on(player.starpower, STARPOWER),
-        }
-        if player.secondary_position:
-            fields[ATTRIB_SECONDARY_POS] = str(POS_STRING_TO_NUM.get(player.secondary_position, 0))
-        return fields
-
-    @staticmethod
-    def _build_lr_attrib_fields(player: MVPPlayerRecord, *, vs_rhp: bool) -> dict[int, str]:
-        """Name, contact and power in one of the two split tables.
-
-        The spray chart, the batted-ball mix and the outfield fielding
-        percentages are not written, so they stay as the disc has them for the
-        player whose id is being reused: no provider supplies them.
-        """
-        contact = player.contact_rhp if vs_rhp else player.contact_lhp
-        power = player.power_rhp if vs_rhp else player.power_lhp
-        return {
-            LR_FIRST_NAME: player.first_name,
-            LR_LAST_NAME: player.last_name,
-            LR_CONTACT: _on(contact, HITTING),
-            LR_POWER: _on(power, HITTING),
-        }
-
-    @staticmethod
-    def _build_pitchattrib_fields(player: MVPPlayerRecord) -> dict[int, str]:
-        """Stamina, pickoff and up to four pitches.
-
-        Pitch 1 is the asymmetric one: always a fastball, so it has no type
-        column and occupies four columns where each later pitch occupies five.
-        Pitches 2-4 go into the repeating block and pitch 5 is never written.
-        Each pitch's description column is left alone -- it is a display string
-        this patcher has no source for.
-        """
-        fields: dict[int, str] = {
-            PA_FIRST_NAME: player.first_name,
-            PA_LAST_NAME: player.last_name,
-            PA_STAMINA: _on(player.stamina, STAMINA),
-            PA_PICKOFF: _on(player.pickoff, SKILL),
-        }
-        if player.pitches:
-            first = player.pitches[0]
-            fields[PA_PITCH1_MOVEMENT] = _on(first.movement, SKILL)
-            fields[PA_PITCH1_CONTROL] = str(first.control)
-            fields[PA_PITCH1_VELOCITY] = str(first.velocity)
-
-        for i, pitch in enumerate(player.pitches[1 : 1 + MAX_EXTRA_PITCHES]):
-            base = PA_PITCH2_TYPE + i * PA_PITCH_STRIDE
-            fields[base + PA_PITCH_TYPE_OFFSET] = str(pitch.type)
-            fields[base + PA_PITCH_MOVEMENT_OFFSET] = _on(pitch.movement, SKILL)
-            fields[base + PA_PITCH_CONTROL_OFFSET] = str(pitch.control)
-            fields[base + PA_PITCH_VELOCITY_OFFSET] = str(pitch.velocity)
-        return fields
+        else:
+            writer.delete_player_record("pitchattrib", player.hash_id)
 
     @staticmethod
     def _benched_row(team_hash: str, player_id: str, is_pitcher: bool) -> dict[int, str]:
@@ -967,3 +953,163 @@ class MVPPSPPatcher(Patcher):
             ROSTER_LH_NL_POS: nl_pos,
             ROSTER_LH_NL_ORDER: str(nl_order),
         }
+
+
+def _kind(player: MVPPlayerRecord) -> str:
+    """His group among the disc's: `B`, `SP` or `RP`."""
+    if not player.is_pitcher:
+        return "B"
+    return "SP" if player.primary_position == "SP" else "RP"
+
+
+def _position(player: MVPPlayerRecord) -> int:
+    return POS_STRING_TO_NUM.get(player.primary_position, DEFAULT_POS_NUM)
+
+
+def _key(player: MVPPlayerRecord) -> str:
+    """What a choice among the disc's shared looks is made on: the same each run."""
+    return str(player.player_id or player.hash_id)
+
+
+def _rate(
+    spreads: Spreads,
+    player: MVPPlayerRecord,
+    table: str,
+    column: int | str,
+    rating: str,
+    group: str,
+    flip: bool = False,
+) -> int | None:
+    """The disc's value at his rank for `rating` (1 - rank with `flip`) in
+    `group`'s spread; without a rank, his position's median (the group's for a
+    figure no position has, a pitch type's)."""
+    share = player.ratings.get(rating)
+    if share is None:
+        median = spreads.at(table, column, f"pos{_position(player)}", 0.5)
+        return median if median is not None else spreads.at(table, column, group, 0.5)
+    return spreads.at(table, column, group, 1 - share if flip else share)
+
+
+def _put(fields: dict[int, str], column: int, value: int | str | None) -> None:
+    """Set a column, unless the disc gave nothing to set it to."""
+    if value is not None:
+        fields[column] = str(value)
+
+
+def _attrib_fields(player: MVPPlayerRecord, spreads: Spreads) -> dict[int, str]:
+    """The `attrib` columns this patcher sets; the rest (speech, photo,
+    equipment, walk-up music, salary) are merged through."""
+    kind = _kind(player)
+    pos = _position(player)
+    height, weight = player.height - HEIGHT_BASE, player.weight - WEIGHT_BASE
+    fields = {
+        ATTRIB_FIRST_NAME: player.first_name,
+        ATTRIB_LAST_NAME: player.last_name,
+        ATTRIB_JERSEY: str(player.jersey),
+        ATTRIB_BATS: str(player.bats),
+        ATTRIB_THROWS: str(player.throws),
+        ATTRIB_PRIMARY_POS: str(pos),
+        ATTRIB_HEIGHT: str(height),
+        ATTRIB_WEIGHT: str(weight),
+        ATTRIB_HIDDEN: "0",
+    }
+    secondary = player.secondary_position
+    if secondary is None:
+        common, _ = spreads.common("attrib", ATTRIB_SECONDARY_POS, f"pos{pos}")
+        secondary = common[0] if common else None
+    _put(fields, ATTRIB_SECONDARY_POS, secondary)
+    if (build := spreads.build(height, weight)) is not None:
+        fields[ATTRIB_BONE_PROFILE], fields[ATTRIB_BODY_TYPE] = map(str, build)
+    for column in (ATTRIB_BATTING_STANCE, ATTRIB_SWING_TYPE):
+        values, weights = spreads.common("attrib", column, kind)
+        if values:
+            fields[column] = str(values[pick(weights, f"{_key(player)}/{column}")])
+    try:
+        born = date.fromisoformat(player.birth_date)
+        fields[ATTRIB_BIRTHDAY] = str((born - BIRTHDAY_EPOCH).days)
+    except (TypeError, ValueError):
+        pass
+    for rating, column in ATTRIB_RATINGS.items():
+        name = f"pitch_{rating}" if player.is_pitcher else rating
+        group = f"pos{pos}" if rating in BY_POSITION else kind
+        _put(fields, column, _rate(spreads, player, "attrib", column, name, group))
+    return fields
+
+
+def _split_fields(
+    player: MVPPlayerRecord, spreads: Spreads, table: str, side: str, names: dict[str, int]
+) -> dict[int, str]:
+    """His columns in one split table: contact, power, the hot and cold cells
+    of the zone, where his fly balls go, his balls in play, his approach."""
+    group = batting_group(player.bats, side == "lhp")
+    fields = {LR_FIRST_NAME: player.first_name, LR_LAST_NAME: player.last_name}
+
+    def rate(column: int | str, rating: str, flip: bool = False) -> int | None:
+        return _rate(spreads, player, table, column, f"{rating}_{side}", group, flip)
+
+    _put(fields, LR_CONTACT, rate(LR_CONTACT, "contact"))
+    _put(fields, LR_POWER, rate(LR_POWER, "power"))
+    hot, cold = rate("hot", "zones"), rate("cold", "zones", flip=True)
+    means = [spreads.mean(table, c, group) for c in LR_ZONES]
+    if hot is not None and cold is not None and None not in means:
+        order = sorted(range(len(LR_ZONES)), key=lambda i: -means[i])  # type: ignore[operator]
+        cold = min(cold, len(order) - hot)
+        for rank, i in enumerate(order):
+            zone = ZONE_HOT if rank < hot else ZONE_COLD if rank >= len(order) - cold else 1
+            fields[LR_ZONES[i]] = str(zone)
+    direction = [spreads.mean(table, c, group) for c in LR_DIRECTION]
+    if None not in direction:
+        left, right = round(direction[0]), round(direction[2])  # type: ignore[arg-type]
+        fields.update(zip(LR_DIRECTION, map(str, (left, 100 - left - right, right)), strict=True))
+    mix = [rate(LR_HR_PCT, "hr"), rate(LR_LD_PCT, "ld"), rate(LR_GB_PCT, "gb")]
+    if None not in mix:
+        hr, ld, gb = mix  # type: ignore[misc]
+        gb = min(gb, 100 - hr - ld)
+        fields |= {LR_HR_PCT: str(hr), LR_LD_PCT: str(ld), LR_GB_PCT: str(gb)}
+        fields[LR_FB_PCT] = str(100 - hr - ld - gb)
+    for columns, rating in ((LR_CHASE, "chase"), (LR_TAKE, "take"), (LR_MISS, "miss")):
+        for column in (names[n] for n in columns if n in names):
+            _put(fields, column, rate(column, rating))
+    return fields
+
+
+def _pitch_fields(player: MVPPlayerRecord, spreads: Spreads) -> dict[int, str]:
+    """A pitcher's whole `pitchattrib` row: stamina, pickoff, the fastball, his
+    other pitches (`pitch_types`) and the slots he has none for, his delivery."""
+    kind = _kind(player)
+    fields: dict[int, str] = {
+        PA_FIRST_NAME: player.first_name,
+        PA_LAST_NAME: player.last_name,
+        PA_PITCH1_MOVEMENT: "0",
+        PA_PITCH1_DESC: "0",
+    }
+
+    def rate(column: int | str, rating: str, group: str) -> int | None:
+        return _rate(spreads, player, "pitchattrib", column, f"pitch_{rating}", group)
+
+    _put(fields, PA_STAMINA, rate(PA_STAMINA, "stamina", kind))
+    _put(fields, PA_PICKOFF, rate(PA_PICKOFF, "pickoff", kind))
+    _put(fields, PA_PITCH1_CONTROL, rate(PA_PITCH1_CONTROL, "control", kind))
+    fastball = rate(PA_PITCH1_VELOCITY, "velocity", f"{kind}{player.throws}")
+    _put(fields, PA_PITCH1_VELOCITY, fastball)
+    for slot in range(PA_PITCH_SLOTS):
+        base = PA_PITCH2_TYPE + slot * PA_PITCH_STRIDE
+        figures: list[int | str | None] = [NO_PITCH] * PA_PITCH_STRIDE
+        if slot < len(player.pitch_types):
+            kind_code = player.pitch_types[slot]
+            drop = spreads.mean("pitchattrib", f"drop{kind_code}", "all")
+            descs, _ = spreads.common("pitchattrib", f"desc{kind_code}", "all")
+            figures = [
+                kind_code,
+                rate(f"move{kind_code}", "movement", "all"),
+                descs[0] if descs else None,
+                rate(f"ctrl{kind_code}", "control", "all"),
+                fastball - round(drop) if fastball is not None and drop is not None else None,
+            ]
+            if None in figures:
+                figures = [NO_PITCH] * PA_PITCH_STRIDE
+        fields |= {base + i: str(v) for i, v in enumerate(figures)}
+    values, weights = spreads.common("pitchattrib", PA_PITCHER_DELIVERY, kind)
+    if values:
+        fields[PA_PITCHER_DELIVERY] = str(values[pick(weights, _key(player))])
+    return fields

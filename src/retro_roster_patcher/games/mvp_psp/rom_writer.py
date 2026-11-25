@@ -3,10 +3,11 @@
     records -> CSV text -> RefPack -> the section's own fixed allocation
                                    -> database.big -> ISO copy
 
-Every section has a fixed home and no length word. A section starts at its
-offset in `SECTION_MAP` and ends where the next one starts, so the only way to
-store one is to fit it in that space and zero the remainder. A recompressed
-section that does not fit cannot be written at all.
+Every section has a fixed home. A section starts at its offset in
+`SECTION_MAP` and ends where the next one starts, so the only way to store one
+is to fit it in that space and zero the remainder, and write its new
+compressed length into the archive's directory. A recompressed section that
+does not fit cannot be written at all.
 """
 
 from __future__ import annotations
@@ -16,8 +17,8 @@ import os
 from ...core.errors import RomError
 from ...formats.ea_tdb import refpack_compress
 from .models import (
-    COMPACT_ATTRIB_TABLE,
     DATABASE_BIG_SIZE,
+    DIRECTORY_MAGIC,
     SECTION_ALLOCATIONS,
     SECTION_MAP,
     database_big_extent,
@@ -88,6 +89,20 @@ def build_csv_section(
             continue
         lines.append(build_csv_record(hash_id, fields) + LINE_TERMINATOR)
     return "".join(lines).encode("ascii", errors="replace")
+
+
+def directory_lengths(blob: bytes) -> dict[int, int]:
+    """Where the archive's directory keeps each file's compressed length:
+    `{file offset: offset of its 3-byte length}`. Empty for a blob without the
+    directory."""
+    if blob[: len(DIRECTORY_MAGIC)] != DIRECTORY_MAGIC:
+        return {}
+    out = {}
+    at = 6
+    for _ in range(int.from_bytes(blob[4:6], "big")):
+        out[int.from_bytes(blob[at : at + 3], "big")] = at + 3
+        at = blob.index(b"\0", at + 6) + 1
+    return out
 
 
 class SectionTooLargeError(RomError):
@@ -165,7 +180,7 @@ class MVPPSPRomWriter:
         """Merge `fields` into one record, creating it if the table has none.
 
         The merge is what preserves everything this patcher has no source for --
-        spray charts, batted-ball tendencies, salary, contract length, birthday.
+        speech, photo, equipment, walk-up music, salary, contract length.
         A column absent from `fields` keeps whatever the disc had for the player
         whose id is being reused.
 
@@ -178,6 +193,20 @@ class MVPPSPRomWriter:
         merged.update(fields)
         table[player_hash] = merged
         self._modified_tables.add(table_name)
+
+    def delete_player_record(self, table_name: str, player_hash: str) -> None:
+        """Drop one record, as a batter's row in `pitchattrib`."""
+        if self.reader.records.get(table_name, {}).pop(player_hash, None) is not None:
+            self._modified_tables.add(table_name)
+
+    def columns(self, table_name: str) -> dict[str, int]:
+        """The table's column numbers by the names its header gives them."""
+        out = {}
+        for part in self.section_headers.get(table_name, "").split(","):
+            number, _, name = part.partition(" ")
+            if number.isdigit() and name:
+                out[name] = int(number)
+        return out
 
     def _rebuild_section_bytes(self, name: str) -> bytes | None:
         """Rebuild one table and compress it, or None if it cannot be rebuilt.
@@ -193,28 +222,28 @@ class MVPPSPRomWriter:
         if not header:
             return None
         order = self.reader.record_order.get(name)
-        return refpack_compress(build_csv_section(header, records, order))
+        _, allocation = SECTION_ALLOCATIONS[name]
+        return refpack_compress(build_csv_section(header, records, order), room=allocation)
 
     def rebuild_database_big(self) -> bytes:
         """The whole of `database.big`, with every modified section rewritten.
 
         Each rewritten section goes back at its own offset and the rest of its
         allocation is zeroed, so the fixed offsets the game expects are
-        preserved. Sections nothing touched are copied through byte for byte.
+        preserved, and its directory entry takes its new length. Sections
+        nothing touched are copied through byte for byte.
 
         Deliberate, adjudicated divergence from upstream: a section that does not
         fit raises `SectionTooLargeError` where the source did `continue`. Do not
         restore the `continue`; it kept the original section, dropped every edit
         to that table, and still reported a successful patch.
-
-        The `attrib_compact` section is skipped, and that is an inherited defect
-        rather than a decision -- see `_skip_compact_attrib`.
         """
         original = self.reader.database_big
         if original is None:
             raise RomError("database.big was never loaded")
 
         result = bytearray(original)
+        lengths = directory_lengths(original)
         for _, name in SECTION_MAP:
             if name not in self._modified_tables:
                 continue
@@ -222,8 +251,6 @@ class MVPPSPRomWriter:
             # says which sections are candidates, that one says the rebuild
             # produced nothing.
             if name not in self.section_headers:
-                continue
-            if self._skip_compact_attrib(name):
                 continue
 
             compressed = self._rebuild_section_bytes(name)
@@ -238,23 +265,10 @@ class MVPPSPRomWriter:
             result[offset + len(compressed) : offset + allocation] = b"\x00" * (
                 allocation - len(compressed)
             )
+            if offset in lengths:
+                at = lengths[offset]
+                result[at : at + 3] = len(compressed).to_bytes(3, "big")
         return bytes(result)
-
-    @staticmethod
-    def _skip_compact_attrib(name: str) -> bool:
-        """Is this the compact attribute table, which is never rewritten?
-
-        Inherited defect, preserved: `attrib_compact` is a second copy of the
-        player attributes in a narrower form -- 324 bytes of allocation against
-        `attrib`'s 61 448 -- and any screen that reads it shows the 2005 player.
-        Fixing it needs the compact table's column layout, which is nowhere in
-        this repository, and writing a guess is worse than not writing.
-
-        Unreachable through `patch`, since `_modified_tables` only ever gains the
-        names in `models.MODIFIED_TABLES`. Kept so a future caller that stages an
-        edit here is stopped rather than writing it.
-        """
-        return name == COMPACT_ATTRIB_TABLE
 
     def copy_iso(self) -> None:
         """Copy the source image to the output path, creating its directory.
@@ -314,6 +328,7 @@ class MVPPSPRomWriter:
 
 __all__ = [
     "MVPPSPRomWriter",
+    "directory_lengths",
     "SectionTooLargeError",
     "build_csv_record",
     "build_csv_section",

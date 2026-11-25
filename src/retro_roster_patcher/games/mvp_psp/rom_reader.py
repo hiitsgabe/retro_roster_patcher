@@ -28,6 +28,7 @@ from .models import (
     ATTRIB_LAST_NAME,
     ATTRIB_SECTION_OFFSET,
     DATABASE_BIG_SIZE,
+    DIRECTORY_MAGIC,
     HASH_ID_CHARS,
     MVP_TEAM_ABBREVS,
     MVP_TEAM_ORDER,
@@ -41,22 +42,9 @@ from .models import (
     database_big_extent,
 )
 
-# What every section but the first begins with: the RefPack magic, big-endian
-# flags 0x10 then 0xFB.
+# What every section but the directory begins with: the RefPack magic,
+# big-endian flags 0x10 then 0xFB.
 REFPACK_MAGIC = b"\x10\xfb"
-
-# What section 0 begins with instead. 0xC0 sets the "decompressed size is three
-# bytes and there is a compressed size too" flag, which `refpack_decompress`
-# does not implement; `decompress_section` replaces those two bytes with
-# `10 FB` and passes byte 2 onwards through unchanged, so the fixup assumes the
-# 0xC0 header is the same five bytes as the 0x10 one. If 0xC0 really introduces
-# a compressed-size word ahead of the decompressed size, bytes 2-4 are that word
-# and the size the decompressor reads is wrong. Unverified: no disc may enter
-# this repository to check which header a real section 0 has.
-COMPACT_SECTION_FLAG = 0xC0
-
-# The two byte values `validate` accepts at offset 0.
-VALID_FIRST_BYTES = (REFPACK_MAGIC[0], COMPACT_SECTION_FLAG)
 
 # The digits a record id may contain. Lower case only, which is what the disc
 # uses and what `TEAM_HASHES` is written in; an upper-case id would be rejected
@@ -163,7 +151,8 @@ class MVPPSPRomReader:
     def validate(self) -> bool:
         """Does the loaded blob look like this game's `database.big`?
 
-        Three bytes: offset 0 is 0x10 or 0xC0, and offsets 324-325 are 0x10 0xFB.
+        Four bytes: offsets 0-1 are the directory's 0xC0 0xFB, and 324-325 the
+        first table's RefPack 0x10 0xFB.
         The cheap gate only; `analyze_rom` decides on `validate_deep`.
 
         The reads are unguarded because `load` refuses anything that did not
@@ -172,15 +161,15 @@ class MVPPSPRomReader:
         data = self.database_big
         if data is None:
             return False
-        if data[0] not in VALID_FIRST_BYTES:
+        if data[: len(DIRECTORY_MAGIC)] != DIRECTORY_MAGIC:
             return False
         return data[ATTRIB_SECTION_OFFSET : ATTRIB_SECTION_OFFSET + 2] == REFPACK_MAGIC
 
     def validate_deep(self) -> bool:
         """`validate`, and then: does the `team` table hold MVP Baseball's teams?
 
-        A heuristic, and it guards `analyze_rom` only. `validate`'s three bytes
-        -- a byte in `{0x10, 0xC0}`, then 0x10 0xFB -- separate this game from
+        A heuristic, and it guards `analyze_rom` only. `validate`'s four bytes
+        -- 0xC0 0xFB, then 0x10 0xFB -- separate this game from
         noise and not from its siblings: on other EA PSP discs of the era a
         RefPack stream at a sector boundary is the house format, not a
         coincidence. The team ids do separate it, being this database's own
@@ -202,12 +191,8 @@ class MVPPSPRomReader:
         """Decompress the RefPack stream that starts at `offset`.
 
         None when nothing is loaded, when the offset is past the end, or when
-        the bytes there are not a RefPack header this reader knows how to read.
-
-        Section 0 is the special case: its flag byte is 0xC0 where every other
-        section's is 0x10, and `refpack_decompress` only accepts 0x10 0xFB. The
-        two bytes are rewritten and the rest of the stream is passed through
-        unchanged.
+        the bytes there are not a RefPack header -- as at offset 0, the
+        directory.
         """
         data = self.database_big
         if data is None:
@@ -221,14 +206,12 @@ class MVPPSPRomReader:
         raw = data[offset:]
         if len(raw) < 2:
             return None
-        if offset == 0 and raw[0] == COMPACT_SECTION_FLAG:
-            return refpack_decompress(REFPACK_MAGIC + raw[2:])
         if raw[:2] == REFPACK_MAGIC:
             return refpack_decompress(raw)
         return None
 
     def decompress_all(self) -> None:
-        """Decompress every section named in `SECTION_MAP`.
+        """Decompress every table named in `SECTION_MAP`; the directory is none.
 
         A section whose bytes are not a RefPack stream is left out of
         `self.sections` and the rest are still read: the writer only rewrites
@@ -243,7 +226,7 @@ class MVPPSPRomReader:
         blob of 386 977, so its shortest slice is 1369 bytes. Do not restore the
         handler: it caught nothing and would hide a real decompressor bug.
         """
-        for offset, name in SECTION_MAP:
+        for offset, name in SECTION_MAP[1:]:
             data = self.decompress_section(offset)
             if data:
                 self.sections[name] = data

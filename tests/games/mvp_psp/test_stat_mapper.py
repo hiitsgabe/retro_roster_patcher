@@ -1,59 +1,37 @@
-"""`MVPStatMapper`: ESPN rosters and team leaders onto MVP's 0-99 scale.
-
-`map_pitcher` ends with an unconditional
-`rec.pitches = self.default_pitches(is_starter)` *outside* the `if stats:`
-branch, so the velocity and control `_apply_pitcher_stats` has just derived from
-strikeouts, WHIP and ERA are discarded and every pitcher ships with the same
-50/50 arsenal. Upstream's, preserved deliberately; the tests that need the
-derivation drive `_apply_pitcher_stats` directly, because that is the only place
-it survives.
-
-`Player.weight` is not read either, so every patched player is written at
-`MVPPlayerRecord.weight`'s 190 lb default. Also upstream's, also preserved; the
-other half is `patcher._build_attrib_fields`, which writes the column
-unconditionally.
-"""
+"""`MVPStatMapper`: ESPN rosters and season lines onto where each player ranks."""
 
 from __future__ import annotations
-
-import dataclasses
 
 import pytest
 
 from retro_roster_patcher.games.mvp_psp.models import (
-    ATTR_MAX,
-    ATTR_MIN,
     BATTERS_PER_TEAM,
     MVP_ABBREV_TO_INDEX,
-    PITCH_CHANGEUP,
-    PITCH_FASTBALL,
-    PITCH_SLIDER,
     PLAYERS_PER_TEAM,
+    RELIEVER_ARSENAL,
     RELIEVERS_PER_TEAM,
+    SECONDARY_DH,
+    STARTER_ARSENAL,
     STARTERS_PER_TEAM,
-    MVPPitch,
     MVPPlayerRecord,
 )
 from retro_roster_patcher.games.mvp_psp.stat_mapper import (
     BATS_LEFT,
     BATS_RIGHT,
     BATS_SWITCH,
-    DEFAULT_PICKOFF,
     DEFAULT_POSITION,
-    DEFAULT_RELIEVER_STAMINA,
-    DEFAULT_STARTER_STAMINA,
-    PITCHER_NO_STATS_BATTING,
     PITCHER_POSITIONS,
-    PITCHER_WITH_STATS_BATTING,
-    POSITION_DEFAULTS,
+    RATINGS,
     THROWS_LEFT,
     THROWS_RIGHT,
     UNNAMED,
+    LeagueStats,
     MVPStatMapper,
-    PositionDefaults,
-    _clamp,
-    _scale,
+    _innings,
     _stat,
+    batter_stats,
+    batting_side,
+    secondary_position,
 )
 from retro_roster_patcher.sports.models import Player
 
@@ -64,120 +42,13 @@ def player(pid=1, name="Ichiro Suzuki", position="RF", number=51, **kwargs):
     return Player(id=pid, name=name, position=position, number=number, **kwargs)
 
 
-def derived_arsenal(stats, *, is_starter=True):
-    """The arsenal `_apply_pitcher_stats` computes before `map_pitcher` drops it.
-
-    Every velocity and control assertion below goes through here rather than
-    through `map_pitcher`, because `map_pitcher` overwrites the result -- see
-    the module docstring and the label on that method. Reading these through
-    `map_pitcher` would assert a constant.
-    """
-    record = MVPPlayerRecord(is_pitcher=True)
-    return MAPPER._apply_pitcher_stats(record, stats, is_starter).pitches
-
-
 # Everything below reads a rating back through the constant that produced it, so a
 # whole table of them can be changed together and nothing notices. These are the
 # source's numbers, stated once more so a change to one is a change to a test.
 
-CENTRE_FIELD_DEFAULTS = PositionDefaults(
-    speed=65, fielding=60, arm_range=65, throw_strength=60, throw_accuracy=55, contact=55, power=45
-)
-
-DEFAULT_RATINGS = {
-    "C": (35, 60, 55, 65, 60, 55, 50),
-    "1B": (30, 50, 45, 55, 55, 60, 65),
-    "2B": (55, 65, 60, 50, 65, 55, 35),
-    "3B": (40, 55, 55, 70, 60, 55, 55),
-    "SS": (55, 70, 65, 65, 65, 55, 35),
-    "LF": (55, 50, 50, 55, 55, 60, 55),
-    "CF": (65, 60, 65, 60, 55, 55, 45),
-    "RF": (50, 55, 55, 70, 60, 60, 60),
-    "DH": (30, 30, 30, 40, 40, 65, 70),
-}
-
-
-@pytest.mark.parametrize(("position", "ratings"), sorted(DEFAULT_RATINGS.items()))
-def test_a_positions_defaults_are_the_ones_the_source_had(position, ratings):
-    assert dataclasses.astuple(POSITION_DEFAULTS[position]) == ratings
-
-
-def test_the_centre_fielders_defaults_name_their_own_fields():
-    # The parametrised check above compares tuples, so it would survive the
-    # dataclass's own field order being rearranged. This one names them.
-    assert POSITION_DEFAULTS["CF"] == CENTRE_FIELD_DEFAULTS
-
-
-def test_the_nine_lineup_positions_all_have_defaults():
-    assert sorted(POSITION_DEFAULTS) == sorted(DEFAULT_RATINGS)
-
 
 def test_a_player_with_no_name_is_called_player():
     assert UNNAMED == "Player"
-
-
-def test_every_pitchers_pickoff_rating_is_fifty():
-    assert DEFAULT_PICKOFF == 50
-
-
-def test_no_alias_can_name_a_position_with_no_defaults():
-    # This is what makes `map_batter`'s `POSITION_DEFAULTS.get(pos, ...)`
-    # fallback unreachable, and the fallback is argued equivalent at the line on
-    # the strength of it: every string `normalize_position` can return -- the
-    # eleven alias targets and `DEFAULT_POSITION` -- is a key here.
-    reachable = set(MAPPER.normalize_position(p) for p in ["C", "OF", "IF", "DH", "nonsense"])
-    assert reachable - set(POSITION_DEFAULTS) == set()
-
-
-def test_clamping_leaves_a_value_inside_the_scale():
-    assert _clamp(50) == 50
-
-
-def test_clamping_raises_a_negative_to_the_floor():
-    assert _clamp(-1) == ATTR_MIN
-
-
-def test_clamping_lowers_an_overflow_to_the_ceiling():
-    assert _clamp(1000) == ATTR_MAX
-
-
-def test_the_ceiling_is_ninety_nine_and_not_a_hundred():
-    assert _clamp(100) == 99
-
-
-def test_scaling_the_bottom_of_a_range_gives_zero():
-    assert _scale(0.200, 0.200, 0.330) == 0
-
-
-def test_scaling_the_top_of_a_range_gives_ninety_nine():
-    assert _scale(0.330, 0.200, 0.330) == 99
-
-
-def test_scaling_the_middle_of_a_range_gives_the_middle():
-    assert _scale(0.265, 0.200, 0.330) == 50
-
-
-def test_scaling_seven_tenths_of_a_range_lands_on_sixty_nine():
-    # The scale's top is 99 and not 100, and the two agree at both ends and at
-    # the midpoint -- 0.7 of a range is where they part, 69.3 rounding to 69
-    # where 70.0 rounds to 70. Nothing else here could tell them apart.
-    assert _scale(7.0, 0.0, 10.0) == 69
-
-
-def test_scaling_below_a_range_clamps_to_zero():
-    assert _scale(0.100, 0.200, 0.330) == 0
-
-
-def test_scaling_above_a_range_clamps_to_ninety_nine():
-    assert _scale(0.900, 0.200, 0.330) == 99
-
-
-def test_an_inverted_range_answers_the_midpoint():
-    assert _scale(5, 10, 1) == 50
-
-
-def test_an_empty_range_answers_the_midpoint():
-    assert _scale(5, 7, 7) == 50
 
 
 def test_a_reported_statistic_is_read():
@@ -201,28 +72,6 @@ def test_a_zero_statistic_takes_the_default():
 
 def test_a_statistic_is_answered_as_a_float():
     assert type(_stat({"HR": 42}, "HR", 0)) is float
-
-
-def test_the_position_defaults_are_frozen():
-    with pytest.raises(dataclasses.FrozenInstanceError):
-        POSITION_DEFAULTS["C"].speed = 99
-
-
-def test_every_lineup_position_has_defaults():
-    assert sorted(POSITION_DEFAULTS) == ["1B", "2B", "3B", "C", "CF", "DH", "LF", "RF", "SS"]
-
-
-def test_a_catcher_throws_harder_than_a_designated_hitter():
-    assert POSITION_DEFAULTS["C"].throw_strength > POSITION_DEFAULTS["DH"].throw_strength
-
-
-def test_a_centre_fielder_is_the_fastest_default():
-    fastest = max(POSITION_DEFAULTS.values(), key=lambda d: d.speed)
-    assert POSITION_DEFAULTS["CF"] == fastest
-
-
-def test_the_defaults_type_is_the_frozen_dataclass():
-    assert type(POSITION_DEFAULTS["SS"]) is PositionDefaults
 
 
 def test_an_unrecognised_position_falls_back_to_centre_field():
@@ -386,43 +235,6 @@ def test_a_lowercase_provider_code_answers_its_game_abbreviation():
     assert MAPPER.get_mvp_abbrev("wsh") == "WAS"
 
 
-def test_a_batter_with_no_stats_takes_his_positions_speed():
-    record = MAPPER.map_batter(player(position="C"))
-    assert record.speed == POSITION_DEFAULTS["C"].speed
-
-
-def test_a_batter_with_no_stats_takes_his_positions_contact_on_both_sides():
-    record = MAPPER.map_batter(player(position="1B"))
-    assert (record.contact_rhp, record.contact_lhp) == (
-        POSITION_DEFAULTS["1B"].contact,
-        POSITION_DEFAULTS["1B"].contact,
-    )
-
-
-def test_a_batter_with_no_stats_bunts_at_forty():
-    assert MAPPER.map_batter(player()).bunting == 40
-
-
-def test_a_batter_with_no_stats_is_averagely_patient():
-    # 50, one of the four ratings with no positional default.
-    assert MAPPER.map_batter(player()).plate_discipline == 50
-
-
-def test_a_batter_with_no_stats_is_averagely_durable():
-    assert MAPPER.map_batter(player()).durability == 50
-
-
-def test_a_batter_with_no_stats_runs_the_bases_at_his_own_speed(tmp_path):
-    # His speed and not his fielding, and the centre fielder is the position
-    # where the two differ by enough to say so: 65 against 60.
-    assert MAPPER.map_batter(player(position="CF")).baserunning == 65
-
-
-def test_a_batter_with_no_stats_steals_at_his_own_speed(tmp_path):
-    # Not the flat 50 that every other rating with no positional default takes.
-    assert MAPPER.map_batter(player(position="CF")).stealing == 65
-
-
 def test_a_batter_with_no_stats_is_not_a_pitcher():
     assert MAPPER.map_batter(player()).is_pitcher is False
 
@@ -448,280 +260,6 @@ def test_a_batter_with_no_batting_hand_falls_back_to_his_throwing_hand():
     assert MAPPER.map_batter(player(bats="", handedness="L")).bats == BATS_LEFT
 
 
-def test_a_high_average_gives_more_contact_than_a_low_one():
-    high = MAPPER.map_batter(player(), {"AVG": 0.330, "OBP": 0.420})
-    low = MAPPER.map_batter(player(), {"AVG": 0.200, "OBP": 0.280})
-    assert high.contact_rhp > low.contact_rhp
-
-
-def test_contact_is_the_average_plus_a_quarter_of_the_on_base_rating():
-    # A quarter, and the whole rest of this section is comparisons -- which a
-    # third satisfies just as well. The average scales to 50 and the on-base
-    # rating to 99, so the two weightings are 74 and 83.
-    record = MAPPER.map_batter(player(bats="R"), {"AVG": 0.265, "OBP": 0.420})
-    assert record.contact_rhp == 74
-
-
-def test_power_is_two_thirds_home_runs_and_one_third_slugging():
-    # Twenty home runs scale to 44 and a .400 slugging percentage to 20, so
-    # `(44 * 2 + 20) // 3` is 36 where a single weighting would give 21.
-    record = MAPPER.map_batter(player(bats="R"), {"HR": 20, "SLG": 0.400})
-    assert record.power_rhp == 36
-
-
-def test_contact_against_same_side_pitching_is_five_lower():
-    record = MAPPER.map_batter(player(bats="R"), {"AVG": 0.300, "OBP": 0.380})
-    assert record.contact_lhp == record.contact_rhp - 5
-
-
-def test_a_switch_hitter_has_the_same_contact_on_both_sides():
-    record = MAPPER.map_batter(player(bats="S"), {"AVG": 0.300, "OBP": 0.380})
-    assert record.contact_rhp == record.contact_lhp
-
-
-def test_a_switch_hitters_contact_is_the_mean_of_the_two_splits():
-    # The mean of x and x-5, so two or three points below the stronger side --
-    # not equal to it.
-    plain = MAPPER.map_batter(player(bats="R"), {"AVG": 0.300, "OBP": 0.380})
-    switch = MAPPER.map_batter(player(bats="S"), {"AVG": 0.300, "OBP": 0.380})
-    assert switch.contact_rhp == (plain.contact_rhp + plain.contact_lhp) // 2
-
-
-def test_a_switch_hitter_has_the_same_power_on_both_sides():
-    record = MAPPER.map_batter(player(bats="S"), {"HR": 30, "SLG": 0.500})
-    assert record.power_rhp == record.power_lhp
-
-
-def test_home_runs_raise_power():
-    many = MAPPER.map_batter(player(), {"HR": 45, "SLG": 0.600})
-    few = MAPPER.map_batter(player(), {"HR": 1, "SLG": 0.350})
-    assert many.power_rhp > few.power_rhp
-
-
-def test_stolen_bases_raise_speed():
-    fast = MAPPER.map_batter(player(), {"SB": 40})
-    slow = MAPPER.map_batter(player(), {"SB": 1})
-    assert fast.speed > slow.speed
-
-
-def test_five_triples_add_five_points_of_speed():
-    with_triples = MAPPER.map_batter(player(), {"SB": 10, "3B": 5})
-    without = MAPPER.map_batter(player(), {"SB": 10, "3B": 4})
-    assert with_triples.speed == without.speed + 5
-
-
-def test_baserunning_is_five_above_speed():
-    record = MAPPER.map_batter(player(), {"SB": 10})
-    assert record.baserunning == record.speed + 5
-
-
-def test_stealing_equals_speed():
-    record = MAPPER.map_batter(player(), {"SB": 10})
-    assert record.stealing == record.speed
-
-
-def test_a_slow_batter_bunts_at_thirty():
-    record = MAPPER.map_batter(player(), {"SB": 0, "3B": 0})
-    assert record.bunting == 30
-
-
-def test_a_fast_batter_bunts_ten_below_his_speed():
-    record = MAPPER.map_batter(player(), {"SB": 40})
-    assert record.bunting == record.speed - 10
-
-
-def test_a_batter_of_exactly_fifty_speed_is_on_the_fast_side_of_the_bunt_rule():
-    # `30 if speed < 50`, so a batter at exactly 50 bunts at 40. Twenty stolen
-    # bases scale to 49.5, which rounds to 50 and is the only way to stand on
-    # the boundary; the two tests above are at 0 and at 99.
-    record = MAPPER.map_batter(player(), {"SB": 20})
-    assert (record.speed, record.bunting) == (50, 40)
-
-
-def test_durability_is_games_played_on_the_sixty_to_a_hundred_and_fifty_five_scale():
-    # Seventy-two games. The top of the range is 155 and not 156, and 72 is the
-    # lowest count at which the two answers differ -- 13 against 12.
-    assert MAPPER.map_batter(player(), {"GP": 72}).durability == 13
-
-
-def test_starpower_weights_hits_lowest_and_home_runs_highest():
-    # `h * 0.3 + hr * 2 + rbi * 0.5`, scaled from 20 to 200. 180 hits, 20 home
-    # runs and 60 runs batted in make 124, which is 57; exchanging the hit and
-    # run-batted-in weights makes 160 and 70.
-    record = MAPPER.map_batter(player(), {"H": 180, "HR": 20, "RBI": 60})
-    assert record.starpower == 57
-
-
-def test_a_hundred_and_twenty_one_games_adds_five_points_of_fielding():
-    many = MAPPER.map_batter(player(position="SS"), {"GP": 121})
-    few = MAPPER.map_batter(player(position="SS"), {"GP": 120})
-    assert many.fielding == few.fielding + 5
-
-
-def test_plate_discipline_rises_with_the_gap_between_on_base_and_average():
-    patient = MAPPER.map_batter(player(), {"AVG": 0.250, "OBP": 0.370})
-    hacker = MAPPER.map_batter(player(), {"AVG": 0.250, "OBP": 0.290})
-    assert patient.plate_discipline > hacker.plate_discipline
-
-
-def test_durability_rises_with_games_played():
-    iron = MAPPER.map_batter(player(), {"GP": 155})
-    fragile = MAPPER.map_batter(player(), {"GP": 60})
-    assert iron.durability > fragile.durability
-
-
-def test_starpower_rises_with_the_hit_and_home_run_composite():
-    star = MAPPER.map_batter(player(), {"H": 200, "HR": 45, "RBI": 150})
-    scrub = MAPPER.map_batter(player(), {"H": 20, "HR": 1, "RBI": 5})
-    assert star.starpower > scrub.starpower
-
-
-@pytest.mark.parametrize(
-    "field",
-    [
-        "speed",
-        "fielding",
-        "arm_range",
-        "throw_strength",
-        "throw_accuracy",
-        "durability",
-        "plate_discipline",
-        "bunting",
-        "baserunning",
-        "stealing",
-        "starpower",
-        "contact_rhp",
-        "power_rhp",
-        "contact_lhp",
-        "power_lhp",
-    ],
-)
-def test_every_derived_batting_rating_stays_on_the_scale(field):
-    extreme = MAPPER.map_batter(
-        player(),
-        {"AVG": 9.9, "OBP": 9.9, "SLG": 9.9, "HR": 999, "SB": 999, "GP": 999, "H": 999, "RBI": 999},
-    )
-    assert 0 <= getattr(extreme, field) <= ATTR_MAX
-
-
-def test_a_pitcher_with_no_stats_gets_the_fifty_fifty_arsenal():
-    # Which is what the source gave *every* pitcher, derived or not.
-    record = MAPPER.map_pitcher(player(position="SP"), None, is_starter=True)
-    assert record.pitches == MAPPER.default_pitches(True)
-
-
-def test_a_pitcher_with_stats_gets_the_fifty_fifty_arsenal_too():
-    # PINS UPSTREAM FIDELITY DELIBERATELY, and this is bug 1: the derivation
-    # runs and is then thrown away by the unconditional assignment at the end of
-    # `map_pitcher`. Do not delete that line -- it changes `pitchattrib`'s
-    # movement, control and velocity columns on every patched pitcher, and no
-    # disc has ever checked this port's output.
-    record = MAPPER.map_pitcher(
-        player(position="SP"), {"K": 250, "WHIP": 0.90, "ERA": 2.0}, is_starter=True
-    )
-    assert record.pitches == MAPPER.default_pitches(True)
-
-
-def test_the_arsenal_the_stats_derived_was_not_the_fifty_fifty_one():
-    # Pins the test above. Without this, "a pitcher with stats gets the default"
-    # is also satisfied by a derivation that happened to produce the default.
-    assert derived_arsenal({"K": 250, "WHIP": 0.90, "ERA": 2.0}) != MAPPER.default_pitches(True)
-
-
-def test_two_pitchers_with_different_statistics_get_the_same_arsenal():
-    # PINS UPSTREAM FIDELITY DELIBERATELY: the flattening, stated at the level a
-    # disc sees. A Cy Young winner and a replacement-level arm are written with
-    # identical movement, control and velocity.
-    first = MAPPER.map_pitcher(player(position="SP"), {"K": 250, "WHIP": 0.9}, is_starter=True)
-    second = MAPPER.map_pitcher(player(position="SP"), {"K": 90, "WHIP": 1.5}, is_starter=True)
-    assert first.pitches == second.pitches
-
-
-def test_the_two_derivations_those_pitchers_produced_did_differ():
-    # Pins the test above: the inputs really do drive different arsenals, so
-    # "the same" is the overwrite and not two identical stat lines.
-    assert derived_arsenal({"K": 250, "WHIP": 0.9}) != derived_arsenal({"K": 90, "WHIP": 1.5})
-
-
-def test_a_high_strikeout_pitcher_throws_harder_than_a_low_one():
-    assert derived_arsenal({"K": 250})[0].velocity > derived_arsenal({"K": 60})[0].velocity
-
-
-def test_a_low_whip_pitcher_has_better_control_than_a_high_one():
-    sharp = derived_arsenal({"WHIP": 0.90, "ERA": 2.0})
-    wild = derived_arsenal({"WHIP": 1.60, "ERA": 6.0})
-    assert sharp[0].control > wild[0].control
-
-
-def test_a_starter_and_a_reliever_read_the_same_strikeouts_on_different_scales():
-    # 250 strikeouts is a league-leading starter and 90 a league-leading reliever, so
-    # the same 90 is near the bottom of one scale and the top of the other. Every
-    # other velocity test here holds the role fixed.
-    starter = derived_arsenal({"K": 90}, is_starter=True)
-    reliever = derived_arsenal({"K": 90}, is_starter=False)
-    assert (starter[0].velocity, reliever[0].velocity) == (26, 99)
-
-
-def test_a_pitcher_with_statistics_runs_at_thirty():
-    assert MAPPER.map_pitcher(player(position="SP"), {"K": 100}).speed == 30
-
-
-def test_a_pitcher_without_statistics_runs_at_thirty_five():
-    # Five points quicker than one the provider had statistics for, which is
-    # the source's and is preserved rather than harmonised.
-    assert MAPPER.map_pitcher(player(position="SP")).speed == 35
-
-
-def test_a_pitcher_without_statistics_fields_at_forty():
-    assert MAPPER.map_pitcher(player(position="SP")).fielding == 40
-
-
-def test_a_pitcher_with_statistics_fields_at_forty_as_well():
-    # The one rating the two branches agree on.
-    assert MAPPER.map_pitcher(player(position="SP"), {"K": 100}).fielding == 40
-
-
-def test_a_starters_stamina_comes_off_his_quality_starts():
-    # Twenty quality starts on the 5-to-25 range, which is 74 -- above the
-    # floor of 40, so this is the scale rather than the clamp.
-    record = MAPPER.map_pitcher(player(position="SP"), {"QS": 20}, is_starter=True)
-    assert record.stamina == 74
-
-
-def test_a_starters_starpower_weights_wins_three_times():
-    # `w * 3 + k * 0.1 + (6 - era) * 10`, scaled from 10 to 80. Ten wins, a
-    # hundred strikeouts and a 4.00 ERA make 60, which is 71.
-    record = MAPPER.map_pitcher(
-        player(position="SP"), {"W": 10, "K": 100, "ERA": 4.0}, is_starter=True
-    )
-    assert record.starpower == 71
-
-
-def test_a_relievers_starpower_weights_saves_three_times():
-    # `sv * 3 + k * 0.1 + (4 - era) * 5`, ten saves, fifty strikeouts, a 3.00
-    # ERA: 40, which is 42.
-    record = MAPPER.map_pitcher(
-        player(position="RP"), {"SV": 10, "K": 50, "ERA": 3.0}, is_starter=False
-    )
-    assert record.starpower == 42
-
-
-def test_control_reads_the_walks_and_hits_the_right_way_round():
-    # The test above moves ERA as well as WHIP, and the ERA term alone orders the two
-    # whichever way the WHIP term is read. Here ERA is held and only WHIP moves: a
-    # 0.90 WHIP tops its scale and a 1.60 bottoms it, leaving the ERA term to halve
-    # alone.
-    sharp = derived_arsenal({"WHIP": 0.90, "ERA": 2.0})
-    wild = derived_arsenal({"WHIP": 1.60, "ERA": 2.0})
-    assert (sharp[0].control, wild[0].control) == (99, 49)
-
-
-def test_the_derived_velocity_reaches_every_pitch_in_the_arsenal():
-    power = derived_arsenal({"K": 250})
-    finesse = derived_arsenal({"K": 60})
-    assert [p.velocity for p in power] != [p.velocity for p in finesse]
-
-
 def test_a_pitcher_with_no_stats_is_a_pitcher():
     assert MAPPER.map_pitcher(player(position="SP")).is_pitcher is True
 
@@ -734,170 +272,15 @@ def test_a_reliever_is_positioned_as_a_relief_pitcher():
     assert MAPPER.map_pitcher(player(position="RP"), is_starter=False).primary_position == "RP"
 
 
-def test_a_starter_with_no_stats_has_more_stamina_than_a_reliever():
-    starter = MAPPER.map_pitcher(player(position="SP"), is_starter=True)
-    reliever = MAPPER.map_pitcher(player(position="RP"), is_starter=False)
-    assert (starter.stamina, reliever.stamina) == (
-        DEFAULT_STARTER_STAMINA,
-        DEFAULT_RELIEVER_STAMINA,
-    )
-
-
-def test_a_starters_stamina_never_falls_below_forty():
-    # The floor exists so a starter with no quality starts still goes six
-    # innings rather than being pulled in the second.
-    assert MAPPER.map_pitcher(player(position="SP"), {"QS": 0.1}, is_starter=True).stamina == 40
-
-
-def test_quality_starts_raise_stamina():
-    workhorse = MAPPER.map_pitcher(player(position="SP"), {"QS": 25}, is_starter=True)
-    assert workhorse.stamina > 40
-
-
-def test_a_fifteen_win_season_adds_five_points_of_stamina():
-    with_wins = MAPPER.map_pitcher(player(position="SP"), {"QS": 15, "W": 15}, is_starter=True)
-    without = MAPPER.map_pitcher(player(position="SP"), {"QS": 15, "W": 14}, is_starter=True)
-    assert with_wins.stamina == without.stamina + 5
-
-
-def test_a_closer_with_saves_has_more_stamina_than_one_without():
-    closer = MAPPER.map_pitcher(player(position="CP"), {"SV": 21}, is_starter=False)
-    middle = MAPPER.map_pitcher(player(position="RP"), {"SV": 20}, is_starter=False)
-    assert closer.stamina == middle.stamina + 5
-
-
-def test_every_pitcher_picks_off_at_fifty():
-    assert MAPPER.map_pitcher(player(position="SP"), {"K": 100}).pickoff == DEFAULT_PICKOFF
-
-
-def test_a_pitcher_without_stats_hits_slightly_better_than_one_with():
-    # The source's, and the difference is small enough to be an accident
-    # rather than a judgement, so it is preserved rather than harmonised.
-    without = MAPPER.map_pitcher(player(position="SP"))
-    with_stats = MAPPER.map_pitcher(player(position="SP"), {"K": 100})
-    assert (without.contact_rhp, with_stats.contact_rhp) == (
-        PITCHER_NO_STATS_BATTING[0],
-        PITCHER_WITH_STATS_BATTING[0],
-    )
-
-
 # Both tuples are read back through themselves everywhere, so exchanging the
 # two entries of either -- turning a pitcher who makes contact more often than
 # he hits for power into the reverse -- changed nothing anywhere. These are the
 # four numbers, and which of each pair is the contact one.
 
 
-def test_a_pitcher_without_statistics_makes_contact_at_twenty_five():
-    assert MAPPER.map_pitcher(player(position="SP")).contact_rhp == 25
-
-
-def test_a_pitcher_without_statistics_hits_for_power_at_fifteen():
-    assert MAPPER.map_pitcher(player(position="SP")).power_rhp == 15
-
-
-def test_a_pitcher_with_statistics_makes_contact_at_twenty():
-    assert MAPPER.map_pitcher(player(position="SP"), {"K": 100}).contact_rhp == 20
-
-
-def test_a_pitcher_with_statistics_hits_for_power_at_ten():
-    assert MAPPER.map_pitcher(player(position="SP"), {"K": 100}).power_rhp == 10
-
-
-def test_a_winning_starter_has_more_starpower_than_a_losing_one():
-    ace = MAPPER.map_pitcher(player(position="SP"), {"W": 20, "K": 250, "ERA": 2.0})
-    filler = MAPPER.map_pitcher(player(position="SP"), {"W": 2, "K": 40, "ERA": 6.0})
-    assert ace.starpower > filler.starpower
-
-
-def test_a_starter_gets_three_pitches():
-    assert len(MAPPER.default_pitches(True)) == 3
-
-
-def test_a_reliever_gets_two_pitches():
-    assert len(MAPPER.default_pitches(False)) == 2
-
-
-def test_the_first_pitch_is_always_a_fastball():
-    assert MAPPER.default_pitches(True)[0].type == PITCH_FASTBALL
-
-
-def test_a_starters_second_pitch_is_a_slider():
-    assert MAPPER.default_pitches(True)[1].type == PITCH_SLIDER
-
-
-def test_a_starters_third_pitch_is_a_changeup():
-    assert MAPPER.default_pitches(True)[2].type == PITCH_CHANGEUP
-
-
-def test_a_relievers_second_pitch_is_a_slider():
-    assert MAPPER.default_pitches(False)[1].type == PITCH_SLIDER
-
-
-def test_the_fastball_is_the_hardest_pitch():
-    pitches = MAPPER.default_pitches(True, 60, 60)
-    assert pitches[0].velocity == max(p.velocity for p in pitches)
-
-
-def test_the_changeup_is_the_softest_pitch():
-    pitches = MAPPER.default_pitches(True, 60, 60)
-    assert pitches[2].velocity == min(p.velocity for p in pitches)
-
-
-def test_the_fastball_is_ten_above_the_supplied_velocity():
-    assert MAPPER.default_pitches(True, 60, 50)[0].velocity == 70
-
-
-def test_the_slider_trades_five_points_of_control_for_movement():
-    pitches = MAPPER.default_pitches(True, 60, 50)
-    assert (pitches[1].control, pitches[1].movement) == (45, 35)
-
-
 # Each pitch's three numbers, in full, at one velocity and one control. The tests
 # around this one compare a pitch with its neighbour, which leaves the fastball's
 # `velocity // 2` movement and the changeup's fifteen-point velocity drop unstated.
-
-
-def test_a_starters_whole_arsenal_at_sixty_velocity_and_fifty_control():
-    arsenal = MAPPER.default_pitches(True, 60, 50)
-    assert [(p.type, p.movement, p.control, p.velocity) for p in arsenal] == [
-        (PITCH_FASTBALL, 30, 50, 70),
-        (PITCH_SLIDER, 35, 45, 55),
-        (PITCH_CHANGEUP, 20, 50, 45),
-    ]
-
-
-def test_a_relievers_whole_arsenal_at_sixty_velocity_and_fifty_control():
-    arsenal = MAPPER.default_pitches(False, 60, 50)
-    assert [(p.type, p.movement, p.control, p.velocity) for p in arsenal] == [
-        (PITCH_FASTBALL, 30, 50, 70),
-        (PITCH_SLIDER, 30, 45, 55),
-    ]
-
-
-def test_the_changeup_keeps_the_fastballs_control():
-    pitches = MAPPER.default_pitches(True, 60, 50)
-    assert pitches[2].control == pitches[0].control
-
-
-def test_a_starters_slider_moves_more_than_a_relievers():
-    assert MAPPER.default_pitches(True, 60, 50)[1].movement == (
-        MAPPER.default_pitches(False, 60, 50)[1].movement + 5
-    )
-
-
-@pytest.mark.parametrize("starter", [True, False])
-@pytest.mark.parametrize("velocity", [0, 1, 50, 98, 99])
-@pytest.mark.parametrize("control", [0, 1, 50, 98, 99])
-def test_every_generated_pitch_stays_on_the_scale(starter, velocity, control):
-    pitches = MAPPER.default_pitches(starter, velocity, control)
-    off_scale = [
-        p for p in pitches if not (0 <= p.control <= ATTR_MAX and 0 <= p.velocity <= ATTR_MAX)
-    ]
-    assert off_scale == []
-
-
-def test_a_generated_pitch_is_the_frozen_record_type():
-    assert type(MAPPER.default_pitches(True)[0]) is MVPPitch
 
 
 def test_a_batter_and_a_pitcher_carry_the_provider_weight_and_height():
@@ -1089,3 +472,156 @@ def test_two_players_with_the_same_id_are_two_roster_entries():
 def test_selection_never_returns_more_batters_than_the_roster_holds():
     players = [player(pid=700 + i, position="LF") for i in range(40)]
     assert len(MAPPER.select_roster(players)) == BATTERS_PER_TEAM
+
+
+# Ranks against the league.
+
+
+def batter_line(**kw):
+    """A regular's season: 600 PA, league-average everything unless given."""
+    line = {
+        "PA": 600,
+        "AB": 540,
+        "H": 140,
+        "2B": 28,
+        "3B": 2,
+        "HR": 18,
+        "BB": 50,
+        "HBP": 5,
+        "SO": 130,
+        "SB": 8,
+        "CS": 3,
+        "SH": 1,
+        "R": 75,
+        "GP": 140,
+        "GO": 160,
+        "FO": 150,
+        "BIPA": 0.29,
+        "WAR": 2.0,
+    }
+    return line | kw
+
+
+def league_of(*members):
+    return LeagueStats.from_lines(members)
+
+
+def test_the_league_leader_in_steals_ranks_top_in_speed_and_stealing():
+    fast, slow = player(1, "A Fast"), player(2, "B Slow")
+    lines = {1: batter_line(SB=45, CS=5), 2: batter_line(SB=0, CS=1)}
+    others = [(player(10 + i, "C Other"), batter_line(SB=5 + i), False) for i in range(8)]
+    league = league_of((fast, lines[1], False), (slow, lines[2], False), *others)
+    top = MAPPER.map_batter(fast, lines[1], league).ratings
+    bottom = MAPPER.map_batter(slow, lines[2], league).ratings
+    assert top["speed"] > 0.9 and top["stealing"] > 0.9
+    assert bottom["speed"] < 0.1 and bottom["stealing"] < 0.1
+
+
+def test_a_split_ranks_contact_on_its_own_side():
+    hitter = player(1, "A Platoon", bats="L")
+    line = batter_line(**{"vsL.AB": 150, "vsL.H": 30, "vsR.AB": 390, "vsR.H": 130})
+    for k in ("2B", "3B", "HR", "BB", "HBP", "SO"):
+        line |= {f"vsL.{k}": 0, f"vsR.{k}": 0}
+    others = [
+        (player(10 + i, "C Other", bats="L"), batter_line(H=120 + 5 * i), False) for i in range(8)
+    ]
+    league = league_of((hitter, line, False), *others)
+    ratings = MAPPER.map_batter(hitter, line, league).ratings
+    assert ratings["contact_rhp"] > ratings["contact_lhp"]
+
+
+def test_a_batter_without_splits_rates_his_season_on_both_sides():
+    stats = batter_stats(batter_line())
+    assert stats["avg_lhp"] == stats["avg_rhp"]
+
+
+def test_a_partial_line_rates_only_what_it_has():
+    """ESPN's leaders list a player under the categories he leads: a line
+    without games played leaves durability to the position default, not 0."""
+    ratings = MAPPER.map_batter(player(), {"HR": 30.0, "AVG": 0.3}).ratings
+    assert "durability" not in ratings
+    assert "speed" not in ratings
+
+
+def test_a_player_without_a_line_has_no_ratings():
+    assert MAPPER.map_batter(player()).ratings == {}
+    assert MAPPER.map_pitcher(player(position="SP")).ratings == {}
+
+
+def test_fielding_ranks_against_his_own_position():
+    fielding = {"fielding.putouts": 100, "fielding.assists": 300, "fielding.outsOnField": 3000}
+    good = player(1, "A Good", position="SS")
+    poor = player(2, "B Poor", position="SS")
+    first = player(3, "C First", position="1B")
+    lines = {
+        1: batter_line(**fielding, **{"fielding.errors": 2}),
+        2: batter_line(**fielding, **{"fielding.errors": 30}),
+        3: batter_line(**fielding, **{"fielding.errors": 40}),
+    }
+    league = league_of((good, lines[1], False), (poor, lines[2], False), (first, lines[3], False))
+    assert MAPPER.map_batter(good, lines[1], league).ratings["fielding"] > 0.5
+    # Alone at first base, he is his position's middle, whatever the shortstops did.
+    assert MAPPER.map_batter(first, lines[3], league).ratings["throw_accuracy"] == 0.5
+
+
+def test_a_strikeout_pitcher_ranks_top_in_velocity_and_a_wild_one_bottom_in_control():
+    def line(k, bb):
+        return {"TBF": 700, "IP": 170.0, "K": k, "BB": bb, "H": 150, "ER": 70, "GS": 30, "GP": 30}
+
+    ace, wild = player(1, "A Ace", position="SP"), player(2, "B Wild", position="SP")
+    others = [(player(10 + i, "C Other", position="SP"), line(150 + i, 50), True) for i in range(6)]
+    league = league_of((ace, line(260, 40), True), (wild, line(150, 110), True), *others)
+    assert MAPPER.map_pitcher(ace, line(260, 40), league=league).ratings["pitch_velocity"] > 0.9
+    assert MAPPER.map_pitcher(wild, line(150, 110), league=league).ratings["pitch_control"] < 0.1
+
+
+def test_espn_writes_two_thirds_of_an_inning_as_point_two():
+    assert _innings(162.2) == pytest.approx(162 + 2 / 3)
+
+
+def test_every_rating_a_record_holds_is_a_known_one():
+    ratings = MAPPER.map_batter(player(), batter_line()).ratings
+    assert set(ratings) <= set(RATINGS)
+    assert all(0 <= share <= 1 for share in ratings.values())
+
+
+# The rest of the record.
+
+
+def test_a_starter_throws_the_disc_starters_arsenal_and_a_reliever_the_relievers():
+    assert MAPPER.map_pitcher(player(position="SP")).pitch_types == STARTER_ARSENAL
+    reliever = MAPPER.map_pitcher(player(position="RP"), is_starter=False)
+    assert reliever.pitch_types == RELIEVER_ARSENAL
+
+
+def test_a_pitchers_second_position_is_the_other_role():
+    assert MAPPER.map_pitcher(player(position="SP")).secondary_position == 10
+    assert MAPPER.map_pitcher(player(position="RP"), is_starter=False).secondary_position == 0
+
+
+def test_a_batters_second_position_is_where_else_he_batted_most():
+    line = {"pos.SS": 500, "pos.2B": 40, "pos.3B": 60, "pos.DH": 80}
+    assert secondary_position(line, "SS") == 4  # third base
+
+
+def test_a_batter_who_only_also_dhd_is_a_designated_hitter_second():
+    assert secondary_position({"pos.RF": 400, "pos.DH": 100}, "RF") == SECONDARY_DH
+
+
+def test_a_batter_with_no_other_position_has_no_second_one():
+    assert secondary_position({"pos.C": 300}, "C") is None
+    assert secondary_position({}, "C") is None
+
+
+def test_a_switch_hitter_bats_right_against_a_left_hander():
+    assert batting_side(BATS_SWITCH, "lhp") == "R"
+    assert batting_side(BATS_SWITCH, "rhp") == "L"
+    assert batting_side(BATS_LEFT, "lhp") == "L"
+
+
+def test_a_batter_carries_his_birth_date():
+    assert MAPPER.map_batter(player(birth_date="1996-11-26")).birth_date == "1996-11-26"
+
+
+def test_the_record_type_is_the_models_one():
+    assert isinstance(MAPPER.map_batter(player()), MVPPlayerRecord)

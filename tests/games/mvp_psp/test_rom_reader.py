@@ -34,10 +34,8 @@ from retro_roster_patcher.games.mvp_psp.models import (
     database_big_extent,
 )
 from retro_roster_patcher.games.mvp_psp.rom_reader import (
-    COMPACT_SECTION_FLAG,
     HASH_ID_DIGITS,
     REFPACK_MAGIC,
-    VALID_FIRST_BYTES,
     MVPPSPRomReader,
     _looks_like_record_id,
     _parse_record_body,
@@ -74,12 +72,14 @@ def test_the_refpack_magic_is_the_two_header_bytes():
     assert REFPACK_MAGIC == b"\x10\xfb"
 
 
-def test_the_first_section_uses_a_different_flag_byte():
-    assert COMPACT_SECTION_FLAG == 0xC0
+def test_a_disc_validates_on_its_directorys_magic(tmp_path):
+    assert loaded(tmp_path).validate() is True
 
 
-def test_validate_accepts_exactly_the_two_first_bytes():
-    assert sorted(VALID_FIRST_BYTES) == [0x10, 0xC0]
+def test_the_directory_is_not_a_refpack_stream(tmp_path):
+    reader = parsed(tmp_path)
+    assert reader.decompress_section(0) is None
+    assert "directory" not in reader.sections
 
 
 def test_the_second_section_starts_at_three_hundred_and_twenty_four():
@@ -267,15 +267,6 @@ def test_an_unloaded_reader_does_not_validate(tmp_path):
     assert MVPPSPRomReader(str(write_iso(tmp_path))).validate() is False
 
 
-def test_a_disc_with_the_compact_flag_validates(tmp_path):
-    assert loaded(tmp_path, fixture.DiscSpec(compact_flag_c0=True)).validate() is True
-
-
-def test_a_disc_with_an_ordinary_first_section_validates(tmp_path):
-    # `validate` accepts both first bytes and `decompress_section` handles both.
-    assert loaded(tmp_path, fixture.DiscSpec(compact_flag_c0=False)).validate() is True
-
-
 def test_a_disc_whose_first_byte_is_neither_does_not_validate(tmp_path):
     reader = loaded(tmp_path)
     reader.database_big = b"\x11" + reader.database_big[1:]
@@ -343,7 +334,7 @@ def test_the_deep_check_fails_when_the_shallow_one_does(tmp_path):
 def test_the_deep_check_decompresses_every_section(tmp_path):
     reader = loaded(tmp_path)
     reader.validate_deep()
-    assert len(reader.sections) == SECTION_COUNT
+    assert len(reader.sections) == SECTION_COUNT - 1  # every table; the directory is none
 
 
 def test_the_shallow_check_decompresses_nothing(tmp_path):
@@ -352,26 +343,6 @@ def test_the_shallow_check_decompresses_nothing(tmp_path):
     reader = loaded(tmp_path)
     reader.validate()
     assert reader.sections == {}
-
-
-def test_the_first_section_decompresses_through_the_flag_fixup(tmp_path):
-    reader = loaded(tmp_path, fixture.DiscSpec(compact_flag_c0=True))
-    expected = fixture.decompress_section_at(reader.database_big, "attrib_compact")
-    assert reader.decompress_section(0) == expected
-
-
-def test_the_first_section_decompresses_without_the_fixup_too(tmp_path):
-    reader = loaded(tmp_path, fixture.DiscSpec(compact_flag_c0=False))
-    expected = fixture.decompress_section_at(reader.database_big, "attrib_compact")
-    assert reader.decompress_section(0) == expected
-
-
-def test_the_two_first_section_flags_decompress_to_the_same_bytes(tmp_path):
-    # The fixup is only correct if it is: it rewrites two bytes and passes the
-    # rest of the stream through.
-    with_flag = loaded(tmp_path, fixture.DiscSpec(compact_flag_c0=True), name="a.iso")
-    without = loaded(tmp_path, fixture.DiscSpec(compact_flag_c0=False), name="b.iso")
-    assert with_flag.decompress_section(0) == without.decompress_section(0)
 
 
 def test_a_later_section_decompresses_to_what_the_fixture_put_there(tmp_path):
@@ -399,32 +370,8 @@ def test_an_offset_one_byte_before_the_end_answers_none(tmp_path):
     assert loaded(tmp_path).decompress_section(DATABASE_BIG_SIZE - 1) is None
 
 
-def test_a_first_section_flagged_with_neither_byte_is_refused(tmp_path):
-    # The fixup is `offset == 0 AND the flag is 0xC0`, and the second half of that is
-    # what this pins. For a section already flagged 0x10 the rewrite puts back the two
-    # bytes it replaced and is a no-op, so the only way to see the guard is a first
-    # section flagged with neither byte, which must be refused rather than forced into
-    # a header it does not have.
-    reader = loaded(tmp_path)
-    blob = bytearray(reader.database_big)
-    blob[0] = 0x42
-    reader.database_big = bytes(blob)
-    assert reader.decompress_section(0) is None
-
-
 def test_an_unloaded_reader_decompresses_nothing(tmp_path):
     assert MVPPSPRomReader(str(write_iso(tmp_path))).decompress_section(0) is None
-
-
-def test_the_compact_flag_fixup_only_applies_at_offset_zero(tmp_path):
-    # A 0xC0 byte anywhere else is not a RefPack header and must be refused
-    # rather than fixed up.
-    reader = loaded(tmp_path)
-    offset, _ = mvp_models.SECTION_ALLOCATIONS["attrib"]
-    blob = bytearray(reader.database_big)
-    blob[offset] = COMPACT_SECTION_FLAG
-    reader.database_big = bytes(blob)
-    assert reader.decompress_section(offset) is None
 
 
 def test_a_truncated_refpack_stream_raises_from_the_format_layer(tmp_path):
@@ -449,7 +396,7 @@ def test_a_section_of_exactly_two_bytes_reaches_the_decompressor(tmp_path):
 def test_every_section_decompresses(tmp_path):
     reader = loaded(tmp_path)
     reader.decompress_all()
-    assert sorted(reader.sections) == sorted(name for _, name in mvp_models.SECTION_MAP)
+    assert sorted(reader.sections) == sorted(name for _, name in mvp_models.SECTION_MAP[1:])
 
 
 def test_a_section_that_is_not_refpack_is_left_out_and_the_rest_are_read(tmp_path):
@@ -460,7 +407,7 @@ def test_a_section_that_is_not_refpack_is_left_out_and_the_rest_are_read(tmp_pat
     reader.database_big = bytes(blob)
     reader.decompress_all()
     assert sorted(reader.sections) == sorted(
-        name for _, name in mvp_models.SECTION_MAP if name != "batstat"
+        name for _, name in mvp_models.SECTION_MAP[1:] if name != "batstat"
     )
 
 
@@ -485,7 +432,7 @@ def test_a_section_decompressing_to_nothing_leaves_the_others(tmp_path):
     blob[offset : offset + len(empty)] = empty
     reader.database_big = bytes(blob)
     reader.decompress_all()
-    assert len(reader.sections) == SECTION_COUNT - 1
+    assert len(reader.sections) == SECTION_COUNT - 2
 
 
 def test_the_shallow_get_info_still_reads_the_slots(tmp_path):
@@ -596,7 +543,7 @@ def test_a_record_terminated_without_a_crlf_is_still_read():
 
 def test_parsing_covers_every_decompressed_section(tmp_path):
     reader = parsed(tmp_path)
-    assert sorted(reader.records) == sorted(name for _, name in mvp_models.SECTION_MAP)
+    assert sorted(reader.records) == sorted(name for _, name in mvp_models.SECTION_MAP[1:])
 
 
 def test_the_roster_table_holds_one_row_per_disc_player(tmp_path):

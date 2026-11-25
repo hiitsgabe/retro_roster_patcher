@@ -27,7 +27,6 @@ from retro_roster_patcher.games.mvp_psp.models import (
     ATTRIB_LAST_NAME,
     ATTRIB_SALARY,
     ATTRIB_WEIGHT,
-    COMPACT_ATTRIB_TABLE,
     DATABASE_BIG_SIZE,
     SECTION_ALLOCATIONS,
     SECTION_COUNT,
@@ -214,11 +213,11 @@ def test_loading_an_image_that_fails_the_header_check_answers_false(tmp_path):
 
 
 def test_loading_reads_every_section(tmp_path):
-    assert len(make_writer(tmp_path).reader.sections) == SECTION_COUNT
+    assert len(make_writer(tmp_path).reader.sections) == SECTION_COUNT - 1
 
 
 def test_loading_keeps_a_header_for_every_section(tmp_path):
-    assert len(make_writer(tmp_path).section_headers) == SECTION_COUNT
+    assert len(make_writer(tmp_path).section_headers) == SECTION_COUNT - 1
 
 
 def test_the_kept_header_is_the_sections_first_line(tmp_path):
@@ -323,7 +322,7 @@ def test_the_discs_record_order_is_not_the_sorted_one(tmp_path):
     assert order != sorted(order)
 
 
-@pytest.mark.parametrize("name", [n for _, n in SECTION_MAP if n != "attrib"])
+@pytest.mark.parametrize("name", [n for _, n in SECTION_MAP[1:] if n != "attrib"])
 def test_an_edit_to_one_section_leaves_every_other_section_byte_identical(tmp_path, name):
     writer = make_writer(tmp_path, fixture.DiscSpec(teams=2, players_per_team=3))
     original = writer.reader.database_big
@@ -464,16 +463,49 @@ def test_a_table_the_reader_never_parsed_rebuilds_to_nothing(tmp_path):
     assert writer._rebuild_section_bytes("team") is None
 
 
-def test_the_compact_attribute_table_is_never_rebuilt(tmp_path):
-    # INHERITED DEFECT, preserved: fixing it needs a column layout no disc in
-    # this repository can supply. A caller that stages an edit here is the case
-    # the guard exists for.
+def test_a_rewritten_tables_directory_entry_takes_its_new_length(tmp_path):
     writer = make_writer(tmp_path)
-    original = writer.reader.database_big
-    writer.update_records(COMPACT_ATTRIB_TABLE, {"00000000a": {0: "x"}})
-    offset, allocation = SECTION_ALLOCATIONS[COMPACT_ATTRIB_TABLE]
+    writer.update_player_record("attrib", fixture.player_id(0, 0), {ATTRIB_LAST_NAME: "Longer" * 9})
     rebuilt = writer.rebuild_database_big()
-    assert rebuilt[offset : offset + allocation] == original[offset : offset + allocation]
+    entries = fixture.directory_entries(rebuilt)
+    offset, length = entries["attrib"]
+    assert offset == SECTION_ALLOCATIONS["attrib"][0]
+    assert length != fixture.directory_entries(writer.reader.database_big)["attrib"][1]
+    # The stream is exactly that long: what follows it is the zeroed rest.
+    assert len(refpack_decompress_at(rebuilt, offset, length)) > 0
+    assert rebuilt[offset + length : offset + SECTION_ALLOCATIONS["attrib"][1]].strip(b"\0") == b""
+
+
+def refpack_decompress_at(blob, offset, length):
+    from retro_roster_patcher.formats.ea_tdb import refpack_decompress
+
+    return refpack_decompress(blob[offset : offset + length])
+
+
+def test_an_untouched_tables_directory_entry_is_left_alone(tmp_path):
+    writer = make_writer(tmp_path)
+    writer.update_player_record("attrib", fixture.player_id(0, 0), {ATTRIB_LAST_NAME: "X"})
+    rebuilt = writer.rebuild_database_big()
+    before = fixture.directory_entries(writer.reader.database_big)
+    after = fixture.directory_entries(rebuilt)
+    assert {k: v for k, v in after.items() if k != "attrib"} == {
+        k: v for k, v in before.items() if k != "attrib"
+    }
+
+
+def test_a_deleted_record_leaves_the_table(tmp_path):
+    writer = make_writer(tmp_path)
+    pitcher = fixture.player_id(0, 0)
+    writer.delete_player_record("pitchattrib", pitcher)
+    rebuilt = writer.rebuild_database_big()
+    assert pitcher not in fixture.parse_table(fixture.decompress_section_at(rebuilt, "pitchattrib"))
+
+
+def test_the_columns_are_named_by_the_header(tmp_path):
+    columns = make_writer(tmp_path).columns("lrattrib_lhp")
+    assert columns["lrattrib_chaseslowbreak"] == 21
+    assert "lrattrib_chasehardbreak" not in columns
+    assert make_writer(tmp_path).columns("lrattrib_rhp")["lrattrib_misshardbreak"] == 28
 
 
 def test_rebuilding_without_a_loaded_blob_raises(tmp_path):

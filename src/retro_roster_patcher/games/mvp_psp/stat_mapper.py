@@ -1,31 +1,53 @@
-"""Turn ESPN's MLB rosters and team leaders into MVP Baseball's 0-99 ratings.
+"""Turn ESPN's MLB season lines into where each player ranks, rating by rating.
 
-Two inputs per player: the roster entry (`sports.models.Player`) and, when the
-provider had one, a dict of season totals keyed by ESPN's own abbreviations --
-`AVG`, `OPS`, `ERA`, `WHIP` and so on. The leaders endpoint only returns each
-category's leaders, so most players have a partial dict and some have none at
-all, and the position defaults below are what a player with no dict gets.
+Each rating ranks one or more of the player's stats (`BATTER_SOURCES`,
+`SPLIT_SOURCES`, `PITCHER_SOURCES`) against every player of his group in the
+league fetched (`LeagueStats`): a batter against the league's batters, his
+fielding against his position's, a split against the batters who swing from
+his side against that hand, a pitcher against the starters or the relievers.
+`patch` turns the rank (0-1) into the value at that rank of the disc's own
+spread of the rating (`spreads`). A rating none of whose stats his line has is
+left out, and `patch` writes his position's median: a partial stat line no
+longer rates 0.
+
+Rates are counted per plate appearance, per batter faced or per chance and
+pulled toward the group's rate by a few dozen of them (`Stat`); a split toward
+the player's own season by `SPLIT_SHRINK` at-bats, then toward the group's by
+`SEASON_SHRINK` plate appearances. A batter without splits takes his season on
+both sides. The ratings the retail disc's own 2004 lines track (its 361
+regulars, Spearman): contact the split's average (0.96), power its isolated
+power (0.95), home-run share its home runs (0.98), speed and stealing steal
+attempts (0.74, 0.81), baserunning steal success and attempts, bunting
+sacrifice bunts with speed and few home runs, plate discipline walks (0.61),
+durability games (0.87), fielding and throwing accuracy fielding % (0.4-0.5),
+range putouts and assists per inning, arm assists per inning (a catcher's
+caught-stealing %), pickoff pickoffs per inning (0.4-0.5; with the caught-
+stealing % of runners off him), stamina innings per start or appearance (0.96
+for relievers), fastball velocity strikeouts (0.47). ESPN measures none of the
+batter's chase and miss rates: walks and strikeouts stand in for them.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import bisect
+from collections import defaultdict
+from collections.abc import Iterable, Mapping
+from dataclasses import dataclass, field
 from typing import Any
 
+from ...core.hockey import stat
 from ...sports.models import Player
 from .models import (
-    ATTR_MAX,
-    ATTR_MIN,
     BATTERS_PER_TEAM,
     MODERN_MLB_TO_MVP,
     MVP_ABBREV_TO_INDEX,
-    PITCH_CHANGEUP,
-    PITCH_FASTBALL,
-    PITCH_SLIDER,
+    POS_STRING_TO_NUM,
+    RELIEVER_ARSENAL,
     RELIEVERS_PER_TEAM,
+    SECONDARY_DH,
     SELECTION_POSITIONS,
+    STARTER_ARSENAL,
     STARTERS_PER_TEAM,
-    MVPPitch,
     MVPPlayerRecord,
 )
 
@@ -72,53 +94,359 @@ BATS_SWITCH = 2
 THROWS_RIGHT = 0
 THROWS_LEFT = 1
 
+#: The two hands a batter faces, as the split keys (`vsL.AVG`) and the rating
+#: names (`contact_lhp`) spell them.
+SIDES = {"lhp": "vsL", "rhp": "vsR"}
 
-@dataclass(frozen=True)
-class PositionDefaults:
-    """What a player at one position gets when the provider reported no stats.
+#: The ratings of the `attrib` table a batter's line ranks, and their stats; a
+#: rating with several averages their ranks, a stat listed twice counting twice.
+BATTER_SOURCES: dict[str, tuple[str, ...]] = {
+    "plate_discipline": ("walks",),
+    "bunting": ("sac_bunts", "steal_attempts", "few_home_runs"),
+    "stealing": ("steal_attempts",),
+    "baserunning": ("steal_success", "steal_attempts", "runs_scored"),
+    "speed": ("steal_attempts", "steal_attempts", "triples"),
+    "durability": ("games",),
+    "starpower": ("war",),
+    "fielding": ("fielding_pct", "dwar"),
+    "range": ("range_factor", "dwar"),
+    "throw_strength": ("arm",),
+    "throw_accuracy": ("fielding_pct",),
+}
+#: Ranked against his position, not the league's batters.
+FIELDING_RATINGS = frozenset({"fielding", "range", "throw_strength", "throw_accuracy"})
+FIELDING_STATS = frozenset({"fielding_pct", "range_factor", "arm"})
 
-    Frozen on purpose: no shared mutable default object may reach a record.
-    """
-
-    speed: int
-    fielding: int
-    arm_range: int
-    throw_strength: int
-    throw_accuracy: int
-    contact: int
-    power: int
-
-
-POSITION_DEFAULTS: dict[str, PositionDefaults] = {
-    "C": PositionDefaults(35, 60, 55, 65, 60, 55, 50),
-    "1B": PositionDefaults(30, 50, 45, 55, 55, 60, 65),
-    "2B": PositionDefaults(55, 65, 60, 50, 65, 55, 35),
-    "3B": PositionDefaults(40, 55, 55, 70, 60, 55, 55),
-    "SS": PositionDefaults(55, 70, 65, 65, 65, 55, 35),
-    "LF": PositionDefaults(55, 50, 50, 55, 55, 60, 55),
-    "CF": PositionDefaults(65, 60, 65, 60, 55, 55, 45),
-    "RF": PositionDefaults(50, 55, 55, 70, 60, 60, 60),
-    "DH": PositionDefaults(30, 30, 30, 40, 40, 65, 70),
+#: The split-table ratings, each once per side (`contact_lhp`, `contact_rhp`),
+#: ranked against the batters who swing from his side against that hand.
+#: `zones` is how many of the nine strike-zone cells are hot, `ld` and `gb`
+#: the line-drive and ground-ball shares of his balls in play.
+SPLIT_SOURCES: dict[str, tuple[str, ...]] = {
+    "contact": ("avg",),
+    "power": ("iso",),
+    "zones": ("avg", "iso"),
+    "hr": ("hr_in_play",),
+    "ld": ("babip",),
+    "gb": ("ground",),
+    "chase": ("free_swing",),
+    "take": ("walk_rate",),
+    "miss": ("strikeout_rate",),
 }
 
-# Ratings a pitcher gets for the things pitchers are not rated on. The two pairs
-# differ by five points for no stated reason; preserved, not harmonised.
-PITCHER_NO_STATS_BATTING = (25, 15)  # contact, power
-PITCHER_WITH_STATS_BATTING = (20, 10)
+#: A pitcher's ratings and their stats. `control` and `movement` rate every
+#: pitch, each on its own pitch type's spread.
+PITCHER_SOURCES: dict[str, tuple[str, ...]] = {
+    "stamina": ("length",),
+    "pickoff": ("pickoffs", "runners_caught"),
+    "velocity": ("strikeouts",),
+    "control": ("few_walks", "low_whip"),
+    "movement": ("ground", "low_era"),
+    "starpower": ("war",),
+}
 
-DEFAULT_STARTER_STAMINA = 70
-DEFAULT_RELIEVER_STAMINA = 35
-DEFAULT_PICKOFF = 50
+#: Every rating name a record's `ratings` may hold.
+RATINGS = (
+    *BATTER_SOURCES,
+    *(f"{r}_{side}" for r in SPLIT_SOURCES for side in SIDES),
+    *(f"pitch_{r}" for r in PITCHER_SOURCES),
+)
+
+#: A split is pulled toward the batter's own season by this many at-bats, and
+#: the season toward his group's by this many plate appearances.
+SPLIT_SHRINK = 60
+SEASON_SHRINK = 150
+
+#: The fielding positions a batter's `pos.XX` at-bats can name.
+FIELD_POSITIONS = ("C", "1B", "2B", "3B", "SS", "LF", "CF", "RF")
+
+
+@dataclass(frozen=True)
+class Stat:
+    """One stat of one player: `count / out_of`, pulled toward his group's rate
+    by `weight` of `out_of`; a plain value when `out_of` is None. `sign` -1
+    makes a lower one rank higher."""
+
+    count: float
+    out_of: float | None = None
+    weight: float = 0.0
+    sign: int = 1
+
+
+def _innings(ip: float) -> float:
+    """ESPN writes 162 and 2/3 innings as 162.2."""
+    whole = int(ip)
+    return whole + round((ip - whole) * 10) / 3
+
+
+def _get(line: Mapping[str, object], *keys: str) -> float | None:
+    """The sum of `keys` in the line, or None when any is missing."""
+    values = [stat(line, key) for key in keys]
+    return None if None in values else sum(values)  # type: ignore[arg-type]
+
+
+def _rate(count: float | None, out_of: float | None, weight: float, sign: int = 1) -> Stat | None:
+    return Stat(count, out_of, weight, sign) if count is not None and out_of else None
+
+
+def _split_rate(
+    line: Mapping[str, object], prefix: str, count: tuple[str, ...], out_of: tuple[str, ...]
+) -> float | None:
+    """`count / out_of` in the split `prefix`, pulled toward the season's rate
+    by `SPLIT_SHRINK`; the season's when there is no split."""
+    season = _get(line, *count), _get(line, *out_of)
+    if season[0] is None or not season[1]:
+        return None
+    own = season[0] / season[1]
+    split = (
+        _get(line, *(f"{prefix}.{k}" for k in count)),
+        _get(line, *(f"{prefix}.{k}" for k in out_of)),
+    )
+    if split[0] is None or split[1] is None:
+        return own
+    return (split[0] + own * SPLIT_SHRINK) / (split[1] + SPLIT_SHRINK)
+
+
+def batter_stats(line: Mapping[str, object]) -> dict[str, Stat]:
+    """A batter's stats, by the names `BATTER_SOURCES` and `SPLIT_SOURCES` use
+    (a split one suffixed `_lhp` or `_rhp`). A stat the line lacks is absent."""
+    pa = stat(line, "PA") or _get(line, "AB", "BB", "HBP")
+    singles_and_walks = _get(line, "H", "BB", "HBP")
+    if singles_and_walks is not None and (extra := _get(line, "2B", "3B", "HR")) is not None:
+        singles_and_walks -= extra
+    attempts = _get(line, "SB", "CS")
+    on_base = _get(line, "H", "BB", "HBP")
+    runs = _get(line, "R")
+    if runs is not None and on_base is not None and (hr := stat(line, "HR")) is not None:
+        runs, on_base = runs - hr, on_base - hr
+    out: dict[str, Stat | None] = {
+        "walks": _rate(stat(line, "BB"), pa, 100),
+        "sac_bunts": _rate(stat(line, "SH"), pa, 100),
+        "few_home_runs": _rate(stat(line, "HR"), pa, 100, -1),
+        "triples": _rate(stat(line, "3B"), pa, 100),
+        "steal_attempts": _rate(attempts, singles_and_walks, 50),
+        "steal_success": _rate(stat(line, "SB"), attempts, 5),
+        "runs_scored": _rate(runs, on_base, 50),
+        "games": Stat(stat(line, "GP")) if stat(line, "GP") is not None else None,
+        "war": Stat(stat(line, "WAR")) if stat(line, "WAR") is not None else None,
+    }
+    putouts_assists = _get(line, "fielding.putouts", "fielding.assists")
+    chances = _get(line, "fielding.putouts", "fielding.assists", "fielding.errors")
+    outs = stat(line, "fielding.outsOnField")
+    out["fielding_pct"] = _rate(putouts_assists, chances, 50)
+    if putouts_assists is not None and outs:
+        out["range_factor"] = Stat(putouts_assists * 27, outs, 27 * 30)
+    if (dwar := stat(line, "fielding.defWARBR")) is not None and outs:
+        out["dwar"] = Stat(dwar)
+    caught = stat(line, "fielding.catcherCaughtStealing")
+    allowed = stat(line, "fielding.catcherStolenBasesAllowed")
+    if caught is not None and allowed is not None and caught + allowed:
+        out["arm"] = Stat(caught, caught + allowed, 20)
+    elif (assists := stat(line, "fielding.assists")) is not None and outs:
+        out["arm"] = Stat(assists * 27, outs, 27 * 30)
+
+    season_hr = [stat(line, k) for k in ("HR", "AB", "SO")]
+    for side, prefix in SIDES.items():
+        hits = _split_rate(line, prefix, ("H",), ("AB",))
+        power = _split_rate(line, prefix, ("2B", "3B", "3B", "HR", "HR", "HR"), ("AB",))
+        hr_rate = None
+        if None not in season_hr and season_hr[1] > season_hr[2]:  # type: ignore[operator]
+            hr_rate = season_hr[0] / (season_hr[1] - season_hr[2])  # type: ignore[operator]
+            hr, ab, so = (stat(line, f"{prefix}.{k}") for k in ("HR", "AB", "SO"))
+            if hr is not None and ab is not None and so is not None:
+                hr_rate = (hr + hr_rate * SPLIT_SHRINK) / (ab - so + SPLIT_SHRINK)
+        walks = _split_rate(line, prefix, ("BB",), ("AB", "BB", "HBP"))
+        strikeouts = _split_rate(line, prefix, ("SO",), ("AB", "BB", "HBP"))
+        # Counted over his season's plate appearances, so a short season is
+        # pulled toward the group's rate like any other.
+        for name, value, sign in (
+            ("avg", hits, 1),
+            ("iso", power, 1),
+            ("hr_in_play", hr_rate, 1),
+            ("walk_rate", walks, 1),
+            ("free_swing", walks, -1),
+            ("strikeout_rate", strikeouts, 1),
+            ("babip", stat(line, "BIPA"), 1),
+        ):
+            if value is not None and pa:
+                out[f"{name}_{side}"] = Stat(value * pa, pa, SEASON_SHRINK, sign)
+        out[f"ground_{side}"] = _rate(stat(line, "GO"), _get(line, "GO", "FO"), 50)
+    return {name: value for name, value in out.items() if value is not None}
+
+
+def pitcher_stats(line: Mapping[str, object], starter: bool) -> dict[str, Stat]:
+    """A pitcher's stats, by the names `PITCHER_SOURCES` uses."""
+    faced = stat(line, "TBF")
+    ip = _innings(stat(line, "IP") or 0.0)
+    games = stat(line, "GS" if starter else "GP")
+    balls = _get(line, "GB", "FB")
+    out: dict[str, Stat | None] = {
+        "strikeouts": _rate(stat(line, "K"), faced, 100),
+        "few_walks": _rate(stat(line, "BB"), faced, 100, -1),
+        "low_whip": _rate(_get(line, "BB", "H"), ip, 30, -1),
+        "low_era": _rate(_get(line, "ER"), ip, 30, -1),
+        "ground": _rate(stat(line, "GB"), balls, 50),
+        "length": _rate(ip or None, games, 3),
+        # ESPN's `pickoffs` is 0 for every pitcher; `POA`, which it calls
+        # pickoff attempts, counts 0-7 a season, a pickoff count.
+        "pickoffs": _rate(stat(line, "POA"), ip, 30),
+        "runners_caught": _rate(stat(line, "CS"), _get(line, "SB", "CS"), 10),
+        "war": Stat(stat(line, "WAR")) if stat(line, "WAR") is not None else None,
+    }
+    return {name: value for name, value in out.items() if value is not None}
+
+
+def _rank(values: list[float], value: float) -> float:
+    """Where `value` ranks among sorted `values`, 0-1, ties at their middle."""
+    below = bisect.bisect_left(values, value)
+    equal = bisect.bisect_right(values, value) - below
+    return (below + equal / 2) / len(values)
+
+
+def batting_side(bats: int, side: str) -> str:
+    """The side a batter swings from against `side`'s hand: a switch hitter
+    bats right against a left-hander."""
+    if bats == BATS_SWITCH:
+        return "R" if side == "lhp" else "L"
+    return "L" if bats == BATS_LEFT else "R"
+
+
+@dataclass
+class _Member:
+    """One player of the league as `LeagueStats` ranks him."""
+
+    groups: dict[str, str]  # rating kind -> his group of it
+    stats: dict[str, Stat]
+
+
+@dataclass
+class LeagueStats:
+    """Every fetched player's stats, by group, to rank one player against."""
+
+    #: (group, stat) -> the group's rate, for a stat counted out of something.
+    rates: dict[tuple[str, str], float] = field(default_factory=dict)
+    #: (group, stat) -> every value, sorted.
+    values: dict[tuple[str, str], list[float]] = field(default_factory=dict)
+    #: (group, rating) -> every average rank over the rating's stats, sorted:
+    #: an average of ranks bunches in the middle, so it is ranked again.
+    blends: dict[tuple[str, str], list[float]] = field(default_factory=dict)
+
+    @classmethod
+    def from_lines(cls, lines: Iterable[tuple[Player, Mapping[str, object], bool]]) -> LeagueStats:
+        """The league of these (player, line, is a starter) triples; a player
+        without a line is left out."""
+        members = [_member(p, line, starter) for p, line, starter in lines if line]
+        league = cls()
+        sums: dict[tuple[str, str], list[float]] = defaultdict(lambda: [0.0, 0.0])
+        for m in members:
+            for name, s in m.stats.items():
+                if s.out_of is not None:
+                    total = sums[m.groups[_kind(name)], name]
+                    total[0] += s.count
+                    total[1] += s.out_of
+        league.rates = {key: c / n for key, (c, n) in sums.items() if n}
+        values: dict[tuple[str, str], list[float]] = defaultdict(list)
+        for m in members:
+            for name in m.stats:
+                values[m.groups[_kind(name)], name].append(league.value(m, name))
+        league.values = {key: sorted(v) for key, v in values.items()}
+        blends: dict[tuple[str, str], list[float]] = defaultdict(list)
+        for m in members:
+            for rating, names in _sources(m).items():
+                if len(names) > 1 and (blend := league._blend(m, rating, names)) is not None:
+                    blends[m.groups[_rating_kind(rating)], rating].append(blend)
+        league.blends = {key: sorted(v) for key, v in blends.items()}
+        return league
+
+    def value(self, m: _Member, name: str) -> float:
+        s = m.stats[name]
+        if s.out_of is None:
+            return s.sign * s.count
+        prior = self.rates.get((m.groups[_kind(name)], name), s.count / s.out_of)
+        return s.sign * (s.count + prior * s.weight) / (s.out_of + s.weight)
+
+    def _blend(self, m: _Member, rating: str, names: tuple[str, ...]) -> float | None:
+        shares = [
+            _rank(pool, self.value(m, name))
+            for name in names
+            if name in m.stats and (pool := self.values.get((m.groups[_kind(name)], name)))
+        ]
+        return sum(shares) / len(shares) if shares else None
+
+    def shares(self, player: Player, line: Mapping[str, object], starter: bool) -> dict[str, float]:
+        """Where he ranks in his group, 0-1, for each rating his line has a stat of."""
+        m = _member(player, line, starter)
+        out = {}
+        for rating, names in _sources(m).items():
+            blend = self._blend(m, rating, names)
+            pool = self.blends.get((m.groups[_rating_kind(rating)], rating))
+            if blend is not None:
+                out[rating] = _rank(pool, blend) if len(names) > 1 and pool else blend
+        return out
+
+
+def _kind(stat_name: str) -> str:
+    """Which of a member's groups a stat is ranked in."""
+    if stat_name in FIELDING_STATS:
+        return "position"
+    for side in SIDES:
+        if stat_name.endswith(side):
+            return side
+    return "league"
+
+
+def _rating_kind(rating: str) -> str:
+    if rating in FIELDING_RATINGS:
+        return "position"
+    for side in SIDES:
+        if rating.endswith(side):
+            return side
+    return "league"
+
+
+def _sources(m: _Member) -> dict[str, tuple[str, ...]]:
+    if m.groups["league"] in ("SP", "RP"):
+        return {f"pitch_{r}": names for r, names in PITCHER_SOURCES.items()}
+    out: dict[str, tuple[str, ...]] = dict(BATTER_SOURCES)
+    for r, names in SPLIT_SOURCES.items():
+        for side in SIDES:
+            out[f"{r}_{side}"] = tuple(f"{n}_{side}" for n in names)
+    return out
+
+
+def _member(player: Player, line: Mapping[str, object], starter: bool) -> _Member:
+    if MVPStatMapper.is_pitcher(player):
+        role = "SP" if starter else "RP"
+        return _Member({"league": role, "position": role}, pitcher_stats(line, starter))
+    bats = MVPStatMapper.map_bat_hand(player.bats or player.handedness)
+    groups = {"league": "B", "position": MVPStatMapper.normalize_position(player.position)}
+    groups |= {side: batting_side(bats, side) for side in SIDES}
+    return _Member(groups, batter_stats(line))
+
+
+def secondary_position(line: Mapping[str, object], primary: str) -> int | None:
+    """The `attrib` column 6 code of the position he has batted at most besides
+    his own (`pos.XX` at-bats), DH when it is only that; None when neither."""
+    played = {
+        pos: ab
+        for pos in FIELD_POSITIONS
+        if pos != primary and (ab := stat(line, f"pos.{pos}") or 0) > 0
+    }
+    if played:
+        return POS_STRING_TO_NUM[max(played, key=played.__getitem__)]
+    if primary != "DH" and (stat(line, "pos.DH") or 0) > 0:
+        return SECONDARY_DH
+    return None
 
 
 def _person(player: Player) -> dict[str, Any]:
     """The record fields about the man, not his ratings: height and weight
-    (the provider's, else the record's defaults) and what his looks and
-    portrait are read from."""
+    (the provider's, else the record's defaults), birth date, and what his
+    looks and portrait are read from."""
     out: dict[str, Any] = {
         "player_id": player.id,
         "photo_url": player.photo_url,
         "nationality": player.nationality,
+        "birth_date": player.birth_date or "",
     }
     if player.height > 0:
         out["height"] = int(player.height)
@@ -127,279 +455,69 @@ def _person(player: Player) -> dict[str, Any]:
     return out
 
 
-def _clamp(val: int, lo: int = ATTR_MIN, hi: int = ATTR_MAX) -> int:
-    return max(lo, min(hi, val))
-
-
-def _scale(value: float, low: float, high: float) -> int:
-    """Map `value` from the range `[low, high]` onto 0-99, clamped at both ends.
-
-    An inverted or empty range answers 50, the scale's midpoint.
-    """
-    if high <= low:
-        return 50
-    return _clamp(round((value - low) / (high - low) * ATTR_MAX))
-
-
 def _stat(stats: dict[str, Any], key: str, default: float) -> float:
-    """One statistic as a float, with `default` for absent, None, empty or zero.
-
-    `or default` treats a reported zero as an absence, deliberately: an ERA of
-    exactly 0.00 means too few innings for the number to mean anything, and an
-    OPS of exactly 0.000 is a pitcher taking at-bats.
-    """
+    """One statistic as a float, with `default` for absent, None, empty or zero."""
     return float(stats.get(key, default) or default)
 
 
 class MVPStatMapper:
     """Maps ESPN player data onto `MVPPlayerRecord`. Stateless."""
 
-    def map_batter(self, player: Player, stats: dict[str, Any] | None = None) -> MVPPlayerRecord:
-        """One position player.
-
-        With stats, every rating is derived. Without, the position defaults are
-        copied in and the four that have no positional default -- durability,
-        plate discipline, bunting, baserunning, stealing -- take fixed values.
-        """
+    def map_batter(
+        self,
+        player: Player,
+        stats: Mapping[str, object] | None = None,
+        league: LeagueStats | None = None,
+    ) -> MVPPlayerRecord:
+        """One position player; `league` ranks his line, without one it is ranked alone."""
+        stats = stats or {}
         pos = self.normalize_position(player.position)
-        # Unreachable fallback, and kept: `POSITION_ALIASES` and
-        # `POSITION_DEFAULTS` are separate tables, and an alias added to one and
-        # not the other must land somewhere stated rather than raise `KeyError`.
-        defaults = POSITION_DEFAULTS.get(pos, POSITION_DEFAULTS[DEFAULT_POSITION])
-
-        rec = MVPPlayerRecord(
+        return MVPPlayerRecord(
             first_name=self.first_name(player.name),
             last_name=self.last_name(player.name),
             jersey=player.number or 0,
             bats=self.map_bat_hand(player.bats or player.handedness),
             throws=self.map_throw_hand(player.handedness),
             primary_position=pos,
+            secondary_position=secondary_position(stats, pos),
+            ratings=self._shares(player, stats, False, league),
             is_pitcher=False,
             **_person(player),
         )
 
-        if stats:
-            return self._apply_batter_stats(rec, stats, defaults)
-
-        rec.speed = defaults.speed
-        rec.fielding = defaults.fielding
-        rec.arm_range = defaults.arm_range
-        rec.throw_strength = defaults.throw_strength
-        rec.throw_accuracy = defaults.throw_accuracy
-        rec.contact_rhp = defaults.contact
-        rec.power_rhp = defaults.power
-        rec.contact_lhp = defaults.contact
-        rec.power_lhp = defaults.power
-        rec.durability = 50
-        rec.plate_discipline = 50
-        rec.bunting = 40
-        rec.baserunning = defaults.speed
-        rec.stealing = defaults.speed
-        return rec
-
-    def _apply_batter_stats(
-        self,
-        rec: MVPPlayerRecord,
-        stats: dict[str, Any],
-        defaults: PositionDefaults,
-    ) -> MVPPlayerRecord:
-        """Derive a batter's ratings from his season totals.
-
-        `OPS` feeds `select_roster`'s batting order and none of these ratings.
-        """
-        avg = _stat(stats, "AVG", 0.250)
-        hr = _stat(stats, "HR", 0)
-        rbi = _stat(stats, "RBI", 0)
-        sb = _stat(stats, "SB", 0)
-        slg = _stat(stats, "SLG", 0.400)
-        obp = _stat(stats, "OBP", 0.320)
-        hits = _stat(stats, "H", 0)
-        gp = _stat(stats, "GP", 0)
-
-        # Contact from average, with a quarter of the on-base rating added.
-        rec.contact_rhp = _clamp(_scale(avg, 0.200, 0.330) + _scale(obp, 0.280, 0.420) // 4)
-        # Five points lower against same-side pitching. Applied before the
-        # switch-hitter check below, which averages the two back together.
-        rec.contact_lhp = _clamp(rec.contact_rhp - 5)
-
-        # Power two-thirds from home runs and one-third from slugging.
-        rec.power_rhp = _clamp((_scale(hr, 0, 45) * 2 + _scale(slg, 0.350, 0.600)) // 3)
-        rec.power_lhp = _clamp(rec.power_rhp - 5)
-
-        if rec.bats == BATS_SWITCH:
-            # A switch hitter has no weak side, so the two splits collapse to
-            # their mean -- 2 or 3 points below the stronger side, not equal to
-            # it, because the mean of x and x-5 is x-2.
-            rec.contact_rhp = rec.contact_lhp = (rec.contact_rhp + rec.contact_lhp) // 2
-            rec.power_rhp = rec.power_lhp = (rec.power_rhp + rec.power_lhp) // 2
-
-        rec.speed = _scale(sb, 0, 40)
-        if _stat(stats, "3B", 0) >= 5:
-            rec.speed = _clamp(rec.speed + 5)
-        rec.baserunning = _clamp(rec.speed + 5)
-        rec.stealing = rec.speed
-
-        rec.fielding = defaults.fielding
-        if gp > 120:
-            rec.fielding = _clamp(rec.fielding + 5)
-        rec.arm_range = defaults.arm_range
-        rec.throw_strength = defaults.throw_strength
-        rec.throw_accuracy = defaults.throw_accuracy
-
-        # On-base minus average is a walk-rate proxy: the gap is entirely walks
-        # and hit-by-pitches.
-        rec.plate_discipline = _scale(obp - avg, 0.040, 0.120)
-        rec.durability = _scale(gp, 60, 155)
-        rec.bunting = 30 if rec.speed < 50 else _clamp(rec.speed - 10)
-        rec.starpower = _scale(hits * 0.3 + hr * 2 + rbi * 0.5, 20, 200)
-        return rec
-
     def map_pitcher(
         self,
         player: Player,
-        stats: dict[str, Any] | None = None,
+        stats: Mapping[str, object] | None = None,
         *,
         is_starter: bool = True,
+        league: LeagueStats | None = None,
     ) -> MVPPlayerRecord:
-        """One pitcher.
-
-        Upstream behaviour, known wrong, preserved deliberately: the last
-        statement assigns `default_pitches(is_starter)` *outside* the `if stats:`
-        branch, discarding the velocity and control `_apply_pitcher_stats` just
-        derived, so every pitcher ships with the same 50-velocity, 50-control
-        arsenal. Do not move the line inside the branch: it would change
-        `pitchattrib`'s movement, control and velocity columns on every patched
-        pitcher, and this port's output has never been checked against a retail
-        UMD.
-        """
-        rec = MVPPlayerRecord(
+        """One pitcher; a starter is listed with relief as his second position
+        and a reliever with starting, as on the retail disc."""
+        stats = stats or {}
+        return MVPPlayerRecord(
             first_name=self.first_name(player.name),
             last_name=self.last_name(player.name),
             jersey=player.number or 0,
             bats=self.map_bat_hand(player.bats or player.handedness),
             throws=self.map_throw_hand(player.handedness),
             primary_position=STARTER_POSITION if is_starter else "RP",
+            secondary_position=POS_STRING_TO_NUM["RP" if is_starter else "SP"],
+            ratings=self._shares(player, stats, is_starter, league),
             is_pitcher=True,
+            pitch_types=STARTER_ARSENAL if is_starter else RELIEVER_ARSENAL,
             **_person(player),
         )
 
-        if stats:
-            rec = self._apply_pitcher_stats(rec, stats, is_starter)
-        else:
-            rec.stamina = DEFAULT_STARTER_STAMINA if is_starter else DEFAULT_RELIEVER_STAMINA
-            rec.pickoff = DEFAULT_PICKOFF
-            rec.speed = 35
-            rec.fielding = 40
-            rec.contact_rhp, rec.power_rhp = PITCHER_NO_STATS_BATTING
-            rec.contact_lhp, rec.power_lhp = PITCHER_NO_STATS_BATTING
-
-        # Outside the branch above on purpose. See this method's docstring.
-        rec.pitches = self.default_pitches(is_starter)
-        return rec
-
-    def _apply_pitcher_stats(
-        self,
-        rec: MVPPlayerRecord,
-        stats: dict[str, Any],
-        is_starter: bool,
-    ) -> MVPPlayerRecord:
-        """Derive a pitcher's ratings from his season totals."""
-        era = _stat(stats, "ERA", 4.00)
-        k = _stat(stats, "K", 0)
-        whip = _stat(stats, "WHIP", 1.30)
-        w = _stat(stats, "W", 0)
-        sv = _stat(stats, "SV", 0)
-        qs = _stat(stats, "QS", 0)
-
-        if is_starter:
-            # Quality starts, then a bonus for a fifteen-win season, then a
-            # floor of 40 -- so a starter with no quality starts at all still
-            # goes six innings rather than being pulled in the second.
-            rec.stamina = _scale(qs, 5, 25)
-            if w >= 15:
-                rec.stamina = _clamp(rec.stamina + 5)
-            rec.stamina = _clamp(rec.stamina, 40, ATTR_MAX)
-        else:
-            rec.stamina = _clamp(25 + (5 if sv > 20 else 0))
-
-        rec.pickoff = DEFAULT_PICKOFF
-
-        # Strikeout total as a velocity proxy, on the range each role can reach:
-        # 250 strikeouts is a league-leading starter, 90 a league-leading
-        # reliever.
-        velocity = _scale(k, 60, 250) if is_starter else _scale(k, 20, 90)
-
-        # Control is the mean of two inverted scales, so a *lower* WHIP and a
-        # *lower* ERA both raise it.
-        control = (_scale(1.60 - whip, 0.0, 0.70) + _scale(6.0 - era, 0.0, 4.0)) // 2
-
-        # Dead, and knowingly so: `map_pitcher` overwrites this on the way out,
-        # so the velocity and control above never reach a disc. Keep it.
-        rec.pitches = self.default_pitches(is_starter, velocity, control)
-
-        rec.contact_rhp, rec.power_rhp = PITCHER_WITH_STATS_BATTING
-        rec.contact_lhp, rec.power_lhp = PITCHER_WITH_STATS_BATTING
-        rec.speed = 30
-        rec.fielding = 40
-
-        if is_starter:
-            composite = w * 3 + k * 0.1 + (6.0 - era) * 10
-        else:
-            composite = sv * 3 + k * 0.1 + (4.0 - era) * 5
-        rec.starpower = _scale(composite, 10, 80)
-        return rec
-
-    def default_pitches(
-        self,
-        is_starter: bool,
-        velocity: int = 50,
-        control: int = 50,
-    ) -> list[MVPPitch]:
-        """A pitcher's arsenal: three pitches for a starter, two for a reliever.
-
-        The fastball is the hardest and the changeup the softest, and each pitch
-        after the first trades control for movement. The `type` of the first
-        pitch is stored but never written -- column 8 is the first type column
-        and pitch 1 is always a fastball, so the game has no column for it.
-
-        The fastball's `movement` is unclamped where the other two are clamped:
-        `velocity // 2` cannot exceed 49, so the clamp could never fire.
-        """
-        pitches = [
-            MVPPitch(
-                type=PITCH_FASTBALL,
-                movement=velocity // 2,
-                control=control,
-                velocity=_clamp(velocity + 10),
-            )
-        ]
-        if is_starter:
-            pitches.append(
-                MVPPitch(
-                    type=PITCH_SLIDER,
-                    movement=_clamp(velocity // 2 + 5),
-                    control=_clamp(control - 5),
-                    velocity=_clamp(velocity - 5),
-                )
-            )
-            pitches.append(
-                MVPPitch(
-                    type=PITCH_CHANGEUP,
-                    movement=_clamp(velocity // 3),
-                    control=control,
-                    velocity=_clamp(velocity - 15),
-                )
-            )
-        else:
-            pitches.append(
-                MVPPitch(
-                    type=PITCH_SLIDER,
-                    movement=_clamp(velocity // 2),
-                    control=_clamp(control - 5),
-                    velocity=_clamp(velocity - 5),
-                )
-            )
-        return pitches
+    @staticmethod
+    def _shares(
+        player: Player, stats: Mapping[str, object], starter: bool, league: LeagueStats | None
+    ) -> dict[str, float]:
+        if not stats:
+            return {}
+        league = league or LeagueStats.from_lines([(player, stats, starter)])
+        return league.shares(player, stats, starter)
 
     def select_roster(
         self,

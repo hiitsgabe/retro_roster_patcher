@@ -16,24 +16,22 @@ repository. These tests pin what the source said, and say so.
 
 from __future__ import annotations
 
-import dataclasses
+from datetime import date, timedelta
 
 import pytest
 
 from retro_roster_patcher.games.mvp_psp import models
 from retro_roster_patcher.games.mvp_psp.models import (
     AL_SLOT_COUNT,
-    ATTR_MAX,
-    ATTR_MIN,
     ATTRIB_POS_1B,
     ATTRIB_POS_CF,
     ATTRIB_POS_PITCHER,
     ATTRIB_POS_RELIEVER,
     BATTERS_PER_TEAM,
     BULLPEN_POSITIONS,
-    COMPACT_ATTRIB_TABLE,
     DATABASE_BIG_LBA,
     DATABASE_BIG_SIZE,
+    DIRECTORY_TABLE,
     HASH_ID_CHARS,
     ISO_SECTOR_SIZE,
     LINEUP_POSITIONS,
@@ -57,7 +55,6 @@ from retro_roster_patcher.games.mvp_psp.models import (
     STARTERS_PER_TEAM,
     TEAM_COUNT,
     TEAM_HASHES,
-    MVPPitch,
     MVPPlayerRecord,
     database_big_extent,
 )
@@ -134,8 +131,8 @@ def test_the_last_sections_allocation_runs_to_the_end_of_the_blob():
     assert offset + allocation == DATABASE_BIG_SIZE
 
 
-def test_the_compact_attribute_table_is_the_first_section():
-    assert SECTION_MAP[0][1] == COMPACT_ATTRIB_TABLE
+def test_the_archives_directory_is_the_first_section():
+    assert SECTION_MAP[0][1] == DIRECTORY_TABLE
 
 
 def test_the_four_player_tables_are_the_ones_the_patcher_merges_into():
@@ -155,8 +152,8 @@ def test_every_modified_table_is_a_real_section(name):
     assert name in SECTION_ALLOCATIONS
 
 
-def test_the_compact_attribute_table_is_not_among_the_modified_ones():
-    assert COMPACT_ATTRIB_TABLE not in MODIFIED_TABLES
+def test_the_directory_is_not_among_the_tables():
+    assert DIRECTORY_TABLE not in MODIFIED_TABLES
 
 
 # The tests above check that the section table is *self-consistent* -- ascending,
@@ -166,23 +163,23 @@ def test_the_compact_attribute_table_is_not_among_the_modified_ones():
 # `SECTION_ALLOCATIONS` gives it, so the fixture moves with the code and the round
 # trip closes over the error.
 #
-# These are the numbers themselves. They are the source's, they have never been
-# checked against a real disc, and no disc may enter this repository to check them --
-# so this is not a derivation, it is the record. A change to one of them is a change
-# to a disc's layout and has to be a change to this list.
+# These are the numbers themselves, as the retail disc's directory lists them
+# (`attrib.dat`, `lhattrib.dat`, `rhattrib.dat`, ...; `lh` is against
+# left-handers). A change to one of them is a change to a disc's layout and has
+# to be a change to this list.
 
 SECTION_OFFSETS = (
-    (0, "attrib_compact"),
+    (0, "directory"),
     (324, "attrib"),
-    (61772, "lrattrib_rhp"),
-    (101852, "lrattrib_lhp"),
+    (61772, "lrattrib_lhp"),
+    (101852, "lrattrib_rhp"),
     (144692, "batstat"),
     (165552, "fieldstat"),
-    (188428, "lrbatstat_rhp"),
-    (214440, "lrpitchstat_rhp"),
+    (188428, "lrbatstat_lhp"),
+    (214440, "lrpitchstat_lhp"),
     (229676, "pitchstat"),
-    (245436, "lrbatstat_lhp"),
-    (274488, "lrpitchstat_lhp"),
+    (245436, "lrbatstat_rhp"),
+    (274488, "lrpitchstat_rhp"),
     (290260, "pitchattrib"),
     (313720, "team"),
     (317176, "teamstat"),
@@ -227,8 +224,17 @@ ATTRIB_COLUMNS = {
     "ATTRIB_THROWS": 4,
     "ATTRIB_PRIMARY_POS": 5,
     "ATTRIB_SECONDARY_POS": 6,
+    "ATTRIB_AUDIO_ID": 7,
+    "ATTRIB_PHOTO": 8,
     "ATTRIB_HEIGHT": 9,
     "ATTRIB_WEIGHT": 10,
+    "ATTRIB_BONE_PROFILE": 11,
+    "ATTRIB_FACE": 12,
+    "ATTRIB_SKIN_TONE": 13,
+    "ATTRIB_HAIR_STYLE": 14,
+    "ATTRIB_HAIR_COLOUR": 15,
+    "ATTRIB_FACIAL_HAIR": 16,
+    "ATTRIB_BODY_TYPE": 17,
     "ATTRIB_PLATE_DISCIPLINE": 18,
     "ATTRIB_BUNTING": 19,
     "ATTRIB_STEALING_AGGRESSIVE": 20,
@@ -239,9 +245,21 @@ ATTRIB_COLUMNS = {
     "ATTRIB_THROW_STRENGTH": 25,
     "ATTRIB_THROW_ACCURACY": 26,
     "ATTRIB_DURABILITY": 27,
+    "ATTRIB_BATTING_STANCE": 28,
+    "ATTRIB_SWING_TYPE": 29,
+    "ATTRIB_BAT_COLOUR": 30,
+    "ATTRIB_BATTING_GLOVE": 31,
+    "ATTRIB_WRISTBAND": 32,
+    "ATTRIB_ELBOW_GUARD": 33,
+    "ATTRIB_SHIN_GUARD": 34,
+    "ATTRIB_SOCKS": 35,
+    "ATTRIB_CATCHER_MASK": 36,
+    "ATTRIB_FIELD_GLOVE_COLOUR": 37,
+    "ATTRIB_DITTY": 38,
     "ATTRIB_SALARY": 39,
     "ATTRIB_CONTRACT_LENGTH": 40,
     "ATTRIB_STARPOWER": 41,
+    "ATTRIB_HIDDEN": 42,
     "ATTRIB_BIRTHDAY": 43,
 }
 
@@ -250,22 +268,10 @@ LR_COLUMNS = {
     "LR_LAST_NAME": 1,
     "LR_CONTACT": 2,
     "LR_POWER": 3,
-    "LR_SPRAY_UL": 4,
-    "LR_SPRAY_UM": 5,
-    "LR_SPRAY_UR": 6,
-    "LR_SPRAY_CL": 7,
-    "LR_SPRAY_CM": 8,
-    "LR_SPRAY_CR": 9,
-    "LR_SPRAY_LL": 10,
-    "LR_SPRAY_LM": 11,
-    "LR_SPRAY_LR": 12,
-    "LR_FIELD_PCT_LF": 13,
-    "LR_FIELD_PCT_CF": 14,
-    "LR_FIELD_PCT_RF": 15,
     "LR_HR_PCT": 16,
-    "LR_FB": 17,
-    "LR_LD": 18,
-    "LR_GB": 19,
+    "LR_FB_PCT": 17,
+    "LR_LD_PCT": 18,
+    "LR_GB_PCT": 19,
 }
 
 PITCHATTRIB_COLUMNS = {
@@ -309,9 +315,10 @@ PITCH_BLOCK_SHAPE = {
     "PA_PITCH_STRIDE": 5,
     "PA_PITCH_TYPE_OFFSET": 0,
     "PA_PITCH_MOVEMENT_OFFSET": 1,
+    "PA_PITCH_DESC_OFFSET": 2,
     "PA_PITCH_CONTROL_OFFSET": 3,
     "PA_PITCH_VELOCITY_OFFSET": 4,
-    "MAX_EXTRA_PITCHES": 3,
+    "PA_PITCH_SLOTS": 4,
 }
 
 POSITION_CODES = {
@@ -327,10 +334,12 @@ POSITION_CODES = {
     "ATTRIB_POS_RELIEVER": 10,
 }
 
+# As the Edit Player screen cycles them.
 PITCH_TYPE_CODES = {
-    "PITCH_FASTBALL": 1,
-    "PITCH_SLIDER": 3,
-    "PITCH_CHANGEUP": 4,
+    "Changeup": 1,
+    "Curveball": 2,
+    "Slider": 6,
+    "2-Seam Fastball": 8,
 }
 
 DECLARED_NUMBERS = {
@@ -341,11 +350,10 @@ DECLARED_NUMBERS = {
     **TEAM_COLUMNS,
     **PITCH_BLOCK_SHAPE,
     **POSITION_CODES,
-    **PITCH_TYPE_CODES,
     "HASH_ID_CHARS": 9,
     "AL_SLOT_COUNT": 14,
     "NOT_IN_LINEUP": -1,
-    # 7 is centre field. `_build_attrib_fields` reaches it only for a position
+    # 7 is centre field. `_attrib_fields` reaches it only for a position
     # string `POS_STRING_TO_NUM` does not name, which `map_rosters` cannot
     # produce, so nothing else says which code it is; 0 would file the player
     # as a starting pitcher.
@@ -366,7 +374,7 @@ def test_no_two_columns_of_one_table_share_a_number(columns):
 
 
 def test_the_second_pitch_is_the_base_of_the_repeating_block():
-    # `_build_pitchattrib_fields` addresses pitches 2-4 as
+    # `_pitch_fields` addresses pitches 2-5 as
     # `PA_PITCH2_TYPE + i * PA_PITCH_STRIDE + offset`, so the four `PA_PITCH2_*`
     # constants have to be that block's first instance or the named ones and the
     # computed ones disagree.
@@ -384,11 +392,18 @@ def test_the_second_pitch_is_the_base_of_the_repeating_block():
     }
 
 
-def test_the_last_pitch_the_patcher_writes_stops_before_the_delivery_column():
-    # Three extra pitches after the fastball puts the last velocity at column
-    # 22, and the delivery column is 28, so pitch 5's block (23-27) is the gap.
-    last = models.PA_PITCH2_TYPE + (models.MAX_EXTRA_PITCHES - 1) * models.PA_PITCH_STRIDE
-    assert last + models.PA_PITCH_VELOCITY_OFFSET == 22
+def test_the_four_pitch_slots_end_at_the_delivery_column():
+    end = models.PA_PITCH2_TYPE + models.PA_PITCH_SLOTS * models.PA_PITCH_STRIDE
+    assert end == models.PA_PITCHER_DELIVERY
+
+
+@pytest.mark.parametrize(("name", "code"), sorted(PITCH_TYPE_CODES.items()))
+def test_a_pitch_type_code_is_the_one_the_edit_screen_names(name, code):
+    assert models.PITCH_NAMES[code] == name
+
+
+def test_the_arsenals_are_pitch_types():
+    assert set(models.STARTER_ARSENAL + models.RELIEVER_ARSENAL) <= set(models.PITCH_NAMES)
 
 
 def test_the_extent_starts_where_the_lba_says():
@@ -659,14 +674,6 @@ def test_a_player_outside_the_lineup_stores_minus_one():
     assert NOT_IN_LINEUP == -1
 
 
-def test_the_scale_runs_from_zero():
-    assert ATTR_MIN == 0
-
-
-def test_the_scale_runs_to_ninety_nine():
-    assert ATTR_MAX == 99
-
-
 def test_the_designated_hitter_is_stored_as_a_first_baseman():
     # The game has no DH position code, so a DH is offered at first base by the
     # game's own lineup screen. Lossy, and the source's.
@@ -695,29 +702,23 @@ def test_the_pitcher_and_reliever_codes_are_distinct():
     assert ATTRIB_POS_PITCHER != ATTRIB_POS_RELIEVER
 
 
-def test_a_pitch_is_frozen():
-    pitch = MVPPitch(type=1, movement=2, control=3, velocity=4)
-    with pytest.raises(dataclasses.FrozenInstanceError):
-        pitch.velocity = 5
-
-
-def test_a_pitch_carries_its_four_values():
-    pitch = MVPPitch(type=1, movement=2, control=3, velocity=4)
-    assert (pitch.type, pitch.movement, pitch.control, pitch.velocity) == (1, 2, 3, 4)
-
-
-def test_a_player_record_defaults_to_six_feet():
-    # PINS UPSTREAM FIDELITY DELIBERATELY, and this is the bug: nothing in this
-    # package ever assigns `height`, so this default is what every patched
-    # player is written at. `patcher._build_attrib_fields` says why it stays.
+def test_a_player_record_without_a_height_is_six_feet():
     assert MVPPlayerRecord().height == 72
 
 
-def test_a_player_record_defaults_to_the_league_average_weight():
-    # PINS UPSTREAM FIDELITY DELIBERATELY, the other half of the same bug:
-    # nothing assigns `weight` either, so this default is what every patched
-    # player is written at. `patcher._build_attrib_fields` says why it stays.
+def test_a_player_record_without_a_weight_is_190_pounds():
     assert MVPPlayerRecord().weight == 190
+
+
+def test_height_and_weight_are_stored_above_48_inches_and_100_pounds():
+    # The retail disc's Manny Ramirez is 24 and 113; the Edit Player screen
+    # shows 6'0" and 213.
+    assert (models.HEIGHT_BASE, models.WEIGHT_BASE) == (48, 100)
+
+
+def test_a_birthday_counts_days_from_1948():
+    # The retail disc's Curt Schilling is 6892; the screen shows 14 November 1966.
+    assert models.BIRTHDAY_EPOCH + timedelta(6892) == date(1966, 11, 14)
 
 
 def test_a_player_record_defaults_to_being_out_of_the_lineup():
@@ -729,8 +730,8 @@ def test_a_player_record_starts_with_no_hash_id():
     assert MVPPlayerRecord().hash_id == ""
 
 
-def test_two_player_records_do_not_share_an_arsenal():
+def test_two_player_records_do_not_share_their_ratings():
     first = MVPPlayerRecord()
     second = MVPPlayerRecord()
-    first.pitches.append(MVPPitch(type=1, movement=1, control=1, velocity=1))
-    assert second.pitches == []
+    first.ratings["speed"] = 0.9
+    assert second.ratings == {}

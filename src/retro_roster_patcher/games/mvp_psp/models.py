@@ -13,16 +13,18 @@ field-number constants below are column names, not addresses, so a wrong one
 writes a real column of a real record with the wrong meaning rather than
 crashing.
 
-`database.big` is 19 sections. Each is an independent RefPack stream at a fixed
-offset, and the space between one offset and the next is that section's whole
-allocation -- there is no length word anywhere, so a section that recompresses
-larger than its allocation cannot be stored at all. `rom_writer` raises rather
-than silently keeping the original; see `MVPPSPRomWriter`.
+`database.big` is an EA compressed archive (`C0 FB`): a directory of 18
+files, then each file as an independent RefPack stream at its offset, padded to
+four bytes. The directory gives each file's offset and compressed length; the
+space between one offset and the next is the file's whole allocation, so a
+table that recompresses larger than that cannot be stored at all. `rom_writer`
+raises rather than silently keeping the original; see `MVPPSPRomWriter`.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import date
 
 # Where `database.big` lives: a hardcoded LBA, and that is the whole of this
 # game's ISO 9660 interaction -- two `seek(DATABASE_BIG_LBA * ISO_SECTOR_SIZE)`
@@ -51,20 +53,24 @@ def database_big_extent() -> tuple[int, int]:
     return start, start + DATABASE_BIG_SIZE
 
 
-# `(offset within database.big, table name)`, ascending. Nineteen entries,
-# carried over unverified against a real disc.
+# `(offset within database.big, table name)`, ascending: the directory, then
+# its 18 files in its order (`attrib.dat`, `lhattrib.dat`, ...). The `lh` and
+# `rh` files are a player against left- and right-handers: the retail disc's
+# Bobby Abreu, a left-handed batter, has 233 plate appearances in
+# `lhbstats.dat` and 480 in `rhbstats.dat`, and its Edit Player screen shows
+# Manny Ramirez's `lhattrib.dat` contact and power as his VS LHP.
 SECTION_MAP: tuple[tuple[int, str], ...] = (
-    (0, "attrib_compact"),
+    (0, "directory"),
     (324, "attrib"),
-    (61772, "lrattrib_rhp"),
-    (101852, "lrattrib_lhp"),
+    (61772, "lrattrib_lhp"),
+    (101852, "lrattrib_rhp"),
     (144692, "batstat"),
     (165552, "fieldstat"),
-    (188428, "lrbatstat_rhp"),
-    (214440, "lrpitchstat_rhp"),
+    (188428, "lrbatstat_lhp"),
+    (214440, "lrpitchstat_lhp"),
     (229676, "pitchstat"),
-    (245436, "lrbatstat_lhp"),
-    (274488, "lrpitchstat_lhp"),
+    (245436, "lrbatstat_rhp"),
+    (274488, "lrpitchstat_rhp"),
     (290260, "pitchattrib"),
     (313720, "team"),
     (317176, "teamstat"),
@@ -105,13 +111,17 @@ PLAYER_TABLES: tuple[str, ...] = ("attrib", "lrattrib_rhp", "lrattrib_lhp", "pit
 ROSTER_TABLE = "roster"
 MODIFIED_TABLES: tuple[str, ...] = (*PLAYER_TABLES, ROSTER_TABLE)
 
-# The first section, and the only one the patcher never rewrites -- an inherited
-# defect rather than a decision. See `rom_writer`.
-COMPACT_ATTRIB_TABLE = "attrib_compact"
+# The archive's directory: `C0 FB`, its length (2 bytes), the file count (2),
+# then per file a 3-byte offset, a 3-byte compressed length and a NUL-ended
+# name, all big-endian. Not a table: `rom_writer` rewrites the length of each
+# file it rewrites.
+DIRECTORY_TABLE = "directory"
+DIRECTORY_MAGIC = b"\xc0\xfb"
 
-# Column numbers within each table, from the section's own header line. Keep the
-# ones no code writes: together they are the only description of this format
-# anywhere in the project.
+# Column numbers within each table, from the section's own header line (its
+# names in the comments where the constant shortens them). The ratings on 0-15
+# show on the Edit Player screens as 10 per point to 5, then 5 per point (12 is
+# 85); speed, contact, power, stamina and pitch control as stored.
 
 ATTRIB_FIRST_NAME = 0
 ATTRIB_LAST_NAME = 1
@@ -119,13 +129,21 @@ ATTRIB_JERSEY = 2
 ATTRIB_BATS = 3  # 0=R, 1=L, 2=S
 ATTRIB_THROWS = 4  # 0=R, 1=L
 ATTRIB_PRIMARY_POS = 5
-ATTRIB_SECONDARY_POS = 6
+ATTRIB_SECONDARY_POS = 6  # a position code or `SECONDARY_*`; his own when he has none
 ATTRIB_AUDIO_ID = 7  # names the player's speech and portrait (`portraits`)
-ATTRIB_HEIGHT = 9  # inches
-ATTRIB_WEIGHT = 10  # pounds
+ATTRIB_PHOTO = 8  # 1, or 2 on 26 rookies the disc has no photo of; not written
+ATTRIB_HEIGHT = 9  # inches above `HEIGHT_BASE`
+ATTRIB_WEIGHT = 10  # pounds above `WEIGHT_BASE`
+ATTRIB_BONE_PROFILE = 11  # the 3D body's build, 26-37 (`spreads.Spreads.build`)
+ATTRIB_FACE = 12  # 12-16: `looks`
+ATTRIB_SKIN_TONE = 13
+ATTRIB_HAIR_STYLE = 14
+ATTRIB_HAIR_COLOUR = 15
+ATTRIB_FACIAL_HAIR = 16
+ATTRIB_BODY_TYPE = 17  # 1 Athletic, 2 Heavy
 ATTRIB_PLATE_DISCIPLINE = 18
 ATTRIB_BUNTING = 19
-ATTRIB_STEALING_AGGRESSIVE = 20
+ATTRIB_STEALING_AGGRESSIVE = 20  # the screen's Stealing Tendency
 ATTRIB_BASERUNNING = 21
 ATTRIB_SPEED = 22
 ATTRIB_FIELDING = 23
@@ -133,35 +151,54 @@ ATTRIB_RANGE = 24
 ATTRIB_THROW_STRENGTH = 25
 ATTRIB_THROW_ACCURACY = 26
 ATTRIB_DURABILITY = 27
-ATTRIB_SALARY = 39  # not written
+ATTRIB_BATTING_STANCE = 28  # 0-5 the shared stances ("Open"), the rest a star's own
+ATTRIB_SWING_TYPE = 29  # 0 or 1; no screen names it
+ATTRIB_BAT_COLOUR = 30  # 30-37 equipment, as the Equipment screen shows it; not written
+ATTRIB_BATTING_GLOVE = 31
+ATTRIB_WRISTBAND = 32
+ATTRIB_ELBOW_GUARD = 33
+ATTRIB_SHIN_GUARD = 34
+ATTRIB_SOCKS = 35
+ATTRIB_CATCHER_MASK = 36
+ATTRIB_FIELD_GLOVE_COLOUR = 37
+ATTRIB_DITTY = 38  # walk-up music, 0-6; not written
+ATTRIB_SALARY = 39  # not written: ESPN's rosters carry a contract for 35 of 1146
 ATTRIB_CONTRACT_LENGTH = 40  # not written
 ATTRIB_STARPOWER = 41
-ATTRIB_BIRTHDAY = 43  # not written
+ATTRIB_HIDDEN = 42  # 1 on the MVP Legends
+ATTRIB_BIRTHDAY = 43  # days from `BIRTHDAY_EPOCH`
 
-# `lrattrib_rhp` and `lrattrib_lhp` share a layout: the same player, split by
-# the handedness of the pitcher he is facing. Only names, contact and power are
-# written; the spray-chart and batted-ball columns are left as the disc has
-# them, because nothing in any provider's data could produce them.
+# The season the disc holds, whose calendar the game ages players by.
+DISC_SEASON = 2005
+HEIGHT_BASE = 48
+WEIGHT_BASE = 100
+BIRTHDAY_EPOCH = date(1948, 1, 1)
+
+# `lrattrib_lhp` and `lrattrib_rhp`: the batter against left- and right-handed
+# pitching. Columns 0-19 are the same in both; the approach columns after them
+# are not (the LHP table has no `lrattrib_chasehardbreak`), so those are named
+# by the header, not numbered.
 LR_FIRST_NAME = 0
 LR_LAST_NAME = 1
 LR_CONTACT = 2
 LR_POWER = 3
-LR_SPRAY_UL = 4  # not written
-LR_SPRAY_UM = 5  # not written
-LR_SPRAY_UR = 6  # not written
-LR_SPRAY_CL = 7  # not written
-LR_SPRAY_CM = 8  # not written
-LR_SPRAY_CR = 9  # not written
-LR_SPRAY_LL = 10  # not written
-LR_SPRAY_LM = 11  # not written
-LR_SPRAY_LR = 12  # not written
-LR_FIELD_PCT_LF = 13  # not written
-LR_FIELD_PCT_CF = 14  # not written
-LR_FIELD_PCT_RF = 15  # not written
-LR_HR_PCT = 16  # not written
-LR_FB = 17  # not written
-LR_LD = 18  # not written
-LR_GB = 19  # not written
+# The 3x3 strike zone, top-left to bottom-right (`lrattrib_hit_ul` ...
+# `lrattrib_hit_lr`): 0 cold (blue on the Edit Player list), 1 neither, 2 hot (red).
+LR_ZONES = tuple(range(4, 13))
+ZONE_COLD = 0
+ZONE_HOT = 2
+# Where his fly balls go, percent: a right-handed swing pulls them to left.
+LR_DIRECTION = (13, 14, 15)  # lf, cf, rf
+# His balls in play, percent, summing to 100.
+LR_HR_PCT = 16
+LR_FB_PCT = 17
+LR_LD_PCT = 18
+LR_GB_PCT = 19
+# How often he chases, takes and misses a fastball, a slow and a hard breaking
+# ball, 0-15.
+LR_CHASE = ("lrattrib_chasefb", "lrattrib_chaseslowbreak", "lrattrib_chasehardbreak")
+LR_TAKE = ("lrattrib_takefb", "lrattrib_takeslowbreak", "lrattrib_takehardbreak")
+LR_MISS = ("lrattrib_missfb", "lrattrib_missslowbreak", "lrattrib_misshardbreak")
 
 # `pitchattrib`. Pitch 1 is asymmetric with pitches 2-5: it is always a fastball,
 # so it has no type column and occupies four columns where every later pitch
@@ -169,29 +206,29 @@ LR_GB = 19  # not written
 # and pitch 1 is addressed by its own three constants.
 PA_FIRST_NAME = 0
 PA_LAST_NAME = 1
-PA_STAMINA = 2
-PA_PICKOFF = 3
-PA_PITCH1_MOVEMENT = 4
-PA_PITCH1_DESC = 5  # not written
+PA_STAMINA = 2  # 40-99
+PA_PICKOFF = 3  # 0-15
+PA_PITCH1_MOVEMENT = 4  # 0 on every retail pitcher
+PA_PITCH1_DESC = 5  # 0 on every retail pitcher
 PA_PITCH1_CONTROL = 6
-PA_PITCH1_VELOCITY = 7
+PA_PITCH1_VELOCITY = 7  # miles an hour
 PA_PITCH2_TYPE = 8
 PA_PITCH2_MOVEMENT = 9
-PA_PITCH2_DESC = 10  # not written
+PA_PITCH2_DESC = 10
 PA_PITCH2_CONTROL = 11
 PA_PITCH2_VELOCITY = 12
-PA_PITCHER_DELIVERY = 28  # not written
+PA_PITCHER_DELIVERY = 28  # 0-8 shared windups, the rest a pitcher's own ("Schilling")
 
-# Columns per pitch in the repeating block, and the offsets within one.
+# Columns per pitch in the repeating block, and the offsets within one. A slot
+# without a pitch holds `NO_PITCH` in all five.
 PA_PITCH_STRIDE = 5
 PA_PITCH_TYPE_OFFSET = 0
-PA_PITCH_MOVEMENT_OFFSET = 1
+PA_PITCH_MOVEMENT_OFFSET = 1  # 0-15
+PA_PITCH_DESC_OFFSET = 2  # 0-7 by pitch type; no screen shows it
 PA_PITCH_CONTROL_OFFSET = 3
-PA_PITCH_VELOCITY_OFFSET = 4
-
-# How many of a pitcher's arsenal reach the repeating block: at most three after
-# the fastball, so columns 23-27 (pitch 5) are untouched on every player.
-MAX_EXTRA_PITCHES = 3
+PA_PITCH_VELOCITY_OFFSET = 4  # miles an hour
+PA_PITCH_SLOTS = 4  # pitches 2-5
+NO_PITCH = "-"
 
 # `roster`. Four (position, batting order) pairs, because the game stores a
 # separate lineup for each combination of opposing-pitcher handedness and
@@ -253,7 +290,7 @@ POS_STRING_TO_NUM: dict[str, int] = {
     "LR": ATTRIB_POS_RELIEVER,
 }
 
-# What `_build_attrib_fields` writes for a position string the table above does
+# What `patcher._attrib_fields` writes for a position string the table above does
 # not name. 7 is centre field.
 DEFAULT_POS_NUM = ATTRIB_POS_CF
 
@@ -460,26 +497,35 @@ MODERN_MLB_TO_MVP: dict[str, str] = {
     "PHI": "PHI",
 }
 
-# Every rating in this game is on 0-99. There is no other scale in the package.
-ATTR_MIN = 0
-ATTR_MAX = 99
+# Pitch type codes, as the Edit Player screen's Pitch 2 cycles them. Pitch 1 is
+# always the fastball and has no type column.
+PITCH_NAMES: dict[int, str] = {
+    1: "Changeup",
+    2: "Curveball",
+    3: "Knuckleball",
+    4: "Screwball",
+    5: "Sinker",
+    6: "Slider",
+    7: "Splitter",
+    8: "2-Seam Fastball",
+    9: "Cutter",
+    10: "Circle Change",
+    11: "Forkball",
+    12: "Knucklecurve",
+    13: "Palmball",
+    14: "Slurve",
+}
+# No provider names a pitcher's pitches, so after the fastball he throws the
+# retail disc's commonest arsenal for his role: its starters' (30 of 200) and
+# its relievers' (22 of 180).
+STARTER_ARSENAL = (1, 2, 6, 8)
+RELIEVER_ARSENAL = (1, 6)
 
-# Pitch type codes. Only these three are ever produced, and the fastball code is
-# written for pitch 1 only as a placeholder the game ignores -- column 8 is the
-# first type column and pitch 1 has none.
-PITCH_FASTBALL = 1
-PITCH_SLIDER = 3
-PITCH_CHANGEUP = 4
-
-
-@dataclass(frozen=True)
-class MVPPitch:
-    """One entry in a pitcher's arsenal."""
-
-    type: int
-    movement: int
-    control: int
-    velocity: int
+# `attrib` column 6 codes besides the positions.
+SECONDARY_DH = 9
+SECONDARY_OF = 11
+SECONDARY_IF = 12
+SECONDARY_UTILITY = 13
 
 
 @dataclass
@@ -492,6 +538,11 @@ class MVPPlayerRecord:
     `height` and `weight` are the provider's, else 6'0" and 190 lb.
     `player_id`, `photo_url` and `nationality` are the provider's, for the
     player's portrait and looks (`looks`, `portraits`); none is a column.
+
+    `ratings` holds where he ranks in his group, 0-1, for each rating the
+    mapper had his stats for (`stat_mapper.RATINGS`); `patch` writes the value
+    at that rank of the disc's own spread of it (`spreads`), and for a rating
+    not in it the disc's median for his position.
     """
 
     first_name: str = ""
@@ -500,31 +551,15 @@ class MVPPlayerRecord:
     bats: int = 0  # 0=R, 1=L, 2=S
     throws: int = 0  # 0=R, 1=L
     primary_position: str = "CF"
-    secondary_position: str = ""
+    secondary_position: int | None = None  # `attrib` column 6; None for his position's default
     height: int = 72  # inches
     weight: int = 190  # pounds
+    birth_date: str = ""  # ISO; "" keeps the disc's
 
-    speed: int = 50
-    fielding: int = 50
-    arm_range: int = 50
-    throw_strength: int = 50
-    throw_accuracy: int = 50
-    durability: int = 50
-    plate_discipline: int = 50
-    bunting: int = 50
-    baserunning: int = 50
-    stealing: int = 50
-    starpower: int = 50
-
-    contact_rhp: int = 50
-    power_rhp: int = 50
-    contact_lhp: int = 50
-    power_lhp: int = 50
+    ratings: dict[str, float] = field(default_factory=dict)
 
     is_pitcher: bool = False
-    stamina: int = 50
-    pickoff: int = 50
-    pitches: list[MVPPitch] = field(default_factory=list)
+    pitch_types: tuple[int, ...] = ()
 
     # Filled by `map_rosters` from the player's index in the selected roster,
     # not by the mapper: they are facts about the slot, not about the player.
