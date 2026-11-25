@@ -328,8 +328,10 @@ def test_younger_players_are_faster_and_shorter_ones_quicker_off_the_mark():
     assert acceleration == sorted(acceleration) and acceleration[-1] > acceleration[0]
 
 
-def test_heading_and_jump_rank_headers_and_height():
-    players, stats = _forwards(20, headed_goals=lambda k: k // 2, shots_headed=lambda k: k)
+def test_heading_ranks_headed_goals_and_jump_height():
+    players, stats = _forwards(20, headed_goals=lambda k: k // 2)
+    for k, player in enumerate(players):
+        player.height = 170 + k
     rated = _rate(players, stats)
     assert rated[-1].heading > rated[0].heading
     assert rated[-1].jump_power > rated[0].jump_power

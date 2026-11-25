@@ -1360,7 +1360,7 @@ def test_fetch_survives_a_failed_lineup(tmp_path):
 
 def _keeper_line(pid):
     return PlayerStats(pid, 30, 2700, 0, 0, 0, 0, 900, 70.0, 0, 0, 0, 0, 0, 0, 0, 1, 2, 1, 0,
-                       None, 30, saves=90, shots_faced=120)  # fmt: skip
+                       None, 30, saves=90)  # fmt: skip
 
 
 def test_fetch_keeps_each_teams_stats_and_survives_a_failed_one(tmp_path):

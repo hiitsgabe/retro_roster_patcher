@@ -74,16 +74,13 @@ class PlayerStats:
     rating: float | None  # Provider's own average match rating, if it publishes one
     lineups: int = 0  # Times in starting XI
     saves: int = 0
-    shots_faced: int = 0
     goals_conceded: int = 0
     clean_sheets: int = 0
     headed_goals: int = 0
-    shots_headed: int = 0
     crosses_total: int = 0
     crosses_accurate: int = 0
     long_balls_total: int = 0
     long_balls_accurate: int = 0
-    free_kick_shots: int = 0
     free_kick_goals: int = 0
     left_foot_shots: int = 0
     right_foot_shots: int = 0
