@@ -21,10 +21,10 @@ from retro_roster_patcher.games.nhl94_snes.models import (
     NHL94PlayerAttributes,
 )
 from retro_roster_patcher.games.nhl94_snes.stat_mapper import (
+    GOALIE_DEFAULTS,
     POSITION_DEFAULTS,
+    LeagueStats,
     NHL94StatMapper,
-    _clamp,
-    _scale,
 )
 from retro_roster_patcher.sports.models import Player
 
@@ -43,24 +43,6 @@ def _squad(spec):
 @pytest.fixture
 def mapper():
     return NHL94StatMapper()
-
-
-@pytest.mark.parametrize(
-    ("value", "expected"),
-    [(0, 0), (15, 1), (45, 3), (90, 6), (200, 6), (-50, 0)],
-)
-def test_a_value_scales_onto_the_zero_to_six_range(value, expected):
-    assert _scale(value, 0, 90) == expected
-
-
-def test_a_degenerate_range_scales_to_the_middle():
-    # `high <= low` has no ratio to compute, so the mapper answers 3.
-    assert _scale(10, 5, 5) == 3
-
-
-@pytest.mark.parametrize(("value", "expected"), [(-1, 0), (3, 3), (7, 6)])
-def test_clamping_holds_a_value_inside_zero_to_six(value, expected):
-    assert _clamp(value) == expected
 
 
 def test_a_team_code_maps_to_its_slot(mapper):
@@ -193,124 +175,106 @@ def test_any_other_handedness_is_encoded_as_left(mapper):
     assert mapper.map_player(_player(2, "C"), "BOS").handedness == 0
 
 
-def test_a_scoring_skaters_attributes_come_from_the_stat_line(mapper):
-    stats = {"G": 40, "A": 55, "PTS": 90, "+/-": 40, "PIM": 80}
-    attributes = mapper.map_player(_player(1, "C"), "BOS", stats).attributes
-    assert attributes.shot_power == 6  # 40 goals against a 0-40 range
-    assert attributes.shot_accuracy == 6
-    assert attributes.pass_accuracy == 6  # 55 assists against 0-55
-    assert attributes.stick_handling == 6  # 90 points against 0-90
-    assert attributes.off_awareness == 6
-    assert attributes.def_awareness == 6  # +40 against a -30..+40 range
-    assert attributes.roughness == 6  # 80 PIM against 0-80
-    assert attributes.aggression == 6
+def _league(mapper, position, lines, index):
+    """Map player `index` of `lines` (one per player at `position`) against the
+    league they make."""
+    pairs = [(_player(i + 1, position, age=20 + i % 15), line) for i, line in enumerate(lines)]
+    league = LeagueStats.from_lines(pairs)
+    player, line = pairs[index]
+    return mapper.map_player(player, "BOS", line, league).attributes
 
 
-def test_a_pointless_skater_lands_at_the_bottom_of_every_scaled_attribute(mapper):
-    stats = {"G": 0, "A": 0, "PTS": 0, "+/-": -30, "PIM": 0}
-    attributes = mapper.map_player(_player(1, "C"), "BOS", stats).attributes
-    assert attributes.shot_power == 0
-    assert attributes.pass_accuracy == 0
-    assert attributes.off_awareness == 0
-    assert attributes.def_awareness == 0
-    assert attributes.roughness == 0
+def test_every_skater_rating_comes_from_its_own_stats(mapper):
+    """Shot accuracy is not shot power, stick handling not offensive awareness,
+    shot bias not aggression, and checking, endurance, speed and agility come
+    from the line too."""
+    lines = [
+        {
+            "GP": 82,
+            "G": 10 + i % 15,
+            "A": 15 + i % 20,
+            "PTS": 25 + i % 30,
+            "S": 120 + 3 * i,
+            "PIM": 20 + i,
+            "hits": 50 + i,
+            "TOI": 900 + 10 * i,
+            "+/-": i % 9 - 4,
+        }
+        for i in range(40)
+    ]
+    # Many shots, few goals, many assists, few penalties, many hits, big minutes.
+    lines.append(
+        {
+            "GP": 82,
+            "G": 6,
+            "A": 60,
+            "PTS": 66,
+            "S": 330,
+            "PIM": 4,
+            "hits": 250,
+            "TOI": 1500,
+            "+/-": 0,
+        }
+    )
+    player = _league(mapper, "C", lines, 40)
+    assert player.shot_power >= 5 and player.shot_accuracy <= 1
+    assert player.off_awareness >= 5 and player.stick_handling <= 2
+    assert player.pass_accuracy >= 5 and player.shot_bias <= 1
+    assert player.aggression <= 1 and player.fighting <= 1
+    assert player.checking >= 5 and player.endurance >= 5
+    assert player.speed >= 4 and player.agility >= 4
 
 
-def test_fifty_points_is_not_enough_for_the_speed_bonus(mapper):
+def test_a_partial_line_keeps_the_positions_default_for_what_it_lacks(mapper):
+    """ESPN's leaders give some skaters only one category: the stats there are
+    used, the rest stay the position's, not 0 nor the team's lowest."""
     base = POSITION_DEFAULTS["LW"]
-    attributes = mapper.map_player(_player(1, "LW"), "BOS", {"PTS": 50}).attributes
-    assert attributes.speed == base.speed
-    assert attributes.agility == base.agility
+    lines = [{"GP": 82, "A": 10 + i} for i in range(40)]
+    lines.append({"GP": 82, "A": 70})
+    attributes = _league(mapper, "LW", lines, 40)
+    assert isinstance(attributes, NHL94PlayerAttributes)
+    assert attributes.pass_accuracy >= 5
+    for name in ("shot_power", "shot_accuracy", "off_awareness", "def_awareness", "aggression"):
+        assert getattr(attributes, name) == getattr(base, name)
 
 
-def test_fifty_one_points_earns_it(mapper):
-    """Pins `> 50` rather than `>= 50`, from the other side of the boundary."""
-    base = POSITION_DEFAULTS["LW"]
-    attributes = mapper.map_player(_player(1, "LW"), "BOS", {"PTS": 51}).attributes
-    assert attributes.speed == base.speed + 1
-    assert attributes.agility == base.agility + 1
+def test_a_goalie_is_rated_from_his_season(mapper):
+    """Save % gives defensive awareness; saves, wins and goals against the rest."""
+    lines = [
+        {"GP": 40, "W": 15 + i % 10, "SV": 900 + 10 * i, "SV%": 0.890 + 0.001 * i, "GAA": 3.2}
+        for i in range(30)
+    ]
+    lines.append({"GP": 62, "W": 40, "SV": 1750, "SV%": 0.925, "GAA": 2.1, "SO": 6})
+    star = _league(mapper, "G", lines, 30)
+    worst = _league(mapper, "G", lines, 0)
+    assert isinstance(star, NHL94GoalieAttributes)
+    assert (star.agility, star.def_awareness, star.puck_control) == (6, 6, 6)
+    assert min(star.stick_right, star.stick_left, star.glove_right, star.glove_left) >= 5
+    assert star.speed == 4 and worst.speed == 3
+    assert worst.def_awareness < star.def_awareness and worst.puck_control < star.puck_control
 
 
-def test_checking_and_endurance_stay_at_the_positions_defaults(mapper):
-    base = POSITION_DEFAULTS["D"]
-    attributes = mapper.map_player(_player(1, "D"), "BOS", {"PTS": 80}).attributes
-    assert attributes.checking == base.checking
-    assert attributes.endurance == base.endurance
+def test_a_goalie_line_without_save_percentage_keeps_the_default_awareness(mapper):
+    lines = [{"GP": 30, "SV%": 0.900 + 0.001 * i, "GAA": 3.0} for i in range(10)]
+    lines.append({"GP": 30, "GAA": 2.8})
+    assert _league(mapper, "G", lines, 10).def_awareness == GOALIE_DEFAULTS.def_awareness
 
 
-def _goalie(mapper, stats):
-    attributes = mapper.map_player(_player(1, "G"), "BOS", stats).attributes
-    assert isinstance(attributes, NHL94GoalieAttributes)
-    return attributes
-
-
-def test_a_goalies_agility_and_save_zones_come_from_save_percentage(mapper):
-    # .925 over 90 games shrinks to .922, past the top of .865-.915.
-    attributes = _goalie(mapper, {"SV%": 0.925, "GP": 90})
-    assert attributes.agility == 6
-    zones = (attributes.stick_right, attributes.stick_left)
-    assert zones + (attributes.glove_right, attributes.glove_left) == (6, 6, 6, 6)
-
-
-def test_a_weak_save_percentage_bottoms_out_the_agility(mapper):
-    assert _goalie(mapper, {"SV%": 0.860, "GP": 90}).agility == 0
-
-
-def test_a_goalies_awareness_comes_from_goals_against(mapper):
-    # 2.2 over 90 games shrinks to 2.29, past the bottom of 3.6-2.4.
-    assert _goalie(mapper, {"GAA": 2.2, "GP": 90}).def_awareness == 6
-
-
-def test_a_small_sample_is_pulled_to_an_average_goalie(mapper):
-    """A backup's perfect night is not the best goalie in the league: ESPN's
-    {SV%: 1.0} with no wins counts as one game, .905, a step over a goalie with
-    no line at all (the .895 prior)."""
-    assert _goalie(mapper, {}).agility == 4
-    assert _goalie(mapper, {"SV%": 1.0}).agility == 5
-    # Three games of .941 count for three games' worth: .906.
-    assert _goalie(mapper, {"SV%": 0.941, "GP": 3}).agility == 5
-
-
-def test_a_goalie_without_wins_is_rated_on_his_own_numbers(mapper):
-    """ESPN lists wins for its top goalies only: two backups with save % lines
-    and no wins rate apart, by their own numbers."""
-    better = _goalie(mapper, {"SV%": 0.948, "GAA": 1.6})
-    worse = _goalie(mapper, {"SV%": 0.864, "GAA": 4.1})
-    assert (better.agility, better.def_awareness) == (4, 3)
-    assert (worse.agility, worse.def_awareness) == (3, 2)
-
-
-def test_puck_control_and_speed_follow_the_goalies_quality(mapper):
-    """Puck control (weight 9) between agility and awareness; speed 3 or 4, the
-    cartridge's goalie range."""
-    star = _goalie(mapper, {"SV%": 0.925, "GAA": 2.2, "GP": 90})
-    average = _goalie(mapper, {})
-    assert (star.puck_control, star.speed) == (6, 4)
-    assert (average.agility, average.def_awareness) == (4, 2)
-    assert (average.puck_control, average.speed) == (3, 3)
+def test_a_goalie_without_a_stat_line_gets_the_goalie_defaults(mapper):
+    record = mapper.map_player(_player(1, "G"), "BOS")
+    assert record.attributes == GOALIE_DEFAULTS
+    assert record.attributes is not GOALIE_DEFAULTS
 
 
 def test_a_goalie_is_never_scored_on_the_skater_scale(mapper):
     """Every skater-only stat is ignored, so a 90-point goalie stays a goalie."""
-    assert _goalie(mapper, {"PTS": 90, "G": 40}) == _goalie(mapper, {})
+    attributes = mapper.map_player(_player(1, "G"), "BOS", {"PTS": 90, "G": 40}).attributes
+    assert attributes == GOALIE_DEFAULTS
 
 
 def test_a_null_stat_value_is_read_as_missing_rather_than_raising(mapper):
     attributes = mapper.map_player(_player(1, "C"), "BOS", {"PTS": None, "G": None}).attributes
     assert attributes.off_awareness == POSITION_DEFAULTS["C"].off_awareness
-
-
-def test_a_partial_line_keeps_the_positions_default_for_what_it_lacks(mapper):
-    """ESPN's leaders give some skaters only one category: the stats there are
-    used, the rest stay the position's, not 0."""
-    base = POSITION_DEFAULTS["LW"]
-    attributes = mapper.map_player(_player(1, "LW"), "BOS", {"A": 55, "PIM": 0}).attributes
-    assert isinstance(attributes, NHL94PlayerAttributes)
-    assert attributes.pass_accuracy == 6
-    assert attributes.roughness == 0
-    assert attributes.shot_power == base.shot_power
-    assert attributes.off_awareness == base.off_awareness
-    assert attributes.def_awareness == base.def_awareness
 
 
 def test_an_empty_stat_dict_falls_through_to_the_defaults(mapper):

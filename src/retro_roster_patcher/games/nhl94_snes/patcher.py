@@ -77,7 +77,7 @@ from .rom_writer import (
     NHL94SNESRomWriter,
     header_counts,
 )
-from .stat_mapper import NHL94StatMapper
+from .stat_mapper import LeagueStats, NHL94StatMapper
 
 #: One (goalies, forwards, defensemen) triple per ROM slot.
 RosterCounts = list[tuple[int, int, int]]
@@ -107,10 +107,6 @@ def _starting_six_first(ordered: list[Player]) -> list[Player]:
     return goalies[:1] + forwards[:3] + defence[:2] + goalies[1:] + forwards[3:] + defence[2:]
 
 
-#: The counting stats a partial ESPN line can lack, which then take the lowest
-#: value the team's list has: a player missing from a top-25 list is below it.
-FLOOR_STATS = ("G", "A", "PTS", "PIM")
-
 ESPN_STANDINGS_URL = "https://site.api.espn.com/apis/v2/sports/hockey/nhl/standings?season={season}"
 
 
@@ -119,15 +115,6 @@ def _number(value: Any) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return None
-
-
-def _leader_floors(leaders: Mapping[str, Mapping[str, Any]]) -> dict[str, float]:
-    floors: dict[str, float] = {}
-    for key in FLOOR_STATS:
-        values = [v for line in leaders.values() if (v := _number(line.get(key))) is not None]
-        if values:
-            floors[key] = min(values)
-    return floors
 
 
 def _goal_rates(leaders: Mapping[str, Mapping[str, Any]]) -> tuple[float, float] | None:
@@ -437,12 +424,20 @@ class NHL94SNESPatcher(Patcher):
         defencemen actually filled, because `patch` writes the header from that
         and not from the ROM. A team with fewer than 2 goalies is left out, with
         a status line, and its slot keeps the cartridge's team: the line table
-        always counts two. A stat line missing a counting stat (ESPN lists each
-        category's top 25) takes the lowest value the team's list has. Each
+        always counts two. Each player's ratings rank his stats against every
+        player fetched; a rating whose stats his line lacks (ESPN lists each
+        category's top 25) keeps the position default. Each
         record's `strength` (header byte 14) is the one `fetch` ranked.
         """
         self.check_slot_mapping(slot_mapping)
         counts = self._resolve_roster_counts(roster_counts)
+        # Every fetched player is the league each one's ratings rank against
+        # (`stat_mapper`), those whose team has no slot among them.
+        league = LeagueStats.from_lines(
+            (player, (roster.extra.get("leaders") or {}).get(str(player.id)) or {})
+            for roster in data.teams
+            for player in roster.players
+        )
         teams: dict[int, NHL94TeamRecord] = {}
         for roster in data.teams:
             slot = self.mapper.get_team_slot(roster.team.code)
@@ -475,12 +470,9 @@ class NHL94SNESPatcher(Patcher):
                 continue
             selected = goalies + forwards + defence
             num_forwards, num_defensemen = len(forwards), len(defence)
-            floors = _leader_floors(leaders)
             records = [
                 self.mapper.map_player(
-                    player,
-                    roster.team.code,
-                    {**floors, **line} if (line := leaders.get(str(player.id))) else {},
+                    player, roster.team.code, leaders.get(str(player.id), {}), league
                 )
                 for player in selected
             ]

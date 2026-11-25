@@ -193,9 +193,9 @@ class NHL94GenesisRomWriter:
         Byte 1: Weight (0-14) | Agility (0-6)
         Byte 2: Speed (0-6) | Off. Awareness (0-6)
         Byte 3: Def. Awareness (0-6) | Shot Power (0-6)
-        Byte 4: Checking (0-6) | Handedness (0=L, 1=R)
+        Byte 4: Checking (0-6) | Fighting (0-6) x 2 + Handedness (0=L, 1=R)
         Byte 5: Stick Handling (0-6) | Shot Accuracy (0-6)
-        Byte 6: Endurance (0-6) | Roughness (0-6)
+        Byte 6: Endurance (0-6) | Shot Bias (0-6)
         Byte 7: Pass Accuracy (0-6) | Aggression (0-6)
 
         A goalie's are his own fields: weight | agility, speed | defensive
@@ -235,13 +235,14 @@ class NHL94GenesisRomWriter:
         self.data[offset] = encode_nibble(attrs.def_awareness, attrs.shot_power)
         offset += 1
 
-        self.data[offset] = encode_nibble(attrs.checking, player.handedness)
+        fighting = max(0, min(6, attrs.fighting))
+        self.data[offset] = encode_nibble(attrs.checking, 0) | fighting << 1 | player.handedness & 1
         offset += 1
 
         self.data[offset] = encode_nibble(attrs.stick_handling, attrs.shot_accuracy)
         offset += 1
 
-        self.data[offset] = encode_nibble(attrs.endurance, attrs.roughness)
+        self.data[offset] = encode_nibble(attrs.endurance, attrs.shot_bias)
         offset += 1
 
         self.data[offset] = encode_nibble(attrs.pass_accuracy, attrs.aggression)

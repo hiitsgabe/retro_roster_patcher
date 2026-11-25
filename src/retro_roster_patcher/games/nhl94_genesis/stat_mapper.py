@@ -55,7 +55,7 @@ POSITION_DEFAULTS = {
         def_awareness=2,
         checking=2,
         endurance=3,
-        roughness=2,
+        shot_bias=2,
         aggression=2,
     ),
     "LW": NHL94GenPlayerAttributes(
@@ -69,7 +69,7 @@ POSITION_DEFAULTS = {
         def_awareness=2,
         checking=3,
         endurance=3,
-        roughness=3,
+        shot_bias=3,
         aggression=3,
     ),
     "RW": NHL94GenPlayerAttributes(
@@ -83,7 +83,7 @@ POSITION_DEFAULTS = {
         def_awareness=2,
         checking=3,
         endurance=3,
-        roughness=3,
+        shot_bias=3,
         aggression=3,
     ),
     "D": NHL94GenPlayerAttributes(
@@ -97,7 +97,7 @@ POSITION_DEFAULTS = {
         def_awareness=4,
         checking=4,
         endurance=3,
-        roughness=3,
+        shot_bias=2,
         aggression=3,
     ),
 }
@@ -130,8 +130,9 @@ RETAIL: dict[str, dict[str, tuple[int, ...]]] = {
         "def_awareness": (5, 27, 77, 174, 71, 9, 1),
         "checking": (0, 48, 144, 119, 47, 6, 0),
         "endurance": (3, 26, 66, 129, 115, 18, 7),
-        "roughness": (41, 55, 75, 66, 61, 66, 0),
+        "shot_bias": (41, 55, 75, 66, 61, 66, 0),
         "aggression": (15, 50, 121, 104, 60, 12, 2),
+        "fighting": (70, 90, 82, 78, 30, 11, 3),
     },
     "D": {
         "speed": (1, 12, 86, 86, 24, 2, 0),
@@ -144,8 +145,9 @@ RETAIL: dict[str, dict[str, tuple[int, ...]]] = {
         "def_awareness": (1, 14, 38, 88, 62, 6, 2),
         "checking": (1, 11, 53, 103, 40, 2, 1),
         "endurance": (0, 15, 40, 76, 68, 10, 2),
-        "roughness": (17, 47, 42, 37, 37, 31, 0),
+        "shot_bias": (17, 47, 42, 37, 37, 31, 0),
         "aggression": (1, 9, 59, 84, 51, 6, 1),
+        "fighting": (8, 38, 71, 66, 24, 2, 2),
     },
     "G": {
         "agility": (0, 0, 26, 17, 13, 1, 2),
@@ -162,7 +164,10 @@ RETAIL: dict[str, dict[str, tuple[int, ...]]] = {
 #: The stats each rating ranks; a rating with several averages their ranks, a
 #: stat listed twice counting twice. Speed and agility lean on points (a star
 #: is quick), then youth and lightness. Checking ranks size only for a line
-#: without hits (the NHL API's).
+#: without hits (the NHL API's). Shot bias ranks goals minus assists per game,
+#: fighting fights and penalty minutes: the cartridge's follow its players'
+#: 1992-93 goals minus assists, and majors and penalty minutes (rank
+#: correlations 0.73 and 0.56).
 SKATER_SOURCES: dict[str, tuple[str, ...]] = {
     "speed": ("points", "points", "youth"),
     "agility": ("points", "points", "lightness"),
@@ -174,20 +179,26 @@ SKATER_SOURCES: dict[str, tuple[str, ...]] = {
     "def_awareness": ("plus_minus", "blocks"),
     "checking": ("hits", "size"),
     "endurance": ("ice_time",),
-    "roughness": ("majors",),
+    "shot_bias": ("goal_margin",),
     "aggression": ("pim",),
+    "fighting": ("fights", "pim"),
 }
-#: No provider counts saves by zone: the four zones rank save % alone, each on
-#: its own spread.
+#: The cartridge rates its goalies on 1992-93's save % (defensive awareness
+#: follows it at 0.97) and on how much each played: agility, puck control and
+#: the save zones follow his season's saves, speed his wins, more than any rate
+#: (so wins and saves rank as season totals). No provider counts saves by zone:
+#: the stick zones blend save % and saves, the glove zones goals against and
+#: saves, which follow the cartridge's best. Its goalies' ratings do not follow
+#: their age, shots against per game or shutouts.
 GOALIE_SOURCES: dict[str, tuple[str, ...]] = {
-    "agility": ("save",),
-    "speed": ("youth",),
-    "def_awareness": ("goals_against",),
-    "puck_control": ("wins",),
-    "stick_right": ("save",),
-    "stick_left": ("save",),
-    "glove_right": ("save",),
-    "glove_left": ("save",),
+    "agility": ("goals_against", "saves"),
+    "speed": ("save", "wins"),
+    "def_awareness": ("save",),
+    "puck_control": ("saves",),
+    "stick_right": ("save", "saves"),
+    "stick_left": ("save", "saves"),
+    "glove_right": ("goals_against", "saves"),
+    "glove_left": ("goals_against", "saves"),
 }
 
 #: The keys a counting stat comes under: the NHL API's, then ESPN's.
@@ -200,8 +211,9 @@ COUNTS: dict[str, tuple[str, ...]] = {
     "pim": ("PIM",),
     "hits": ("hits",),
     "blocks": ("blockedShots",),
-    "majors": ("majorPenalties",),
+    "fights": ("fightingPenalties",),
     "wins": ("W",),
+    "saves": ("SV", "saves"),
 }
 SKATER_SHRINK_GAMES = 20
 #: A shooting % is pulled toward the league's 10% by 50 shots' worth.
@@ -327,8 +339,9 @@ class LeagueStats:
                 out["save"] = shrunk(sv, SV_PRIOR, n)
             if gaa is not None:
                 out["goals_against"] = -shrunk(gaa, GAA_PRIOR, n)
-            if (wins := rate("wins")) is not None:
-                out["wins"] = wins
+            for name in ("wins", "saves"):
+                if name in totals:
+                    out[name] = totals[name]
             return out
         if player.weight:
             out["lightness"] = -float(player.weight)
@@ -339,8 +352,10 @@ class LeagueStats:
             out["hits"] = hits
         elif player.weight:
             out["size"] = float(player.weight)
-        if (majors := rate("majors")) is not None:
-            out["majors"] = majors
+        if (fights := rate("fights")) is not None:
+            out["fights"] = fights
+        if "goals" in out and "assists" in out:
+            out["goal_margin"] = out["goals"] - out["assists"]
         shots, goals = totals.get("shots"), totals.get("goals")
         if shots and goals is not None:
             out["finishing"] = (goals + SPCT_PRIOR * SPCT_SHOTS) / (shots + SPCT_SHOTS)
@@ -367,6 +382,20 @@ class LeagueStats:
         return _rank(pool, blend) if blend is not None and pool else blend
 
 
+def rate(
+    attrs: object, player: Player, line: Mapping[str, object], league: LeagueStats | None = None
+) -> None:
+    """Set each of `attrs`' ratings whose stats the line has from their rank in
+    `league` (his line alone without one). The SNES cartridge's records are this
+    one's, so `nhl94_snes` rates with it too."""
+    league = league or LeagueStats.from_lines([(player, line)])
+    group = _group(player.position)
+    own = league.sources(player, line)
+    for rating in _sources_of(group):
+        if (share := league.rating_share(group, rating, own)) is not None:
+            setattr(attrs, rating, on_retail(share, RETAIL[group][rating]))
+
+
 class NHL94GenStatMapper:
     def map_player(
         self,
@@ -387,7 +416,7 @@ class NHL94GenStatMapper:
         else:
             attrs = dataclasses.replace(POSITION_DEFAULTS.get(pos, POSITION_DEFAULTS["C"]))
         if stats:
-            self._rate(attrs, player, stats, league or LeagueStats.from_lines([(player, stats)]))
+            rate(attrs, player, stats, league)
 
         jersey = player.number or 1
 
@@ -410,20 +439,6 @@ class NHL94GenStatMapper:
             attributes=attrs,
             photo_url=player.photo_url,
         )
-
-    def _rate(
-        self,
-        attrs: NHL94GenPlayerAttributes | NHL94GenGoalieAttributes,
-        player: Player,
-        line: Mapping[str, object],
-        league: LeagueStats,
-    ) -> None:
-        """Set each rating whose stats the line has from their rank in `league`."""
-        group = _group(player.position)
-        own = league.sources(player, line)
-        for rating in _sources_of(group):
-            if (share := league.rating_share(group, rating, own)) is not None:
-                setattr(attrs, rating, on_retail(share, RETAIL[group][rating]))
 
     def select_roster(
         self,

@@ -197,9 +197,10 @@ def player_stats(player: NHL94PlayerRecord) -> bytes:
     Byte 1: Weight class (0-14) | Agility
     Byte 2: Speed | Off. Awareness (a goalie: Def. Awareness again, as retail)
     Byte 3: Def. Awareness | Shot Power (a goalie: Puck Control)
-    Byte 4: Checking (a goalie: 0) | Handedness (0=L, 1=R; a goalie's glove)
+    Byte 4: Checking (a goalie: 0) | Fighting x 2 + Handedness (0=L, 1=R; a
+            goalie's glove, his fighting 0)
     Byte 5: Stick Handling | Shot Accuracy (a goalie: 0 | 0)
-    Byte 6: Endurance | Roughness (a goalie: Stick Right | Stick Left)
+    Byte 6: Endurance | Shot Bias (a goalie: Stick Right | Stick Left)
     Byte 7: Pass Accuracy | Aggression (a goalie: Glove Right | Glove Left)
     """
     a = player.attributes
@@ -220,9 +221,9 @@ def player_stats(player: NHL94PlayerRecord) -> bytes:
             encode_weight_nibble(player.weight_class, a.agility),
             encode_nibble(a.speed, a.off_awareness),
             encode_nibble(a.def_awareness, a.shot_power),
-            encode_nibble(a.checking, hand),
+            encode_nibble(a.checking, 0) | max(0, min(6, a.fighting)) << 1 | hand,
             encode_nibble(a.stick_handling, a.shot_accuracy),
-            encode_nibble(a.endurance, a.roughness),
+            encode_nibble(a.endurance, a.shot_bias),
             encode_nibble(a.pass_accuracy, a.aggression),
         ]
     return bytes([(jersey // 10) << 4 | jersey % 10, *body])

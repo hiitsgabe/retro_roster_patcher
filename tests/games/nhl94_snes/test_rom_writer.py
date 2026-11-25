@@ -89,8 +89,9 @@ def _records(count, *, name="Fourteen Char", goalies=2):
                     def_awareness=i % 7,
                     checking=(i + 1) % 7,
                     endurance=(i + 2) % 7,
-                    roughness=(i + 3) % 7,
+                    shot_bias=(i + 3) % 7,
                     aggression=(i + 4) % 7,
+                    fighting=(i + 5) % 7,
                 ),
             )
         )
@@ -181,9 +182,10 @@ def test_the_written_stat_bytes_decode_to_the_records_attributes(tmp_path):
     assert decoded["stick_handling"] == attributes.stick_handling
     assert decoded["checking"] == attributes.checking
     assert decoded["endurance"] == attributes.endurance
-    assert decoded["roughness"] == attributes.roughness
+    assert decoded["shot_bias"] == attributes.shot_bias
     assert decoded["pass_accuracy"] == attributes.pass_accuracy
     assert decoded["aggression"] == attributes.aggression
+    assert decoded["fighting"] == attributes.fighting
 
 
 def test_a_goalie_is_written_in_the_games_goalie_fields():

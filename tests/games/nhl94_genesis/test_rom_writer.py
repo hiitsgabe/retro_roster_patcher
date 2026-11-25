@@ -172,9 +172,9 @@ def test_the_fixture_decoder_inverts_the_writers_encoders():
                     encode_weight_nibble(d["weight_class"], d["agility"]),
                     encode_nibble(d["speed"], d["off_awareness"]),
                     encode_nibble(d["def_awareness"], d["shot_power"]),
-                    encode_nibble(d["checking"], d["handedness"]),
+                    encode_nibble(d["checking"], 0) | d["fighting"] << 1 | d["handedness"],
                     encode_nibble(d["stick_handling"], d["shot_accuracy"]),
-                    encode_nibble(d["endurance"], d["roughness"]),
+                    encode_nibble(d["endurance"], d["shot_bias"]),
                     encode_nibble(d["pass_accuracy"], d["aggression"]),
                 ]
             )
@@ -458,15 +458,16 @@ def test_attributes_land_in_the_seven_stat_bytes(rom_paths):
             def_awareness=1,
             checking=2,
             endurance=4,
-            roughness=3,
+            shot_bias=3,
             aggression=2,
+            fighting=6,
         ),
     )
     assert writer.write_team_roster(0, [player]) == 1
     assert writer.finalize() is True
 
     _, stats = _read_back(output).read_team_roster(0)
-    assert stats[0] == b"\x87\xb1\x06\x15\x21\x34\x43\x52"
+    assert stats[0] == b"\x87\xb1\x06\x15\x2d\x34\x43\x52"
     assert synthetic_rom.decode_player_stats(stats[0]) == {
         "jersey_number": 87,
         "weight_class": 11,
@@ -477,10 +478,11 @@ def test_attributes_land_in_the_seven_stat_bytes(rom_paths):
         "shot_power": 5,
         "checking": 2,
         "handedness": 1,
+        "fighting": 6,
         "stick_handling": 3,
         "shot_accuracy": 4,
         "endurance": 4,
-        "roughness": 3,
+        "shot_bias": 3,
         "pass_accuracy": 5,
         "aggression": 2,
     }
@@ -488,14 +490,14 @@ def test_attributes_land_in_the_seven_stat_bytes(rom_paths):
 
 def test_the_record_defaults_are_written_as_the_middling_ratings(rom_paths):
     # The defaults are what every caller that does not supply attributes gets, so
-    # they are worth pinning as bytes: weight 7, most attributes 3, roughness and
-    # aggression 2, handedness left.
+    # they are worth pinning as bytes: weight 7, most attributes 3, shot_bias,
+    # aggression and fighting 2, handedness left.
     writer, output = _loaded_writer(rom_paths)
     assert writer.write_team_roster(0, [NHL94GenPlayerRecord(name="AA")]) == 1
     assert writer.finalize() is True
 
     _, stats = _read_back(output).read_team_roster(0)
-    assert stats[0] == b"\x01\x73\x33\x33\x30\x33\x32\x32"
+    assert stats[0] == b"\x01\x73\x33\x33\x34\x33\x32\x32"
 
 
 def test_an_out_of_range_attribute_is_clamped_before_it_reaches_the_rom(rom_paths):

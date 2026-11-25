@@ -145,6 +145,12 @@ class NHL94PlayerAttributes:
     """A skater's nibble-packed stats. Each is 0-6, which the Team Roster shows
     as 18 x n squashed below 50 (v / 2 + 25): 0 = 25, 1 = 34, 2 = 43, 3 = 54,
     4 = 72, 5 = 90, 6 = 100, then +-9 from the per-game hot/cold modifier.
+
+    The record is the Genesis one (`NHL94GenPlayerAttributes` says what
+    `shot_bias` and `fighting` are), and this port's AI reads `shot_bias` as that
+    one's does ($13E3,x). It copies `fighting` into its player objects
+    ($9F:D158) and no code found reads it: an injury here is for the game on a
+    random draw ($9E:C343), whoever checked.
     """
 
     speed: int = 3
@@ -158,14 +164,17 @@ class NHL94PlayerAttributes:
     checking: int = 3
     endurance: int = 3
     # hidden stats
-    roughness: int = 2
+    shot_bias: int = 2
     aggression: int = 2
+    fighting: int = 2
 
 
 @dataclass
 class NHL94GoalieAttributes:
     """A goalie's nibbles, 0-6 each, named as the game's own goalie columns
-    ($80:D8CD) name them. The overall is (9 x agility + 9 x awareness + 9 x puck
+    ($80:D8CD, each column's nibble mask the Genesis table's) name them, and as
+    the cartridge's 55 goalies the Genesis one also carries hold them, nibble for
+    nibble. The overall is (9 x agility + 9 x awareness + 9 x puck
     control + 2 x each save zone) / 2; the save routine ($9E:F098) picks one of
     the four zones by the shot's side. The skater nibbles left over (checking,
     stick handling, shot accuracy) are never read for a goalie and stay 0, as on

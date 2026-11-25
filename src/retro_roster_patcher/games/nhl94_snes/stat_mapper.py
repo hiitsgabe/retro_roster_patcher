@@ -1,11 +1,14 @@
-"""Maps NHL season stats onto NHL94's 0-6 attribute scale, falling back to
-position defaults when a player has no stat line, and per stat when the line
-lacks one (ESPN's team leaders list only each category's top players)."""
+"""Maps a player's season onto NHL 94's 0-6 ratings the way `nhl94_genesis`
+does (its `stat_mapper` says how): the two cartridges carry the same player
+records, so each rating ranks the same stats against the league fetched and
+takes the value at that rank of the cartridge's spread (the Genesis counts:
+this cartridge's differ by a handful of players). A rating none of whose stats
+the line has keeps the position default, and a player without a stat line
+keeps them all."""
 
 from dataclasses import dataclass, replace
 
 from ...core.hockey import (
-    GAA_PRIOR,
     SV_PRIOR,
     deployment,
     goalie_games,
@@ -15,6 +18,8 @@ from ...core.hockey import (
 )
 from ...core.text import to_ascii
 from ...sports.models import Player
+from ..nhl94_genesis import stat_mapper as genesis
+from ..nhl94_genesis.stat_mapper import LeagueStats, rate
 from .models import (
     MODERN_NHL_TO_NHL94,
     NHL94GoalieAttributes,
@@ -23,84 +28,11 @@ from .models import (
 )
 from .rom_writer import MAX_NAME_LENGTH, abbreviate
 
-# Default attributes by position (0-6 scale)
 POSITION_DEFAULTS = {
-    "C": NHL94PlayerAttributes(
-        speed=3,
-        agility=3,
-        shot_power=3,
-        shot_accuracy=3,
-        stick_handling=3,
-        pass_accuracy=3,
-        off_awareness=3,
-        def_awareness=2,
-        checking=2,
-        endurance=3,
-        roughness=2,
-        aggression=2,
-    ),
-    "LW": NHL94PlayerAttributes(
-        speed=3,
-        agility=3,
-        shot_power=3,
-        shot_accuracy=3,
-        stick_handling=3,
-        pass_accuracy=2,
-        off_awareness=3,
-        def_awareness=2,
-        checking=3,
-        endurance=3,
-        roughness=3,
-        aggression=3,
-    ),
-    "RW": NHL94PlayerAttributes(
-        speed=3,
-        agility=3,
-        shot_power=3,
-        shot_accuracy=3,
-        stick_handling=3,
-        pass_accuracy=2,
-        off_awareness=3,
-        def_awareness=2,
-        checking=3,
-        endurance=3,
-        roughness=3,
-        aggression=3,
-    ),
-    "D": NHL94PlayerAttributes(
-        speed=2,
-        agility=2,
-        shot_power=2,
-        shot_accuracy=2,
-        stick_handling=2,
-        pass_accuracy=3,
-        off_awareness=2,
-        def_awareness=4,
-        checking=4,
-        endurance=3,
-        roughness=3,
-        aggression=3,
-    ),
+    pos: NHL94PlayerAttributes(**vars(attrs)) for pos, attrs in genesis.POSITION_DEFAULTS.items()
 }
-
-
-def _clamp(val: int, lo: int = 0, hi: int = 6) -> int:
-    return max(lo, min(hi, val))
-
-
-def _scale(value: float, low: float, high: float) -> int:
-    """Map a value within [low, high] onto the game's 0-6 scale."""
-    if high <= low:
-        return 3
-    ratio = (value - low) / (high - low)
-    return _clamp(round(ratio * 6))
-
-
-# The save % and goals-against ranges spread over 0-6. On 2025-26's numbers
-# they put the starters' mean overall at 68 and the backups' near 50-60, where
-# the cartridge has 67 and 53.
-SV_RANGE = (0.865, 0.915)
-GAA_RANGE = (3.6, 2.4)
+#: A goalie with no stat line.
+GOALIE_DEFAULTS = NHL94GoalieAttributes(**vars(genesis.GOALIE_DEFAULTS))
 
 
 def goalie_rank(stats: dict) -> tuple[float, float]:
@@ -128,19 +60,21 @@ class NHL94StatMapper:
         player: Player,
         team_abbrev: str,
         stats: dict | None = None,
+        league: LeagueStats | None = None,
     ) -> NHL94PlayerRecord:
+        """`league` ranks his stats; without one his line is ranked alone."""
         pos = player.position.upper() if player.position else "C"
         is_goalie = pos == "G"
 
+        # Copied, not shared: `attributes` is public and mutable, so the module
+        # constants must not be handed out.
         attrs: NHL94PlayerAttributes | NHL94GoalieAttributes
         if is_goalie:
-            attrs = self._map_goalie(stats or {})
-        elif stats:
-            attrs = self._map_stats(stats, pos)
+            attrs = replace(GOALIE_DEFAULTS)
         else:
-            # Copied, not shared: `attributes` is public and mutable, so the module
-            # constant must not be handed out.
             attrs = replace(POSITION_DEFAULTS.get(pos, POSITION_DEFAULTS["C"]))
+        if stats:
+            rate(attrs, player, stats, league)
 
         jersey = player.number or 1
 
@@ -161,56 +95,6 @@ class NHL94StatMapper:
             is_goalie=is_goalie,
             attributes=attrs,
             photo_url=player.photo_url,
-        )
-
-    def _map_stats(self, stats: dict, pos: str) -> NHL94PlayerAttributes:
-        """Per-season stat ranges used for scaling:
-
-        G: 0-40, A: 0-55, PTS: 0-90, +/-: -30..+40, PIM: 0-80
-
-        A stat the line lacks keeps the position's default for what it drives.
-        """
-        base = POSITION_DEFAULTS.get(pos, POSITION_DEFAULTS["C"])
-        g, a, pts, pm, pim = (stat(stats, k) for k in ("G", "A", "PTS", "+/-", "PIM"))
-
-        def scaled(value: float | None, low: float, high: float, default: int) -> int:
-            return default if value is None else _scale(value, low, high)
-
-        bonus = 1 if pts is not None and pts > 50 else 0
-        return NHL94PlayerAttributes(
-            speed=_clamp(base.speed + bonus),
-            agility=_clamp(base.agility + bonus),
-            shot_power=scaled(g, 0, 40, base.shot_power),
-            shot_accuracy=scaled(g, 0, 40, base.shot_accuracy),
-            stick_handling=scaled(pts, 0, 90, base.stick_handling),
-            pass_accuracy=scaled(a, 0, 55, base.pass_accuracy),
-            off_awareness=scaled(pts, 0, 90, base.off_awareness),
-            def_awareness=scaled(None if pm is None else pm + 30, 0, 70, base.def_awareness),
-            checking=base.checking,
-            endurance=base.endurance,
-            roughness=scaled(pim, 0, 80, base.roughness),
-            aggression=scaled(pim, 0, 80, base.aggression),
-        )
-
-    def _map_goalie(self, stats: dict) -> NHL94GoalieAttributes:
-        """Agility and the four save zones from save %, awareness from
-        goals-against, both shrunk by games played (`SV_RANGE`, `GAA_RANGE`).
-        Puck control follows the two, and speed is 3 or 4, the cartridge's goalie
-        range.
-        """
-        games = goalie_games(stats)
-        agility = _scale(shrunk(stat(stats, "SV%"), SV_PRIOR, games), *SV_RANGE)
-        gaa = shrunk(stat(stats, "GAA"), GAA_PRIOR, games)
-        awareness = _scale(GAA_RANGE[0] - gaa, 0, GAA_RANGE[0] - GAA_RANGE[1])
-        return NHL94GoalieAttributes(
-            agility=agility,
-            speed=4 if agility + awareness >= 7 else 3,
-            def_awareness=awareness,
-            puck_control=(agility + awareness + 1) // 2,
-            stick_right=agility,
-            stick_left=agility,
-            glove_right=agility,
-            glove_left=agility,
         )
 
     def select_roster(

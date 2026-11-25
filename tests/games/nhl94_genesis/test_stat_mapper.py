@@ -108,19 +108,31 @@ def test_a_passer_reads_the_play_better_than_he_handles_the_puck(mapper):
     assert passer.stick_handling <= 2
 
 
-def test_roughness_is_fights_and_aggression_penalty_minutes(mapper):
-    lines = [{"GP": 82, "PIM": 20 + i, "majorPenalties": i % 3} for i in range(40)]
-    lines.append({"GP": 82, "PIM": 110, "majorPenalties": 0})
-    pest = _map(mapper, _forwards(lines), 40)
+def test_shot_bias_leans_to_the_scorer_over_the_playmaker(mapper):
+    lines = [{"GP": 82, "G": 10 + i % 15, "A": 15 + i % 20} for i in range(40)]
+    lines += [{"GP": 82, "G": 45, "A": 15}, {"GP": 82, "G": 8, "A": 60}]
+    league = _forwards(lines)
+    sniper, playmaker = _map(mapper, league, 40), _map(mapper, league, 41)
+    assert sniper.shot_bias >= 4 and playmaker.shot_bias <= 1
+
+
+def test_fighting_is_fights_and_penalty_minutes(mapper):
+    lines = [{"GP": 82, "PIM": 20 + i, "fightingPenalties": i % 3} for i in range(40)]
+    lines += [
+        {"GP": 82, "PIM": 110, "fightingPenalties": 0},
+        {"GP": 82, "PIM": 150, "fightingPenalties": 15},
+    ]
+    league = _forwards(lines)
+    pest, enforcer = _map(mapper, league, 40), _map(mapper, league, 41)
     assert pest.aggression >= 5
-    assert pest.roughness <= 1
+    assert enforcer.fighting >= 5 and pest.fighting < enforcer.fighting
 
 
-def test_without_fight_counts_roughness_keeps_the_position_default(mapper):
-    # The NHL API's club stats carry penalty minutes but no fights or majors.
+def test_without_fight_counts_fighting_ranks_penalty_minutes(mapper):
+    # The NHL API's club stats carry penalty minutes but no fights.
     player = _map(mapper, _forwards([{"GP": 82, "PIM": 20 + i} for i in range(41)]), 40)
-    assert player.roughness == POSITION_DEFAULTS["C"].roughness
-    assert player.aggression >= 5
+    assert player.fighting >= 5 and player.aggression >= 5
+    assert player.shot_bias == POSITION_DEFAULTS["C"].shot_bias
 
 
 def test_a_stat_the_line_lacks_keeps_the_position_default(mapper):
@@ -192,11 +204,11 @@ def test_two_stats_averaged_still_spread_like_the_cartridge(mapper):
 def test_youth_is_the_birth_date_where_the_roster_has_one(mapper):
     # The NHL API's rosters carry a birth date and no age.
     league_lines = [
-        (_skater(id=i + 1, position="G", birth_date=f"{1985 + i}-06-01"), {"GP": 30, "SV%": 0.9})
+        (_skater(id=i + 1, birth_date=f"{1985 + i}-06-01"), {"GP": 82, "PTS": 40})
         for i in range(20)
     ]
     youngest, oldest = (_map(mapper, league_lines, i) for i in (19, 0))
-    assert (youngest.speed, oldest.speed) == (4, 3)
+    assert youngest.speed > oldest.speed
 
 
 def test_a_birth_date_lost_to_none_is_no_birth_date(mapper):
@@ -205,17 +217,23 @@ def test_a_birth_date_lost_to_none_is_no_birth_date(mapper):
     assert record.attributes.speed == on_retail(0.5, RETAIL["F"]["speed"])
 
 
-def test_a_goalie_without_age_keeps_the_cartridges_slowest_goalie_speed(mapper):
-    record = mapper.map_player(_skater(position="G"), "BOS", {"GP": 30, "SV%": 0.9})
-    assert record.attributes.speed == GOALIE_DEFAULTS.speed == 3
+def test_a_goalie_speed_stays_in_the_cartridges_three_or_four(mapper):
+    lines = [{"GP": 40, "W": 5 + i, "SV%": 0.880 + 0.002 * i} for i in range(30)]
+    assert {_map(mapper, _goalies(lines), i).speed for i in range(30)} == {3, 4}
 
 
-def test_a_goalie_ranks_on_save_percentage_goals_against_and_wins(mapper):
+def test_a_goalie_ranks_on_save_percentage_goals_against_saves_and_wins(mapper):
     lines = [
-        {"GP": 40, "W": 15 + i % 10, "SV%": 0.890 + 0.001 * i, "GAA": 3.2 - 0.02 * i}
+        {
+            "GP": 40,
+            "W": 15 + i % 10,
+            "SV": 900 + 10 * i,
+            "SV%": 0.890 + 0.001 * i,
+            "GAA": 3.2 - 0.02 * i,
+        }
         for i in range(30)
     ]
-    lines.append({"GP": 60, "W": 42, "SV%": 0.925, "GAA": 2.10})
+    lines.append({"GP": 60, "W": 42, "SV": 1700, "SV%": 0.925, "GAA": 2.10})
     best = _map(mapper, _goalies(lines), 30)
     worst = _map(mapper, _goalies(lines), 0)
     assert isinstance(best, NHL94GenGoalieAttributes)
@@ -225,12 +243,12 @@ def test_a_goalie_ranks_on_save_percentage_goals_against_and_wins(mapper):
     assert best.speed in (3, 4) and worst.speed in (3, 4)
 
 
-def test_a_goalie_line_without_save_percentage_keeps_the_default_agility(mapper):
-    # It used to read a missing save % as 0 and rate the goalie's agility 0.
+def test_a_goalie_line_without_save_percentage_keeps_the_default_awareness(mapper):
+    # It used to read a missing save % as 0 and rate the goalie 0.
     lines = [{"GP": 30, "SV%": 0.900 + 0.001 * i, "GAA": 3.0} for i in range(10)]
     lines.append({"GP": 30, "GAA": 2.8})
     goalie = _map(mapper, _goalies(lines), 10)
-    assert goalie.agility == GOALIE_DEFAULTS.agility
+    assert goalie.def_awareness == GOALIE_DEFAULTS.def_awareness
 
 
 def test_a_goalie_without_a_stat_line_gets_the_goalie_defaults(mapper):

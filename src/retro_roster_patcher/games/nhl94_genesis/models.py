@@ -107,7 +107,21 @@ class NHL94GenPlayerAttributes:
     """NHL94 Genesis player attributes (0-6 scale, stored as nibbles).
 
     14 attributes packed into 7 bytes. Each nibble is 0-6 (except
-    weight which uses the full 0-14 range, and handedness which is 0/1).
+    weight which uses the full 0-14 range, and the handedness nibble, whose bit
+    0 is the hand and bits 1-3 `fighting`).
+
+    `shot_bias` is the nibble editors call roughness: nhl94.com's forum reads it
+    as the CPU's lean to shoot (high) or pass (low), the AI weighs it when it has
+    the puck ($E32C, $E444), and the cartridge's follows goals minus assists per
+    game. No screen shows it.
+
+    `fighting` is named here for the cartridge's own values, its enforcers' the
+    highest (Twist and McRae 6, Grimson, Probert and Odjick 5): no screen or
+    editor names it. NHL 94 has no fights and reads it where a check injures a
+    player ($0144AC): the checker's 6 puts him out for the game, his 0 or 1 for
+    the period, and anything between for the game only when the injured player's
+    own is odd. A check by a player whose is 0 also adds 3, not 1, to a counter
+    ($C46E) that no code found reads.
     """
 
     speed: int = 3
@@ -120,8 +134,9 @@ class NHL94GenPlayerAttributes:
     def_awareness: int = 3
     checking: int = 3
     endurance: int = 3
-    roughness: int = 2
+    shot_bias: int = 2
     aggression: int = 2
+    fighting: int = 2
 
 
 @dataclass

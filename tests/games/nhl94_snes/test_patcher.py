@@ -32,6 +32,7 @@ from retro_roster_patcher.games.nhl94_snes.rom_reader import (
     ROM_SIZE_NO_HEADER,
     NHL94SNESRomReader,
 )
+from retro_roster_patcher.games.nhl94_snes.stat_mapper import POSITION_DEFAULTS
 from retro_roster_patcher.sports.espn import EspnClient
 from retro_roster_patcher.sports.models import League, LeagueData, Player, Team, TeamRoster
 from retro_roster_patcher.sports.nhl import NhlApiClient
@@ -1130,23 +1131,20 @@ def test_nhl_club_stats_give_the_strength_without_a_request(tmp_path):
     assert (teams[BOS_SLOT].strength, teams[CHI_SLOT].strength) == (0x40, 0x04)
 
 
-def test_a_partial_stat_line_takes_the_teams_lowest_listed_value(patcher):
-    """ESPN lists each category's top 25: a player missing from the points list
-    scored fewer than its last entry, not the position's default (3 here)."""
-    data = _league_data(("BOS", 6))
-    players = data.teams[0].players
-    leaders = data.teams[0].extra["leaders"]
-    leaders[str(players[2].id)] = {"G": 40, "A": 50, "PTS": 90, "PIM": 80}
-    leaders[str(players[4].id)] = {"G": 2, "A": 13, "PTS": 15, "PIM": 4}
-    leaders[str(players[3].id)] = {"+/-": 5}
-
-    def partial():
-        team = patcher.map_rosters(data).teams[BOS_SLOT]
-        return next(r for r in team.players if r.name == "BOS Player03").attributes
-
-    assert partial().off_awareness == 1  # the lower of the two listed, 15
-    leaders[str(players[2].id)]["PTS"] = 0
-    assert partial().off_awareness == 0
+def test_a_partial_stat_line_keeps_the_position_default_for_what_it_lacks(patcher):
+    """ESPN lists each category's top 25: a rating none of whose stats a line
+    has keeps the position's default, and the rest rank against every club."""
+    data = _league_data(("BOS", 6), ("TOR", 6))
+    bos, tor = data.teams
+    bos.extra["leaders"][str(bos.players[3].id)] = {"GP": 82, "+/-": 5}
+    bos.extra["leaders"][str(bos.players[4].id)] = {"GP": 82, "PTS": 15}
+    tor.extra["leaders"].update(
+        {str(p.id): {"GP": 82, "PTS": 60 + n} for n, p in enumerate(tor.players)}
+    )
+    team = patcher.map_rosters(data).teams[BOS_SLOT]
+    partial, low = (next(r for r in team.players if r.name == f"BOS Player0{n}") for n in (3, 4))
+    assert partial.attributes.off_awareness == POSITION_DEFAULTS["C"].off_awareness
+    assert low.attributes.off_awareness < POSITION_DEFAULTS["C"].off_awareness
 
 
 def _skaters(forwards, defence, goalies=2):
