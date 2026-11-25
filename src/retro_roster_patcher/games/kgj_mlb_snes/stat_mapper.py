@@ -2,16 +2,23 @@
 
 Each rating falls back to its position default on its own when the stat it
 comes from is missing or rests on too small a sample, so one missing stat never
-zeroes a rating. The scales were fitted so a 2026 league spreads over each
-rating the way the 1994 cartridge's 700 players do.
+zeroes a rating. BAT, POW, SPD and a pitcher's SPD and CON are on scales fitted
+so a 2026 league spreads over each the way the 1994 cartridge's 700 players do.
+DEF and FAT rank the player against his group in the league fetched
+(`KGJLeague`) and take the value at that rank of the cartridge's own spread
+(`RETAIL_DEF`, `RETAIL_FAT`).
 """
 
+import bisect
 import dataclasses
 import unicodedata
-from collections.abc import Callable
+from collections import defaultdict
+from collections.abc import Callable, Iterable, Mapping
+from dataclasses import dataclass, field
 from typing import Any
 
 from ...sports.models import Player
+from ..nhl94_genesis.stat_mapper import on_retail
 from . import looks
 from .models import (
     BATTERS_PER_TEAM,
@@ -29,7 +36,7 @@ MIN_PA = 100
 MIN_IP = 20.0
 
 
-def _stat(stats: dict, key: str) -> float | None:
+def _stat(stats: Mapping, key: str) -> float | None:
     """`stats[key]` as a number, or None when it is missing or not one."""
     value = stats.get(key)
     if isinstance(value, bool) or not isinstance(value, int | float):
@@ -71,6 +78,88 @@ PITCHER_DEFAULTS = {
     "RP": KGJPitcherAttributes(speed=6, control=5, fatigue=3),
 }
 
+#: How many of the cartridge's players have each value 0-10: DEF of its 420
+#: batters by the position each is listed at, FAT of its 140 starters (slots
+#: 15-19) and 140 relievers (20-24). Its DEF follows the 1993 Gold Gloves (the
+#: slots of I. Rodriguez, Grace, M. Williams, Bell, O. Smith, Larkin, Walker and
+#: Griffey hold 10) and every one of its closers has FAT 2, its long men 3-5.
+RETAIL_DEF = {
+    "C": (0, 0, 0, 1, 1, 10, 15, 16, 3, 7, 3),
+    "1B": (0, 0, 0, 0, 1, 5, 5, 8, 7, 1, 1),
+    "2B": (0, 0, 0, 0, 0, 0, 7, 9, 7, 3, 2),
+    "3B": (0, 0, 0, 0, 0, 4, 13, 4, 2, 4, 1),
+    "SS": (0, 0, 0, 0, 0, 1, 6, 11, 3, 3, 4),
+    "LF": (0, 0, 0, 0, 0, 6, 8, 5, 4, 3, 2),
+    "CF": (0, 0, 0, 0, 1, 0, 2, 5, 8, 9, 3),
+    "RF": (0, 0, 0, 0, 2, 2, 8, 8, 2, 5, 1),
+    "DH": (0, 0, 1, 1, 7, 1, 2, 2, 0, 0, 0),
+    "IF": (0, 0, 0, 6, 13, 16, 9, 5, 14, 12, 5),
+    "OF": (0, 0, 2, 8, 21, 18, 11, 7, 4, 2, 1),
+}
+RETAIL_FAT = {
+    "SP": (0, 0, 0, 0, 0, 6, 42, 43, 32, 14, 3),
+    "RP": (0, 0, 97, 40, 2, 1, 0, 0, 0, 0, 0),
+}
+
+#: A rate is pulled toward his group's by this many fielding innings (dWAR per
+#: inning) or appearances (innings per appearance).
+SHRINK_INNINGS = 300.0
+SHRINK_APPEARANCES = 10.0
+
+
+def fielding_sample(line: Mapping) -> tuple[float, float] | None:
+    """(dWAR, fielding innings) from ESPN's fielding line (`DWAR`, `FIP`)."""
+    dwar, innings = _stat(line, "DWAR"), _stat(line, "FIP")
+    return (dwar, innings) if dwar is not None and innings else None
+
+
+def usage_sample(line: Mapping) -> tuple[float, float] | None:
+    """(innings, appearances) from ESPN's pitching line."""
+    ip, games = _stat(line, "IP"), _stat(line, "GP")
+    return (_innings(ip), games) if ip is not None and games else None
+
+
+@dataclass
+class KGJLeague:
+    """Every fetched player's sample, by group, that DEF and FAT rank one
+    against: dWAR per fielding inning by listed position, innings per
+    appearance of starters (`SP`) and relievers (`RP`)."""
+
+    #: group -> its own rate, the prior a short sample is pulled toward.
+    rates: dict[str, float] = field(default_factory=dict)
+    #: group -> every player's shrunk rate, sorted.
+    values: dict[str, list[float]] = field(default_factory=dict)
+
+    @classmethod
+    def of(cls, samples: Iterable[tuple[str, tuple[float, float] | None]]) -> "KGJLeague":
+        """The league of these (group, sample) pairs; one without a sample is left out."""
+        kept = [(group, sample) for group, sample in samples if sample]
+        sums: dict[str, list[float]] = defaultdict(lambda: [0.0, 0.0])
+        for group, (total, n) in kept:
+            sums[group][0] += total
+            sums[group][1] += n
+        league = cls(rates={group: total / n for group, (total, n) in sums.items()})
+        values: dict[str, list[float]] = defaultdict(list)
+        for group, sample in kept:
+            values[group].append(league.rate(group, sample))
+        league.values = {group: sorted(v) for group, v in values.items()}
+        return league
+
+    def rate(self, group: str, sample: tuple[float, float]) -> float:
+        total, n = sample
+        k = SHRINK_APPEARANCES if group in RETAIL_FAT else SHRINK_INNINGS
+        return (total + self.rates.get(group, total / n) * k) / (n + k)
+
+    def rating(self, group: str, sample: tuple[float, float], counts: tuple[int, ...]) -> int:
+        """The value of `counts` at the rank of `sample` in `group`, ties at
+        their middle; alone in his group, the cartridge's median."""
+        value = self.rate(group, sample)
+        values = self.values.get(group) or [value]
+        below = bisect.bisect_left(values, value)
+        equal = bisect.bisect_right(values, value) - below
+        return on_retail((below + equal / 2) / len(values), counts)
+
+
 #: Who fields, by the positions ESPN lists: a catcher, a first baseman, three
 #: infielders and three outfielders (`patcher._lineup_positions` spreads each
 #: group over its positions). A batter ESPN lists at DH competes for the
@@ -98,8 +187,27 @@ PITCHER_BATTING = KGJBatterAttributes(batting=2, power=1, speed=3, defense=3)
 
 
 class KGJStatMapper:
-    def map_batter(self, player: Player, stats: dict | None = None) -> KGJPlayerRecord:
-        """`stats` is the player's ESPN batting line (`get_baseball_athlete_stats`).
+    def league(self, lines: Iterable[tuple[Player, Mapping, Mapping]]) -> KGJLeague:
+        """What DEF and FAT rank against: every fetched (player, season line,
+        fielding line), a batter in the group of the position ESPN lists, a
+        pitcher among ESPN's starters (SP) or everyone else."""
+        return KGJLeague.of(
+            ("SP" if (p.position or "").upper() == "SP" else "RP", usage_sample(line))
+            if self.is_pitcher(p)
+            else (self._normalize_position(p.position, False), fielding_sample(glove))
+            for p, line, glove in lines
+        )
+
+    def map_batter(
+        self,
+        player: Player,
+        stats: dict | None = None,
+        fielding: Mapping | None = None,
+        league: KGJLeague | None = None,
+    ) -> KGJPlayerRecord:
+        """`stats` is the player's ESPN batting line (`get_baseball_athlete_stats`)
+        and `fielding` his fielding line. `league` (from `league()`) ranks his
+        DEF; without one he is ranked alone.
 
         A pitcher here is a spare filling a short bench: he is written as an IF
         with the game's own pitcher batting, never as a P with fielder ratings.
@@ -111,7 +219,7 @@ class KGJStatMapper:
             avg, hr, rbi = 200, 1, 5
         else:
             pos = self._normalize_position(player.position, is_pitcher=False)
-            attrs = self._map_batter_stats(stats, pos)
+            attrs = self._map_batter_stats(stats, pos, fielding, league)
             measured = _stat(stats, "AVG")
             avg = 250 if measured is None else round(measured * 1000)
             hr = int(_stat(stats, "HR") or 0)
@@ -141,8 +249,10 @@ class KGJStatMapper:
         player: Player,
         stats: dict | None = None,
         is_starter: bool = True,
+        league: KGJLeague | None = None,
     ) -> KGJPlayerRecord:
-        """`stats` is the player's ESPN pitching line."""
+        """`stats` is the player's ESPN pitching line. `league` (from
+        `league()`) ranks his FAT; without one he is ranked alone."""
         stats = stats or {}
         era = _stat(stats, "ERA")
         first, last = self._split_name(player.name)
@@ -156,7 +266,7 @@ class KGJStatMapper:
             is_pitcher=True,
             bats=self._bats(player),
             throws=self._throws(player),
-            pitcher_attrs=self._map_pitcher_stats(stats, is_starter),
+            pitcher_attrs=self._map_pitcher_stats(stats, is_starter, league),
             wins=int(_stat(stats, "W") or 0),
             losses=int(_stat(stats, "L") or 0),
             era=400 if era is None else round(era * 100),
@@ -166,10 +276,17 @@ class KGJStatMapper:
         looks.fit(record, player.height, player.weight)
         return record
 
-    def _map_batter_stats(self, stats: dict, pos: str) -> KGJBatterAttributes:
+    def _map_batter_stats(
+        self,
+        stats: Mapping,
+        pos: str,
+        fielding: Mapping | None = None,
+        league: KGJLeague | None = None,
+    ) -> KGJBatterAttributes:
         """BAT from AVG (.190-.300 = 3-10), POW from isolated power (SLG - AVG,
         .070-.280 = 2-10), SPD from steals plus twice the triples per 600 PA (0
-        is about 4, 50 is 10), DEF from the position, +1 past 120 games.
+        is about 4, 50 is 10), DEF from dWAR per fielding inning ranked among
+        the league's players listed at his position (`RETAIL_DEF`).
         """
         base = BATTER_DEFAULTS.get(pos, BATTER_DEFAULTS["CF"])
         pa = _stat(stats, "PA") or 0.0
@@ -184,31 +301,32 @@ class KGJStatMapper:
         speed = base.speed
         if sample and sb is not None:
             speed = _lin((sb + 2 * (_stat(stats, "3B") or 0)) / pa * 600, -4, 50, 3, 10)
-        games = _stat(stats, "GP") or 0
-        return KGJBatterAttributes(
-            batting=batting,
-            power=power,
-            speed=speed,
-            defense=min(10, base.defense + (games > 120)),
-        )
+        defense = base.defense
+        if pos in RETAIL_DEF and (glove := fielding_sample(fielding or {})):
+            league = league or KGJLeague.of([(pos, glove)])
+            defense = league.rating(pos, glove, RETAIL_DEF[pos])
+        return KGJBatterAttributes(batting=batting, power=power, speed=speed, defense=defense)
 
-    def _map_pitcher_stats(self, stats: dict, is_starter: bool) -> KGJPitcherAttributes:
+    def _map_pitcher_stats(
+        self, stats: Mapping, is_starter: bool, league: KGJLeague | None = None
+    ) -> KGJPitcherAttributes:
         """SPD from K/9 (5.5-11.5 = 4-10), CON from BB/9 (5.0-1.8 = 4-10), FAT
-        from innings per game: a starter's 4.5-7.0 = 5-10 (from 3 starts), a
-        reliever's 0.9-2.0 = 2-5. FAT sets when he tires, so a starter never
-        drops below 5, the cartridge's own floor.
+        from innings per appearance, ranked among the league's starters (from 3
+        starts) or relievers (`RETAIL_FAT`): the game tires him from (FAT) * 7
+        pitches, so a starter is 5-10 and a reliever 2-5, a closer's one inning
+        a 2.
         """
-        base = PITCHER_DEFAULTS["SP" if is_starter else "RP"]
+        group = "SP" if is_starter else "RP"
+        base = PITCHER_DEFAULTS[group]
         ip = _innings(_stat(stats, "IP") or 0.0)
         if ip < MIN_IP:
             return dataclasses.replace(base)
         k, bb = _stat(stats, "K"), _stat(stats, "BB")
-        games, starts = _stat(stats, "GP") or 0, _stat(stats, "GS") or 0
+        usage = usage_sample(stats)
         fatigue = base.fatigue
-        if is_starter and starts >= 3:
-            fatigue = _lin(ip / games, 4.5, 7.0, 5, 10)
-        elif not is_starter and games:
-            fatigue = _lin(ip / games, 0.9, 2.0, 2, 5)
+        if usage and (not is_starter or (_stat(stats, "GS") or 0) >= 3):
+            league = league or KGJLeague.of([(group, usage)])
+            fatigue = league.rating(group, usage, RETAIL_FAT[group])
         return KGJPitcherAttributes(
             speed=base.speed if k is None else _lin(k / ip * 9, 5.5, 11.5, 4, 10),
             control=base.control if bb is None else _lin(bb / ip * 9, 5.0, 1.8, 4, 10),

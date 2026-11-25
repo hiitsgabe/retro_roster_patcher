@@ -152,16 +152,17 @@ def _nibble(value: int, high: int, low: int = 0) -> int:
 def write(d: bytearray, off: int, record: KGJPlayerRecord) -> None:
     """A record's look at file offset `off`: bytes 0x0E-0x14, and 0x15-0x17
     for a pitcher (a batter's are zero, as on the cartridge), each nibble
-    clamped to the values the cartridge uses. Leaves 0x11 hi and 0x14 lo, which
-    the game never reads, and the throwing hand in 0x15 hi."""
+    clamped to the values the cartridge uses. 0x11 hi and 0x14 lo, which the
+    game never reads (its record reader $85:D738 masks them off), are 0, as most
+    of the cartridge's are; the throwing hand in 0x15 hi is left alone."""
     b = record.batter_appearance
     d[off + 0x0E] = _nibble(b.skin, 5) << 4 | _nibble(b.head, 7)
     d[off + 0x0F] = _nibble(b.hair_color, 4) << 4 | _nibble(b.body, 3)
     d[off + 0x10] = _nibble(b.legs_size, 1) << 4 | _nibble(b.legs_stance, 4)
-    d[off + 0x11] = d[off + 0x11] & 0xF0 | _nibble(b.arms_stance, 2)
+    d[off + 0x11] = _nibble(b.arms_stance, 2)
     d[off + 0x12] = _nibble(b.waggle, 7, 1) << 4 | _nibble(b.piece, 1)
     d[off + 0x13] = _nibble(b.piece_set, 2) << 4 | _nibble(b.sequence, 4)
-    d[off + 0x14] = _nibble(b.bat_color, 2) << 4 | d[off + 0x14] & 0x0F
+    d[off + 0x14] = _nibble(b.bat_color, 2) << 4
     if not record.is_pitcher:
         d[off + 0x15 : off + 0x18] = bytes(3)
         return

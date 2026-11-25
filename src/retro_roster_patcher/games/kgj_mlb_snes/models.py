@@ -304,20 +304,25 @@ class KGJPlayerRecord:
                 on the bench the game ignores it and a sub takes the slot's
       0x0A      jersey number
       0x0B      batter: BAT | POW; pitcher: SPD | CON (each rating - 1)
-      0x0C      batter: SPD | DEF; pitcher: the whole byte is FAT - 1. He tires
-                from (byte + 1) * 7 pitches and is worst from (byte + 1) * 9
+      0x0C      batter: SPD | DEF; pitcher: the whole byte is FAT - 1 (read
+                unmasked at $85:D4AA and on his card at $85:DE3A, so its high
+                nibble is 0 only because FAT stays under 11). He tires from
+                (byte + 1) * 7 pitches and is worst from (byte + 1) * 9
       0x0D      bats (0 R, 1 L, 2 switch) | throws (0 R, 1 L). Pitchers too: they
                 bat, and a fielder throws with the low nibble
       0x0E-0x14 batter looks (`KGJBatterAppearance`): skin | head, hair |
                 build, legs size | stance, unused | arms, waggle | piece,
-                piece set | sequence, bat colour | unused
+                piece set | sequence, bat colour | unused. The two unused
+                nibbles are only ever read masked off (0x11 `AND #$0F`, 0x14
+                shifted right 4), and are written 0
       0x15-0x17 pitcher only: throws | skin, head | hair, build | delivery
                 (`KGJPitcherAppearance`)
       0x18-0x1F four 12-bit stats, each a low byte then a nibble holding bits
                 8-11: batter AVG, HR, RBI and 0; pitcher W, L, ERA, saves. The
                 high nibble of 0x19, 0x1B, 0x1D and 0x1F is the stat's digit
                 count minus one, as the cartridge has it (AVG always 3, a
-                batter's saves 0xF). The game never reads those four nibbles.
+                batter's saves 0xF). The game never reads those four nibbles:
+                its stat reader ($85:DF0B) keeps 12 bits.
 
     Nothing in the record says pitcher or batter, starter or reliever: the game
     goes by the slot (15 and up pitch, 20 and up relieve), and a pitcher bats

@@ -22,9 +22,12 @@ from retro_roster_patcher.games.kgj_mlb_snes.models import (
 from retro_roster_patcher.games.kgj_mlb_snes.stat_mapper import (
     BATTER_DEFAULTS,
     PITCHER_DEFAULTS,
+    KGJLeague,
     KGJStatMapper,
     _innings,
     _lin,
+    fielding_sample,
+    usage_sample,
 )
 from retro_roster_patcher.sports.models import Player
 
@@ -117,12 +120,38 @@ def test_defense_comes_from_the_position_default_and_not_from_the_stats(mapper):
     assert (short_stop, designated) == (8, 2)
 
 
-def test_more_than_120_games_adds_one_to_defense(mapper):
-    assert mapper._map_batter_stats({"GP": 121}, "C").defense == 8
+def _glove(dwar, innings=1200.0):
+    return {"DWAR": dwar, "FIP": innings}
 
 
-def test_exactly_120_games_does_not(mapper):
-    assert mapper._map_batter_stats({"GP": 120}, "C").defense == 7
+def _infield(*dwars):
+    return KGJLeague.of(("SS", fielding_sample(_glove(d))) for d in dwars)
+
+
+def test_defense_ranks_dwar_on_the_cartridges_spread_of_the_position(mapper):
+    league = _infield(-1.0, 0.0, 0.5, 1.0, 3.0)
+    best = mapper._map_batter_stats(WEAK_BATTER, "SS", _glove(3.0), league).defense
+    worst = mapper._map_batter_stats(WEAK_BATTER, "SS", _glove(-1.0), league).defense
+    assert (best, worst) == (10, 6)
+
+
+def test_a_short_fielding_sample_is_pulled_toward_the_positions_rate(mapper):
+    league = _infield(-1.0, 0.0, 0.5, 1.0, 3.0)
+    short = mapper._map_batter_stats(WEAK_BATTER, "SS", _glove(0.5, 30.0), league).defense
+    full = mapper._map_batter_stats(WEAK_BATTER, "SS", _glove(3.0), league).defense
+    assert short < full
+
+
+def test_a_line_without_fielding_keeps_the_position_default(mapper):
+    # A partial line: no dWAR, or no innings in the field (a pure DH).
+    league = _infield(-1.0, 3.0)
+    no_dwar = mapper._map_batter_stats(STAR_BATTER, "SS", {"FIP": 1200.0}, league).defense
+    no_field = mapper._map_batter_stats(STAR_BATTER, "DH", _glove(0.0, 0.0), league).defense
+    assert (no_dwar, no_field) == (BATTER_DEFAULTS["SS"].defense, BATTER_DEFAULTS["DH"].defense)
+
+
+def test_a_fielder_alone_takes_the_cartridges_median(mapper):
+    assert mapper._map_batter_stats(WEAK_BATTER, "CF", _glove(2.0)).defense == 8
 
 
 def test_an_unknown_position_falls_back_to_centre_fields_defense(mapper):
@@ -135,18 +164,47 @@ def test_a_pitchers_speed_and_control_span_the_scale(mapper):
     assert (best.speed, best.control, worst.speed, worst.control) == (10, 10, 4, 4)
 
 
-def test_a_starters_fatigue_is_on_the_cartridges_starter_scale(mapper):
-    # Innings per start: 7 is the top, and a 5-inning starter is not left at
-    # FAT 1 to tire after 7 pitches; the cartridge's starters run 5-10.
-    ace = mapper._map_pitcher_stats(ACE, True).fatigue
-    short = mapper._map_pitcher_stats(dict(ACE, IP=120.0), True).fatigue
-    assert (ace, short) == (10, 5)
+def _usage(group, *lines):
+    return KGJLeague.of((group, usage_sample(line)) for line in lines)
 
 
-def test_a_relievers_fatigue_is_on_the_cartridges_reliever_scale(mapper):
-    closer = mapper._map_pitcher_stats(CLOSER, False).fatigue
-    long_man = mapper._map_pitcher_stats(LONG_MAN, False).fatigue
-    assert (closer, long_man) == (2, 5)
+def test_a_starters_fatigue_ranks_innings_per_start_on_the_starter_spread(mapper):
+    # The cartridge's starters run 5-10, so nobody is left to tire after 7 pitches.
+    short = dict(ACE, IP=120.0)
+    league = _usage("SP", ACE, short, dict(ACE, IP=150.0), dict(ACE, IP=180.0))
+    ace = mapper._map_pitcher_stats(ACE, True, league).fatigue
+    assert (ace, mapper._map_pitcher_stats(short, True, league).fatigue) == (8, 6)
+
+
+def test_a_relievers_fatigue_ranks_innings_per_appearance_on_the_reliever_spread(mapper):
+    # The cartridge's closers all have FAT 2 and its long men 3-5.
+    league = _usage("RP", CLOSER, LONG_MAN, dict(CLOSER, IP=65.0))
+    closer = mapper._map_pitcher_stats(CLOSER, False, league).fatigue
+    long_man = mapper._map_pitcher_stats(LONG_MAN, False, league).fatigue
+    assert (closer, long_man) == (2, 3)
+
+
+def test_a_few_appearances_are_pulled_toward_the_bullpens_rate():
+    # Two ten-inning outings are not a ten-inning reliever: ten appearances'
+    # worth of the bullpen's rate weighs in.
+    league = _usage("RP", CLOSER, LONG_MAN)
+    assert league.rate("RP", (20.0, 2.0)) == pytest.approx((20 + 160 / 100 * 10) / 12)
+
+
+def test_the_league_groups_pitchers_by_espns_role_and_batters_by_position(mapper):
+    league = mapper.league(
+        [
+            (_player(id=1, position="SP"), ACE, {}),
+            (_player(id=2, position="RP"), CLOSER, {}),
+            (_player(id=3, position="SS"), STAR_BATTER, _glove(1.0)),
+            (_player(id=4, position="DH"), STAR_BATTER, {}),
+        ]
+    )
+    assert sorted((g, len(v)) for g, v in league.values.items()) == [
+        ("RP", 1),
+        ("SP", 1),
+        ("SS", 1),
+    ]
 
 
 def test_a_reliever_in_the_rotation_keeps_the_starter_fatigue_default(mapper):

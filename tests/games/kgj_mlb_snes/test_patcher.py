@@ -512,6 +512,24 @@ def test_fetch_keeps_the_batting_line_of_a_batter_and_the_pitching_line_of_a_pit
     assert data.teams[0].extra["stats"] == {"0": {"AVG": 0.311}, "15": {"ERA": 2.5}}
 
 
+def test_fetch_keeps_a_batters_fielding_line_and_no_pitchers(tmp_path):
+    glove = {"DWAR": 1.5, "FIP": 1200.0}
+    line = {"batting": {"AVG": 0.311}, "fielding": glove, "pitching": {"ERA": 2.5}}
+    p = KGJMLBPatcher(cache_dir=tmp_path / "cache")
+    p.api = FakeApi(_teams(), lines={0: line, 15: line})
+    assert p.fetch(season=2025).teams[0].extra["fielding"] == {"0": glove}
+
+
+def test_the_fielding_line_ranks_defense_against_the_league(patcher):
+    data = _squad_league(["CF"] * BATTERS_PER_TEAM + STAFF)
+    data.teams[0].extra["fielding"] = {
+        str(i): {"DWAR": i / 2, "FIP": 1200.0} for i in range(BATTERS_PER_TEAM)
+    }
+    players = patcher.map_rosters(data, order_as_given=True).teams[SEA_SLOT].players
+    worst, best = players[0].batter_attrs.defense, players[14].batter_attrs.defense
+    assert (worst, best) == (4, 10)
+
+
 def test_a_team_with_no_lines_still_gets_an_empty_dict(tmp_path):
     p = KGJMLBPatcher(cache_dir=tmp_path / "cache")
     p.api = FakeApi(_teams(), lines={})
@@ -943,11 +961,14 @@ class _StubMapper:
     def is_pitcher(self, player):
         return self.real.is_pitcher(player)
 
-    def map_batter(self, player, stats=None):
-        return self.real.map_batter(player, stats)
+    def league(self, lines):
+        return self.real.league(lines)
 
-    def map_pitcher(self, player, stats=None, is_starter=True):
-        return self.real.map_pitcher(player, stats, is_starter=is_starter)
+    def map_batter(self, player, stats=None, fielding=None, league=None):
+        return self.real.map_batter(player, stats, fielding, league)
+
+    def map_pitcher(self, player, stats=None, is_starter=True, league=None):
+        return self.real.map_pitcher(player, stats, is_starter=is_starter, league=league)
 
 
 def test_map_rosters_drops_a_negative_slot(patcher):

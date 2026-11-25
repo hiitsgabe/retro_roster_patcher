@@ -139,11 +139,11 @@ def test_a_head_that_draws_like_another_counts_as_that_one():
     assert looks._card(a) == looks._card(b)
 
 
-def test_write_leaves_the_nibbles_the_game_never_reads():
+def test_write_zeroes_the_nibbles_the_game_never_reads():
     record = _record(11, pitcher=True)
     raw = bytearray(range(0x80, 0xA0))
     looks.write(raw, 0, record)
-    assert raw[0x11] >> 4 == 0x91 >> 4 and raw[0x14] & 15 == 0x94 & 15
+    assert raw[0x11] >> 4 == 0 and raw[0x14] & 15 == 0
     assert raw[0x15] >> 4 == 0x95 >> 4  # the throwing hand
     assert raw[0x0E] == record.batter_appearance.skin << 4 | record.batter_appearance.head
     assert raw[:0x0E] == bytes(range(0x80, 0x8E)) and raw[0x18:] == bytes(range(0x98, 0xA0))

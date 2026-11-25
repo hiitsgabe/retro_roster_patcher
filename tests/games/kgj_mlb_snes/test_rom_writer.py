@@ -288,9 +288,8 @@ def test_a_batters_animation_lands_at_bytes_0x12_and_0x13(writer):
     assert (raw[0x12], raw[0x13]) == (0x61, 0x23)
 
 
-def test_a_batters_bat_colour_takes_the_high_nibble_of_byte_0x14(writer):
-    before = writer.data[_offset(4, 6) + 0x14] & 0x0F
-    assert _written_batter(writer)["raw"][0x14] == 0x20 | before
+def test_a_batters_bat_colour_takes_the_high_nibble_of_byte_0x14_and_zeroes_the_low(writer):
+    assert _written_batter(writer)["raw"][0x14] == 0x20
 
 
 def test_every_look_nibble_is_clamped_to_what_the_game_draws(writer):
@@ -339,11 +338,9 @@ def test_a_batters_leg_fields_share_byte_0x10(writer):
     assert _written_batter(writer)["legs"] == 0x14
 
 
-def test_the_arms_nibble_leaves_the_high_half_of_byte_0x11_alone(writer):
-    # The fixture puts a non-zero value in that half, so a write that clobbered
-    # the whole byte is visible. This is the one field the writer merges.
-    before = writer.data[_offset(4, 6) + 0x11] & 0xF0
-    assert _written_batter(writer)["arms"] == before | 0x2
+def test_the_arms_nibble_zeroes_the_high_half_of_byte_0x11(writer):
+    # The fixture puts a non-zero value in that half, which the game never reads.
+    assert _written_batter(writer)["arms"] == 0x2
 
 
 def test_a_batter_zeroes_the_three_pitcher_appearance_bytes(writer):
@@ -389,10 +386,9 @@ def test_a_batter_zeroes_byte_0x1e(writer):
     assert _written_batter(writer)["stat_fourth"] == 0
 
 
-def test_a_batter_leaves_the_nibbles_no_field_owns_alone(writer):
-    before = {offset: writer.data[_offset(4, 6) + offset] for offset in fixture.UNTOUCHED_OFFSETS}
+def test_a_batter_zeroes_the_nibbles_the_game_never_reads(writer):
     after = _written_batter(writer)["untouched"]
-    assert (after[0x11] >> 4, after[0x14] & 0x0F) == (before[0x11] >> 4, before[0x14] & 0x0F)
+    assert (after[0x11] >> 4, after[0x14] & 0x0F) == (0, 0)
 
 
 def _written_pitcher(writer, team=4, slot=17, **overrides):
@@ -468,10 +464,9 @@ def test_a_pitchers_saves_land_at_byte_0x1e(writer):
     assert _written_pitcher(writer)["stat_fourth"] == 44
 
 
-def test_a_pitcher_leaves_the_nibbles_no_field_owns_alone(writer):
-    before = {offset: writer.data[_offset(4, 17) + offset] for offset in fixture.UNTOUCHED_OFFSETS}
+def test_a_pitcher_zeroes_the_nibbles_the_game_never_reads(writer):
     after = _written_pitcher(writer)["untouched"]
-    assert (after[0x11] >> 4, after[0x14] & 0x0F) == (before[0x11] >> 4, before[0x14] & 0x0F)
+    assert (after[0x11] >> 4, after[0x14] & 0x0F) == (0, 0)
 
 
 def test_a_team_index_past_the_league_is_refused(writer):

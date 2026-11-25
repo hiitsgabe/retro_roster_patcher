@@ -259,7 +259,8 @@ class KGJMLBPatcher(Patcher):
             # season ever fetched is served forever.
             players = self.api.get_baseball_squad(team.id, season) or []
             # Each player's whole season line, one request each (cached): the
-            # pitching line for a pitcher, the batting line for anyone else.
+            # pitching line for a pitcher, the batting and fielding lines for
+            # anyone else.
             lines = parallel_map(
                 lambda p: self.api.get_baseball_athlete_stats(p.id, season), players
             )
@@ -267,6 +268,11 @@ class KGJMLBPatcher(Patcher):
                 str(p.id): line[kind]
                 for p, line in zip(players, lines, strict=True)
                 if (kind := "pitching" if self.mapper.is_pitcher(p) else "batting") in line
+            }
+            fielding = {
+                str(p.id): line["fielding"]
+                for p, line in zip(players, lines, strict=True)
+                if not self.mapper.is_pitcher(p) and "fielding" in line
             }
             rosters.append(
                 TeamRoster(
@@ -277,6 +283,7 @@ class KGJMLBPatcher(Patcher):
                     # batters start, 9 in the AL and 8 in the NL; see `_lineup`.
                     extra={
                         "stats": stats,
+                        "fielding": fielding,
                         "lineup": self.api.get_baseball_lineup(team.id, season),
                         "lineup_size": len(_lineup(slot)),
                     },
@@ -340,12 +347,18 @@ class KGJMLBPatcher(Patcher):
         club's lineup once; see `_lineup_positions`.
         """
         self.check_slot_mapping(slot_mapping)
+        league = self.mapper.league(
+            (p, _stats(r).get(str(p.id), {}), (r.extra.get("fielding") or {}).get(str(p.id), {}))
+            for r in data.teams
+            for p in r.players
+        )
         teams: dict[int, KGJTeamRecord] = {}
         for roster in data.teams:
             slot = self.mapper.get_team_slot(roster.team.code)
             if slot is None or not 0 <= slot < expansion.TEAMS:
                 continue
             stats = _stats(roster)
+            fielding = roster.extra.get("fielding") or {}
             if order_as_given:
                 # The caller's order sets the lineup, the bench, the rotation
                 # and the bullpen within each block.
@@ -364,7 +377,10 @@ class KGJMLBPatcher(Patcher):
             batters = batters + rest[:short]
             pitchers = (pitchers + rest[short:])[: PLAYERS_PER_TEAM - BATTERS_PER_TEAM]
 
-            hitters = [self.mapper.map_batter(p, stats.get(str(p.id), {})) for p in batters]
+            hitters = [
+                self.mapper.map_batter(p, stats.get(str(p.id), {}), fielding.get(str(p.id)), league)
+                for p in batters
+            ]
             lineup = hitters[: len(_lineup(slot))]
             # Most-used first, so of two starters listed at one position the
             # regular keeps it and the other moves (to DH, say).
@@ -377,7 +393,7 @@ class KGJMLBPatcher(Patcher):
                 lineup[i].position = position
             arms = [
                 self.mapper.map_pitcher(
-                    p, stats.get(str(p.id), {}), is_starter=j < STARTERS_PER_TEAM
+                    p, stats.get(str(p.id), {}), is_starter=j < STARTERS_PER_TEAM, league=league
                 )
                 for j, p in enumerate(pitchers)
             ]
