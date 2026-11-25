@@ -65,7 +65,7 @@ def test_writing_every_field_changes_no_bit_a_field_does_not_own():
     assert all((record[i] ^ CASILLAS[i]) & ~owned[i] & 0xFF == 0 for i in range(48, 92)), (
         "a bit no field owns changed"
     )
-    assert owned[85] == 0xA7 and owned[87] == 0x06 and owned[54] == 0x7F and owned[51] == 0
+    assert owned[85] == 0xA7 and owned[87] == 0x26 and owned[54] == 0x7F and owned[51] == 0
 
 
 def test_a_value_is_clamped_to_its_field():

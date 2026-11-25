@@ -12,12 +12,16 @@ Players: `0_TEXT.AFS` entry 47 part 0 (Latin names) and entry 46 part 0
 Bytes 48-123, bit by bit (counts over the 4790 records the disc's squads use):
 
     48-49    commentary name (`CALL_NAME_BYTE`): written, his own or none
-    50       bits 0-2 the edited flags (name, shirt name, commentary name; PES 6's layout),
-             bits 3-7 unused: 0 on every record; left as they are
+    50       bits 0-2 the edited flags (name, shirt name, commentary name; PES 6's layout,
+             bit 2 seen set by Edit Player on a commentary-name change), bits 3-7 unused: 0 on
+             every record; left as they are
     51       bit 0 `NATIONAL_DOUBLE_FLAG`: cleared on a written player; bits 1-7 unused (0)
     52-89    `abilities.FIELDS`, the registered position (53 bits 4-7) and the playable
              flags (bit 7 of 54-65); the bits of 85, 87, 88 and 89 that no field names are
              listed in `abilities`
+Kept below means as the record has it, or, for a player on the disc already, copied from his
+own record with the look region (92-123).
+
     90-91    Unidentified (the abilities module's "shirt and body shape" is PES 6's reading,
              not checked here): 90 holds 54 values (120 on 1948 records, 88 on 837), 91 holds
              151 (119 on 1697); kept as the record has them

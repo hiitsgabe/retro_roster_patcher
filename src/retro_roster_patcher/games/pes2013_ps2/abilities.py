@@ -19,6 +19,11 @@ C. Ronaldo, Rooney, Iniesta, Buffon), and among players of 24-28 the mean of a p
 ratings rises from 75.1 at 0 to 87.8 at 7. Nothing on screen shows it; it is ranked like a
 rating, on the player's match rating, minutes and age.
 
+Byte 87 bit 5 is the abilities-edited flag (`abilities_edited`): PCSX2's Edit Player set it, in
+the saved record, when only an ability of Pedro was changed (Defense 50 to 51), and not when
+only Tello's commentary name was (2026-11-25). It is 0 on every disc record, and a patch
+writes 0 (`defaults`: a patched player is not one the user edited).
+
 Written elsewhere, not here: bytes 48-49, the commentary name, byte 51 bit 0 (`models`), the
 registered position (byte 53 bits 4-7) and the playable flags (bit 7 of bytes 54-65), which the
 patcher writes from the role, and the look from byte 92 (`models`).
@@ -32,10 +37,11 @@ Unidentified, and left as the record has them:
 - byte 85 bit 4 (set on 288) and bit 6 (set on 131): no field, card or category of pesmaster
   goes with either; same attempts.
 - byte 87 bit 0: set on 1043 records, with a left foot on 1052 of the 1083 left-footers and on
-  8 right-footers; no left-footer's card, free-kick or penalty motion explains the exceptions.
-- byte 87 bit 4: set on 459 records. PES 6's and FVitor7's editors call bit 4 of this byte
-  "Ability Edited", but on a retail disc no record has been edited.
-- byte 87 bits 3 and 5-7 and byte 88 bits 6-7: 0 on every record.
+  8 right-footers; no left-footer's card, free-kick or penalty motion explains the exceptions,
+  and it is not the foot's copy: switching Messi to the right foot in Edit Player left it set.
+- byte 87 bit 4: set on 459 records. PES 6's and FVitor7's editors call it "Ability Edited",
+  but here that is bit 5 (above): editing an ability left bit 4 alone.
+- byte 87 bits 3, 6 and 7 and byte 88 bits 6-7: 0 on every record.
 - byte 89 bit 7 (set on 832) and bytes 90-91: PES 6 reads them as shirt and body shape; not
   checked in this game (`models`).
 
@@ -153,6 +159,7 @@ FIELDS: dict[str, tuple[int, int, int]] = {
     "growth_type": (86, 0, 0xFF),
     "long_range_drive": (87, 1, 1),
     "roulette": (87, 2, 1),
+    "abilities_edited": (87, 5, 1),
     "height": (88, 0, 0x3F),
     "weight": (89, 0, 0x7F),
 }
