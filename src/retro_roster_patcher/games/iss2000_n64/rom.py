@@ -48,6 +48,11 @@ A player record (offsets in the record; counts are of the 2,200 national-team re
     0x2E      build: the game shows the weight from this and the height
     0x2F      attack, 0x30 cover: 24-99; attack rises with the line (r 0.57) and
               determination, cover with defence (r 0.75)
+    0x31      lateral lean, 0 the team's left to 99 its right: the match (ROM
+              0x26C660) makes it a pair of weights 2v/99 and 2 - 2v/99 and uses
+              one or the other when the ball is out on either flank. Retail
+              medians 43 on the left flank, 54 in the middle, 60 on the right
+              (r 0.29 with the place's width); seen on no screen
     0x33      position bits: 1 GK, 2 DF, 4 MF, 8 FW (combinations allowed)
     0x34      team id, 0x35 index in the team
 
@@ -56,7 +61,9 @@ with every known byte and with the place's line, depth and width in the team's
 formation, and the retail players who hold the rarer values; for the bits of the
 first word, setting each on a starter's in-match copy and reading the Member
 screen's abilities, aptitudes and special techniques (none of bits 23-31 shows
-anything there). What the patch writes is said for each.
+anything there); and the match code's loads through the player's record pointer
+(word 0x04 33 times, 0x0C-0x10 and 0x32 once or twice each, 0x12-0x13 and
+0x15-0x17 never through it), not traced to a behaviour. What the patch writes is said for each.
 
     0x00-0x03 bits 23-28: set on 56, 46, 41, 5, 2 and 5 records, read as a small
               number 1-8 more than as flags; bits 29-31 always 0. Written 0.
@@ -79,11 +86,9 @@ anything there). What the patch writes is said for each.
     0x2C      keepers 74-96 (r 0.56 with goalkeeping), others 8-22: a second
               keeping skill no screen shows. The group's median on the
               cartridge (`mapper.RETAIL`).
-    0x31      0-99, a little higher the further right his place (r 0.29 with
-              its width; medians 43 on the left flank, 54 in the middle, 60
-              on the right); seen on no screen. His side's median
-              (`mapper.SIDE`).
-    0x32      0-99, median 29, rising with the mean ability (r 0.41). Kept.
+    0x32      0-99, median 29, rising with the mean ability (r 0.41); the match
+              reads it once, as 120 less it (ROM 0x399B58), in code not traced
+              further. Kept.
     0x36-0x37 0 on every record. Kept.
 """
 

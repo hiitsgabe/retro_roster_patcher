@@ -32,9 +32,8 @@ The special techniques (`TECHNIQUES`, the 23 the Member screen lists) go the
 same way: one with a source is given to as large a top of the group as holds
 it on the cartridge, and the ones nothing measures (feint, long, loop,
 overhead and volley shots, diving header, long throw, both penalty ones, trap)
-to nobody. The roles word is his role's (`ROLES`); byte 0x31, not identified but
-higher the further right a retail player's place, is the median of his role's
-side (`SIDE`); the foot is the one he takes his shots with (`foot_of`).
+to nobody. The roles word and the lateral lean are his role's (`ROLES`, `SIDE`),
+and the foot the one he takes his shots with (`foot_of`).
 
 The XI is the club's starting eleven when there is one, each starter on the
 line he is given, in the cartridge's formation nearest the roster's own (a
@@ -224,8 +223,8 @@ ROLES = {
 }  # fmt: skip
 #: The same for a player without a role, by group.
 GROUP_ROLES = {"GK": 0x0000, "DF": 0x0C06, "MF": 0x3060, "FW": 0xC300}
-#: Record byte 0x31 (unidentified, `rom`): the median of the cartridge's starters on the left
-#: flank, in the middle and on the right flank.
+#: The lateral lean (record 0x31, 0 the team's left to 99 its right): the median of the
+#: cartridge's starters on the left flank, in the middle and on the right flank.
 SIDE = {"L": 43, "C": 54, "R": 60}
 
 #: Formations on the cartridge: (defenders, midfielders, forwards) -> a team
@@ -262,7 +261,7 @@ class N64Player:
     player_id: int = 0
     photo_url: str = ""
     #: His soccer role (`Player.role`, else the one his lineup code reads as), "" when he has
-    #: none: the writer seats a line by it, and writes his roles word and byte 0x31 from it.
+    #: none: the writer seats a line by it, and writes his roles word and lateral lean from it.
     role: str = ""
     #: The special techniques he has: bit set as `TECHNIQUES` numbers them.
     techniques: int = 0
