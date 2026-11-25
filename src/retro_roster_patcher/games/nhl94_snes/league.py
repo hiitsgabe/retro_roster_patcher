@@ -169,6 +169,22 @@ BANK_9C_PADDING = 0x9CF945
 BANK_9C_END = 0x9D0000
 
 LOGO_LOADERS = (0x9D87DB, 0x9DC69B, 0x9DD9B7)
+#: The menus put the NHL shield or the NHLPA logo in a logo box by archive
+#: index (`LDA #$1C` / `#$1D`, `STA $7E:3454` / `3452`), Columbus's and
+#: Minnesota's in the 34-entry archive; they follow the two past the teams.
+#: Not in `CODE`, so an image an earlier patch grew is still `expanded` and
+#: gets them on its next patch.
+LOGO_BOXES = (
+    0x9BC25A,
+    0x9BC261,
+    0x9BC83B,
+    0x9BC842,
+    0x9C8593,
+    0x9D9D41,
+    0x9DA4B4,
+    0x9DAA95,
+    0x9DAAD4,
+)
 ARCHIVE_SIZE = 0x7C00
 
 #: (CPU address, cartridge bytes, expanded bytes).
@@ -292,6 +308,7 @@ def expand(rom: bytearray) -> bool:
     True when it is so laid out, now or by an earlier patch; False, writing
     nothing, for an image laid out otherwise."""
     if expanded(rom):
+        _point_logo_boxes(rom)
         return True
     if _state(rom) != "retail":
         return False
@@ -380,4 +397,12 @@ def expand(rom: bytearray) -> bool:
         site = _file(loader)
         rom[site + 1] = _cpu(at) >> 16
         rom[site + 6 : site + 8] = (_cpu(at) & 0xFFFF).to_bytes(2, "little")
+    _point_logo_boxes(rom)
     return True
+
+
+def _point_logo_boxes(rom: bytearray) -> None:
+    for cpu in LOGO_BOXES:
+        at = _file(cpu) + 1
+        if rom[at - 1] == 0xA9 and rom[at] in (RETAIL_SLOTS, RETAIL_SLOTS + 1):
+            rom[at] += SLOTS - RETAIL_SLOTS

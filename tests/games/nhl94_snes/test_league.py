@@ -138,3 +138,33 @@ def test_a_shared_entry_is_stored_once():
     archive = league.build_archive([b"aa", b"bbb", b"aa"])
     assert struct.unpack_from("<3I", archive) == (12, 14, 12)
     assert league.archive_entries(archive, 3) == [b"aa", b"bbb", b"aa"]
+
+
+def _logo_box_operands(rom):
+    return [rom[league._file(cpu) + 1] for cpu in league.LOGO_BOXES]
+
+
+CARTRIDGE_LOGO_BOXES = (0x1C, 0x1D, 0x1C, 0x1D, 0x1D, 0x1D, 0x1C, 0x1C, 0x1D)
+
+
+def _with_cartridge_logo_boxes(rom):
+    for cpu, index in zip(league.LOGO_BOXES, CARTRIDGE_LOGO_BOXES, strict=True):
+        rom[league._file(cpu) : league._file(cpu) + 3] = bytes([0xA9, index, 0])
+
+
+def test_the_logo_boxes_name_the_league_logos_past_the_teams():
+    rom, _ = _retail()
+    _with_cartridge_logo_boxes(rom)
+    league.expand(rom)
+    assert _logo_box_operands(rom) == [0x20, 0x21, 0x20, 0x21, 0x21, 0x21, 0x20, 0x20, 0x21]
+    once = bytes(rom)
+    league.expand(rom)
+    assert bytes(rom) == once
+
+
+def test_an_image_grown_before_the_logo_boxes_moved_gets_them():
+    rom, _ = _retail()
+    league.expand(rom)
+    _with_cartridge_logo_boxes(rom)
+    assert league.expanded(rom) and league.expand(rom) is True
+    assert _logo_box_operands(rom) == [0x20, 0x21, 0x20, 0x21, 0x21, 0x21, 0x20, 0x20, 0x21]
