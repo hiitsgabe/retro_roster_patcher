@@ -6,7 +6,9 @@ and speeds floor at 0x1C, so a value below retail plays worse than it reads.
 The top value (15, or 7 on the 3-bit fields) is kept for the top few percent.
 
   * shooting 1-7: goals and shots on target.
-  * technique 1-7: pass accuracy, averaged with dribble success when supplied.
+  * technique 1-7: pass, long-ball and cross accuracy and dribble success
+    (`TECHNIQUE_SOURCES`), each pulled toward his position's rate and ranked
+    in it, then averaged by rank (`ranks.Ranks`); none of them, the median.
   * stamina 7-15: minutes per appearance.
   * kick 2-7: passes per game, else the mean of shooting and technique.
   * offense / defense: the position's retail slot median, moved by up to 2 with
@@ -54,6 +56,7 @@ from .models import (
     ISSPlayerRecord,
     ISSTeamRecord,
 )
+from .ranks import Ranks
 from .rom_writer import _to_ascii
 
 #: The cartridge's formation records, one per shape `ISSPatcher.formations` offers, in that order
@@ -222,21 +225,20 @@ class ISSStatMapper:
     #: stops gating.
     CATEGORY_INPUTS = {
         "shooting": ("goals", "shots_on"),
-        "technique": ("passes_accuracy",),
         "stamina": ("minutes", "appearances"),
         "kick": ("passes_total", "appearances"),
         "offense": ("goals", "assists", "appearances"),
         "defense": ("tackles_total", "interceptions", "appearances"),
     }
 
-    #: Inputs a category is *better* with and survives without. ESPN measures
-    #: neither dribbling field, and it is the only provider this game has, so
-    #: drop the dribbling *term* from the formula rather than the player from the
-    #: ranking: `technique` has one other input, and dropping every player leaves
-    #: the category empty and hands all 405 the same default rating.
-    CATEGORY_OPTIONAL_INPUTS = {
-        "technique": ("dribbles_success", "dribbles_attempts"),
-    }
+    #: The rates technique ranks (`pes2013_ps2.abilities.RATES`); a player missing one is ranked
+    #: on the others, and one missing all of them gets the median.
+    TECHNIQUE_SOURCES = (
+        "pass_accuracy",
+        "long_ball_accuracy",
+        "cross_accuracy",
+        "dribble_success",
+    )
 
     #: Categories ranked within the player's position: offense and defense shift
     #: off a position baseline instead of restating it, and technique (pass
@@ -414,17 +416,6 @@ class ISSStatMapper:
                 out[at[seat]] = players[k]
         return out
 
-    def _technique_value(self, stats: PlayerStats) -> float:
-        """Raw technique score: dribble success rate and pass accuracy, averaged.
-
-        Pass accuracy alone when the provider does not measure dribbling.
-        """
-        if _any_unsupplied(stats, self.CATEGORY_OPTIONAL_INPUTS["technique"]):
-            return stats.passes_accuracy
-        return (
-            (stats.dribbles_success / max(stats.dribbles_attempts, 1)) * 100 + stats.passes_accuracy
-        ) / 2
-
     def _compute_percentiles(
         self, all_stats: dict[int, PlayerStats], positions: dict[int, str] | None = None
     ) -> dict[str, dict[int, float]]:
@@ -440,7 +431,6 @@ class ISSStatMapper:
 
         categories: dict[str, Callable[[PlayerStats], float]] = {
             "shooting": lambda s: s.goals + s.shots_on * 0.3,
-            "technique": self._technique_value,
             "stamina": _per_game(lambda s: s.minutes),
             "kick": _per_game(lambda s: s.passes_total),
             "offense": _per_game(lambda s: s.goals + s.assists),
@@ -460,8 +450,25 @@ class ISSStatMapper:
             percentiles[cat_name] = {
                 pid: rank for raw in groups.values() for pid, rank in _ranks(raw).items()
             }
-
+        percentiles["technique"] = self._technique_percentiles(all_stats, positions or {})
         return percentiles
+
+    def _technique_percentiles(
+        self, all_stats: dict[int, PlayerStats], positions: dict[int, str]
+    ) -> dict[int, float]:
+        """Each player's technique rank (0-100) in his position, from `TECHNIQUE_SOURCES`;
+        a player with none of them is left out."""
+        members = [
+            (Player(id=pid, name="", position=positions.get(pid, "")), positions.get(pid, ""), s)
+            for pid, s in all_stats.items()
+        ]
+        sources = {group: {"technique": self.TECHNIQUE_SOURCES} for _, group, _ in members}
+        ranks = Ranks(members, sources)
+        out = {}
+        for player, group, line in members:
+            if (share := ranks.of(player, group, line).get("technique")) is not None:
+                out[player.id] = share * 100
+        return out
 
     def _shirt_numbers(self, players: list[Player]) -> list[int]:
         """Unique numbers 1-15, the only ones retail uses. A real number of 15

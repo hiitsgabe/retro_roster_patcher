@@ -1,23 +1,40 @@
 """ESPN squads reduced to ISS 2000's 22-player records.
 
-Ratings are league percentiles placed onto the cartridge's own spread: for
-each position group and each byte, `RETAIL` holds the 2nd, 10th, 50th, 90th
+Each rating ranks the player's season against his position group in the league
+fetched (`iss_snes.ranks`: counts per 90 minutes and rates, each pulled toward
+the group's own) and takes the value at that rank of the cartridge's own
+spread: for each group and each byte, `RETAIL` holds the 2nd, 10th, 50th, 90th
 and 98th percentile of the 2,200 national-team players, so a league's median
-player rates like a retail median and its best like retail's best. What feeds
-each percentile:
+player rates like a retail median and its best like retail's best. What each
+ranks (`SOURCES`):
 
-  determination  minutes per appearance and share of starts
-  shoot          goals and shots on target per 90 (keepers: pass accuracy)
-  curve          assists and passes per 90
-  speed, dash    no pace data anywhere: age (younger is quicker) per position
+  determination  goals and goals per shot (the Japanese game's kettei-ryoku,
+                 finishing)
+  shoot          shots and the share on target (a keeper's goal kick: long
+                 balls and their accuracy)
+  curve          crosses, cross accuracy and free-kick goals
+  speed, dash    no provider measures pace: youth
   stamina        minutes per appearance
-  jump           height
-  keep           fouls drawn and dribbles per 90
-  defence        tackles, interceptions and blocks per 90
-  passing        passes per 90 times pass accuracy
-  goalkeeping    keepers: share of starts (the first-choice keeper rates best)
+  jump           height and headed goals (keepers: height and save rate)
+  keep           fouls drawn, dribbles and dribble success
+  defence        tackles won, interceptions, clearances and blocks (keepers:
+                 save rate and clean sheets)
+  passing        passes, pass accuracy and long-ball accuracy
+  goalkeeping    keepers: save rate (saves over saves and goals conceded) and
+                 clean sheets
+  attack, cover  goals, assists and shots; interceptions, tackles, clearances
 
-A player without statistics gets his group's median.
+A rating none of whose stats the player has, and every rating of a player
+without a stat line, is his group's median on the cartridge. So is byte 0x2C
+(`keeper2`), which is not identified (`rom`).
+
+The special techniques (`TECHNIQUES`, the 23 the Member screen lists) go the
+same way: one with a source is given to as large a top of the group as holds
+it on the cartridge, and the ones nothing measures (feint, long, loop,
+overhead and volley shots, diving header, long throw, both penalty ones, trap)
+to nobody. The roles word is his role's (`ROLES`); byte 0x31, not identified but
+higher the further right a retail player's place, is the median of his role's
+side (`SIDE`); the foot is the one he takes his shots with (`foot_of`).
 
 The XI is the club's starting eleven when there is one, each starter on the
 line he is given, in the cartridge's formation nearest the roster's own (a
@@ -29,15 +46,21 @@ bench is the rest by starts and minutes, a second keeper first.
 
 from __future__ import annotations
 
-from bisect import bisect_left, bisect_right
 from dataclasses import dataclass, field
-from datetime import date
 
 from ...core.kits import KitSpec
 from ...core.shirt_numbers import shirt_numbers
 from ...sports.espn import LINEUP_GROUPS
-from ...sports.lineup import lineup_role, nearest_shape, parse_shape, team_formation
+from ...sports.lineup import (
+    lineup_role,
+    nearest_shape,
+    parse_shape,
+    slot_side,
+    team_formation,
+)
 from ...sports.models import Player, PlayerStats, TeamRoster
+from ..iss_snes.ranks import Ranks, Spread, place
+from ..we2002.stat_mapper import preferred_foot
 from . import rom as R
 
 GROUPS = ("GK", "DF", "MF", "FW")
@@ -47,8 +70,7 @@ _LINE = {"GK": 0, "DF": 1, "MF": 2, "FW": 3}
 
 #: Retail spread per group: byte -> (p2, p10, p50, p90, p98). Byte names as
 #: `rom.ABILITY_NAMES`, then the keeper bytes and the two awareness bytes.
-_Q = tuple[int, int, int, int, int]
-RETAIL: dict[str, dict[str, _Q]] = {
+RETAIL: dict[str, dict[str, Spread]] = {
     "GK": dict(
         determination=(51, 56, 64, 76, 80),
         shoot=(71, 74, 79, 85, 88),
@@ -114,7 +136,97 @@ RETAIL: dict[str, dict[str, _Q]] = {
         cover=(33, 37, 48, 60, 65),
     ),
 }
-_PCTS = (2.0, 10.0, 50.0, 90.0, 98.0)
+
+#: The stats each rating and technique ranks, by group (`iss_snes.ranks`).
+_OUTFIELD: dict[str, tuple[str, ...]] = {
+    "determination": ("goals", "finishing"),
+    "shoot": ("shots", "shot_accuracy"),
+    "curve": ("crosses", "cross_accuracy", "free_kick_goals"),
+    "speed": ("youth",),
+    "dash": ("youth",),
+    "stamina": ("minutes_per_game",),
+    "jump": ("height", "headed_goals"),
+    "keep": ("fouls_drawn", "dribbles", "dribble_success"),
+    "defence": ("tackles_won", "interceptions", "clearances", "blocks"),
+    "passing": ("passes", "pass_accuracy", "long_ball_accuracy"),
+    "attack": ("goals", "assists", "shots"),
+    "cover": ("interceptions", "tackles", "clearances"),
+    "dribble": ("dribbles", "fouls_drawn"),
+    "through_pass": ("assists",),
+    "middle_shot": ("shots",),
+    "heading": ("headed_goals",),
+    "sliding": ("tackles",),
+    "post_play": ("headed_goals", "height", "weight"),
+    "man_mark": ("tackles_won", "interceptions"),
+    "intercept": ("interceptions",),
+    "corner_kick": ("crosses", "cross_accuracy"),
+    "free_kick": ("free_kick_goals",),
+    "one_on_one": ("tackles_won",),
+    "long_pass": ("long_balls", "long_ball_accuracy"),
+}
+SOURCES: dict[str, dict[str, tuple[str, ...]]] = {
+    "GK": {
+        "shoot": ("long_balls", "long_ball_accuracy"),
+        "speed": ("youth",),
+        "dash": ("youth",),
+        "stamina": ("minutes_per_game",),
+        "jump": ("height", "save_rate"),
+        "defence": ("save_rate", "clean_sheets"),
+        "passing": ("passes", "pass_accuracy"),
+        "goalkeeping": ("save_rate", "clean_sheets"),
+        "highball": ("height",),
+        "one_on_one": ("save_rate",),
+    },
+    "DF": _OUTFIELD,
+    "MF": _OUTFIELD,
+    "FW": _OUTFIELD | {"one_on_one": ("finishing",)},
+}
+
+#: The cartridge's national-team players per group (a record's highest position bit, a keeper's
+#: first), which `TECHNIQUES` counts its holders among.
+RETAIL_PLAYERS = {"GK": 207, "DF": 511, "MF": 870, "FW": 612}
+#: The special techniques, bits 0-22 of the record's first word in the Member screen's order:
+#: name -> (bit, the cartridge's holders among its keepers, defenders, midfielders, forwards).
+TECHNIQUES: dict[str, tuple[int, tuple[int, int, int, int]]] = {
+    "dribble": (0, (1, 6, 83, 108)),
+    "feint": (1, (2, 1, 19, 44)),
+    "through_pass": (2, (1, 3, 47, 42)),
+    "long_shot": (3, (0, 1, 5, 1)),
+    "middle_shot": (4, (2, 4, 47, 95)),
+    "loop_shot": (5, (0, 0, 0, 2)),
+    "overhead": (6, (0, 0, 0, 2)),
+    "volley": (7, (0, 0, 0, 5)),
+    "heading": (8, (5, 31, 40, 82)),
+    "diving_header": (9, (0, 0, 0, 5)),
+    "sliding": (10, (0, 7, 7, 0)),
+    "post_play": (11, (0, 0, 1, 8)),
+    "man_mark": (12, (4, 34, 17, 0)),
+    "intercept": (13, (0, 1, 6, 0)),
+    "highball": (14, (25, 0, 0, 0)),
+    "corner_kick": (15, (0, 0, 1, 3)),
+    "free_kick": (16, (1, 0, 6, 7)),
+    "long_throw": (17, (0, 0, 0, 0)),
+    "one_on_one": (18, (14, 35, 41, 20)),
+    "pk_kicker": (19, (0, 0, 0, 0)),
+    "pk_keeper": (20, (1, 0, 0, 0)),
+    "long_pass": (21, (0, 1, 13, 1)),
+    "trap": (22, (0, 0, 1, 7)),
+}
+
+#: The roles word (record 0x08) of each soccer role: the value most of the cartridge's players
+#: at the formation place of that role and side hold. Bits 0-9 are the roles he is at home in
+#: (sweeper, centre back, stopper, side back, wing back, defensive and offensive half, winger,
+#: centre forward, striker), bits 10-15 the left and right of defence, midfield and attack.
+ROLES = {
+    "GK": 0x0000, "CB": 0x0C06, "LB": 0x1418, "RB": 0x2818, "LWB": 0x1418, "RWB": 0x2818,
+    "CDM": 0x3020, "CM": 0x3060, "CAM": 0x3040, "LM": 0x1010, "RM": 0x2010,
+    "LW": 0x5090, "RW": 0xA090, "ST": 0xC300,
+}  # fmt: skip
+#: The same for a player without a role, by group.
+GROUP_ROLES = {"GK": 0x0000, "DF": 0x0C06, "MF": 0x3060, "FW": 0xC300}
+#: Record byte 0x31 (unidentified, `rom`): the median of the cartridge's starters on the left
+#: flank, in the middle and on the right flank.
+SIDE = {"L": 43, "C": 54, "R": 60}
 
 #: Formations on the cartridge: (defenders, midfielders, forwards) -> a team
 #: whose formation row and id are copied.
@@ -150,8 +262,18 @@ class N64Player:
     player_id: int = 0
     photo_url: str = ""
     #: His soccer role (`Player.role`, else the one his lineup code reads as), "" when he has
-    #: none: the writer seats a line by it.
+    #: none: the writer seats a line by it, and writes his roles word and byte 0x31 from it.
     role: str = ""
+    #: The special techniques he has: bit set as `TECHNIQUES` numbers them.
+    techniques: int = 0
+
+    @property
+    def roles(self) -> int:
+        return ROLES.get(self.role, GROUP_ROLES[self.group])
+
+    @property
+    def side(self) -> int:
+        return SIDE[slot_side(self.role) if self.role else "C"]
 
 
 @dataclass
@@ -208,99 +330,45 @@ def short_player_name(player: Player, taken: set[str]) -> str:
     return name
 
 
-def _rank(values: dict[int, float]) -> dict[int, float]:
-    ordered = sorted(values.values())
-    n = len(ordered)
-    out = {}
-    for pid, v in values.items():
-        lo = bisect_left(ordered, v)
-        hi = bisect_right(ordered, v)
-        out[pid] = (lo + (hi - lo - 1) / 2) / max(n - 1, 1) * 100
-    return out
-
-
-def _place(q: _Q, pct: float) -> int:
-    """Percentile `pct` (0-100) on the retail spread `q`, interpolated."""
-    if pct <= _PCTS[0]:
-        return q[0]
-    for k in range(1, 5):
-        if pct <= _PCTS[k]:
-            a, b = _PCTS[k - 1], _PCTS[k]
-            return round(q[k - 1] + (q[k] - q[k - 1]) * (pct - a) / (b - a))
-    return q[4]
-
-
 def group_of(player: Player) -> str:
     return _GROUP_OF.get(player.position, "MF")
 
 
-def _per90(stat: float, s: PlayerStats) -> float:
-    return stat * 90 / max(s.minutes, 90)
-
-
-#: Raw scores feeding each rating, from a player's season line.
-_FEEDS = {
-    "determination": lambda s: (
-        s.minutes / max(s.appearances, 1) + 30 * s.lineups / max(s.appearances, 1)
-    ),
-    "shoot": lambda s: _per90(s.goals * 3 + s.shots_on, s),
-    "curve": lambda s: _per90(s.assists * 10, s) + _per90(s.passes_total, s) / 20,
-    "stamina": lambda s: s.minutes / max(s.appearances, 1),
-    "keep": lambda s: _per90(s.fouls_drawn + s.dribbles_success, s),
-    "defence": lambda s: _per90(s.tackles_total + s.interceptions + s.blocks, s),
-    "passing": lambda s: _per90(s.passes_total, s) * s.passes_accuracy / 100,
-    "attack": lambda s: _per90(s.goals + s.assists, s),
-    "cover": lambda s: _per90(s.tackles_total + s.interceptions, s),
-    "goalkeeping": lambda s: s.lineups + s.minutes / 90,
-}
-
-
-def _age(player: Player, today: date) -> int:
-    if player.age:
-        return player.age
-    try:
-        born = date.fromisoformat(player.birth_date)
-    except ValueError:
-        return 26
-    return today.year - born.year - ((today.month, today.day) < (born.month, born.day))
+def foot_of(stats: PlayerStats | None) -> int:
+    """The foot byte: `we2002`'s rule (`preferred_foot`) on the shots he took with each foot."""
+    return (FOOT_RIGHT, FOOT_LEFT, FOOT_BOTH)[preferred_foot(stats)]
 
 
 class N64StatMapper:
-    """League-wide percentiles, so one club's players are rated against the
-    whole league, not their own squad."""
+    """League-wide ranks, so one club's players are rated against the whole
+    league, not their own squad."""
 
-    def __init__(self, today: date | None = None) -> None:
-        self.today = today or date.today()
+    def __init__(self) -> None:
         #: The line each starter of the last `select_22` plays in.
         self._lines: dict[int, int] = {}
 
-    def league_percentiles(self, rosters: list[TeamRoster]) -> dict[int, dict[str, float]]:
-        out: dict[int, dict[str, float]] = {}
-        everyone = [(p, r.player_stats.get(p.id)) for r in rosters for p in r.players]
-        for group in GROUPS:
-            members = [(p, s) for p, s in everyone if group_of(p) == group]
-            if not members:
-                continue
-            for key, feed in _FEEDS.items():
-                raw = {p.id: feed(s) for p, s in members if s and s.appearances}
-                for pid, pct in _rank(raw).items():
-                    out.setdefault(pid, {})[key] = pct
-            ages = {p.id: float(-_age(p, self.today)) for p, _ in members}
-            for pid, pct in _rank(ages).items():
-                out.setdefault(pid, {})["speed"] = pct
-                out[pid]["dash"] = pct
-            heights = {p.id: p.height for p, _ in members if p.height}
-            for pid, pct in _rank(heights).items():
-                out.setdefault(pid, {})["jump"] = pct
-        return out
+    def league_ranks(self, rosters: list[TeamRoster]) -> dict[int, dict[str, float]]:
+        """Player id -> rating or technique -> his rank (0-1) in his group, for those of
+        `SOURCES` he has a stat of."""
+        members = [(p, group_of(p), r.player_stats.get(p.id)) for r in rosters for p in r.players]
+        ranks = Ranks(members, SOURCES)
+        return {p.id: ranks.of(p, group, line) for p, group, line in members}
 
-    def map_player(self, player: Player, pcts: dict[str, float], name: str) -> N64Player:
+    def map_player(
+        self,
+        player: Player,
+        ranks: dict[str, float],
+        name: str,
+        stats: PlayerStats | None = None,
+    ) -> N64Player:
         group = group_of(player)
         q = RETAIL[group]
-        ratings = {key: _place(spread, pcts.get(key, 50.0)) for key, spread in q.items()}
-        if group != "GK":
-            ratings["goalkeeping"] = q["goalkeeping"][2]
-            ratings["keeper2"] = q["keeper2"][2]
+        ratings = {key: place(spread, ranks.get(key)) for key, spread in q.items()}
+        techniques = 0
+        for technique, (bit, holders) in TECHNIQUES.items():
+            share = holders[GROUPS.index(group)] / RETAIL_PLAYERS[group]
+            if ranks.get(technique, 0.0) > 1 - share:
+                techniques |= 1 << bit
         height = round(player.height * 2.54) if player.height else 0
         height = min(max(height or {"GK": 188, "DF": 183, "MF": 177, "FW": 179}[group], 158), 199)
         build = 55
@@ -314,12 +382,13 @@ class N64StatMapper:
             group=group,
             position_bits=_POSITION_BITS[group],
             ratings=ratings,
-            foot={"L": FOOT_LEFT, "B": FOOT_BOTH}.get(player.handedness, FOOT_RIGHT),
+            foot=foot_of(stats),
             height_cm=height,
             build=build,
             player_id=player.id,
             photo_url=player.photo_url,
             role=player.role,
+            techniques=techniques,
         )
 
     def select_22(
@@ -455,7 +524,7 @@ class N64StatMapper:
     def map_team(
         self,
         roster: TeamRoster,
-        pcts: dict[int, dict[str, float]],
+        ranks: dict[int, dict[str, float]],
         *,
         order_as_given: bool = False,
     ) -> N64Team:
@@ -487,7 +556,7 @@ class N64StatMapper:
             shared = surnames.count(surname) > 1
             name = short_player_name(p, taken | ({surname} if shared else set()))
             taken.add(surname)
-            mapped = self.map_player(p, pcts.get(p.id, {}), name)
+            mapped = self.map_player(p, ranks.get(p.id, {}), name, roster.player_stats.get(p.id))
             # A roster fetched before roles: his lineup code says what he plays.
             mapped.role = mapped.role or lineup_role(p.id, (roster.extra or {}).get("lineup"))
             played = self._lines.get(p.id)

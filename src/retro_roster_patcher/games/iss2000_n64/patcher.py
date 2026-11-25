@@ -237,7 +237,7 @@ class ISS2000Patcher(Patcher):
     ) -> MappedRosters:
         self.check_slot_mapping(slot_mapping)
         by_id = {r.team.id: r for r in data.teams}
-        pcts = self.mapper.league_percentiles(data.teams)
+        ranks = self.mapper.league_ranks(data.teams)
         teams: dict[int, N64Team] = {}
         for entry in slot_mapping or []:
             if not 0 <= entry.slot_index < R.NATIONAL_TEAMS:
@@ -254,7 +254,7 @@ class ISS2000Patcher(Patcher):
             if national and not roster.players:
                 self.status(f"Skipped {roster.team.name}: ESPN has no squad for it")
                 continue
-            team = self.mapper.map_team(roster, pcts, order_as_given=order_as_given)
+            team = self.mapper.map_team(roster, ranks, order_as_given=order_as_given)
             team.national = national
             team.nation = (
                 cartridge_slot(TEAM_NAMES, NATIONAL_ALIASES, roster.team) if national else None

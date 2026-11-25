@@ -5,11 +5,9 @@ use, because the kick-off condition takes up to 5 off every field and a value
 below retail plays worse than it reads. Speed has no ESPN source and comes from
 position and age; stamina has its own input and is no longer speed's twin.
 
-`technique` is half dribbling and half passing, and ESPN measures no dribbling at
-all. The gate is `CATEGORY_OPTIONAL_INPUTS`, and it is NOT WE2002's rule:
-dropping the player from the category would leave it empty and give every player
-the same rating, so the dribbling *term* is dropped instead, which preserves the
-ranking exactly.
+`technique` ranks pass, long-ball and cross accuracy and dribble success
+(`TECHNIQUE_SOURCES`) within the position, averaged by rank: a rate the provider
+does not supply is left out, not read as 0.
 """
 
 from __future__ import annotations
@@ -85,28 +83,9 @@ def test_the_category_input_table_names_only_real_playerstats_fields():
     assert named <= fields
 
 
-def test_the_optional_input_table_names_only_real_playerstats_fields():
-    fields = {f.name for f in dataclasses.fields(PlayerStats)}
-    named = {name for names in ISSStatMapper.CATEGORY_OPTIONAL_INPUTS.values() for name in names}
-    assert named <= fields
-
-
 def test_the_category_input_table_covers_exactly_the_computed_categories(mapper):
     computed = set(mapper._compute_percentiles({1: _stats(1)}))
-    assert set(ISSStatMapper.CATEGORY_INPUTS) == computed
-
-
-def test_the_optional_input_table_names_only_computed_categories(mapper):
-    computed = set(mapper._compute_percentiles({1: _stats(1)}))
-    assert set(ISSStatMapper.CATEGORY_OPTIONAL_INPUTS) <= computed
-
-
-def test_the_optional_inputs_are_exactly_the_two_espn_dribbling_fields():
-    assert set(ISSStatMapper.CATEGORY_OPTIONAL_INPUTS["technique"]) <= set(SOCCER_UNSUPPLIED_STATS)
-    assert ISSStatMapper.CATEGORY_OPTIONAL_INPUTS["technique"] == (
-        "dribbles_success",
-        "dribbles_attempts",
-    )
+    assert set(ISSStatMapper.CATEGORY_INPUTS) | {"technique"} == computed
 
 
 def test_no_required_input_is_a_field_espn_leaves_unsupplied():
@@ -144,46 +123,30 @@ def test_zero_appearances_does_not_divide_by_zero(mapper):
     assert mapper._compute_percentiles(all_stats)["stamina"][1] == 0.0
 
 
-def test_technique_uses_both_halves_when_dribbling_is_measured(mapper):
-    stats = _stats(1, dribbles_success=30, dribbles_attempts=60, passes_accuracy=80.0)
-    assert mapper._technique_value(stats) == (50.0 + 80.0) / 2
+def test_technique_ranks_long_ball_and_cross_accuracy_with_pass_accuracy(mapper):
+    plain = dict(long_balls_total=40, long_balls_accurate=20, crosses_total=30, crosses_accurate=6)
+    all_stats = {
+        1: _stats(1, **plain),
+        2: _stats(2, **plain | dict(long_balls_accurate=34, crosses_accurate=15)),
+        3: _stats(3, **plain | dict(passes_accuracy=70.0)),
+    }
+    technique = mapper._compute_percentiles(all_stats)["technique"]
+    assert technique[2] > technique[1] > technique[3]
 
 
-def test_technique_falls_back_to_pass_accuracy_alone_when_it_is_not(mapper):
-    stats = _stats(1, dribbles_success=0, dribbles_attempts=0, passes_accuracy=80.0)
-    stats.unsupplied = SOCCER_UNSUPPLIED_STATS
-    assert mapper._technique_value(stats) == 80.0
+def test_technique_ignores_dribbling_values_the_record_declares_filler(mapper):
+    all_stats = {
+        1: _stats(1, dribbles_success=40, dribbles_attempts=40, unsupplied=SOCCER_UNSUPPLIED_STATS),
+        2: _stats(2, dribbles_success=0, dribbles_attempts=40, unsupplied=SOCCER_UNSUPPLIED_STATS),
+    }
+    technique = mapper._compute_percentiles(all_stats)["technique"]
+    assert technique[1] == technique[2]
 
 
-def test_the_fallback_ignores_dribbling_values_the_record_declares_filler(mapper):
-    """DELIBERATE DIVERGENCE, and the only regime where output differs from
-    upstream's. A record that names a field unsupplied while still carrying a
-    measurement for it is not something any provider here builds --
-    `EspnClient._parse_athlete_stats` writes 0 and declares it -- so this is a
-    statement about which of the two the code believes."""
-    stats = _stats(1, dribbles_success=60, dribbles_attempts=60, passes_accuracy=40.0)
-    stats.unsupplied = SOCCER_UNSUPPLIED_STATS
-    assert mapper._technique_value(stats) == 40.0
-
-
-def test_the_espn_fallback_preserves_the_ranking_pass_accuracy_gives(mapper):
-    """Why the ROM is byte-identical: a percentile is a rank, and `pa` is a
-    strictly increasing transform of upstream's `(0 + pa) / 2`."""
-    accuracies = [40.0, 55.5, 61.0, 72.25, 88.0]
-    espn = {}
-    naive = {}
-    for i, accuracy in enumerate(accuracies, start=1):
-        espn[i] = _stats(
-            i,
-            passes_accuracy=accuracy,
-            dribbles_success=0,
-            dribbles_attempts=0,
-            unsupplied=SOCCER_UNSUPPLIED_STATS,
-        )
-        naive[i] = _stats(i, passes_accuracy=accuracy, dribbles_success=0, dribbles_attempts=0)
-    gated = mapper._compute_percentiles(espn)["technique"]
-    ungated = mapper._compute_percentiles(naive)["technique"]
-    assert gated == ungated
+def test_a_player_with_no_technique_stat_is_left_out_of_technique(mapper):
+    unsupplied = SOCCER_UNSUPPLIED_STATS + ("passes_accuracy", "passes_total")
+    all_stats = {1: _stats(1, unsupplied=unsupplied), 2: _stats(2)}
+    assert 1 not in mapper._compute_percentiles(all_stats)["technique"]
 
 
 def test_the_espn_fallback_still_separates_players(mapper):
@@ -201,17 +164,6 @@ def test_the_espn_fallback_still_separates_players(mapper):
     }
     percentiles = mapper._compute_percentiles(all_stats)["technique"]
     assert len(set(percentiles.values())) == 10
-
-
-def test_dropping_the_player_instead_would_have_flattened_the_category(mapper):
-    """The design note, made checkable. `passes_accuracy` is a *required* input
-    and dribbling is optional; had dribbling been required, every ESPN record
-    would be skipped and the category would come back empty."""
-    all_stats = {
-        i: _stats(i, unsupplied=SOCCER_UNSUPPLIED_STATS + ("passes_accuracy",))
-        for i in range(1, 11)
-    }
-    assert mapper._compute_percentiles(all_stats)["technique"] == {}
 
 
 def test_an_empty_category_gives_every_player_the_retail_median(mapper):
@@ -255,7 +207,7 @@ def _squad(counts):
 
 def test_the_categories_are_the_six_the_stats_drive():
     """Speed is not one of them: nothing ESPN reports measures pace."""
-    assert set(ISSStatMapper.CATEGORY_INPUTS) == {
+    assert set(ISSStatMapper.CATEGORY_INPUTS) | {"technique"} == {
         "shooting",
         "technique",
         "stamina",

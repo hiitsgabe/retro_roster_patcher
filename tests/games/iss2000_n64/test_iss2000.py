@@ -2,6 +2,7 @@
 
 import os
 import random
+from dataclasses import replace
 
 import pytest
 
@@ -510,3 +511,87 @@ def test_a_rewritten_asset_starts_on_an_8_byte_boundary():
     # The stream is padded to 8 too, so it also ends on a boundary.
     assert (one.end - one.start) % 8 == 0 and (two.end - two.start) % 8 == 0
     assert len(image) == R.ROM_SIZE
+
+
+def _keepers_and_forwards():
+    from retro_roster_patcher.sports.models import PlayerStats
+
+    zero = dict.fromkeys(
+        "goals assists shots_total shots_on passes_total tackles_total interceptions blocks "
+        "duels_total duels_won dribbles_attempts dribbles_success fouls_committed fouls_drawn "
+        "cards_yellow cards_red".split(),
+        0,
+    )
+
+    def line(pid, **kw):
+        base = zero | dict(passes_accuracy=0.0, rating=None)
+        return PlayerStats(player_id=pid, appearances=20, minutes=1800, lineups=20, **base | kw)
+
+    players = [Player(id=k, name=f"Keeper {k}", position="Goalkeeper") for k in (1, 2, 3)]
+    players += [Player(id=k, name=f"Forward {k}", position="Attacker") for k in (4, 5, 6)]
+    stats = {
+        1: line(1, saves=80, goals_conceded=15, clean_sheets=9),
+        2: line(2, saves=40, goals_conceded=35, clean_sheets=2),
+        3: line(3, unsupplied=("saves", "goals_conceded", "clean_sheets")),
+        4: line(4, shots_total=60, left_foot_shots=50, right_foot_shots=5, headed_goals=8),
+        5: line(5, shots_total=40, left_foot_shots=18, right_foot_shots=20, headed_goals=0),
+        6: line(6, shots_total=4, left_foot_shots=3, right_foot_shots=1),
+    }
+    roster = TeamRoster(team=Team(id=1, name="Club", code="CLB"), players=players)
+    roster.player_stats = stats
+    return roster
+
+
+def test_keepers_rate_by_save_rate_and_clean_sheets_and_a_missing_one_by_the_median():
+    from retro_roster_patcher.games.iss2000_n64.mapper import RETAIL
+
+    roster = _keepers_and_forwards()
+    m = N64StatMapper()
+    ranks = m.league_ranks([roster])
+    good, poor, unknown = (
+        m.map_player(p, ranks[p.id], "x", roster.player_stats[p.id]) for p in roster.players[:3]
+    )
+    assert good.ratings["goalkeeping"] > poor.ratings["goalkeeping"]
+    assert unknown.ratings["goalkeeping"] == RETAIL["GK"]["goalkeeping"][2]
+    assert unknown.ratings["keeper2"] == good.ratings["keeper2"] == RETAIL["GK"]["keeper2"][2]
+
+
+def test_the_foot_is_the_one_he_shoots_with_and_right_below_ten_shots():
+    from retro_roster_patcher.games.iss2000_n64.mapper import FOOT_BOTH, FOOT_LEFT, FOOT_RIGHT
+
+    roster = _keepers_and_forwards()
+    m = N64StatMapper()
+    ranks = m.league_ranks([roster])
+    feet = [
+        m.map_player(p, ranks[p.id], "x", roster.player_stats[p.id]).foot
+        for p in roster.players[3:]
+    ]
+    assert feet == [FOOT_LEFT, FOOT_BOTH, FOOT_RIGHT]
+
+
+def test_a_technique_goes_to_the_top_of_the_group_and_one_nothing_measures_to_nobody():
+    from retro_roster_patcher.games.iss2000_n64.mapper import TECHNIQUES
+
+    roster = _keepers_and_forwards()
+    # Heading goes to the top 13% of forwards: too few for three of them to hold it.
+    for k in range(7, 27):
+        roster.players.append(Player(id=k, name=f"Forward {k}", position="Attacker"))
+        roster.player_stats[k] = replace(roster.player_stats[5], player_id=k)
+    m = N64StatMapper()
+    ranks = m.league_ranks([roster])
+    header, other = (
+        m.map_player(p, ranks[p.id], "x", roster.player_stats[p.id]) for p in roster.players[3:5]
+    )
+    heading = 1 << TECHNIQUES["heading"][0]
+    assert header.techniques & heading and not other.techniques & heading
+    assert not (header.techniques | other.techniques) & (1 << TECHNIQUES["feint"][0])
+
+
+def test_the_roles_word_and_byte_0x31_come_from_his_role():
+    from retro_roster_patcher.games.iss2000_n64.mapper import GROUP_ROLES, ROLES, SIDE
+
+    m = N64StatMapper()
+    left_back = m.map_player(Player(id=1, name="A B", position="Defender", role="LB"), {}, "x")
+    nobody = m.map_player(Player(id=2, name="C D", position="Attacker"), {}, "x")
+    assert (left_back.roles, left_back.side) == (ROLES["LB"], SIDE["L"])
+    assert (nobody.roles, nobody.side) == (GROUP_ROLES["FW"], SIDE["C"])

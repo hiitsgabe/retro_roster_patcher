@@ -22,9 +22,20 @@ Layout:
   start = compressed. A compressed asset is either LZ (`lz_decompress`) or,
   when bit 31 of its first word is set, zlib.
 
-A player record (offsets in the record):
+A player record (offsets in the record; counts are of the 2,200 national-team records):
 
-    0x00-0x03 special-ability bit set (bits 0-22)
+    0x00-0x03 big-endian word, bits 0-22: the special techniques, in the order
+              the Member screen lists them (`mapper.TECHNIQUES`); setting one bit
+              on a starter's in-match copy showed exactly that technique there
+    0x08-0x09 big-endian roles word: bits 0-9 the roles he is at home in
+              (sweeper, centre back, stopper, side back, wing back, defensive and
+              offensive half, winger, centre forward, striker), bits 10-15 the
+              left and right of defence, midfield and attack; a set bit added 4
+              to that role's aptitude on the Member screen
+    0x0A-0x0B a 10-bit number (0x0A and the top two bits of 0x0B): 1-484 in
+              record order over teams 0-21, 0 elsewhere, and the all-star teams
+              100, 101 and 105 repeat the number of the national player each
+              copies. Kept.
     0x0B      low 6 bits: shirt number
     0x11      high nibble hair colour, low nibble skin tone (0 light - 8 dark)
     0x14      face (portrait and head model)
@@ -33,11 +44,47 @@ A player record (offsets in the record):
               stamina, jump, keep, defence, passing
     0x2A      foot: right-footed players 70-76, left 14-29, both 38-63
     0x2B      goalkeeping
-    0x2C      second keeper skill (keepers 74-96, others 10-22)
     0x2D      height - 100 (cm)
     0x2E      build: the game shows the weight from this and the height
+    0x2F      attack, 0x30 cover: 24-99; attack rises with the line (r 0.57) and
+              determination, cover with defence (r 0.75)
     0x33      position bits: 1 GK, 2 DF, 4 MF, 8 FW (combinations allowed)
     0x34      team id, 0x35 index in the team
+
+Unidentified. Tried for each: the spread over the cartridge's records, correlation
+with every known byte and with the place's line, depth and width in the team's
+formation, and the retail players who hold the rarer values; for the bits of the
+first word, setting each on a starter's in-match copy and reading the Member
+screen's abilities, aptitudes and special techniques (none of bits 23-31 shows
+anything there). What the patch writes is said for each.
+
+    0x00-0x03 bits 23-28: set on 56, 46, 41, 5, 2 and 5 records, read as a small
+              number 1-8 more than as flags; bits 29-31 always 0. Written 0.
+    0x04-0x07 a word set on 16 records (bits 0, 13, 17, 19, 21, 26-28, the
+              same few players in their all-star copies). Written 0.
+    0x0C      1 on six records (Oembe, Arnar, Tanaka, Myon Bo, Ali Ali,
+              Kashibov), else 0. Kept.
+    0x0D      0 on 2,107 records, else one or two of bits 2-7. Kept.
+    0x0E      0 on 1,924 records; the others are whole teams' records (0-175),
+              and rise with the player's mean ability (r 0.53). Kept.
+    0x0F      10-91, median 22, rising a little with the mean ability (r 0.31).
+              Kept.
+    0x10      0 on every record. Kept.
+    0x12      0-189, median 36, 0x14 on 460 records; 0x13 0 on 1,291, its top
+              two bits on most of the rest. Neither correlates with anything
+              known. Kept.
+    0x15-0x17 nibbles: 0x15 high 11-15 and low 0-7, 0x16 high 0-7 and low 0-3,
+              0x17 two 0-7s; none correlates with anything known (|r| < 0.2).
+              Kept.
+    0x2C      keepers 74-96 (r 0.56 with goalkeeping), others 8-22: a second
+              keeping skill no screen shows. The group's median on the
+              cartridge (`mapper.RETAIL`).
+    0x31      0-99, a little higher the further right his place (r 0.29 with
+              its width; medians 43 on the left flank, 54 in the middle, 60
+              on the right); seen on no screen. His side's median
+              (`mapper.SIDE`).
+    0x32      0-99, median 29, rising with the mean ability (r 0.41). Kept.
+    0x36-0x37 0 on every record. Kept.
 """
 
 from __future__ import annotations
@@ -69,6 +116,7 @@ MIRROR = 0x1000000
 GROWTH_START = 0x1000100
 
 # Record offsets.
+ROLES = 0x08
 NUMBER = 0x0B
 LOOK = 0x11
 FACE = 0x14
@@ -80,6 +128,9 @@ GOALKEEPING = 0x2B
 KEEPER2 = 0x2C
 HEIGHT = 0x2D
 BUILD = 0x2E
+ATTACK = 0x2F
+COVER = 0x30
+SIDE = 0x31
 POSITION = 0x33
 TEAM = 0x34
 INDEX = 0x35

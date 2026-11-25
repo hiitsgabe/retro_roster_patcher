@@ -3,7 +3,7 @@
 The 36 national-team slots take clubs, so the slot mapping is explicit, as in
 `iss-snes`. A mapped slot gets the club's 20: the eleven as `iss-snes` and
 `iss2000-n64` pick them, then the bench; each player's name and nine skills,
-placed by league percentile onto the cartridge's own spread for his position;
+ranked in his position group as `iss2000-n64` ranks them (`FEED`) onto the cartridge's spread;
 his position code from his role; each team's looks from its players' head
 shots (`looks`). Main menu games start with the first two mapped clubs instead
 of Brazil v England.
@@ -52,19 +52,19 @@ from ...sports.espn import EspnClient
 from ...sports.lineup import lineup_role, nearest_shape, parse_shape, seat_line, team_formation
 from ...sports.models import LeagueData, Player, TeamRoster
 from ...sports.nationals import cartridge_slot, cartridge_slot_map
-from ..iss2000_n64.mapper import GROUPS, N64StatMapper, _place, group_of, parse_formation
+from ..iss2000_n64.mapper import GROUPS, N64StatMapper, group_of, parse_formation
 from ..iss2000_n64.patcher import NATIONAL_ALIASES, NATIONAL_LEAGUE
 from ..iss_snes.models import Flag, ISSLook
 from ..iss_snes.patcher import ISSPatcher, _chosen, _parse_hex_colour
+from ..iss_snes.ranks import Spread, place
 from ..iss_snes.rom_writer import two_band_flag
 from ..iss_snes.stat_mapper import ISSStatMapper
 from . import bignames, flags, kits, looks, names, pages, scenarios, screens
 from . import rom as R
 
-_Q = tuple[int, int, int, int, int]
 #: Cartridge spread (2nd, 10th, 50th, 90th, 98th percentile of the stored
 #: value) per position group, measured on the 720 USA players.
-RETAIL: dict[str, dict[str, _Q]] = {
+RETAIL: dict[str, dict[str, Spread]] = {
     "GK": dict(speed=(4, 5, 6, 7, 8), dash=(4, 5, 6, 7, 8), curl=(1, 2, 3, 4, 6),
                shot=(4, 4, 5, 6, 6), intelligence=(2, 3, 4, 5, 6), balance=(4, 5, 6, 8, 8),
                jump=(4, 5, 6, 7, 8), dribble=(3, 3, 4, 6, 7), stamina=(4, 5, 6, 8, 8)),
@@ -78,7 +78,7 @@ RETAIL: dict[str, dict[str, _Q]] = {
                shot=(4, 4, 5, 6, 6), intelligence=(4, 5, 6, 8, 8), balance=(3, 5, 6, 8, 8),
                jump=(3, 4, 6, 7, 9), dribble=(4, 5, 6, 8, 8), stamina=(4, 5, 7, 8, 9)),
 }  # fmt: skip
-#: Which league percentile (`N64StatMapper.league_percentiles`) feeds a skill.
+#: Which rank of `N64StatMapper.league_ranks` (its `SOURCES` say what each ranks) sets a skill.
 FEED = dict(
     speed="speed", dash="dash", curl="curve", shot="shoot", intelligence="passing",
     balance="defence", jump="jump", dribble="keep", stamina="stamina",
@@ -293,7 +293,7 @@ class ISSDeluxePatcher(Patcher):
     ) -> MappedRosters:
         self.check_slot_mapping(slot_mapping)
         by_id = {r.team.id: r for r in data.teams}
-        pcts = self.mapper.league_percentiles(data.teams)
+        ranks = self.mapper.league_ranks(data.teams)
         teams: dict[int, DeluxeTeam] = {}
         for entry in slot_mapping or []:
             if not 0 <= entry.slot_index < len(R.TEAMS):
@@ -306,7 +306,7 @@ class ISSDeluxePatcher(Patcher):
                     f"Slot {entry.slot_index} maps to team {entry.team_id}, "
                     "which is not in the fetched league data"
                 )
-            team = self._map_team(roster, pcts, order_as_given)
+            team = self._map_team(roster, ranks, order_as_given)
             if data.league.id == NATIONAL_LEAGUE:
                 team.nation = cartridge_slot(R.TEAMS, NATIONAL_ALIASES, roster.team)
                 team.national = team.nation == entry.slot_index
@@ -316,7 +316,7 @@ class ISSDeluxePatcher(Patcher):
         return MappedRosters(game_id=self.game_id, teams=teams)
 
     def _map_team(
-        self, roster: TeamRoster, pcts: dict[int, dict[str, float]], order_as_given: bool
+        self, roster: TeamRoster, ranks: dict[int, dict[str, float]], order_as_given: bool
     ) -> DeluxeTeam:
         extra = roster.extra or {}
         formation = team_formation(roster) or ""
@@ -353,8 +353,8 @@ class ISSDeluxePatcher(Patcher):
                     ("GK", "DF", "MF", "FW")[line] if line is not None and k < 11 else group_of(p)
                 )
             q = RETAIL[group]
-            got = pcts.get(p.id, {})
-            skills = {s: _place(q[s], got.get(FEED[s], 50.0)) for s in R.SKILL_NAMES}
+            got = ranks.get(p.id, {})
+            skills = {s: place(q[s], got.get(FEED[s])) for s in R.SKILL_NAMES}
             player = DeluxePlayer(
                 name,
                 group,

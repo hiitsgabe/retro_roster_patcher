@@ -11,7 +11,7 @@ from . import rom as R
 from .mapper import FORMATION_DONORS, N64Player, N64Team
 
 _ABILITY_BYTES = {name: R.ABILITIES + k for k, name in enumerate(R.ABILITY_NAMES)}
-_ABILITY_BYTES.update(goalkeeping=R.GOALKEEPING, keeper2=R.KEEPER2, attack=0x2F, cover=0x30)
+_ABILITY_BYTES.update(goalkeeping=R.GOALKEEPING, keeper2=R.KEEPER2, attack=R.ATTACK, cover=R.COVER)
 
 
 #: The donor teams' formation rows and ids on the cartridge, in `FORMATION_DONORS` order: a
@@ -83,7 +83,9 @@ def starting_order(image: bytes | bytearray, slot: int, roles: Sequence[str] = (
 
 def write_player(image: bytearray, slot: int, index: int, p: N64Player) -> None:
     o = R.record_offset(slot, index)
-    image[o : o + 4] = bytes(4)  # special abilities: none known to be earned
+    # The unidentified bits 23-28 and word 0x04 (`rom`) were the retail player's own: cleared.
+    image[o : o + 8] = p.techniques.to_bytes(4, "big") + bytes(4)
+    image[o + R.ROLES : o + R.ROLES + 2] = p.roles.to_bytes(2, "big")
     image[o + R.NUMBER] = (image[o + R.NUMBER] & 0xC0) | (p.number & 0x3F)
     if p.look is not None:
         hair, skin, face = p.look
@@ -97,6 +99,7 @@ def write_player(image: bytearray, slot: int, index: int, p: N64Player) -> None:
     image[o + R.FOOT] = p.foot
     image[o + R.HEIGHT] = max(58, min(99, p.height_cm - 100))
     image[o + R.BUILD] = p.build
+    image[o + R.SIDE] = p.side
     image[o + R.POSITION] = p.position_bits
 
 

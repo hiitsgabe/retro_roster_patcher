@@ -18,7 +18,14 @@ Disassembly) and the name layout of rofldark's ISS Deluxe Editor.
   number less one, a permutation of 0-19 that in nine nations is not the
   record order. The record's index is the player's place (0-10 the eleven,
   11-19 the bench), so the place and its line come from the formation record
-  below. Byte 6 flags this patch keeps.
+  below. Byte 6: the low nibble a star's own hair style (1-13, on 37 of the
+  720 players: CODE_83C903 hands a non-zero one to the routine that sets up
+  an extra head sprite, CODE_83CB2A, for at most three of the eleven), bit 4
+  the alternate look (`looks`), its high nibble shifted into the palette
+  index; bits 5-7 are 0 on every record. The patch writes the alternate bit
+  and clears the rest. The record is copied to RAM $7E3E00 (10 bytes a
+  player) at kick-off, and every byte is accounted for: there is no
+  unidentified field.
 * Team formations $8B:EF48 (ROM 0x5EF48, `FORMATION_PTRS`): one word per team
   (the 36 nations in `TEAMS` order, the six star teams, one extra), the
   address in bank $8B of the team's 31-byte record: the formation id
