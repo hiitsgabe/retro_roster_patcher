@@ -107,8 +107,9 @@ MEMBER_SLACK = 8192
 # 20**, which is what makes `models.NAME_FIELD_CHARS` 15 rather than 19.
 NAME_FIELD_BYTES = 16
 
-# 62 bytes: two 16-byte names, seven integers packed into the tail, then the
-# fields the writer also takes (`SKIN`, `INTL` to `DAY_`, and `CITY`).
+# 65 bytes: two 16-byte names, seven integers packed into the tail, then the
+# other fields the writer takes: `SKIN`, birth (`INTL` to `DAY_`, `CITY`),
+# draft and rookie (`YEAD`, `POSD`, `ROOK`) and the headgear (`HELM`).
 #   bits   0..127  FNME  16 ASCII bytes
 #   bits 128..255  LNME  16 ASCII bytes
 #   bits 256..271  INDX  16 bits, byte-aligned
@@ -135,8 +136,12 @@ SPBT_FIELDS = [
     FieldSpec("MONT", TYPE_UINT, 325, 4),
     FieldSpec("DAY_", TYPE_UINT, 329, 5),
     FieldSpec("CITY", TYPE_STRING, 336, 160),
+    FieldSpec("YEAD", TYPE_UINT, 496, 7),
+    FieldSpec("POSD", TYPE_UINT, 503, 9),
+    FieldSpec("ROOK", TYPE_UINT, 512, 1),
+    FieldSpec("HELM", TYPE_UINT, 513, 3),
 ]
-SPBT_RECORD_SIZE = 62
+SPBT_RECORD_SIZE = 65
 
 # The 21 six-bit skater ratings, in the order the writer lists them. `FIGH` is
 # two bits and is appended after them, so no rating is at a multiple of eight
@@ -455,6 +460,10 @@ def disc_bio_values(team: int, row: int, height: int = DEFAULT_DISC_HEIGHT) -> d
         "MONT": 1 + row % 12,
         "DAY_": 1 + row % 28,
         "CITY": f"DiscCity{row}",
+        "YEAD": 30 + row % 10,
+        "POSD": 1 + row,
+        "ROOK": row % 2,
+        "HELM": 3,
     }
 
 

@@ -6,7 +6,7 @@ Used as an alternative to ESPN for the NHL94 SNES patcher.
 
 import json
 import os
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import asdict
 from datetime import date
 from typing import Any
@@ -20,6 +20,14 @@ from .serde import _only_declared
 BASE_URL = "https://api-web.nhle.com/v1"
 #: The NHL's player search: every player it knows, with his current club.
 SEARCH_URL = "https://search.d3.nhle.com/api/v1/search/player"
+#: Clubs a career names that today's standings do not, by full name.
+FORMER_CLUBS = {
+    "Arizona Coyotes": "ARI",
+    "Phoenix Coyotes": "PHX",
+    "Atlanta Thrashers": "ATL",
+    "Utah Hockey Club": "UTA",
+    "Mighty Ducks of Anaheim": "ANA",
+}
 
 
 def current_season(today: date) -> int:
@@ -196,6 +204,34 @@ class NhlApiClient:
             "missing": missing,
         }
 
+    def get_hockey_careers(self, player_ids: Iterable[int]) -> dict[str, dict[str, Any]]:
+        """Each player's NHL career from his landing page, by player id (str):
+        `{"draft_year", "draft_pick", "seasons"}`. The draft is 0 and 0 for an
+        undrafted player. A season is one regular season or playoffs, clubs
+        added up: `{"season" (start year), "playoffs", "team" ("ANA-BOS" when
+        traded), "GP", ...}` with a skater's G, A, PTS, +/-, PIM, S, PPG, SHG
+        and GWG or a goalie's W, L, T, SO, GA, SA, MIN, G, A and PIM.
+
+        One request a player, cached once it answers; a player whose page
+        does not answer is left out and asked again next time.
+        """
+        ids = [int(i) for i in player_ids if i]
+        cached = {i: self._load_cache(f"nhl_api_career_{i}") for i in ids}
+        missing = [i for i in ids if cached[i] is None]
+        if missing:
+            codes = {team.name: team.code for team in self.get_nhl_teams()} | FORMER_CLUBS
+            landings = parallel_map(lambda i: self._request(f"/player/{i}/landing"), missing)
+            for i, landing in zip(missing, landings, strict=True):
+                if not landing:
+                    continue
+                try:
+                    career = _career(landing, codes)
+                except (AttributeError, KeyError, TypeError, ValueError):
+                    continue  # a page not shaped as expected: skip the player
+                cached[i] = career
+                self._save_cache(f"nhl_api_career_{i}", career)
+        return {str(i): career for i, career in cached.items() if career is not None}
+
     def _parse_standings_teams(self, data: dict) -> list[Team]:
         if not isinstance(data, dict):
             return []
@@ -297,6 +333,60 @@ class NhlApiClient:
         path = os.path.join(self.cache_dir, f"{key}.json")
         with open(path, "w") as f:
             json.dump(data, f)
+
+
+#: A season's counts, landing key -> this library's stat key.
+_SKATER_COUNTS = {
+    "gamesPlayed": "GP",
+    "goals": "G",
+    "assists": "A",
+    "points": "PTS",
+    "plusMinus": "+/-",
+    "pim": "PIM",
+    "shots": "S",
+    "powerPlayGoals": "PPG",
+    "shorthandedGoals": "SHG",
+    "gameWinningGoals": "GWG",
+}
+_GOALIE_COUNTS = {
+    "gamesPlayed": "GP",
+    "wins": "W",
+    "losses": "L",
+    "ties": "T",
+    "shutouts": "SO",
+    "goalsAgainst": "GA",
+    "shotsAgainst": "SA",
+    "goals": "G",
+    "assists": "A",
+    "pim": "PIM",
+}
+
+
+def _career(landing: dict[str, Any], codes: dict[str, str]) -> dict[str, Any]:
+    """`get_hockey_careers`' entry for one landing page."""
+    goalie = landing.get("position") == "G"
+    counts = _GOALIE_COUNTS if goalie else _SKATER_COUNTS
+    seasons: dict[tuple[int, bool], dict[str, Any]] = {}
+    for row in landing.get("seasonTotals") or []:
+        if row.get("leagueAbbrev") != "NHL" or row.get("gameTypeId") not in (2, 3):
+            continue
+        key = int(row["season"]) // 10000, row["gameTypeId"] == 3
+        name = (row.get("teamName") or {}).get("default", "")
+        code = codes.get(name) or name[:3].upper()
+        season = seasons.setdefault(key, {"season": key[0], "playoffs": key[1], "team": ""})
+        if code not in season["team"].split("-"):
+            season["team"] = f"{season['team']}-{code}".strip("-")
+        for theirs, ours in counts.items():
+            season[ours] = season.get(ours, 0) + int(row.get(theirs) or 0)
+        if goalie:
+            minutes, _, seconds = str(row.get("timeOnIce") or "0:00").partition(":")
+            season["MIN"] = season.get("MIN", 0) + int(minutes) + round(int(seconds or 0) / 60)
+    draft = landing.get("draftDetails") or {}
+    return {
+        "draft_year": int(draft.get("year") or 0),
+        "draft_pick": int(draft.get("overallPick") or 0),
+        "seasons": [seasons[key] for key in sorted(seasons)],
+    }
 
 
 def _position(code: str) -> str:

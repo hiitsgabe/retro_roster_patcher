@@ -37,9 +37,11 @@ from ...formats.ea_tdb import (
 from .faces import FACES_BH_NAME, FACES_PATH
 from .models import (
     GOALIE_FIELDS,
+    GOALIE_WEAR,
     NAME_FIELD_CHARS,
     POSITION_REVERSE,
     SKATER_FIELDS,
+    SKATER_WEAR,
     WEIGHT_BASE_POUNDS,
     NHL07GoalieAttributes,
     NHL07PlayerRecord,
@@ -254,6 +256,14 @@ class NHL07PSPRomWriter:
                 values[name] = value
         if player.city:
             values["CITY"] = player.city
+        for name, value in (
+            ("YEAD", player.draft_year),
+            ("POSD", player.draft_pick),
+            ("ROOK", player.rookie),
+        ):
+            if value >= 0:
+                values[name] = value
+        values |= GOALIE_WEAR if player.is_goalie else SKATER_WEAR
 
         spbt.write_record(record_idx, values, strict=True)
 

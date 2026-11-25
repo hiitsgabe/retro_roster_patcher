@@ -41,7 +41,7 @@ from datetime import date
 from pathlib import Path
 from typing import Any
 
-from ...core import hockey_ratings
+from ...core import hockey_ratings, nhl_career
 from ...core.assets import crest_png
 from ...core.concurrency import parallel_map
 from ...core.errors import ApiError, CapabilityError, RomError, as_rom_error
@@ -149,6 +149,17 @@ def _live_records(table: TDBTable) -> range:
     `find_records` iterate `num_records` unbounded and must not be used.
     """
     return range(min(table.num_records, table.capacity))
+
+
+def _one_season(line: object, season: int, team: str, player: Any) -> dict[str, object]:
+    """A career of the one season a provider's stat line is, for a player whose
+    career was not fetched: no draft, and no season for a line without a game."""
+    row = (
+        nhl_career.season_line(line, season, team, (player.position or "").upper() == "G")
+        if isinstance(line, Mapping)
+        else None
+    )
+    return {"seasons": [row] if row else []}
 
 
 def _hidden(rost: TDBTable) -> int:
@@ -410,9 +421,11 @@ class NHL05PS2Patcher(Patcher):
         for i, team in enumerate(mapped):
             if on_progress is not None:
                 on_progress(i / len(mapped), f"Fetching {team.name}...")
+            careers: dict[str, Any] = {}
             if self.provider == "nhl":
                 players = self.api.get_hockey_squad(team.code, season)
                 leaders = self.api.get_hockey_team_leaders(team.code, season)
+                careers = self.api.get_hockey_careers(p.id for p in players or [])
             else:
                 # Pass `season` to both: the squad endpoint has no season in its
                 # URL but does have one in its cache key, and the leaders
@@ -425,7 +438,7 @@ class NHL05PS2Patcher(Patcher):
                     players=players or [],
                     # Carry leaders in `extra`, never on an instance attribute:
                     # the whole result has to round-trip through JSON.
-                    extra={"leaders": leaders or {}},
+                    extra={"leaders": leaders or {}, "careers": careers},
                 )
             )
 
@@ -469,7 +482,8 @@ class NHL05PS2Patcher(Patcher):
             self.status("Free agents: the NHL API listed none")
             return None
         self.status(f"Free agents: {len(players)} from the NHL API")
-        return {"players": [asdict(p) for p in players], "stats": lines}
+        careers = self.free_agents_api.get_hockey_careers(p.id for p in players)
+        return {"players": [asdict(p) for p in players], "stats": lines, "careers": careers}
 
     def suggest_squad_order(self, team_roster):
         """`select_roster`'s order with the starting six first: the first G, C,
@@ -529,9 +543,18 @@ class NHL05PS2Patcher(Patcher):
                     roster.players, leaders, max_players=len(roster.players)
                 )
             )
+            careers = roster.extra.get("careers") or {}
+            # The start year: ESPN numbers a season by the year it ends in.
+            season = data.league.season - (self.provider != "nhl")
             records = [
                 self.mapper.map_player(
-                    player, roster.team.code, leaders.get(str(player.id), {}), league
+                    player,
+                    roster.team.code,
+                    leaders.get(str(player.id), {}),
+                    league,
+                    careers.get(str(player.id))
+                    or _one_season(leaders.get(str(player.id)), season, roster.team.code, player),
+                    season,
                 )
                 for player in selected
             ]
@@ -548,6 +571,7 @@ class NHL05PS2Patcher(Patcher):
         free = (data.league.extra or {}).get("free_agents") or {}
         if free.get("players"):
             lines = free.get("stats") or {}
+            careers = free.get("careers") or {}
             known = {f.name for f in fields(Player)}
             teams[FREE_AGENTS] = [
                 self.mapper.map_player(
@@ -555,6 +579,8 @@ class NHL05PS2Patcher(Patcher):
                     "",
                     lines.get(str(raw.get("id")), {}),
                     league,
+                    careers.get(str(raw.get("id"))) or {"seasons": []},
+                    data.league.season - (self.provider != "nhl"),
                 )
                 for raw in free["players"]
             ]
@@ -636,7 +662,8 @@ class NHL05PS2Patcher(Patcher):
 
             self.status("Rebuilding DB.VIV...")
             writer.rebuild_and_write(
-                self._archive_spelling(writer, master_tdb, roster_tdb),
+                self._archive_spelling(writer, master_tdb, roster_tdb)
+                | self._write_careers(writer, tables),
                 on_progress,
             )
             if options.get("portraits", True):
@@ -661,6 +688,32 @@ class NHL05PS2Patcher(Patcher):
             teams_patched=teams_patched,
             players_patched=players_patched,
         )
+
+    def _write_careers(
+        self, writer: NHL05PS2RomWriter, tables: _MasterTables
+    ) -> dict[str, TDBFile]:
+        """Give every written bio his own seasons in `nhlstats.tdb`, and drop
+        the old player's tournaments and trophy links (`core.nhl_career`).
+        Returns the TDBs changed, by member name, for the rebuild."""
+        reader = writer.reader
+        changed: dict[str, TDBFile] = {}
+        if reader is None or not writer.careers:
+            return changed
+        stats, tournaments, awards = (reader.get_tdb(name) for name in nhl_career.TDBS)
+        if stats is not None:
+            written, left = nhl_career.rewrite(stats, writer.careers, self._listed(tables))
+            changed[nhl_career.TDBS[0]] = stats
+            self.status(
+                f"Career statistics: {written} seasons"
+                + (f"; {left} of the oldest found no room" if left else "")
+            )
+        nhl_career.forget(tournaments, awards, writer.careers)
+        changed |= {
+            name: tdb
+            for name, tdb in zip(nhl_career.TDBS[1:], (tournaments, awards), strict=True)
+            if tdb is not None
+        }
+        return changed
 
     def _own_save_folder(self, writer: NHL05PS2RomWriter) -> None:
         """Name the disc's memory card folder for its new roster (`saves`), so
@@ -1254,6 +1307,22 @@ class NHL05PS2Patcher(Patcher):
         return (caps[True][0], caps[False][0]), (caps[True][1], caps[False][1])
 
     @staticmethod
+    def _listed(tables: _MasterTables) -> set[int]:
+        """The player ids some list shows: a ROST row of a team other than the
+        hidden one, a free agent (`FREE`) or a minor-leaguer (`MINI`)."""
+        rost = tables.rost
+        hidden = _hidden(rost)
+        rows = [rost.read_record(i) for i in _live_records(rost)]
+        listed = {tables.player(r.get("INDX")) for r in rows if r.get("TEAM") != hidden}
+        for name in ("FREE", "MINI"):
+            table = tables.tdb.get_table(name)
+            if table is not None:
+                listed |= {
+                    tables.player(table.read_record(i).get("INDX")) for i in _live_records(table)
+                }
+        return {pid for pid in listed if pid is not None}
+
+    @staticmethod
     def _shown(tables: _MasterTables) -> Counter[int | None]:
         """How many ROST, FREE and MINI rows show each player id."""
         rost = tables.rost
@@ -1459,6 +1528,7 @@ class NHL05PS2Patcher(Patcher):
         """
         writer.write_player_bio(tables.tdb, roster_slot.bio_index, player)
         writer.photos[roster_slot.bio_index] = player.photo_url
+        writer.careers[roster_slot.player_id] = (player.is_goalie, player.seasons)
         writer.ranks[roster_slot.bio_index] = rank
         if player.skin >= 0:
             writer.skins[roster_slot.bio_index] = player.skin

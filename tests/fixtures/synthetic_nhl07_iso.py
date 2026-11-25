@@ -88,8 +88,9 @@ MEMBER_SLACK = 8192
 # several straddle a byte boundary. A layout of byte-aligned bytes would let a
 # writer that ignored `bit_width` pass every test here.
 
-# 70 bytes: two 20-byte names, eight integers packed into the tail, then the
-# birth fields the writer also takes (`INTL` to `DAY_`, and `CITY`).
+# 74 bytes: two 20-byte names, eight integers packed into the tail, then the
+# other fields the writer takes: birth (`INTL` to `DAY_`, `CITY`), draft and
+# rookie (`YEAD`, `POSD`, `ROOK`) and what he wears (`VSCG` to `HBGM`).
 #   bits   0..159  FNME  20 ASCII bytes
 #   bits 160..319  LNME  20 ASCII bytes
 #   bits 320..335  INDX  16 bits, byte-aligned
@@ -117,8 +118,15 @@ SPBT_FIELDS = [
     FieldSpec("MONT", TYPE_UINT, 389, 4),
     FieldSpec("DAY_", TYPE_UINT, 393, 5),
     FieldSpec("CITY", TYPE_STRING, 400, 160),
+    FieldSpec("YEAD", TYPE_UINT, 560, 6),
+    FieldSpec("POSD", TYPE_UINT, 566, 9),
+    FieldSpec("ROOK", TYPE_UINT, 575, 1),
+    FieldSpec("VSCG", TYPE_UINT, 576, 1),
+    FieldSpec("DVOC", TYPE_UINT, 577, 1),
+    FieldSpec("VCGP", TYPE_UINT, 578, 5),
+    FieldSpec("HBGM", TYPE_UINT, 583, 5),
 ]
-SPBT_RECORD_SIZE = 70
+SPBT_RECORD_SIZE = 74
 
 # The 21 six-bit skater ratings, in the order the writer lists them. `FIGH` is
 # two bits and is appended after them, so no rating is at a multiple of eight
@@ -421,6 +429,13 @@ def disc_bio_values(team: int, row: int, height: int = DEFAULT_DISC_HEIGHT) -> d
         "MONT": 1 + row % 12,
         "DAY_": 1 + row % 28,
         "CITY": f"DiscCity{row}",
+        "YEAD": 30 + row % 10,
+        "POSD": 1 + row,
+        "ROOK": row % 2,
+        "VSCG": row % 2,
+        "DVOC": row % 2,
+        "VCGP": 1 + row % 6,
+        "HBGM": 1 + row % 4,
     }
 
 

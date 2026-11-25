@@ -9,15 +9,17 @@ default, the median of the disc's NHL players at that position.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import replace
 
 from ...core.hockey import deployment
 from ...core.hockey_ratings import League, Sources, Spread, rate
 from ...sports.models import Player
-from ..nhl05_ps2.stat_mapper import set_birth
+from ..nhl05_ps2.stat_mapper import set_birth, set_career
 from .models import (
     MODERN_NHL_TO_NHL07,
     NAME_FIELD_CHARS,
+    YEAD_NOT_AVAILABLE,
     NHL07GoalieAttributes,
     NHL07PlayerRecord,
     NHL07SkaterAttributes,
@@ -430,6 +432,8 @@ class NHL07StatMapper:
         team_abbrev: str,
         stats: dict | None = None,
         league: League | None = None,
+        career: Mapping[str, object] | None = None,
+        season: int = 0,
     ) -> NHL07PlayerRecord:
         """Build one `NHL07PlayerRecord` from a provider `Player`.
 
@@ -439,6 +443,8 @@ class NHL07StatMapper:
         `stats` empty or absent is not an error: it selects the position
         defaults, which is what a player with no games played gets. `league`
         ranks his stats; without one his line is ranked alone.
+        `career` (`sports.nhl`'s, or one season built from his line) gives
+        his seasons up to `season`, his draft and his rookie flag.
         """
         pos = player.position.upper() if player.position else DEFAULT_POSITION
         is_goalie = pos == "G"
@@ -473,6 +479,8 @@ class NHL07StatMapper:
             photo_url=player.photo_url or "",
         )
         set_birth(record, player, GAME_YEAR)
+        if career is not None:
+            set_career(record, career, season, YEAD_NOT_AVAILABLE)
 
         attrs: NHL07SkaterAttributes | NHL07GoalieAttributes
         if is_goalie:

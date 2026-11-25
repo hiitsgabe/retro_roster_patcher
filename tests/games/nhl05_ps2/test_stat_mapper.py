@@ -648,3 +648,45 @@ def test_a_busy_goalie_with_a_good_save_rate_outrates_a_backup_and_both_play_but
     for rating in ("glove_high", "stick_low", "five_hole", "rebound_ctrl", "endurance"):
         assert getattr(starter, rating) > getattr(backup, rating), rating
     assert starter.style == backup.style == 2
+
+
+# -- career: draft, rookie flag and the seasons the stats tables get ----------
+
+
+def _season(year, games, playoffs=False):
+    return {"season": year, "playoffs": playoffs, "team": "EDM", "GP": games}
+
+
+def _career(**career):
+    from retro_roster_patcher.games.nhl05_ps2.stat_mapper import set_career
+
+    record = NHL05PlayerRecord()
+    set_career(record, career, 2025, 65)
+    return record
+
+
+def test_a_drafted_veteran_has_his_draft_and_is_no_rookie():
+    record = _career(draft_year=2015, draft_pick=1, seasons=[_season(2015, 45), _season(2025, 82)])
+    assert (record.draft_year, record.draft_pick, record.rookie) == (2015 - 1959, 1, 0)
+
+
+def test_seasons_after_the_one_patched_are_left_out():
+    record = _career(draft_year=2015, draft_pick=1, seasons=[_season(2025, 82), _season(2026, 20)])
+    assert [s["season"] for s in record.seasons] == [2025]
+
+
+def test_a_player_with_no_nhl_game_before_the_season_is_a_rookie():
+    record = _career(draft_year=2023, draft_pick=3, seasons=[_season(2024, 0), _season(2025, 80)])
+    assert record.rookie == 1
+    # Playoff games do not make a player a veteran either.
+    assert _career(draft_year=2023, seasons=[_season(2024, 4, True)]).rookie == 1
+
+
+def test_an_undrafted_player_reads_not_available():
+    record = _career(draft_year=0, draft_pick=0, seasons=[_season(2020, 70)])
+    assert (record.draft_year, record.draft_pick) == (65, 0)
+
+
+def test_a_career_built_from_one_stat_line_carries_no_draft_and_no_rookie_flag():
+    record = _career(seasons=[_season(2025, 82)])
+    assert (record.draft_year, record.draft_pick, record.rookie) == (65, 0, 0)

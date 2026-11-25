@@ -9,6 +9,7 @@ default, the median of the disc's NHL players at that position.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import replace
 from typing import Any
 
@@ -23,6 +24,7 @@ from .models import (
     MODERN_NHL_TO_NHL05,
     NAME_FIELD_CHARS,
     STATE_CODES,
+    YEAD_NOT_AVAILABLE,
     NHL05GoalieAttributes,
     NHL05PlayerRecord,
     NHL05SkaterAttributes,
@@ -421,6 +423,38 @@ def set_birth(record: Any, player: Player, game_year: int = GAME_YEAR) -> None:
         record.birth_month, record.birth_day = int(parts[1]), int(parts[2])
 
 
+def set_career(record: Any, career: Mapping[str, object], season: int, not_available: int) -> None:
+    """The record's NHL seasons up to `season` (`core.nhl_career` writes them),
+    his draft and whether he is a rookie.
+
+    `YEAD` is the draft year less 1959 and `POSD` the overall pick;
+    `not_available` and 0 for a player who was not drafted or whose career
+    carries no draft (a provider that does not send one). `ROOK` marks, on the
+    NHL 2005 disc, the players whose first NHL season was the one before the
+    game's and those yet to play (116 of the 155 it flags, against 53 of the
+    906 it does not; NHL 07 carries the same flags two seasons stale): a
+    player with no NHL game before `season`, when his career is known.
+    """
+    listed = career.get("seasons")
+    seasons = [
+        dict(s)
+        for s in (listed if isinstance(listed, list) else [])
+        if isinstance(s, dict) and (not season or int(s.get("season") or 0) <= season)
+    ]
+    record.seasons = seasons
+    year = career.get("draft_year")
+    drafted = isinstance(year, int) and year > 0
+    record.draft_year = max(0, int(year) - BIRTH_YEAR_BASE) if drafted else not_available  # type: ignore[call-overload]
+    pick = career.get("draft_pick")
+    record.draft_pick = int(pick) if drafted and isinstance(pick, int) else 0
+    before = sum(
+        int(s.get("GP") or 0)
+        for s in seasons
+        if not s.get("playoffs") and int(s.get("season") or 0) < season
+    )
+    record.rookie = int("draft_year" in career and before == 0)
+
+
 def _defaults_for(position: str) -> NHL05SkaterAttributes:
     """A fresh copy of one position's defaults.
 
@@ -440,6 +474,8 @@ class NHL05StatMapper:
         team_abbrev: str,
         stats: dict | None = None,
         league: League | None = None,
+        career: Mapping[str, object] | None = None,
+        season: int = 0,
     ) -> NHL05PlayerRecord:
         """Build one `NHL05PlayerRecord` from a provider `Player`.
 
@@ -450,6 +486,8 @@ class NHL05StatMapper:
         `stats` empty or absent is not an error: it selects the position
         defaults, which is what a player with no games played gets. `league`
         ranks his stats; without one his line is ranked alone.
+        `career` (`sports.nhl`'s, or one season built from his line) gives
+        his seasons up to `season`, his draft and his rookie flag.
         """
         pos = player.position.upper() if player.position else DEFAULT_POSITION
         is_goalie = pos == "G"
@@ -490,6 +528,8 @@ class NHL05StatMapper:
             nationality=player.nationality,
         )
         set_birth(record, player)
+        if career is not None:
+            set_career(record, career, season, YEAD_NOT_AVAILABLE)
 
         attrs: NHL05SkaterAttributes | NHL05GoalieAttributes
         if is_goalie:

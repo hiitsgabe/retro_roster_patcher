@@ -66,6 +66,9 @@ class FakeApi:
         self._leaders = leaders or {}
         self.squad_calls: list[tuple] = []
         self.leader_calls: list[tuple] = []
+        self.career_calls: list[list[int]] = []
+        #: By player id: what `get_hockey_careers` answers.
+        self.careers: dict[int, dict] = {}
 
     def get_nhl_teams(self):
         return list(self._teams)
@@ -77,6 +80,10 @@ class FakeApi:
     def get_hockey_team_leaders(self, key, season=None):
         self.leader_calls.append((key, season))
         return dict(self._leaders.get(key, {}))
+
+    def get_hockey_careers(self, player_ids):
+        self.career_calls.append(list(player_ids))
+        return {str(i): self.careers[i] for i in self.career_calls[-1] if i in self.careers}
 
 
 def default_teams():
@@ -1124,9 +1131,11 @@ def test_a_row_the_patch_leaves_unused_is_taken_off_every_line(tmp_path):
     assert [f for row in rows for f in fixture.LINE_FLAG_NAMES if row[f] == 1] == []
 
 
-def test_a_written_row_keeps_its_team(tmp_path):
+def test_a_written_row_keeps_its_team_and_the_rows_left_over_leave_it(tmp_path):
+    # The squad fills 22 rows; the last three would list a 2006 player with
+    # his ratings, so they go to the team no screen lists (the 6-bit field's 63).
     _, out = patched(tmp_path)
-    assert [r["TEAM"] for r in team_row_records(out, 3)] == [3] * fixture.ROWS_PER_TEAM
+    assert [r["TEAM"] for r in team_row_records(out, 3)] == [3] * 22 + [63] * 3
 
 
 def test_a_written_row_keeps_its_index(tmp_path):
@@ -1482,8 +1491,8 @@ class StubMapper:
     def select_roster(self, players, stats=None, max_players=25):
         return self._inner.select_roster(players, stats, max_players)
 
-    def map_player(self, player, code, stats=None, league=None):
-        return self._inner.map_player(player, code, stats, league)
+    def map_player(self, player, code, stats=None, league=None, career=None, season=0):
+        return self._inner.map_player(player, code, stats, league, career, season)
 
     def generate_team_line_flags(self, players):
         return self._inner.generate_team_line_flags(players)

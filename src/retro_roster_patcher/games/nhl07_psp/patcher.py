@@ -30,13 +30,14 @@ from __future__ import annotations
 
 import importlib.util
 import os
+from collections import Counter
 from collections.abc import Mapping
 from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from ...core import hockey_ratings, nhl_clubs
+from ...core import hockey_ratings, nhl_career, nhl_clubs
 from ...core.assets import crest_png
 from ...core.concurrency import parallel_map
 from ...core.errors import ApiError, CapabilityError, RomError, as_rom_error
@@ -69,6 +70,7 @@ from .faces import (
     toned_face,
 )
 from .models import (
+    ALL_STAR_SLOTS,
     NHL07_TEAM_NAMES,
     SLOT_COUNT,
     TDB_BIOATT,
@@ -188,6 +190,30 @@ def _live_records(table: TDBTable) -> range:
     return range(min(table.num_records, table.capacity))
 
 
+def _one_season(line: object, season: int, team: str, player: Any) -> dict[str, object]:
+    """A career of the one season a provider's stat line is, for a player whose
+    career was not fetched: no draft, and no season for a line without a game."""
+    row = (
+        nhl_career.season_line(line, season, team, (player.position or "").upper() == "G")
+        if isinstance(line, Mapping)
+        else None
+    )
+    return {"seasons": [row] if row else []}
+
+
+def _hidden(rost: TDBTable) -> int:
+    """The team no screen lists: the highest `TEAM` the field holds (127; the
+    disc's teams run to 109)."""
+    width = next((f.bit_width for f in rost.fields if f.name == "TEAM"), 7)
+    return (1 << width) - 1
+
+
+def _gone(rost: TDBTable) -> dict[str, object]:
+    """What a ROST row leaving its team takes: the hidden team (`_hidden`),
+    undressed and off every line."""
+    return {"TEAM": _hidden(rost), "DRES": 0, **dict.fromkeys(LINE_FLAGS, 0)}
+
+
 def _index_map(table: TDBTable) -> dict[int, int]:
     """`{INDX value: record position}` over one table's live records.
 
@@ -247,6 +273,10 @@ class _MasterTables:
     spbt_by_indx: dict[int, int]
     spai_by_indx: dict[int, int]
     sgai_by_indx: dict[int, int]
+
+    def player(self, indx: object) -> int | None:
+        """The player id a ROST, FREE or MINI row's `INDX` leads to."""
+        return self.play_id_by_indx.get(indx) if isinstance(indx, int) else None
 
     @classmethod
     def of(cls, tdb: TDBFile) -> _MasterTables:
@@ -447,9 +477,11 @@ class NHL07PSPPatcher(Patcher):
         for i, team in enumerate(mapped):
             if on_progress is not None:
                 on_progress(i / len(mapped), f"Fetching {team.name}...")
+            careers: dict[str, Any] = {}
             if self.provider == "nhl":
                 players = self.api.get_hockey_squad(team.code, season)
                 leaders = self.api.get_hockey_team_leaders(team.code, season)
+                careers = self.api.get_hockey_careers(p.id for p in players or [])
             else:
                 # Pass `season` to both: the squad endpoint has no season in its
                 # URL but does have one in its cache key, and the leaders
@@ -462,7 +494,7 @@ class NHL07PSPPatcher(Patcher):
                     players=players or [],
                     # Carry leaders in `extra`, never on an instance attribute:
                     # the whole result has to round-trip through JSON.
-                    extra={"leaders": leaders or {}},
+                    extra={"leaders": leaders or {}, "careers": careers},
                 )
             )
 
@@ -758,9 +790,18 @@ class NHL07PSPPatcher(Patcher):
                 if order_as_given
                 else self.mapper.select_roster(roster.players, leaders, max_players=MAX_PLAYERS)
             )
+            careers = roster.extra.get("careers") or {}
+            # The start year: ESPN numbers a season by the year it ends in.
+            season = data.league.season - (self.provider != "nhl")
             records = [
                 self.mapper.map_player(
-                    player, roster.team.code, leaders.get(str(player.id), {}), league
+                    player,
+                    roster.team.code,
+                    leaders.get(str(player.id), {}),
+                    league,
+                    careers.get(str(player.id))
+                    or _one_season(leaders.get(str(player.id)), season, roster.team.code, player),
+                    season,
                 )
                 for player in selected
             ]
@@ -842,9 +883,11 @@ class NHL07PSPPatcher(Patcher):
 
             self.status("Writing rosters...")
             photos: dict[int, str] = {}
+            careers: dict[int, tuple[bool, list[dict[str, object]]]] = {}
             teams_patched, players_patched = self._write_all_teams(
-                writer, rosters, tables, mirrors, on_progress, photos
+                writer, rosters, tables, mirrors, on_progress, photos, careers
             )
+            extra_tdbs = self._write_careers(writer, careers, tables)
 
             # ponytail: renames go by slot, as on NHL 2005, so an NHL API season
             # from before the move (Atlanta to 2011, Arizona to 2024) is renamed
@@ -857,7 +900,7 @@ class NHL07PSPPatcher(Patcher):
 
             self.status("Rebuilding db.viv...")
             writer.rebuild_and_write(
-                self._archive_spelling(writer, master_tdb, bioatt_tdb, roster_tdb),
+                self._archive_spelling(writer, master_tdb, bioatt_tdb, roster_tdb) | extra_tdbs,
                 on_progress,
             )
 
@@ -912,6 +955,35 @@ class NHL07PSPPatcher(Patcher):
         for players in dressed.teams.values():
             looks.dress(players, faces)
         return dressed
+
+    def _write_careers(
+        self,
+        writer: NHL07PSPRomWriter,
+        careers: Mapping[int, tuple[bool, list[dict[str, object]]]],
+        tables: _MasterTables,
+    ) -> dict[str, TDBFile]:
+        """Give every written bio his own seasons in `nhlstats.tdb`, and drop
+        the old player's tournaments and trophy links (`core.nhl_career`).
+        Returns the TDBs changed, by member name, for the rebuild."""
+        reader = writer.reader
+        changed: dict[str, TDBFile] = {}
+        if reader is None or not careers:
+            return changed
+        stats, tournaments, awards = (reader.get_tdb(name) for name in nhl_career.TDBS)
+        if stats is not None:
+            written, left = nhl_career.rewrite(stats, careers, self._listed(tables))
+            changed[nhl_career.TDBS[0]] = stats
+            self.status(
+                f"Career statistics: {written} seasons"
+                + (f"; {left} of the oldest found no room" if left else "")
+            )
+        nhl_career.forget(tournaments, awards, careers)
+        changed |= {
+            name: tdb
+            for name, tdb in zip(nhl_career.TDBS[1:], (tournaments, awards), strict=True)
+            if tdb is not None
+        }
+        return changed
 
     def _parse_tdbs(
         self, writer: NHL07PSPRomWriter
@@ -968,10 +1040,17 @@ class NHL07PSPPatcher(Patcher):
         mirrors: _MirrorTables,
         on_progress: ProgressFn | None,
         photos: dict[int, str],
+        careers: dict[int, tuple[bool, list[dict[str, object]]]],
     ) -> tuple[int, int]:
         """Write every mapped slot, returning (teams patched, players patched).
 
-        `photos` collects each written bio record's head shot URL, "" for none.
+        `photos` collects each written bio record's head shot URL, "" for none,
+        and `careers` each written bio id's seasons.
+
+        Clubs first, by sorting: an All-Star side (Seattle, Vegas) takes rows
+        the clubs left (`_give_own_rows`). A side with too few is left as it
+        was and dropped from `rosters` (`patch`'s own copy), so it is neither
+        renamed nor given a crest.
 
         Re-check the slot range here as well as in `map_rosters`: the keys come
         from a plain dict that may have crossed a JSON boundary since.
@@ -990,7 +1069,11 @@ class NHL07PSPPatcher(Patcher):
                     PROGRESS_COPY_END + (i / len(targets)) * span,
                     f"Writing {NHL07_TEAM_NAMES[slot]} ({len(players)} players)...",
                 )
-            written = self._write_team(writer, slot, players, tables, mirrors, photos)
+            if slot in ALL_STAR_SLOTS and not self._give_own_rows(slot, players, tables, mirrors):
+                self.status(f"{NHL07_TEAM_NAMES[slot]} left as it was: too few free roster rows")
+                del rosters.teams[slot]
+                continue
+            written = self._write_team(writer, slot, players, tables, mirrors, photos, careers)
             players_patched += written
             # A slot that placed no player record did not get patched.
             if written > 0:
@@ -1006,6 +1089,7 @@ class NHL07PSPPatcher(Patcher):
         tables: _MasterTables,
         mirrors: _MirrorTables,
         photos: dict[int, str],
+        careers: dict[int, tuple[bool, list[dict[str, object]]]],
     ) -> int:
         """Write one team's players into the rows the disc already has for it.
 
@@ -1035,6 +1119,7 @@ class NHL07PSPPatcher(Patcher):
             used.add(roster_slot.rost_index)
             self._write_player(writer, player, roster_slot, tables, mirrors)
             photos[roster_slot.bio_index] = player.photo_url
+            careers[roster_slot.player_id] = (player.is_goalie, player.seasons)
 
             line_flags = all_line_flags[position] if position < len(all_line_flags) else {}
             values = writer.roster_values(
@@ -1045,18 +1130,101 @@ class NHL07PSPPatcher(Patcher):
             tables.rost.write_record(roster_slot.rost_index, values)
             mirrors.write_rost(roster_slot.rost_index, values)
 
-        # Every remaining row undressed and off every line, so a stale player
-        # can neither take the ice nor hold a unit. `team_rows` and not the
-        # classified lists: a row whose chain to a bio is broken is still one of
-        # this team's rows and the game would dress it.
-        cleared: dict[str, object] = {"DRES": 0, **dict.fromkeys(LINE_FLAGS, 0)}
+        # Every row left over holds a player the provider no longer lists: it
+        # leaves the team (`_gone`), so no 2006 player stays on the list with
+        # ratings. Not deleted: the row keeps its bio, which a national side
+        # may show too. `team_rows` and not the classified lists: a row whose
+        # chain to a bio is broken is still one of this team's rows.
+        gone = _gone(tables.rost)
         for rost_index in team_rows:
             if rost_index in used:
                 continue
-            tables.rost.write_record(rost_index, cleared)
-            mirrors.write_rost(rost_index, cleared)
+            tables.rost.write_record(rost_index, gone)
+            mirrors.write_rost(rost_index, gone)
 
         return len(pairs)
+
+    @staticmethod
+    def _listed(tables: _MasterTables) -> set[int]:
+        """The player ids some list shows: a ROST row of a team other than the
+        hidden one, a free agent (`FREE`) or a minor-leaguer (`MINI`)."""
+        rost = tables.rost
+        hidden = _hidden(rost)
+        rows = [rost.read_record(i) for i in _live_records(rost)]
+        listed = {tables.player(r.get("INDX")) for r in rows if r.get("TEAM") != hidden}
+        for name in ("FREE", "MINI"):
+            table = tables.tdb.get_table(name)
+            if table is not None:
+                listed |= {
+                    tables.player(table.read_record(i).get("INDX")) for i in _live_records(table)
+                }
+        return {pid for pid in listed if pid is not None}
+
+    @staticmethod
+    def _shown(tables: _MasterTables) -> Counter[int | None]:
+        """How many ROST, FREE and MINI rows show each player id."""
+        rost = tables.rost
+        shown = Counter(tables.player(rost.read_record(i).get("INDX")) for i in _live_records(rost))
+        for name in ("FREE", "MINI"):
+            table = tables.tdb.get_table(name)
+            if table is not None:
+                shown.update(
+                    tables.player(table.read_record(i).get("INDX")) for i in _live_records(table)
+                )
+        return shown
+
+    @staticmethod
+    def _give_own_rows(
+        slot: int,
+        players: list[NHL07PlayerRecord],
+        tables: _MasterTables,
+        mirrors: _MirrorTables,
+    ) -> bool:
+        """Move All-Star `slot` onto rows of its own, ahead of its players.
+
+        The disc's All-Star rows point at NHL players' bios, so writing them
+        would rewrite those players on their clubs, ratings and all. The side
+        takes instead, in ROST order, a hidden row (one a club left) for each
+        of its goalies and skaters, among those whose bio nothing else shows:
+        no other row, no free agent (`FREE`), no minor-leaguer (`MINI`). Its
+        own rows go hidden, and its captain's and alternates' letters move to
+        the first skaters taken. False, with nothing changed, when too few
+        such rows are left.
+        """
+        rost = tables.rost
+        gone = _gone(rost)
+        records = {i: rost.read_record(i) for i in _live_records(rost)}
+
+        shown = NHL07PSPPatcher._shown(tables)
+        free: dict[bool, list[int]] = {True: [], False: []}
+        for i, record in records.items():
+            pid = tables.player(record.get("INDX"))
+            if record.get("TEAM") != gone["TEAM"] or pid is None or shown[pid] != 1:
+                continue
+            if pid in tables.spbt_by_indx and pid in tables.sgai_by_indx:
+                free[True].append(i)
+            elif pid in tables.spbt_by_indx and pid in tables.spai_by_indx:
+                free[False].append(i)
+        need = Counter(p.is_goalie for p in players)
+        if any(len(free[goalie]) < n for goalie, n in need.items()):
+            return False
+
+        letters = sorted(
+            capt
+            for r in records.values()
+            if r.get("TEAM") == slot and isinstance(capt := r.get("CAPT"), int) and capt
+        )
+        for i, record in records.items():
+            if record.get("TEAM") == slot:
+                rost.write_record(i, gone)
+                mirrors.write_rost(i, gone)
+        skaters = free[False][: need[False]]
+        captains = dict(zip(skaters, letters, strict=False))
+        for i in free[True][: need[True]] + skaters:
+            values: dict[str, object] = {"TEAM": slot, "CAPT": captains.get(i, 0)}
+            rost.write_record(i, values)
+            mirrors.write_rost(i, values)
+        return True
 
     def _write_portraits(
         self, writer: NHL07PSPRomWriter, master_tdb: TDBFile, photos: Mapping[int, str]

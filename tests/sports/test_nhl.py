@@ -213,6 +213,7 @@ NETWORK_CALLS: dict[str, tuple[tuple[Any, ...], dict[str, Any]]] = {
     "get_hockey_squad": (("BOS",), {}),
     "get_hockey_team_leaders": (("BOS",), {}),
     "get_hockey_free_agents": ((2026,), {}),
+    "get_hockey_careers": (([8478402],), {}),
 }
 
 # This client answers nothing from module constants: every public method calls out.
@@ -230,7 +231,9 @@ def test_no_call_site_falls_back_to_the_default_transport(tmp_path, assert_no_tr
     # URLs have no fixture-backed test of their own, and everything they encode
     # fails silently rather than loudly: the season string both derive from the
     # default season, and the trailing /2 that means regular season, not playoffs.
-    assert urls == [STANDINGS_URL, ROSTER_URL, CLUB_STATS_URL, SEARCH_URL]
+    # A career asks the standings for the clubs' codes, then the player's page.
+    landing = "https://api-web.nhle.com/v1/player/8478402/landing"
+    assert urls == [STANDINGS_URL, ROSTER_URL, CLUB_STATS_URL, SEARCH_URL, STANDINGS_URL, landing]
 
 
 # The NHL's player search, as `get_hockey_free_agents` reads it: the fields it
@@ -409,3 +412,60 @@ def test_a_landing_that_did_not_answer_is_counted_in_a_status_line(tmp_path):
         2026
     )
     assert "Free agents: 1 of 3 did not answer; asked again next time" in lines
+
+
+def careers(tmp_path, ids, transport=None):
+    client = NhlApiClient(str(tmp_path), transport=transport or free_agent_transport())
+    return client.get_hockey_careers(ids)
+
+
+def test_a_career_lists_his_nhl_seasons_and_playoffs_and_no_other_league(tmp_path):
+    career = careers(tmp_path, [1])["1"]
+    assert [(s["season"], s["playoffs"], s["GP"]) for s in career["seasons"]] == [
+        (2024, False, 31),
+        (2025, False, 32),
+    ]
+    assert career["seasons"][1] | {"team": ""} == {
+        "season": 2025, "playoffs": False, "team": "", "GP": 32, "G": 1, "A": 6, "PTS": 7,
+        "+/-": -9, "PIM": 6, "S": 16, "PPG": 0, "SHG": 0, "GWG": 0,
+    }  # fmt: skip
+    goalie = careers(tmp_path, [2])["2"]["seasons"]
+    assert [(s["season"], s["playoffs"], s["GP"], s["W"]) for s in goalie] == [
+        (2026, False, 80, 40),
+        (2026, True, 70, 0),
+    ]
+
+
+def test_a_traded_players_clubs_add_up_into_one_season(tmp_path):
+    def club(name, games, minutes):
+        return season_line(
+            20252026, games, wins=games // 2, timeOnIce=minutes, teamName={"default": name}
+        )
+
+    landing = {
+        "position": "G",
+        "draftDetails": {"year": 2016, "overallPick": 62},
+        "seasonTotals": [
+            club("Arizona Coyotes", 10, "600:29"),
+            club("Nowhere Blades", 20, "1199:31"),
+        ],
+    }
+
+    def transport(url, headers, timeout):
+        return json.dumps(landing if "/player/" in url else {}).encode()
+
+    career = careers(tmp_path, [9], transport)["9"]
+    assert (career["draft_year"], career["draft_pick"]) == (2016, 62)
+    assert career["seasons"] == [
+        {"season": 2025, "playoffs": False, "team": "ARI-NOW", "GP": 30, "W": 15, "L": 0, "T": 0,
+         "SO": 0, "GA": 0, "SA": 0, "G": 0, "A": 0, "PIM": 0, "MIN": 1800}
+    ]  # fmt: skip
+
+
+def test_a_career_is_cached_and_one_that_did_not_answer_is_left_out(tmp_path):
+    transport = free_agent_transport()
+    assert sorted(careers(tmp_path, [1, 5, 7], transport)) == ["1"]
+    asked = len(transport.calls)
+    assert sorted(careers(tmp_path, [1], transport)) == ["1"]
+    assert len(transport.calls) == asked
+    assert careers(tmp_path, [1])["1"]["draft_year"] == 0

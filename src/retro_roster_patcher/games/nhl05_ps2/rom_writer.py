@@ -32,9 +32,11 @@ from ...formats.ea_tdb import (
 )
 from .models import (
     GOALIE_FIELDS,
+    GOALIE_WEAR,
     NAME_FIELD_CHARS,
     POSITION_REVERSE,
     SKATER_FIELDS,
+    SKATER_WEAR,
     NHL05GoalieAttributes,
     NHL05PlayerRecord,
     NHL05SkaterAttributes,
@@ -150,6 +152,9 @@ class NHL05PS2RomWriter:
     def __init__(self, iso_path: str, output_path: str) -> None:
         #: SPBT record index -> the head shot of the player written there.
         self.photos: dict[int, str] = {}
+        #: Each written bio id's seasons (goalie or not, and the seasons), for
+        #: the career tables.
+        self.careers: dict[int, tuple[bool, list[dict[str, object]]]] = {}
         #: Bio record index -> `SKIN` of the player written there (`looks`).
         self.skins: dict[int, int] = {}
         #: Bio record index -> the player's place in his team's list (free
@@ -258,6 +263,14 @@ class NHL05PS2RomWriter:
             values["WEIG"] = player.weight
         if player.height > 0:
             values["HEIG"] = player.height
+        for name, value in (
+            ("YEAD", player.draft_year),
+            ("POSD", player.draft_pick),
+            ("ROOK", player.rookie),
+        ):
+            if value >= 0:
+                values[name] = value
+        values |= GOALIE_WEAR if player.is_goalie else SKATER_WEAR
 
         spbt.write_record(record_idx, values, strict=True)
 

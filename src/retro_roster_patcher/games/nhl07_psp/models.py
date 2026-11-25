@@ -156,6 +156,9 @@ TEAM_COUNT = 30
 # The number of ROM slots a mapped roster may name at all.
 SLOT_COUNT = len(NHL07_TEAM_NAMES)
 
+# The East and West All-Star sides, which Seattle and Vegas take.
+ALL_STAR_SLOTS = (30, 31)
+
 # TDB POS_ field code -> position string. A position the game does not know maps
 # to 0, a centre.
 POSITION_MAP = {
@@ -183,13 +186,36 @@ WEIGHT_BASE_POUNDS = 150
 
 NAME_FIELD_CHARS = 19
 
-# SPBT's other fields on the retail disc, which the writer leaves as they are:
-# `ART_` the portrait and face (rewritten through `portraits` and `faces`),
-# `AUDI`/`DAUD` the commentary's name clip (no silent clip is known), `YEAD`
-# the draft year less 1959 (63 undrafted) and `POSD` the overall pick (no
-# provider here fetches the draft), `ROOK` the rookie flag, and the equipment:
-# `STIC`, `NECK`, `TUCK`, `SKAT`, `HBGM`. `DVOC`, `VSCG` and `VCGP` are
-# unidentified (0-1, 0-1 and 0-3).
+# SPBT's other fields on the retail disc. `ART_` the portrait and face
+# (rewritten through `portraits` and `faces`); `YEAD` the draft year less 1959
+# (63 undrafted), `POSD` the overall pick and `ROOK` the rookie flag
+# (`stat_mapper.set_career`); and the headgear, each value read off the Player
+# Editor's equipment page after changing it on one bio of a retail copy:
+# `VSCG` a skater's visor and a goalie's helmet and cage (1; 0 none and a
+# mask: Hasek, Osgood and Irbe are 1), `VCGP` a skater's visor tint (0 clear,
+# 2 red, 3 yellow, 6 orange; 1 to 6 on 14 skaters) and a goalie's glove,
+# blocker and pads set (0 the default, 2 "Set 2"), `HBGM` a skater's helmet
+# brand (0 CCM, 4 Nike) and a goalie's mask (0 the default). Kept as the bio
+# has them: `AUDI` the commentary's name clip (no silent clip is known) and
+# `DAUD`, equal to it on every bio; `STIC`, `NECK`, `TUCK`, `SKAT`.
+#
+# Unidentified: `DVOC`, one bit, equal to `VSCG` on all 3,260 retail bios
+# (1,436 hold 1). Tried: set alone on one bio (Couture) and cleared alone on
+# another (Hill), the Player Editor's visor and 3D head follow `VSCG` and
+# never `DVOC`; perhaps the visor a player gets back on a reset, by its `D`
+# like `DAUD`'s, but no screen showed that. Written equal to `VSCG`, as the
+# disc has it.
+
+
+# `YEAD` of a player who was not drafted, or whose draft is not known: the
+# Player Editor reads it as "Not available" (1,872 of the retail disc's 3,260 bios).
+YEAD_NOT_AVAILABLE = 63
+
+# What a new player wears, where no provider says: a skater a clear visor,
+# as every player who entered the NHL since 2013 must; a goalie the default
+# mask, not a helmet and cage, and the default pads.
+SKATER_WEAR = {"VSCG": 1, "DVOC": 1, "VCGP": 0}
+GOALIE_WEAR = {"VSCG": 0, "DVOC": 0, "VCGP": 0, "HBGM": 0}
 
 
 @dataclass
@@ -224,10 +250,23 @@ class NHL07SkaterAttributes:
     injury: int = 30  # INJU
     slap_power: int = 30  # SPOW
     wrist_power: int = 30  # WPOW
-    #: Four-bit AI tendencies whose EA names are unknown: what each tracks on
-    #: the retail disc's players is in `stat_mapper.SKATER_SOURCES`.
+    #: Unidentified: three four-bit columns (0-15) no screen shows, named
+    #: after their column only (`PCBI`, `ODBI`, `SPBI`, read as "bias" from
+    #: the shared `BI`). Retail, 864 NHL skaters, rank correlation with their
+    #: own disc ratings: `PCBI` (mostly 4-9) -0.80 with skill (shooting,
+    #: passing, deking, speed) and +0.42 with checking; `ODBI` (mostly 4-10)
+    #: +0.38 with skill and -0.47 with checking; `SPBI` (mostly 4-12) +0.37
+    #: with checking and aggression, about 0 with skill and with shooting
+    #: over passing. NHL 2005's `PCBI` runs the other way (+0.84 with skill),
+    #: so the two discs do not even agree on its direction. Tried: those
+    #: correlations, the same against real 2005-06 stats
+    #: (`stat_mapper.SKATER_SOURCES`), a web search for the column names
+    #: (nothing); not tried: tracing the AI's reads, the EBOOT being
+    #: encrypted. Written from the stats that rank the disc's own players
+    #: best, on the disc's spread, so the patched players keep the disc's
+    #: relation between them and the named ratings.
     pc_bias: int = 7  # PCBI
-    offence_bias: int = 8  # ODBI, high on scorers
+    offence_bias: int = 8  # ODBI
     shoot_bias: int = 8  # SPBI
 
 
@@ -354,6 +393,13 @@ class NHL07PlayerRecord:
     birth_year: int = -1
     birth_month: int = -1
     birth_day: int = -1
+    #: `YEAD` (the draft year less 1959, `YEAD_NOT_AVAILABLE` for none), `POSD`
+    #: (the overall pick) and `ROOK`; -1 leaves the disc's value.
+    draft_year: int = -1
+    draft_pick: int = -1
+    rookie: int = -1
+    #: His NHL seasons, for the career tables (`core.nhl_career`); not a field.
+    seasons: list[dict[str, object]] = field(default_factory=list)
     skater_attrs: NHL07SkaterAttributes | None = None
     goalie_attrs: NHL07GoalieAttributes | None = None
 

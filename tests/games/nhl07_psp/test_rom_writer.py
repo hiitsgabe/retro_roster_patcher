@@ -1098,3 +1098,27 @@ def test_a_bio_without_a_skin_leaves_the_discs(tmp_path):
     assert (
         _write_and_read(tmp_path, 3, SKATER)["SKIN"] == fixture.disc_bio_values(team, row)["SKIN"]
     )
+
+
+def test_a_bio_write_lands_the_draft_and_rookie_flag_and_leaves_them_at_minus_one(tmp_path):
+    from dataclasses import replace
+
+    written = _write_and_read(tmp_path, 3, replace(SKATER, draft_year=56, draft_pick=1, rookie=0))
+    assert (written["YEAD"], written["POSD"], written["ROOK"]) == (56, 1, 0)
+    flat = (3 * fixture.SPBT_STRIDE + fixture.SPBT_SHIFT) % fixture.PLAYER_COUNT
+    disc = fixture.disc_bio_values(*divmod(flat, fixture.ROWS_PER_TEAM))
+    (tmp_path / "kept").mkdir()
+    kept = _write_and_read(tmp_path / "kept", 3, SKATER)
+    assert (kept["YEAD"], kept["POSD"], kept["ROOK"]) == (disc["YEAD"], disc["POSD"], disc["ROOK"])
+
+
+def test_a_skater_gets_a_clear_visor_and_a_goalie_the_default_mask(tmp_path):
+    from dataclasses import replace
+
+    skater = _write_and_read(tmp_path, 3, SKATER)
+    assert {k: skater[k] for k in ("VSCG", "DVOC", "VCGP")} == {"VSCG": 1, "DVOC": 1, "VCGP": 0}
+    (tmp_path / "g").mkdir()
+    goalie = _write_and_read(tmp_path / "g", 3, replace(SKATER, position="G", is_goalie=True))
+    assert {k: goalie[k] for k in ("VSCG", "DVOC", "VCGP", "HBGM")} == dict.fromkeys(
+        ("VSCG", "DVOC", "VCGP", "HBGM"), 0
+    )

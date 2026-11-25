@@ -65,6 +65,9 @@ class FakeApi:
         self._free_agents = free_agents or ([], {})
         self.squad_calls: list[tuple] = []
         self.leader_calls: list[tuple] = []
+        self.career_calls: list[list[int]] = []
+        #: By player id: what `get_hockey_careers` answers.
+        self.careers: dict[int, dict] = {}
         self.free_agent_calls: list[int] = []
 
     def get_nhl_teams(self):
@@ -77,6 +80,10 @@ class FakeApi:
     def get_hockey_team_leaders(self, key, season=None):
         self.leader_calls.append((key, season))
         return dict(self._leaders.get(key, {}))
+
+    def get_hockey_careers(self, player_ids):
+        self.career_calls.append(list(player_ids))
+        return {str(i): self.careers[i] for i in self.career_calls[-1] if i in self.careers}
 
     def get_hockey_free_agents(self, season):
         self.free_agent_calls.append(season)
