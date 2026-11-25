@@ -255,6 +255,15 @@ def test_a_soccer_squad_without_them_reports_zero(tmp_path):
     assert (player.height, player.weight) == (0.0, 0.0)
 
 
+def test_a_basketball_squad_carries_height_and_experience(tmp_path):
+    body = json.loads(_flat_roster("Victor Wembanyama", "Rookie"))
+    body["athletes"][0].update({"height": 88.0, "experience": {"years": 2}})
+    client = EspnClient(str(tmp_path), transport=_sequence_transport(json.dumps(body).encode()))
+    vet, rookie = client.get_basketball_squad(24, 2026)
+    assert (vet.height, vet.experience) == (88.0, 2)
+    assert (rookie.height, rookie.experience) == (0.0, 0)
+
+
 def test_a_baseball_squad_carries_height_weight_and_head_shot(tmp_path):
     body = json.loads(_grouped_roster("Cal Raleigh"))
     body["athletes"][0]["items"][0].update(

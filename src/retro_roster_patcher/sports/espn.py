@@ -923,6 +923,7 @@ class EspnClient:
                     first_name = " ".join(parts[:-1])
 
             wt = athlete.get("weight", 0) or 0
+            exp = athlete.get("experience")
 
             players.append(
                 Player(
@@ -939,6 +940,7 @@ class EspnClient:
                     else "",
                     weight=float(wt),
                     height=float(athlete.get("height", 0) or 0),
+                    experience=int(exp.get("years", 0) or 0) if isinstance(exp, dict) else 0,
                 )
             )
         return players

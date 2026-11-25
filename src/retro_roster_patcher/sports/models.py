@@ -40,6 +40,7 @@ class Player:
     handedness: str = ""  # "L" or "R" (throw hand)
     bats: str = ""  # "L", "R", or "B" (bat hand, baseball only)
     height: float = 0.0  # inches (hockey, baseball); 0 when the provider gives none
+    experience: int = 0  # NBA seasons played (ESPN basketball); 0 when the provider gives none
 
 
 @dataclass
