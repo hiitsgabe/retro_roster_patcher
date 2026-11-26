@@ -507,6 +507,8 @@ NETWORK_CALLS = {
     "get_lineup": ((359, 2001), {}),
     "get_league_logo": ((2001,), {}),
     "get_team": ((132,), {}),
+    "get_group_teams": ((2009, 2026), {}),
+    "matches_played": ((5, 2009), {}),
 }
 
 # Public members that answer from module constants and never make a request.
@@ -1935,3 +1937,23 @@ def test_the_league_ids_only_grow():
 def test_the_norwegian_season_is_the_calendar_year():
     assert espn.default_season("nor.1", date(2026, 4, 1)) == 2026
     assert espn.default_season("bel.1", date(2026, 4, 1)) == 2025
+
+
+def test_the_group_stage_is_read_off_the_standings_group_by_group(tmp_path):
+    def group(*ids):
+        return {"standings": {"entries": [{"team": {"id": i}} if i else {"team": {}} for i in ids]}}
+
+    # The Copa Libertadores' standings, trimmed: two groups of two.
+    body = json.dumps({"children": [group("8", "819"), group("2684", "")]}).encode()
+
+    def transport(url, headers, timeout):
+        transport.calls.append(url)
+        return body
+
+    transport.calls = []
+    client = EspnClient(str(tmp_path), transport=transport)
+    assert client.get_group_teams(2009, 2026) == [8, 819, 2684]
+    assert transport.calls == [
+        "https://site.api.espn.com/apis/v2/sports/soccer/conmebol.libertadores/standings?season=2026"
+    ]
+    assert client.get_group_teams(2009, 2026) == [8, 819, 2684] and len(transport.calls) == 1

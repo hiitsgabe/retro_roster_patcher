@@ -158,6 +158,12 @@ def build_parser() -> argparse.ArgumentParser:
         "(pes2013-ps2)",
     )
     p_patch.add_argument(
+        "--libertadores",
+        action="store_true",
+        help="put this season's Copa Libertadores clubs, with their squads, in the game's own "
+        "Copa Libertadores clubs (pes2013-ps2)",
+    )
+    p_patch.add_argument(
         "--image",
         action="append",
         default=None,

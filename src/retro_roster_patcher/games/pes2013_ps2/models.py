@@ -78,6 +78,25 @@ PLAYER_ENTRIES = (PLAYER_ENTRY_LATIN, PLAYER_ENTRY_JAPANESE)
 #: `LIBERTADORES_BASE` + its index wherever a record number is kept.
 LIBERTADORES_ENTRY = 49
 LIBERTADORES_BASE = 10000
+#: The Copa Libertadores mode's 38 clubs, which its Competition draws 32 of at random: rows
+#: 237-274 of every overlay's team table (a row's id word's low byte is its crest in the emblem
+#: atlases, 130-167), the players and squads of entries 49 and 48 (part 2: each club's shirt
+#: numbers - 1, 32 a row, 0xFF none), the formations of entry 53 part 6 and the kits of entry 54
+#: part 8 (licensed records, whose texture packages follow the clubs'). A patch writes the club
+#: in row k as slot `LIBERTADORES_SLOT_BASE` + k.
+LIBERTADORES_SLOT_BASE = 2000
+LIBERTADORES_CLUBS = 38
+LIBERTADORES_ENTRIES = (LIBERTADORES_ENTRY, 48)
+LIBERTADORES_ROWS = range(237, 237 + LIBERTADORES_CLUBS)
+LIBERTADORES_FIRST_CREST = 130
+LIBERTADORES_SQUAD_FLAG = 0xA000
+PART_LIBERTADORES_SQUADS = 1
+PART_LIBERTADORES_NUMBERS = 2
+NO_NUMBER = 0xFF
+#: Formation records of the Copa clubs: `formations.FormationTable` team `LIBERTADORES_FORMATION`
+#: + k is record k of entry 53 part 6.
+LIBERTADORES_FORMATION = 1000
+LIBERTADORES_FORMATION_PART = 6
 #: Parts inside each of those entries.
 PART_PLAYERS = 0
 PART_NATIONAL_SQUADS = 1
@@ -241,6 +260,15 @@ TEAM_CODE_BYTES = 8
 #: (Man Utd 7 ... Shakhtar 124), each wearing that club's UCL kits (`kits.PART_UCL`). The
 #: Champions League mode offers every club of slots 0-125; these rows are only its first group.
 UCL_ROWS = range(326, 344)
+#: The clubs the Champions League's Competition draws its 32 from when the player picks
+#: Random: 33 team rows (`FIRST_CLUB_ENTRY` + club), u16 each and then a 0, in `OVER.AFS`
+#: entry 59 (`select.ovl`), 2012-13's participants, holders first (read off PCSX2's RAM).
+SELECT_OVERLAY = 59
+UCL_POOL = 33
+#: The boot file pairs each UCL picker row with its club's row: 18 `{u32 row, u32 club row}`
+#: in `UCL_ROWS` order (Man Utd 326 <-> 74 ...), which the mode reads the row's squad and the
+#: Random draw its clubs through (a row shown for another club hangs the draw).
+UCL_PAIR_BYTES = 8
 
 #: Registered-position nibble values (byte 53 >> 4) grouped the way ESPN
 #: describes positions (2 SW, 3 CB, 4 SB, 6 WB defend; 5 DMF, 7 CMF, 8 SMF, 9 AMF

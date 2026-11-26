@@ -17,7 +17,7 @@ from ..core.errors import CapabilityError, RomError, as_storage_error
 from ..core.models import PartialFn, SlotMapping
 from ..core.patcher import Patcher
 from ..core.registry import get_patcher, list_patchers
-from ..sports.clubs import fetch_top_clubs
+from ..sports.clubs import champions_order, fetch_libertadores, fetch_top_clubs
 from ..sports.espn import default_season
 from ..sports.fotmob import FotmobClient
 from ..sports.headshots import fill_headshots
@@ -240,6 +240,8 @@ def _patch_options(game_id: str, args: argparse.Namespace, patcher: Patcher) -> 
         raise UsageError(f"{game_id} does not take --fill-nations")
     if fill_clubs and not patcher.supports_club_fill:
         raise UsageError(f"{game_id} does not take --fill-clubs")
+    if getattr(args, "libertadores", False) and not patcher.supports_libertadores:
+        raise UsageError(f"{game_id} does not take --libertadores")
     if getattr(args, "blank_unused", False):
         if not getattr(patcher, "supports_blank_unused", False):
             raise UsageError(f"{game_id} does not take --blank-unused")
@@ -346,6 +348,15 @@ def cmd_patch(args: argparse.Namespace, renderer: Renderer) -> None:
         )
         if club_map:
             mapped = mapped.merge(patcher.map_rosters(clubs, slot_mapping=club_map, **map_extras))
+        if fill_clubs == "champions":
+            options["champions"] = champions_order(patcher, default_season("uefa.champions"))
+    if getattr(args, "libertadores", False):
+        renderer.status("Putting this season's Copa Libertadores clubs in the Copa's own...")
+        copa, copa_map = fetch_libertadores(
+            patcher, rom, default_season("conmebol.libertadores"), on_progress=renderer.progress
+        )
+        if copa_map:
+            mapped = mapped.merge(patcher.map_rosters(copa, slot_mapping=copa_map, **map_extras))
     if getattr(args, "fill_nations", False):
         renderer.status("Filling the free slots with the top national teams...")
         season = args.season or data.league.season or default_season("fifa.friendly")

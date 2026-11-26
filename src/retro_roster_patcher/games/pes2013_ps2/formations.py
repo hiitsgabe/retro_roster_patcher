@@ -26,12 +26,19 @@ from __future__ import annotations
 
 from collections import Counter
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from ...core.errors import RomError
 from ...sports.lineup import nearest_shape, parse_shape, seat_line
 from .afs import Table, unwrap, wrap
-from .models import FORMATION_PART, FORMATION_RECORD, FORMATION_TEAMS
+from .models import (
+    FORMATION_PART,
+    FORMATION_RECORD,
+    FORMATION_TEAMS,
+    LIBERTADORES_CLUBS,
+    LIBERTADORES_FORMATION,
+    LIBERTADORES_FORMATION_PART,
+)
 
 #: The bytes a formation changes in a record: the role codes, x and y of places 1-10.
 PRESET_BYTES = 30
@@ -174,12 +181,15 @@ def seats(roles: Sequence[str], record: bytes) -> list[int]:
 
 @dataclass
 class FormationTable:
-    """Entry 53 as parts, of which only part 1 (one record per team) is read or changed."""
+    """Entry 53 as parts, of which only part 1 (one record per team) and part 6 (one per Copa
+    Libertadores club, team `LIBERTADORES_FORMATION` + k) are read or changed."""
 
     header: bytes
     table: Table
     part_header: bytes
     leaf: bytearray
+    copa_header: bytes = b""
+    copa: bytearray = field(default_factory=bytearray)
 
     @classmethod
     def parse(cls, block: bytes) -> FormationTable:
@@ -190,26 +200,39 @@ class FormationTable:
         part_header, leaf = unwrap(table.parts[FORMATION_PART])
         if len(leaf) < FORMATION_TEAMS * FORMATION_RECORD:
             raise RomError("Formation part is shorter than its team records")
-        return cls(header, table, part_header, bytearray(leaf))
+        copa_header, copa = b"", b""
+        if (
+            len(table.parts) > LIBERTADORES_FORMATION_PART
+            and table.parts[LIBERTADORES_FORMATION_PART]
+        ):
+            copa_header, copa = unwrap(table.parts[LIBERTADORES_FORMATION_PART])
+        return cls(header, table, part_header, bytearray(leaf), copa_header, bytearray(copa))
 
-    def _at(self, team: int) -> int:
+    def _at(self, team: int) -> tuple[bytearray, int]:
+        k = team - LIBERTADORES_FORMATION
+        if 0 <= k < LIBERTADORES_CLUBS and len(self.copa) >= (k + 1) * FORMATION_RECORD:
+            return self.copa, k * FORMATION_RECORD
         if not 0 <= team < FORMATION_TEAMS:
             raise RomError(f"Team {team} has no formation record")
-        return team * FORMATION_RECORD
+        return self.leaf, team * FORMATION_RECORD
 
     def get(self, team: int) -> bytes:
-        """Team `team`'s 52 bytes: national row r is `r`, club c is `FIRST_CLUB_FORMATION + c`."""
-        at = self._at(team)
-        return bytes(self.leaf[at : at + FORMATION_RECORD])
+        """Team `team`'s 52 bytes: national row r is `r`, club c is `FIRST_CLUB_FORMATION + c`,
+        Copa club k `LIBERTADORES_FORMATION + k`."""
+        leaf, at = self._at(team)
+        return bytes(leaf[at : at + FORMATION_RECORD])
 
     def set(self, team: int, preset: bytes) -> None:
         """Put a preset over the team's first 30 bytes, keeping its arrows and defence."""
         if len(preset) != PRESET_BYTES:
             raise ValueError(f"A preset is {PRESET_BYTES} bytes, not {len(preset)}")
-        at = self._at(team)
-        self.leaf[at : at + PRESET_BYTES] = preset
+        leaf, at = self._at(team)
+        leaf[at : at + PRESET_BYTES] = preset
 
     def build(self) -> bytes:
-        """The entry rebuilt: part 1 deflated again, every other part as it was."""
+        """The entry rebuilt: parts 1 and 6 deflated again, every other part as it was."""
         self.table.parts[FORMATION_PART] = wrap(self.part_header, bytes(self.leaf))
+        part = LIBERTADORES_FORMATION_PART
+        if self.copa_header and bytes(self.copa) != unwrap(self.table.parts[part])[1]:
+            self.table.parts[part] = wrap(self.copa_header, bytes(self.copa))
         return wrap(self.header, self.table.build())

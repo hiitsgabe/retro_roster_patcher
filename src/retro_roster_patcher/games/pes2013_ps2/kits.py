@@ -20,7 +20,8 @@ package the colours do not touch. t[36] is 4 for a parametric player kit and
 2 for a goalkeeper's; t[1..4] = 49 3c 11 05 is the player model set of the
 disc's parametric clubs. Clubs 130..138 have no record. Part 7 holds 18 more
 club records, the UCL versions of the kits of the clubs the overlays' "UEFA
-Champions League" picker rows (`models.UCL_ROWS`) point at, in row order.
+Champions League" picker rows (`models.UCL_ROWS`) point at, in row order, and part 8 38 more,
+the Copa Libertadores clubs' (`models.LIBERTADORES_ROWS`), licensed.
 """
 
 from __future__ import annotations
@@ -40,6 +41,8 @@ PART_NATIONALS = 0
 PART_CLUBS = 1
 #: The UCL picker clubs' kits, one club record per row of `models.UCL_ROWS`.
 PART_UCL = 7
+#: The Copa Libertadores clubs' kits, one club record per club.
+PART_LIBERTADORES = 8
 CLUB_RECORD = 648
 NATIONAL_RECORD = 456
 KIT_SIZE = 88
@@ -181,7 +184,8 @@ def keeper_spec(*shirts: RGB) -> KitSpec:
 @dataclass
 class KitTable:
     """Entry 54 as parts; `clubs[s]` and `nationals[n]` are the four kits of a team, `ucl[k]`
-    those of UCL picker row k (empty on a disc without part 7)."""
+    those of UCL picker row k and `libertadores[k]` those of Copa club k (empty on a disc
+    without part 7 or 8)."""
 
     header: bytes
     table: Table
@@ -190,6 +194,7 @@ class KitTable:
     clubs: list[list[Kit]]
     nationals: list[list[Kit]]
     ucl: list[list[Kit]]
+    libertadores: list[list[Kit]]
 
     @classmethod
     def parse(cls, block: bytes) -> KitTable:
@@ -200,9 +205,10 @@ class KitTable:
         part_headers: dict[int, bytes] = {}
         leaves: dict[int, bytes] = {}
         parts = [(PART_NATIONALS, NATIONAL_RECORD), (PART_CLUBS, CLUB_RECORD)]
-        if len(table.parts) > PART_UCL and table.parts[PART_UCL]:
-            parts.append((PART_UCL, CLUB_RECORD))
-        teams: dict[int, list[list[Kit]]] = {PART_UCL: []}
+        for extra in (PART_UCL, PART_LIBERTADORES):
+            if len(table.parts) > extra and table.parts[extra]:
+                parts.append((extra, CLUB_RECORD))
+        teams: dict[int, list[list[Kit]]] = {PART_UCL: [], PART_LIBERTADORES: []}
         for part, record in parts:
             part_headers[part], leaves[part] = unwrap(table.parts[part])
             leaf = leaves[part]
@@ -218,6 +224,7 @@ class KitTable:
             teams[PART_CLUBS],
             teams[PART_NATIONALS],
             teams[PART_UCL],
+            teams[PART_LIBERTADORES],
         )
 
     def build(self) -> bytes:
@@ -225,6 +232,7 @@ class KitTable:
             (PART_NATIONALS, NATIONAL_RECORD, self.nationals),
             (PART_CLUBS, CLUB_RECORD, self.clubs),
             (PART_UCL, CLUB_RECORD, self.ucl),
+            (PART_LIBERTADORES, CLUB_RECORD, self.libertadores),
         ):
             if part not in self.leaves:
                 continue

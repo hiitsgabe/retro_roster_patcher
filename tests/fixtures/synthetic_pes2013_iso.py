@@ -23,6 +23,8 @@ from retro_roster_patcher.games.pes2013_ps2.models import (
     CLUB_SQUAD_SIZE,
     DATABASE_OVERLAY_ENGLISH,
     FIRST_CLUB_ENTRY,
+    LIBERTADORES_CLUBS,
+    LIBERTADORES_ROWS,
     NATIONAL_COUNT,
     NATIONAL_SQUAD_SIZE,
     UCL_ROWS,
@@ -137,7 +139,7 @@ def build_kit_entry() -> bytes:
     records (648 bytes): club 0 parametric red/white, club 1 licensed blue/white,
     club 2 parametric black/black. Kit order: GK home, home, GK away, away. Parts 2-6
     are filler; part 7 = the two UCL picker rows' club records (`build_overlay`), licensed
-    lime/black: their UCL kits."""
+    lime/black: their UCL kits; part 8 = the 38 Copa clubs' records, licensed white."""
     red, white, blue, black = 0x801F, 0xFFFF, 0xFC00, 0x8000
     lime = 0x83E0
 
@@ -158,8 +160,10 @@ def build_kit_entry() -> bytes:
     )
     filler = [block(bytes([0xB0 + k]) * 64, compress=True) for k in range(2, 7)]
     ucl = record(lime, black, lime, False, 648) * 2
+    copa = record(white, white, white, False, 648) * LIBERTADORES_CLUBS
     parts = [block(nationals, compress=True), block(clubs, compress=True), *filler]
-    return block(table([*parts, block(ucl, compress=True)]), compress=False)
+    parts += [block(ucl, compress=True), block(copa, compress=True)]
+    return block(table(parts), compress=False)
 
 
 #: Entry 53, the formations, restated here independently of `formations.py`: ten parts, of which
@@ -231,7 +235,14 @@ def build_overlay(
     extra: list[tuple[int, int, int, int]] = []  # pointers, word 3, id word past the clubs
     if ucl:
         filler = pointers[-1]
-        extra = [(*filler, 0, 0x7C0400FF)] * (UCL_ROWS.start - clubs_end)
+        extra = [(*filler, 0, 0x7C0400FF)] * (LIBERTADORES_ROWS.start - clubs_end)
+        for k in range(LIBERTADORES_CLUBS):
+            copa_name = 0x100 + len(strings)
+            strings += f"COPA CLUB {k}".encode().ljust(16, b"\0")
+            copa_code = 0x100 + len(strings)
+            strings += f"C{k:02d}".encode().ljust(8, b"\0")
+            extra.append((copa_name, copa_code, 0x90002C, 0x58030082 + k))
+        extra += [(*filler, 0, 0x7C0400FF)] * (UCL_ROWS.start - LIBERTADORES_ROWS.stop)
         extra.append((*pointers[FIRST_CLUB_ENTRY + 1], 0x900006, 0x16020001))
         own_name = 0x100 + len(strings)
         strings += b"OWN UCL NAME".ljust(16, b"\0")
@@ -297,14 +308,25 @@ def nationality(lang: str) -> list[tuple[str, str]]:
 
 
 def build_libertadores_entry(looks: dict[int, bytes] | None = None, count: int = 8) -> bytes:
-    """Entry 48/49: the South American clubs' players (part 0, `count`
-    records) and their squads (part 1, 0xA000 + record). `looks` gives chosen
-    records a look region of their own (see `player_record`)."""
+    """Entry 48/49: the Copa clubs' players (part 0, `count` records, a keeper first), the
+    38 squads of 32 (part 1, 0xA000 + record; club 0 holds the first half of the records,
+    club 1 the rest) and their shirt numbers (part 2, number - 1, 0xFF none). `looks` gives
+    chosen records a look region of their own (see `player_record`)."""
     players = b"".join(
-        player_record(f"LIB {i}", f"L{i}", 5, (looks or {}).get(i)) for i in range(count)
+        player_record(f"LIB {i}", f"L{i}", 0 if i in (0, count // 2) else 5, (looks or {}).get(i))
+        for i in range(count)
     )
-    squads = struct.pack(f"<{count}H", *(0xA000 + i for i in range(count)))
-    parts = [block(players, compress=True), block(squads, compress=True)]
+    squads = bytearray(LIBERTADORES_CLUBS * CLUB_SQUAD_SIZE * 2)
+    numbers = bytearray(b"\xff" * LIBERTADORES_CLUBS * CLUB_SQUAD_SIZE)
+    for i in range(count):
+        club, place = (0, i) if i < count // 2 else (1, i - count // 2)
+        struct.pack_into("<H", squads, (club * CLUB_SQUAD_SIZE + place) * 2, 0xA000 + i)
+        numbers[club * CLUB_SQUAD_SIZE + place] = place
+    parts = [
+        block(players, compress=True),
+        block(bytes(squads), compress=True),
+        block(bytes(numbers), compress=True),
+    ]
     return block(table(parts), compress=False) + b"\0" * 4096
 
 
@@ -328,6 +350,22 @@ def build_afs(entries: dict[int, bytes], count: int) -> bytes:
     )
 
 
+#: The boot file's UCL picker pairs (row, club): rows 326 and 327 as the overlays have them
+#: (`build_overlay`), the rest club 2.
+UCL_PAIRS = [(326, 1), (327, 0)] + [(row, 2) for row in UCL_ROWS[2:]]
+UCL_PAIRS_AT = 0x100
+#: `select.ovl` (OVER.AFS entry 59): the Champions League's Random pool, 33 team rows from
+#: club 2's on, then a 0.
+UCL_POOL_AT = 0x40
+UCL_POOL_ROWS = list(range(FIRST_CLUB_ENTRY + 2, FIRST_CLUB_ENTRY + 35))
+
+
+def build_select_overlay() -> bytes:
+    data = bytearray(0x100)
+    struct.pack_into(f"<{len(UCL_POOL_ROWS)}H", data, UCL_POOL_AT, *UCL_POOL_ROWS)
+    return bytes(data)
+
+
 def build_iso(
     *,
     player_entry: bytes | None = None,
@@ -346,13 +384,16 @@ def build_iso(
     entries[53] = build_formation_entry() + b"\0" * 2048
     entries[54] = build_kit_entry() + b"\0" * 2048
     text_afs = build_afs(entries, 610)
-    over_afs = build_afs(overlays, 20)
-    boot = b"\x7fELF" + b"\0" * 2044
+    over_afs = build_afs({**overlays, 59: build_select_overlay()}, 60)
+    boot = bytearray(b"\x7fELF" + b"\0" * 2044)
+    boot[UCL_PAIRS_AT : UCL_PAIRS_AT + 8 * len(UCL_ROWS)] = b"".join(
+        struct.pack("<II", row, FIRST_CLUB_ENTRY + club) for row, club in UCL_PAIRS
+    )
     languages = {"U_TEXT.AFS": build_text_afs("u"), "B_TEXT.AFS": build_text_afs("b")}
 
     root_sector = 17
     boot_sector = 18
-    sectors: dict[int, bytes] = {boot_sector: boot}
+    sectors: dict[int, bytes] = {boot_sector: bytes(boot)}
     records = [iso.dir_record(f"{boot_name};1".encode(), boot_sector, len(boot), is_dir=False)]
     nxt = boot_sector + len(boot) // SECTOR
     for name, data in [("0_TEXT.AFS", text_afs), ("OVER.AFS", over_afs), *languages.items()]:

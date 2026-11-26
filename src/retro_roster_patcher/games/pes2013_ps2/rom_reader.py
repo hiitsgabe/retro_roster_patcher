@@ -26,7 +26,11 @@ from .models import (
     DATABASE_OVERLAY_ENGLISH,
     FIRST_CLUB_ENTRY,
     FORMATION_ENTRY,
+    LIBERTADORES_CLUBS,
     LIBERTADORES_ENTRY,
+    LIBERTADORES_FIRST_CREST,
+    LIBERTADORES_ROWS,
+    LIBERTADORES_SQUAD_FLAG,
     NATIONAL_NAMED,
     NATIONAL_SQUAD_SIZE,
     NATIONALITIES,
@@ -34,15 +38,20 @@ from .models import (
     OVERLAY_LOAD_ADDRESS_OFFSET,
     PART_CLUB_NUMBERS,
     PART_CLUB_SQUADS,
+    PART_LIBERTADORES_NUMBERS,
+    PART_LIBERTADORES_SQUADS,
     PART_NATIONAL_ORDER,
     PART_NATIONAL_SQUADS,
     PART_PLAYERS,
     PLAYER_ENTRY_LATIN,
     PLAYER_RECORD_SIZE,
+    SELECT_OVERLAY,
     TEAM_ENTRY_SIZE,
     TEXT_AFS,
     TEXT_ARCHIVE_PRIMARY,
     TEXT_LANGUAGE_AFS,
+    UCL_PAIR_BYTES,
+    UCL_POOL,
     UCL_ROWS,
     ClubSlot,
     PESRomInfo,
@@ -178,6 +187,25 @@ class PlayerTables:
         part = self.parts[PART_CLUB_SQUADS]
         return {v for v in struct.unpack(f"<{len(part) // 2}H", part[: len(part) // 2 * 2]) if v}
 
+    def copa_squad(self, club: int) -> list[int]:
+        """The records of Copa club `club`'s places, in place order (entries 48/49)."""
+        part = self.parts[PART_LIBERTADORES_SQUADS]
+        row = struct.unpack_from(f"<{CLUB_SQUAD_SIZE}H", part, club * CLUB_SQUAD_SIZE * 2)
+        return [v & ~LIBERTADORES_SQUAD_FLAG for v in row if v & LIBERTADORES_SQUAD_FLAG]
+
+    def set_copa_squad(self, club: int, records: list[int], numbers: list[int]) -> None:
+        """Point Copa club `club`'s places at `records`, with shirt numbers `numbers`
+        (number - 1 each); the places after them are emptied."""
+        part = bytearray(self.parts[PART_LIBERTADORES_SQUADS])
+        row = [LIBERTADORES_SQUAD_FLAG | r for r in records]
+        row += [0] * (CLUB_SQUAD_SIZE - len(row))
+        struct.pack_into(f"<{CLUB_SQUAD_SIZE}H", part, club * CLUB_SQUAD_SIZE * 2, *row)
+        self.parts[PART_LIBERTADORES_SQUADS] = bytes(part)
+        shirts = bytearray(self.parts[PART_LIBERTADORES_NUMBERS])
+        at = club * CLUB_SQUAD_SIZE
+        shirts[at : at + CLUB_SQUAD_SIZE] = bytes(numbers).ljust(CLUB_SQUAD_SIZE, b"\xff")
+        self.parts[PART_LIBERTADORES_NUMBERS] = bytes(shirts)
+
 
 @dataclass
 class TeamString:
@@ -206,6 +234,11 @@ class OverlayTeams:
     #: they carry (the crest follows it). Most point at the club row's strings too; a few
     #: in the Greek and Russian overlays at strings of their own.
     ucl: dict[int, int] = field(default_factory=dict)
+    #: The Copa Libertadores clubs' rows (`LIBERTADORES_ROWS`), club k -> its name and code.
+    copa: dict[int, tuple[TeamString, TeamString]] = field(default_factory=dict)
+    #: (start, end) of the overlay bytes that hold the Copa rows' strings and nobody else's,
+    #: which a patch may lay out anew; None when they are not one run.
+    copa_room: tuple[int, int] | None = None
 
 
 class RomReader:
@@ -278,26 +311,41 @@ class RomReader:
     # -- players and squads --------------------------------------------------
 
     def player_tables(self, index: int = PLAYER_ENTRY_LATIN) -> PlayerTables:
+        tables = self._tables(index)
+        needed = max(PART_PLAYERS, PART_CLUB_SQUADS, PART_CLUB_NUMBERS) + 1
+        if len(tables.parts) < needed:
+            raise RomError(
+                f"{TEXT_AFS} entry {index} has {len(tables.parts)} parts, not a player table"
+            )
+        if len(tables.parts[PART_CLUB_SQUADS]) < CLUB_COUNT * CLUB_SQUAD_SIZE * 2:
+            raise RomError(f"{TEXT_AFS} entry {index}: club squad table too short")
+        return tables
+
+    def _tables(self, index: int) -> PlayerTables:
         header, payload = unwrap(self.read(TEXT_AFS, index))
         table = Table.parse(payload)
-        needed = max(PART_PLAYERS, PART_CLUB_SQUADS, PART_CLUB_NUMBERS) + 1
-        if len(table.parts) < needed:
-            raise RomError(
-                f"{TEXT_AFS} entry {index} has {len(table.parts)} parts, not a player table"
-            )
         part_headers: list[bytes] = []
         parts: list[bytes] = []
         for block in table.parts:
             h, p = unwrap(block) if block else (b"", b"")
             part_headers.append(h)
             parts.append(p)
-        if len(parts[PART_CLUB_SQUADS]) < CLUB_COUNT * CLUB_SQUAD_SIZE * 2:
-            raise RomError(f"{TEXT_AFS} entry {index}: club squad table too short")
-        if len(parts[PART_PLAYERS]) % PLAYER_RECORD_SIZE:
+        if not parts or len(parts[PART_PLAYERS]) % PLAYER_RECORD_SIZE:
             raise RomError(f"{TEXT_AFS} entry {index}: player table is not whole records")
         return PlayerTables(
             header, table, part_headers, parts, list(zip(table.parts, parts, strict=True))
         )
+
+    def libertadores_tables(self, index: int = LIBERTADORES_ENTRY) -> PlayerTables:
+        """Entry 49 (48 in Japanese): the Copa clubs' records, squads and shirt numbers."""
+        tables = self._tables(index)
+        sizes = (len(tables.parts[PART_LIBERTADORES_SQUADS]), len(tables.parts[-1]))
+        if len(tables.parts) <= PART_LIBERTADORES_NUMBERS or sizes != (
+            LIBERTADORES_CLUBS * CLUB_SQUAD_SIZE * 2,
+            LIBERTADORES_CLUBS * CLUB_SQUAD_SIZE,
+        ):
+            raise RomError(f"{TEXT_AFS} entry {index} is not the Copa Libertadores table")
+        return tables
 
     def libertadores_players(self, index: int = LIBERTADORES_ENTRY) -> bytes:
         """The South American clubs' player records (part 0 of `index`), or
@@ -372,7 +420,66 @@ class RomReader:
             and rows[row][3] & 0xFF in clubs
             and rows[row][3] == rows[FIRST_CLUB_ENTRY + (rows[row][3] & 0xFF)][3]
         }
-        return OverlayTeams(entry, base, table_offset, clubs, nationals, idents, nationalities, ucl)
+        copa = {
+            k: (string(rows[row][0]), string(rows[row][1]))
+            for k, row in enumerate(LIBERTADORES_ROWS)
+            if row < len(rows) and rows[row][3] & 0xFF == LIBERTADORES_FIRST_CREST + k
+        }
+        copa_rows = {LIBERTADORES_ROWS[k] for k in copa}
+        others = {p for k, row in enumerate(rows) if k not in copa_rows for p in row[:2]}
+        others |= pointers - {p for k, row in enumerate(rows) for p in row[:2]}
+        owned = sorted(
+            {s.offset for pair in copa.values() for s in pair} - {p - base for p in others}
+        )
+        room = None
+        if owned:
+            start, end = owned[0], max(string(base + o).capacity + o for o in owned)
+            if not any(start <= p - base < end for p in others):
+                room = (start, end)
+        return OverlayTeams(
+            entry, base, table_offset, clubs, nationals, idents, nationalities, ucl, copa, room
+        )
+
+    def ucl_pairs(self) -> tuple[int, list[int]] | None:
+        """Where the boot file pairs the UCL picker rows with their clubs' rows (`UCL_ROWS`
+        order) and those club rows; None when the one run of 18 such pairs is not found."""
+        extent = self.extent(BOOT_FILE)
+        with open(self.iso_path, "rb") as f:
+            f.seek(extent.offset)
+            data = f.read(extent.size)
+        first = struct.pack("<I", UCL_ROWS[0])
+        last = FIRST_CLUB_ENTRY + CLUB_COUNT
+        found = []
+        at = data.find(first)
+        while at >= 0:
+            if at % 4 == 0 and at + len(UCL_ROWS) * UCL_PAIR_BYTES <= len(data):
+                pairs = [
+                    struct.unpack_from("<II", data, at + k * UCL_PAIR_BYTES)
+                    for k in range(len(UCL_ROWS))
+                ]
+                if [r for r, _ in pairs] == list(UCL_ROWS) and all(
+                    FIRST_CLUB_ENTRY <= c < last for _, c in pairs
+                ):
+                    found.append((at, [c for _, c in pairs]))
+            at = data.find(first, at + 1)
+        return found[0] if len(found) == 1 else None
+
+    def ucl_pool(self) -> tuple[int, list[int]] | None:
+        """Where `select.ovl` keeps the Champions League's Random pool (`UCL_POOL` team rows,
+        u16, then a 0) and the rows; None when it is not found: the only run of that many
+        different club rows ended by a 0."""
+        try:
+            data = self.read(OVER_AFS, SELECT_OVERLAY)
+        except RomError:
+            return None
+        first, last = FIRST_CLUB_ENTRY, FIRST_CLUB_ENTRY + CLUB_COUNT
+        found = []
+        for off in range(0, len(data) - 2 * UCL_POOL - 1, 2):
+            rows = list(struct.unpack_from(f"<{UCL_POOL + 1}H", data, off))
+            if rows[-1] == 0 and len(set(rows[:-1])) == UCL_POOL:
+                if all(first <= r < last for r in rows[:-1]):
+                    found.append((off, rows[:-1]))
+        return found[0] if len(found) == 1 else None
 
     # -- UI textures -------------------------------------------------------
 

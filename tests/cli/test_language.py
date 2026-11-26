@@ -641,6 +641,19 @@ def club_stub(monkeypatch, fill_stub):
         return LeagueData(league=league, teams=[psg]), mapping
 
     monkeypatch.setattr("retro_roster_patcher.cli.commands.fetch_top_clubs", fake_fetch_top_clubs)
+    monkeypatch.setattr(
+        "retro_roster_patcher.cli.commands.champions_order", lambda patcher, season: [160, 132]
+    )
+
+    def fake_fetch_libertadores(patcher, rom, season, on_progress=None):
+        SEEN.append(("copa", season))
+        boca = TeamRoster(team=Team(id=5, name="Boca Juniors"), players=[Player(id=9, name="Nine")])
+        mapping = [SlotMapping(slot_index=2000, team_id=5, team_name="Boca Juniors")]
+        return LeagueData(league=League(id=2009, name="Copa", season=season), teams=[boca]), mapping
+
+    monkeypatch.setattr(
+        "retro_roster_patcher.cli.commands.fetch_libertadores", fake_fetch_libertadores
+    )
     monkeypatch.setattr("retro_roster_patcher.cli.commands.default_season", lambda code: 2026)
     try:
         registry.register("club-game", platform="test", sport="soccer")(ClubFillPatcher)
@@ -662,6 +675,23 @@ def test_fill_clubs_merges_the_ranked_clubs_then_the_nations_fill_what_is_left(t
 def test_fill_clubs_champions_reaches_the_fill(tmp_path, club_stub):
     assert main(_stub_argv(tmp_path, "club-game", "--fill-clubs=champions")) == 0
     assert [c[4] for c in SEEN if c[0] == "clubs"] == ["champions"]
+    # The participants, best first, reach `patch` for the Champions League's own tables.
+    assert _options_seen() == {"champions": [160, 132]}
+
+
+def test_libertadores_merges_the_copa_clubs_into_the_copa_slots(tmp_path, club_stub):
+    ClubFillPatcher.supports_libertadores = True
+    try:
+        assert main(_stub_argv(tmp_path, "club-game", "--libertadores")) == 0
+    finally:
+        del ClubFillPatcher.supports_libertadores
+    assert ("copa", 2026) in SEEN
+    assert [c[1] for c in SEEN if c[0] == "slots"] == [{0: "Team A", 2000: "Boca Juniors"}]
+
+
+def test_libertadores_on_a_game_without_it_is_a_usage_error(tmp_path, club_stub, capsys):
+    assert main(_stub_argv(tmp_path, "club-game", "--libertadores", "--json")) == 2
+    assert events(capsys)[-1]["msg"] == "club-game does not take --libertadores"
 
 
 def test_fill_clubs_on_a_game_without_it_is_a_usage_error(tmp_path, fill_stub, capsys):

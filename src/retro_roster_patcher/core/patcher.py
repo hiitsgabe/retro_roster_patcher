@@ -80,6 +80,9 @@ class Patcher(ABC):
     #: `sports.clubs.fetch_top_clubs` can fill the club slots the leagues leave
     #: (`club_fill_slots`) with today's best clubs by UEFA coefficient.
     supports_club_fill: bool = False
+    #: `sports.clubs.fetch_libertadores` can put this season's Copa Libertadores clubs in the
+    #: game's own Copa clubs (`libertadores_slots`).
+    supports_libertadores: bool = False
 
     def __init__(
         self,
@@ -194,6 +197,11 @@ class Patcher(ABC):
     def club_fill_slots(self, rom_path: Path, taken: Collection[int]) -> list[int]:
         """The club slots a club fill may use, in the order it fills them, none of `taken`
         (the slots the leagues and the slot map already hold). None by default."""
+        return []
+
+    def libertadores_slots(self, rom_path: Path) -> list[int]:
+        """The slots of the game's Copa Libertadores clubs, in the order a fill takes them.
+        None by default."""
         return []
 
     def own_club_slot(self, rom_path: Path, team: Team) -> int | None:

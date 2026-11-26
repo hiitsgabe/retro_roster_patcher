@@ -11,7 +11,7 @@ from __future__ import annotations
 import os
 import struct
 import unicodedata
-from collections.abc import Callable, Collection, Mapping
+from collections.abc import Callable, Mapping
 
 from ...core.errors import RomError
 from . import abilities
@@ -26,6 +26,7 @@ from .models import (
     AGE_SHIFT,
     BEARD_BYTE,
     BEARD_COLOUR_BYTE,
+    BOOT_FILE,
     CALL_NAME_BYTE,
     CLUB_SQUAD_SIZE,
     COLOUR_RGB,
@@ -34,11 +35,13 @@ from .models import (
     EMBLEM_ENTRIES,
     EMBLEM_PAIRS,
     FACE_TYPE_BYTE,
+    FIRST_CLUB_ENTRY,
     FORMATION_ENTRY,
     HAIR_COLOUR_BYTE,
     HAIRSTYLE_BYTE,
     LEAGUE_NAME_ANCHOR,
     LEAGUE_NAME_ENTRIES,
+    LIBERTADORES_ROWS,
     LOOK_END,
     LOOK_START,
     NATIONAL_DOUBLE_BYTE,
@@ -52,6 +55,7 @@ from .models import (
     PLAYABLE_GK_BYTE,
     PLAYER_RECORD_SIZE,
     POSITION_BYTE,
+    SELECT_OVERLAY,
     SHIRT_NAME_BYTES,
     SHIRT_NAME_CHARS,
     SKIN_BYTE,
@@ -60,6 +64,9 @@ from .models import (
     TEAM_ENTRY_SIZE,
     TEXT_AFS,
     TEXT_LANGUAGE_AFS,
+    UCL_PAIR_BYTES,
+    UCL_POOL,
+    UCL_ROWS,
     PESLook,
 )
 from .rom_reader import OverlayTeams, PlayerTables, RomReader
@@ -295,22 +302,95 @@ class RomWriter:
                     )
                 )
 
-    def write_ucl_rows(self, teams: OverlayTeams, clubs: Collection[int]) -> None:
-        """Point each UCL picker row of one overlay whose club is in `clubs` at the club
-        row's name and code, so it shows the club's new name in every language."""
+    def write_ucl_rows(self, teams: OverlayTeams, rows: Mapping[int, int]) -> None:
+        """Make each UCL picker row of `rows` (row -> club) the club's in one overlay: the
+        club row's name and code pointers, nationality word and id word (the crest), so it
+        shows the club's new name in every language."""
         base = self.reader.extent(OVER_AFS).offset + teams.entry.offset
         with open(self.output_path, "r+b") as f:
-            for row, club in teams.ucl.items():
-                if club in clubs:
-                    name, code = teams.clubs[club]
-                    f.seek(base + teams.table_offset + row * TEAM_ENTRY_SIZE)
-                    f.write(
-                        struct.pack(
-                            "<II",
-                            teams.load_address + name.offset,
-                            teams.load_address + code.offset,
-                        )
-                    )
+            for row, club in rows.items():
+                if row not in teams.ucl or club not in teams.clubs:
+                    continue
+                f.seek(base + teams.table_offset + (FIRST_CLUB_ENTRY + club) * TEAM_ENTRY_SIZE)
+                entry = f.read(TEAM_ENTRY_SIZE)
+                f.seek(base + teams.table_offset + row * TEAM_ENTRY_SIZE)
+                f.write(entry)
+
+    def write_ucl_pairs(self, offset: int, clubs: list[int]) -> None:
+        """Pair the UCL picker rows with these club rows (`RomReader.ucl_pairs`)."""
+        base = self.reader.extent(BOOT_FILE).offset + offset
+        with open(self.output_path, "r+b") as f:
+            for k, (row, club) in enumerate(zip(UCL_ROWS, clubs, strict=True)):
+                f.seek(base + k * UCL_PAIR_BYTES)
+                f.write(struct.pack("<II", row, club))
+
+    def write_ucl_pool(self, offset: int, rows: list[int]) -> None:
+        """Write the Champions League's Random pool (`RomReader.ucl_pool`): `UCL_POOL` team rows."""
+        base = (
+            self.reader.extent(OVER_AFS).offset + self.reader.entry(OVER_AFS, SELECT_OVERLAY).offset
+        )
+        with open(self.output_path, "r+b") as f:
+            f.seek(base + offset)
+            f.write(struct.pack(f"<{UCL_POOL}H", *rows[:UCL_POOL]))
+
+    def write_copa_names(
+        self,
+        teams: OverlayTeams,
+        names: Mapping[int, tuple[str, str]],
+        countries: Mapping[int, int | None] | None = None,
+    ) -> None:
+        """Give the Copa clubs of `names` (club -> name, code) their names in one overlay, and
+        each club of `countries` its country (a nationality: the low half of the row's third
+        word, which the disc sets to the club's nation; None leaves it). The
+        strings of all 38 rows are laid anew over the room they share (`copa_room`), each
+        4-byte aligned, the longest names cut until they fit, and every row is pointed at its
+        own: on the disc a row's room is its 2012 name's, and three rows share a code with a
+        club of the main table (Internacional's INT is Inter's). Without that room, each name
+        is cut to the room of the string it has, and a shared code is left alone."""
+        if not names:
+            return
+        base = self.reader.extent(OVER_AFS).offset + teams.entry.offset
+        texts = {k: names.get(k, (name.text, code.text)) for k, (name, code) in teams.copa.items()}
+        with open(self.output_path, "r+b") as f:
+            for k, nation in (countries or {}).items():
+                if nation is None or k >= len(LIBERTADORES_ROWS):
+                    continue
+                f.seek(base + teams.table_offset + LIBERTADORES_ROWS[k] * TEAM_ENTRY_SIZE + 8)
+                f.write(struct.pack("<H", nation))
+            if teams.copa_room is None:
+                shared = {s.offset for pair in teams.clubs.values() for s in pair}
+                for k, (name, code) in names.items():
+                    for slot, text in zip(teams.copa.get(k, ()), (name, code), strict=False):
+                        if slot.offset in shared:
+                            continue
+                        f.seek(base + slot.offset)
+                        f.write(shorten(text, slot.capacity - 1).ljust(slot.capacity, b"\0"))
+                return
+            start, end = teams.copa_room
+            room = {k: len(text[0].encode("utf-8")) for k, text in texts.items()}
+            while True:
+                raw = {k: (shorten(texts[k][0], room[k]), shorten(texts[k][1], 7)) for k in texts}
+                size = sum(_aligned(len(a) + 1) + _aligned(len(b) + 1) for a, b in raw.values())
+                if size <= end - start or not any(room.values()):
+                    break
+                longest = max(room, key=lambda k: len(raw[k][0]))
+                room[longest] = len(raw[longest][0]) - 1
+            blob = bytearray()
+            pointers: dict[int, tuple[int, int]] = {}
+            for k, pair in raw.items():
+                at = []
+                for string in pair:
+                    at.append(start + len(blob))
+                    blob += string + b"\0"
+                    blob += b"\0" * (-len(blob) % 4)
+                pointers[k] = (at[0], at[1])
+            f.seek(base + start)
+            f.write(bytes(blob[: end - start]).ljust(end - start, b"\0"))
+            for k, (name_at, code_at) in pointers.items():
+                f.seek(base + teams.table_offset + LIBERTADORES_ROWS[k] * TEAM_ENTRY_SIZE)
+                f.write(
+                    struct.pack("<II", teams.load_address + name_at, teams.load_address + code_at)
+                )
 
     # -- emblems -------------------------------------------------------------
 
@@ -468,6 +548,10 @@ class RomWriter:
         with open(self.output_path, "r+b") as f:
             f.seek(extent.offset + entry.offset)
             f.write(block.ljust(max(entry.size, len(block)), b"\0"))
+
+
+def _aligned(size: int) -> int:
+    return size + (-size % 4)
 
 
 def _rename_league(leaf: bytes, names: dict[int, str]) -> bytes | None:

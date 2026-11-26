@@ -346,3 +346,83 @@ def test_a_patcher_without_the_club_fill_is_refused(tmp_path):
     patcher.supports_club_fill = False
     with pytest.raises(CapabilityError):
         _fill(patcher)
+
+
+def test_the_champions_order_is_the_participants_by_coefficient(tmp_path):
+    patcher = ClubPatcher(tmp_path, SQUADS, champions=(1929, 175, 132))
+    # Lens has no snapshot id, so no rank: it comes last.
+    assert clubs.champions_order(patcher, 2026) == [132, 1929, 175]
+
+
+# --- fetch_libertadores ---------------------------------------------------------------
+
+COPA = {
+    9967: (Team(id=9967, name="Bahia"), "bra.1"),
+    5: (Team(id=5, name="Boca Juniors"), "conmebol.recopa"),
+    819: (Team(id=819, name="Flamengo"), "bra.1"),
+    8416: (Team(id=8416, name="Juventud"), "uru.1"),
+    2684: (Team(id=2684, name="Nacional"), "uru.1"),
+}
+
+
+class CopaApi:
+    """ESPN's Copa Libertadores: five clubs, three in the group stage."""
+
+    def __init__(self):
+        self.squads: list[tuple[int, str]] = []
+        self.lineups: list[tuple[int, int]] = []
+
+    def get_teams(self, league_id, season=None):
+        assert league_id == 2009
+        return [COPA[i][0] for i in COPA]
+
+    def get_group_teams(self, league_id, season):
+        return [819, 5, 2684]
+
+    def matches_played(self, team_id, league_id):
+        return {8416: 6, 9967: 2}[team_id]
+
+    def get_team(self, team_id, season=None):
+        return COPA.get(team_id)
+
+    def get_squad(self, team_id, season=None, league_code=None):
+        self.squads.append((team_id, league_code))
+        return players(team_id)
+
+    def get_lineup(self, team_id, league_id, squad=None, team=None, season=None):
+        self.lineups.append((team_id, league_id))
+        return None
+
+
+class CopaPatcher(ClubPatcher):
+    supports_libertadores = True
+
+    def __init__(self, cache_dir, slots):
+        super().__init__(cache_dir, {})
+        self.api = CopaApi()
+        self.copa = list(slots)
+
+    def libertadores_slots(self, rom_path):
+        return self.copa
+
+
+def test_the_copa_takes_the_group_stage_then_the_qualifiers_that_played_most(tmp_path):
+    from pathlib import Path
+
+    patcher = CopaPatcher(tmp_path, [2000, 2001, 2002, 2003])
+    data, mapping = clubs.fetch_libertadores(patcher, Path("rom.iso"), 2026)
+    assert slots_of(mapping) == {2000: 819, 2001: 5, 2002: 2684, 2003: 8416}
+    assert data.league.id == 2009 and [r.team.id for r in data.teams] == [819, 5, 2684, 8416]
+    # Each squad from the club's own league, Boca's (a cup's) from the Copa; the lineups from
+    # the league when ESPN_LEAGUES has it, else from the Copa.
+    assert dict(patcher.api.squads)[5] == "conmebol.libertadores"
+    assert dict(patcher.api.squads)[819] == "bra.1"
+    assert dict(patcher.api.lineups) == {819: 2006, 5: 2009, 2684: 2009, 8416: 2009}
+
+
+def test_a_game_without_copa_clubs_fetches_none(tmp_path):
+    from pathlib import Path
+
+    patcher = CopaPatcher(tmp_path, [])
+    data, mapping = clubs.fetch_libertadores(patcher, Path("rom.iso"), 2026)
+    assert mapping == [] and data.teams == [] and patcher.api.squads == []

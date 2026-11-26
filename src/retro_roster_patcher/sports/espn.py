@@ -222,6 +222,7 @@ _RATING_FIELDS = (
 )
 
 SOCCER_BASE_URL = "https://site.api.espn.com/apis/site/v2/sports/soccer"
+SOCCER_STANDINGS_URL = "https://site.api.espn.com/apis/v2/sports/soccer"
 SOCCER_CORE_URL = "https://sports.core.api.espn.com/v2/sports/soccer/leagues"
 HOCKEY_BASE_URL = "https://site.api.espn.com/apis/site/v2/sports/hockey"
 HOCKEY_CORE_URL = "https://sports.core.api.espn.com/v2/sports/hockey/leagues/nhl"
@@ -400,6 +401,46 @@ class EspnClient:
         if teams:
             self._save_cache(cache_key, data)
         return teams
+
+    def get_group_teams(self, league_id: int, season: int) -> list[int]:
+        """The ids of the teams in a competition's group stage, group by group in table order
+        (the standings document; empty for a league without one, or when it fails)."""
+        item = _ID_TO_LEAGUE.get(league_id)
+        if not item:
+            return []
+        cache_key = f"espn_groups_{league_id}_{season}"
+        data = self._load_cache(cache_key)
+        if not data:
+            try:
+                data = _http.get_json(
+                    f"{SOCCER_STANDINGS_URL}/{item['code']}/standings",
+                    params={"season": season},
+                    transport=self._transport,
+                )
+            except Exception:
+                return []
+        ids = [
+            int(entry["team"]["id"])
+            for group in (data or {}).get("children") or []
+            for entry in (group.get("standings") or {}).get("entries") or []
+            if str((entry.get("team") or {}).get("id", "")).isdigit()
+        ]
+        if ids:
+            self._save_cache(cache_key, data)
+        return ids
+
+    def matches_played(self, team_id: int, league_id: int) -> int:
+        """How many of a team's matches in a league are played: its schedule's completed
+        events, 0 when the schedule fails."""
+        item = _ID_TO_LEAGUE.get(league_id)
+        if not item:
+            return 0
+        schedule = self._request(f"/{item['code']}/teams/{team_id}/schedule", sport="soccer")
+        return sum(
+            1
+            for e in schedule.get("events") or []
+            if (e.get("competitions") or [{}])[0].get("status", {}).get("type", {}).get("completed")
+        )
 
     def get_team(self, team_id: int, season: int | None = None) -> tuple[Team, str] | None:
         """The team with ESPN id `team_id` (ids are the same in every league) and the code of

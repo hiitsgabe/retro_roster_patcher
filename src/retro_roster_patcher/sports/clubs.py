@@ -261,6 +261,58 @@ class _Teams:
         return self._teams
 
 
+def club_roster(
+    patcher: Patcher,
+    team_id: int,
+    season: int,
+    name: str = "",
+    competition: str = "",
+) -> TeamRoster | None:
+    """ESPN's squad of club `team_id` with its stats and lineup, in `patcher`'s squad order,
+    from the club's own league (`get_team`'s default league), or None, with a status line,
+    when ESPN has no team or squad for it. A club whose default league is a cup
+    (`conmebol.recopa`: Boca Juniors) is fetched from `competition` (an ESPN league code)
+    when one is given."""
+    api: Any = getattr(patcher, "api")  # noqa: B009 -- the base Patcher declares no client
+    found = api.get_team(team_id, season)
+    if found is None:
+        patcher.status(f"Skipped {name or team_id}: ESPN has no team {team_id}")
+        return None
+    team, slug = found
+    if (
+        competition
+        and league_id_of(slug) is None
+        and slug.split(".")[0] == competition.split(".")[0]
+    ):
+        slug = competition
+    roster = TeamRoster(team=team)
+    try:
+        roster.players = api.get_squad(team.id, season, league_code=slug)
+    except ApiError as exc:
+        patcher.status(f"Skipped {team.name}: its squad failed ({exc})")
+        return None
+    if not roster.players:
+        patcher.status(f"Skipped {team.name}: ESPN has no squad for it")
+        return None
+    try:  # optional: a mapper rates a player without a line from his position
+        stats = api.get_player_stats(team.id, season, league_code=slug)
+        roster.player_stats = {ps.player_id: ps for ps in stats}
+    except Exception:
+        patcher.status(f"No stats for {team.name}")
+    lineup = None
+    league_id = league_id_of(slug) or (league_id_of(competition) if competition else None)
+    if league_id is not None:
+        try:
+            lineup = api.get_lineup(
+                team.id, league_id, squad=roster.players, team=team, season=season
+            )
+        except ApiError as exc:
+            patcher.status(f"No lineup for {team.name} ({exc})")
+    apply_lineup(roster, lineup)
+    roster.players = patcher.suggest_squad_order(roster)
+    return roster
+
+
 def fetch_top_clubs(
     patcher: Patcher,
     rom: Path,
@@ -327,42 +379,13 @@ def fetch_top_clubs(
             continue
         if str(team_id) in excluded or team_id in country:
             continue
-        found = api.get_team(team_id, season)
-        if found is None:
-            patcher.status(f"Skipped {club.name}: ESPN has no team {team_id}")
-            continue
-        team, slug = found
         if on_progress is not None:
-            on_progress(
-                len(rosters) / len(free), f"Clubs {len(rosters) + 1}/{len(free)}: {team.name}"
-            )
-        roster = TeamRoster(team=team)
-        try:
-            roster.players = api.get_squad(team.id, season, league_code=slug)
-        except ApiError as exc:
-            patcher.status(f"Skipped {team.name}: its squad failed ({exc})")
+            on_progress(len(rosters) / len(free), f"Clubs {len(rosters) + 1}/{len(free)}")
+        roster = club_roster(patcher, team_id, season, club.name)
+        if roster is None:
             continue
-        if not roster.players:
-            patcher.status(f"Skipped {team.name}: ESPN has no squad for it")
-            continue
-        try:  # optional: a mapper rates a player without a line from his position
-            stats = api.get_player_stats(team.id, season, league_code=slug)
-            roster.player_stats = {ps.player_id: ps for ps in stats}
-        except Exception:
-            patcher.status(f"No stats for {team.name}")
-        lineup = None
-        league_id = league_id_of(slug)
-        if league_id is not None:
-            try:
-                lineup = api.get_lineup(
-                    team.id, league_id, squad=roster.players, team=team, season=season
-                )
-            except ApiError as exc:
-                patcher.status(f"No lineup for {team.name} ({exc})")
-        apply_lineup(roster, lineup)
-        roster.players = patcher.suggest_squad_order(roster)
         rosters.append(roster)
-        country[team.id] = club.country
+        country[roster.team.id] = club.country
     mapping = place_ranked(
         [r.team for r in rosters],
         free,
@@ -370,4 +393,60 @@ def fetch_top_clubs(
         regions=patcher.club_fill_regions(rom),
         region_of=lambda t: country.get(t.id),
     )
+    return LeagueData(league=league, teams=rosters), mapping
+
+
+def champions_order(patcher: Patcher, season: int) -> list[int]:
+    """The ESPN ids of this season's Champions League clubs (ESPN's `uefa.champions` teams),
+    best UEFA coefficient first (`uefa_ranking`, by the snapshot's ESPN ids); a club it does
+    not rank comes last, in ESPN's order."""
+    api: Any = getattr(patcher, "api")  # noqa: B009 -- the base Patcher declares no client
+    ranking = uefa_ranking(
+        patcher.cache_dir, on_status=patcher.status, transport=getattr(patcher, "_transport", None)
+    )
+    rank = {int(c.espn_id): c.rank for c in ranking if c.espn_id.isdigit()}
+    playing = [t.id for t in api.get_teams(CHAMPIONS_LEAGUE, season)]
+    return sorted(playing, key=lambda t: rank.get(t, len(ranking) + 1))
+
+
+#: The Copa Libertadores (`ESPN_LEAGUES`).
+LIBERTADORES = 2009
+
+
+def fetch_libertadores(
+    patcher: Patcher, rom: Path, season: int, on_progress: ProgressFn | None = None
+) -> tuple[LeagueData, list[SlotMapping]]:
+    """(LeagueData, slot mapping) of this season's Copa Libertadores clubs for the game's own
+    Copa clubs (`patcher.libertadores_slots(rom)`), for `map_rosters` and a `merge`.
+
+    ESPN lists every club that played it, qualifiers too. The group stage's (its standings,
+    group by group) come first, then the qualifiers that played the most of its matches, until
+    every slot has a club; each with its squad, stats and lineup from its own league
+    (`club_roster`; the competition's lineups for a league ESPN does not carry)."""
+    slots = patcher.libertadores_slots(rom)
+    league = League(
+        id=LIBERTADORES, name="Copa Libertadores", country="South America", season=season
+    )
+    if not slots:
+        return LeagueData(league=league), []
+    api: Any = getattr(patcher, "api")  # noqa: B009 -- the base Patcher declares no client
+    teams = {t.id: t for t in api.get_teams(LIBERTADORES, season)}
+    groups = [t for t in dict.fromkeys(api.get_group_teams(LIBERTADORES, season))]
+    rest = [t for t in teams if t not in groups]
+    played = {t: api.matches_played(t, LIBERTADORES) for t in rest}
+    order = groups + sorted(rest, key=lambda t: -played[t])
+    rosters: list[TeamRoster] = []
+    for team_id in order:
+        if len(rosters) == len(slots):
+            break
+        if on_progress is not None:
+            on_progress(len(rosters) / len(slots), f"Copa {len(rosters) + 1}/{len(slots)}")
+        name = teams[team_id].name if team_id in teams else ""
+        roster = club_roster(patcher, team_id, season, name, "conmebol.libertadores")
+        if roster is not None:
+            rosters.append(roster)
+    mapping = [
+        SlotMapping(slot_index=slot, team_id=r.team.id, team_name=r.team.name)
+        for slot, r in zip(slots, rosters, strict=False)
+    ]
     return LeagueData(league=league, teams=rosters), mapping

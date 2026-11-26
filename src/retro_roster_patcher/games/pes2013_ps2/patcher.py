@@ -84,6 +84,7 @@ from .models import (
     DATABASE_OVERLAYS,
     DEFAULT_NATIONALITY,
     DISPLAY_NAME_CHARS,
+    FIRST_CLUB_ENTRY,
     FIRST_CLUB_FORMATION,
     FORMATION_TEAMS,
     GROUP_POSITIONS,
@@ -91,6 +92,12 @@ from .models import (
     IMAGE_SLOTS,
     LEAGUE_GROUPS,
     LIBERTADORES_BASE,
+    LIBERTADORES_CLUBS,
+    LIBERTADORES_ENTRIES,
+    LIBERTADORES_ENTRY,
+    LIBERTADORES_FIRST_CREST,
+    LIBERTADORES_FORMATION,
+    LIBERTADORES_SLOT_BASE,
     LOOK_END,
     LOOK_START,
     NATION_ROWS,
@@ -105,6 +112,7 @@ from .models import (
     POSITION_BYTE,
     POSITION_GROUPS,
     TEXT_AFS,
+    UCL_POOL,
     UCL_ROWS,
     PESPlayer,
     PESTeamRecord,
@@ -620,11 +628,51 @@ def seat_squad(players: list[PESPlayer], preset: bytes) -> list[PESPlayer]:
     return on + [p for p in players if not any(p is q for q in on)]
 
 
+def copa_club(slot: int) -> int | None:
+    """The Copa Libertadores club (0-37) a slot is (`LIBERTADORES_SLOT_BASE` + k), else None."""
+    k = slot - LIBERTADORES_SLOT_BASE
+    return k if 0 <= k < LIBERTADORES_CLUBS else None
+
+
+def is_national(slot: int) -> bool:
+    return NATIONAL_SLOT_BASE <= slot < NATIONAL_SLOT_BASE + NATIONAL_NAMED
+
+
+def crest_of(slot: int) -> int:
+    """The club's crest in the emblem atlases: the club slot, or 130 + k for Copa club k."""
+    k = copa_club(slot)
+    return slot if k is None else LIBERTADORES_FIRST_CREST + k
+
+
 def formation_team(slot: int) -> int:
-    """The formation record of a slot: a national team's row, or 67 + the club."""
+    """The formation record of a slot: a national team's row, 67 + the club, or
+    `LIBERTADORES_FORMATION` + k for Copa club k."""
+    if (k := copa_club(slot)) is not None:
+        return LIBERTADORES_FORMATION + k
     if slot >= NATIONAL_SLOT_BASE:
         return slot - NATIONAL_SLOT_BASE
     return FIRST_CLUB_FORMATION + slot
+
+
+def club_country(record: PESTeamRecord) -> int | None:
+    """A club's country as a nationality: its players' most common one, or None when none
+    of them has one the disc knows."""
+    known = Counter(p.nation for p in record.players if p.nation is not None)
+    return known.most_common(1)[0][0] if known else None
+
+
+def shirt_numbers(players: list[PESPlayer]) -> list[int]:
+    """Each player's shirt number - 1: his own when it is 1-99 and nobody listed before him
+    wears it, else the lowest one still free."""
+    taken: set[int] = set()
+    out = []
+    for player in players:
+        number = player.number if player.number and 0 < player.number < 100 else 0
+        if not number or number in taken:
+            number = next(n for n in range(1, 100) if n not in taken)
+        taken.add(number)
+        out.append(number - 1)
+    return out
 
 
 def at_home(slot: int, record: PESTeamRecord) -> bool:
@@ -731,6 +779,9 @@ class PES2013PS2Patcher(Patcher):
     supports_nation_fill: bool = True
     #: `club_fill_slots`: the clubs of no league group, the unused groups, then 126-129.
     supports_club_fill: bool = True
+    #: `libertadores_slots`: the Copa Libertadores mode's 38 clubs (`LIBERTADORES_SLOT_BASE` +
+    #: row), written with their players, names, crests, kits and formations.
+    supports_libertadores: bool = True
     #: Screen art `patch(images={name: png})` can replace; `export_images`
     #: writes the current art of each as a PNG to edit.
     image_slots: tuple[str, ...] = IMAGE_SLOT_NAMES
@@ -835,6 +886,17 @@ class PES2013PS2Patcher(Patcher):
         groups = [g for g in LEAGUE_GROUPS if not any(g.holds(s) for s in taken)]
         slots = [*OTHER_CLUBS, *(s for g in groups for s in range(g.first, g.first + g.count))]
         return [s for s in [*slots, *EXHIBITION_CLUBS] if s not in taken]
+
+    def libertadores_slots(self, rom_path: Path) -> list[int]:
+        """The Copa Libertadores mode's 38 clubs, `LIBERTADORES_SLOT_BASE` + their row; none on
+        an image without their table."""
+        with as_rom_error(rom_path):
+            reader = RomReader(str(rom_path))
+            try:
+                found = reader.load() and bool(reader.libertadores_tables())
+            except RomError:
+                found = False
+        return [LIBERTADORES_SLOT_BASE + k for k in range(LIBERTADORES_CLUBS)] if found else []
 
     def own_club_slot(self, rom_path: Path, team: Team) -> int | None:
         """The disc's slot of club `team` (`DISC_CLUBS`, by ESPN id), or None."""
@@ -948,15 +1010,17 @@ class PES2013PS2Patcher(Patcher):
         )
         teams: dict[int, PESTeamRecord] = {}
         for entry in slot_mapping or []:
-            national = entry.slot_index >= NATIONAL_SLOT_BASE
+            national = is_national(entry.slot_index)
             if not (
                 0 <= entry.slot_index < CLUB_COUNT
-                or NATIONAL_SLOT_BASE <= entry.slot_index < NATIONAL_SLOT_BASE + NATIONAL_NAMED
+                or national
+                or copa_club(entry.slot_index) is not None
             ):
                 raise MappingError(
-                    f"Slot {entry.slot_index} is outside the club range 0..{CLUB_COUNT - 1} "
-                    f"and the national range {NATIONAL_SLOT_BASE}.."
-                    f"{NATIONAL_SLOT_BASE + NATIONAL_NAMED - 1}"
+                    f"Slot {entry.slot_index} is outside the club range 0..{CLUB_COUNT - 1}, "
+                    f"the national range {NATIONAL_SLOT_BASE}.."
+                    f"{NATIONAL_SLOT_BASE + NATIONAL_NAMED - 1} and the Copa Libertadores range "
+                    f"{LIBERTADORES_SLOT_BASE}..{LIBERTADORES_SLOT_BASE + LIBERTADORES_CLUBS - 1}"
                 )
             roster = by_id.get(entry.team_id)
             if roster is None:
@@ -1060,12 +1124,9 @@ class PES2013PS2Patcher(Patcher):
             disc = _Disc(bytes(main), reader.libertadores_players())
             originals = {index: t.players for index, t in tables.items()}
             slots = sorted(slot for slot in rosters.teams if 0 <= slot < CLUB_COUNT)
-            national_slots = sorted(
-                slot
-                for slot in rosters.teams
-                if NATIONAL_SLOT_BASE <= slot < NATIONAL_SLOT_BASE + NATIONAL_NAMED
-            )
-            presets = self._presets(rosters, slots + national_slots)
+            national_slots = sorted(slot for slot in rosters.teams if is_national(slot))
+            copa_slots = sorted(slot for slot in rosters.teams if copa_club(slot) is not None)
+            presets = self._presets(rosters, slots + national_slots + copa_slots)
             names: dict[int, tuple[str, str]] = {}
             players_patched = 0
             for i, slot in enumerate(slots):
@@ -1103,6 +1164,7 @@ class PES2013PS2Patcher(Patcher):
             players_patched += written
             for index, t in tables.items():
                 writer.write_player_tables(index, t, blocks[index])
+            players_patched += self._write_copa(writer, rosters, copa_slots, presets, disc)
             if presets:
                 self._write_formations(writer, presets)
             blanks: list[int] = []
@@ -1116,12 +1178,15 @@ class PES2013PS2Patcher(Patcher):
                 )
                 names.update(club_names)
             if options.get("logos", True):
-                self._write_logos(writer, rosters, slots, on_progress)
+                self._write_logos(writer, rosters, slots + copa_slots, on_progress)
             self._write_leagues(
                 writer, rosters, slots, options.get("logos", True), "clubs" in blank_kinds
             )
+            ucl_rows = self._ucl_rows(writer, rosters, names, options.get("champions"))
             if kit_choices:
-                self._write_kits(writer, rosters, slots + national_slots, kit_choices)
+                self._write_kits(
+                    writer, rosters, slots + national_slots + copa_slots, kit_choices, ucl_rows
+                )
             images = self._collect_images(options.get("images"))
             if images:
                 self._write_images(writer, images)
@@ -1133,7 +1198,18 @@ class PES2013PS2Patcher(Patcher):
                 except RomError:
                     continue  # an overlay without a team table is not a database
                 writer.write_team_names(teams, names)
-                writer.write_ucl_rows(teams, names)
+                writer.write_ucl_rows(teams, ucl_rows)
+                writer.write_copa_names(
+                    teams,
+                    {
+                        s - LIBERTADORES_SLOT_BASE: (rosters.teams[s].name, rosters.teams[s].code)
+                        for s in copa_slots
+                    },
+                    {
+                        s - LIBERTADORES_SLOT_BASE: club_country(rosters.teams[s])
+                        for s in copa_slots
+                    },
+                )
                 writer.write_national_rows(
                     teams, _national_rows(teams, rosters, national_slots, blanks, names)
                 )
@@ -1141,7 +1217,7 @@ class PES2013PS2Patcher(Patcher):
                 on_progress(1.0, "Done")
         return PatchResult(
             output_path=str(output_path),
-            teams_patched=len(slots) + len(national_slots),
+            teams_patched=len(slots) + len(national_slots) + len(copa_slots),
             players_patched=players_patched,
         )
 
@@ -1174,7 +1250,7 @@ class PES2013PS2Patcher(Patcher):
             slot: replace(record, players=with_nations(record.players, nationalities))
             for slot, record in rosters.teams.items()
         }
-        for slot in [s for s in teams if s >= NATIONAL_SLOT_BASE]:
+        for slot in [s for s in teams if is_national(s)]:
             record = teams[slot]
             ident = nation_ident(nationalities, record.name, record.code)
             if ident is None:
@@ -1195,7 +1271,7 @@ class PES2013PS2Patcher(Patcher):
             preset = team_preset(rosters.teams[slot])
             if preset is None:
                 continue
-            if formation_team(slot) >= FORMATION_TEAMS:
+            if slot < CLUB_COUNT and formation_team(slot) >= FORMATION_TEAMS:
                 name = rosters.teams[slot].name
                 self.status(f"{name}: slot {slot} has no formation record, formation kept")
                 continue
@@ -1555,6 +1631,116 @@ class PES2013PS2Patcher(Patcher):
             self.status(f"Unused national teams blanked: {len(blanks)} names")
         return names, blanks
 
+    def _ucl_rows(
+        self,
+        writer: RomWriter,
+        rosters: MappedRosters,
+        names: Collection[int],
+        champions: Any,
+    ) -> dict[int, int]:
+        """The Champions League's picker rows to write (row -> club): each row whose club this
+        patch renames, as before; with `champions` (this season's participants' team ids, best
+        first: the `champions` patch option) the rows go to the clubs of slots 0-125 that hold
+        them, in that order, and the Random pool (`RomReader.ucl_pool`) is their rows, then the
+        disc's own until it has its 33. A row or pool place no participant takes is left."""
+        try:
+            ucl = writer.reader.overlay_teams(DATABASE_OVERLAY_ENGLISH).ucl
+        except RomError:
+            return {}
+        rows = {row: club for row, club in ucl.items() if club in names}
+        by_team = {r.team_id: slot for slot, r in rosters.teams.items() if slot < OTHER_CLUBS.stop}
+        playing = [by_team[t] for t in dict.fromkeys(champions or ()) if t in by_team]
+        if not playing:
+            return rows
+        pairs = writer.reader.ucl_pairs()
+        if pairs is None:
+            self.status(
+                "No UCL picker pairs in the boot file: the Champions League keeps its clubs"
+            )
+            return rows
+        rows.update(zip(UCL_ROWS, playing, strict=False))
+        offset, clubs = pairs
+        new = {row: FIRST_CLUB_ENTRY + club for row, club in rows.items()}
+        writer.write_ucl_pairs(
+            offset, [new.get(row, c) for row, c in zip(UCL_ROWS, clubs, strict=True)]
+        )
+        pool = writer.reader.ucl_pool()
+        if pool is None:
+            self.status("No Champions League Random pool on this disc: it keeps its clubs")
+        else:
+            offset, disc_rows = pool
+            mine = [FIRST_CLUB_ENTRY + slot for slot in playing]
+            writer.write_ucl_pool(
+                offset, (mine + [r for r in disc_rows if r not in mine])[:UCL_POOL]
+            )
+        self.status(
+            f"Champions League: {min(len(playing), len(UCL_ROWS))} picker rows and "
+            f"{min(len(playing), UCL_POOL)} Random places for this season's participants"
+        )
+        return rows
+
+    def _write_copa(
+        self,
+        writer: RomWriter,
+        rosters: MappedRosters,
+        slots: list[int],
+        presets: dict[int, bytes],
+        disc: _Disc,
+    ) -> int:
+        """Write each Copa Libertadores club's squad into entries 49 and 48: the club keeps
+        the records its squad has on the disc (23 to 25), which take its players in squad
+        order (a team with a preset lists its eleven in the order of the preset's places, as
+        a national row does), cut to as many (`cut_squad`); each player written as a club's
+        is, his own shirt number (`shirt_numbers`). A record the club no longer uses is
+        blanked. When the entries outgrow their room, every squad is cut by one more, to
+        `MIN_SQUAD`. Returns the players written."""
+        if not slots:
+            return 0
+        try:
+            tables = {i: writer.reader.libertadores_tables(i) for i in LIBERTADORES_ENTRIES}
+        except RomError as exc:
+            self.status(f"Copa Libertadores clubs skipped: {exc}")
+            return 0
+        primary = tables[LIBERTADORES_ENTRY]
+        snapshot = {i: list(t.parts) for i, t in tables.items()}
+        owned = {slot: primary.copa_squad(slot - LIBERTADORES_SLOT_BASE) for slot in slots}
+        top = max(map(len, owned.values()))
+        for cap in range(top, min(top, MIN_SQUAD) - 1, -1):
+            written = 0
+            for slot in slots:
+                record = rosters.teams[slot]
+                preset = presets.get(slot)
+                players = seat_squad(record.players, preset) if preset else record.players
+                squad = cut_squad(players, min(cap, len(owned[slot])))
+                records = owned[slot][: len(squad)]
+                for player, idx in zip(squad, records, strict=False):
+                    for t in tables.values():
+                        RomWriter.set_player_names(t, idx, player.display_name, player.shirt_name)
+                        self._write_look(t, idx, player, disc)
+                        self._write_identity(t, idx, player, disc)
+                        self._write_position(t, idx, player)
+                        RomWriter.set_abilities(t, idx, own_abilities(player))
+                    written += 1
+                for t in tables.values():
+                    for idx in owned[slot][len(records) :]:
+                        t.set_record(idx, bytes(PLAYER_RECORD_SIZE))
+                    t.set_copa_squad(
+                        slot - LIBERTADORES_SLOT_BASE, records, shirt_numbers(squad[: len(records)])
+                    )
+            blocks = {i: t.build() for i, t in tables.items()}
+            if all(len(b) <= writer.room(TEXT_AFS, i) for i, b in blocks.items()):
+                for i, b in blocks.items():
+                    writer.write_player_tables(i, tables[i], b)
+                self.status(f"Copa Libertadores clubs written: {len(slots)}, {written} players")
+                return written
+            self.status(f"Copa Libertadores tables too big; squads cut to {cap - 1}")
+            for i, t in tables.items():
+                t.parts = list(snapshot[i])
+        raise RomError(
+            f"{TEXT_AFS} entries {LIBERTADORES_ENTRIES}: the Copa Libertadores squads do not fit "
+            f"even at {MIN_SQUAD} players"
+        )
+
     def _write_logos(
         self,
         writer: RomWriter,
@@ -1577,7 +1763,7 @@ class PES2013PS2Patcher(Patcher):
             if on_progress is not None:
                 on_progress(0.85 + 0.1 * (i / max(len(slots), 1)), f"Logo for {record.name}...")
             try:
-                logos[slot] = (
+                logos[crest_of(slot)] = (
                     override.read_bytes() if override else self._load_logo(record.logo_url)
                 )
             except ApiError as exc:
@@ -1731,6 +1917,7 @@ class PES2013PS2Patcher(Patcher):
         rosters: MappedRosters,
         slots: list[int],
         choices: dict[int, dict[int, Any]],
+        ucl_rows: dict[int, int] | None = None,
     ) -> None:
         """Draw each mapped team's home and away kits (see `_resolve_kits`).
 
@@ -1741,8 +1928,10 @@ class PES2013PS2Patcher(Patcher):
         without one it gives its colours and pattern instead. Clubs past the
         last kit record (slots 130 and up) are skipped with a status line. A
         nation at home gets the disc's four kits back where they changed. A UCL
-        picker row (`UCL_ROWS`) whose club got new kits wears them in the
-        Champions League too: the club's record is copied over the row's UCL kits.
+        picker row (`ucl_rows`, row -> its club) whose club got new kits wears them in the
+        Champions League too: the club's record is copied over the row's UCL kits. A Copa
+        Libertadores club's kits are its record of entry 54 part 8, licensed on the disc: the
+        player kits become parametric and the keepers' stay, so no texture package moves.
         """
         table = writer.reader.kits()
         licensed = kit_textures.licensed_slots(writer.reader)
@@ -1753,7 +1942,9 @@ class PES2013PS2Patcher(Patcher):
             if slot not in choices:
                 continue
             record = rosters.teams[slot]
-            if slot >= NATIONAL_SLOT_BASE:
+            if (copa := copa_club(slot)) is not None:
+                rows, row = table.libertadores, copa
+            elif slot >= NATIONAL_SLOT_BASE:
                 rows, row = table.nationals, slot - NATIONAL_SLOT_BASE
             else:
                 rows, row = table.clubs, slot
@@ -1789,11 +1980,7 @@ class PES2013PS2Patcher(Patcher):
                     apply_spec(kits[which], spec)
                     written += 1
                     dressed.add(slot)
-        try:
-            ucl = writer.reader.overlay_teams(DATABASE_OVERLAY_ENGLISH).ucl
-        except RomError:
-            ucl = {}
-        for row, club in ucl.items():
+        for row, club in (ucl_rows or {}).items():
             k = row - UCL_ROWS.start
             if club in dressed and k < len(table.ucl):
                 table.ucl[k] = deepcopy(table.clubs[club])
