@@ -1152,9 +1152,9 @@ def _clamp(value: int, low: int, high: int) -> int:
 #:
 #: Byte 5 bit 5 is a squad quota flag. The game's editor shows no field for it and clears it, no
 #: code was found that sets it, and only the menus' code reads it (SELECT.BIN, word 1 & 0x2000 of
-#: the record 0x8008ab34 returns): the automatic line-up (0x80088d0c) counts a team's flagged players
-#: and, with 4 or more, never brings a flagged reserve into the first 16 for an unflagged one,
-#: and an uncalled check (0x8008b6fc) caps them at 3 in the first 16 and 5 in the 23, the shape
+#: the record 0x8008ab34 returns): the automatic line-up (0x80088d0c) counts a team's flagged
+#: players and, with 4 or more, never brings a flagged reserve into the first 16 for an unflagged
+#: one, and an uncalled check (0x8008b6fc) caps them at 3 in the first 16 and 5 in the 23, the shape
 #: of the J.League's foreign-player quota. What real fact it stood for is not known: no retail
 #: player has it, so it stays 0 and the CPU picks its line-ups unrestricted.
 _DISC_BITS = bytes((0x08, 0x10, 0x01, 0, 0, 0x20, 0, 0, 0, 0, 0, 0))
