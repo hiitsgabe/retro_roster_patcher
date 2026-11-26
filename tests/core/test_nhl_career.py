@@ -65,9 +65,15 @@ def stats(capacity=4) -> TDBFile:
 
 
 def rows(tdb: TDBFile, name: str) -> list[dict]:
+    """The table's records but the filler rows no bio owns."""
     table = tdb.get_table(name)
     assert table is not None
-    return [table.read_record(i) for i in range(table.num_records)]
+    records = [table.read_record(i) for i in range(table.num_records)]
+    return [r for r in records if r.get("INDX") not in FILLER]
+
+
+#: The filler `INDX` of the 12- and 13-bit columns here: every bit set.
+FILLER = (4095, 8191)
 
 
 MCDAVID = {
@@ -153,5 +159,19 @@ def test_forgetting_drops_his_tournaments_and_unlinks_his_trophies():
     awards = TDBFile.parse(build_tdb([_table("SAWA", LINK, 4, [{"PID_": 7}, {"PID_": 9}])]))
     forget(tournaments, awards, [7])
     assert [r["INDX"] for r in rows(tournaments, "ITPS")] == [9]
+    assert tournaments.get_table("ITPS").num_records == 3  # type: ignore[union-attr]
     assert [r["PID_"] for r in rows(awards, "SAWA")] == [0, 9]
     forget(None, None, [7])
+
+
+def test_every_table_keeps_the_count_the_disc_gave_it():
+    # NHL 07 shows no one's seasons once a table holds fewer records than the
+    # disc gave it, so the room the dropped rows leave is filled with rows no
+    # bio owns.
+    tdb = stats()
+    before = {n: tdb.get_table(n).num_records for n in ("SCSP", "SCPP", "SCSG")}  # type: ignore[union-attr]
+    rewrite(tdb, {7: (False, [])})
+    for name, count in before.items():
+        table = tdb.get_table(name)
+        assert table is not None and table.num_records == count
+        assert table.read_record(count - 1)["INDX"] == 4095

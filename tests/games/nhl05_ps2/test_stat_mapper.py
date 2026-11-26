@@ -667,12 +667,16 @@ def _career(**career):
 
 def test_a_drafted_veteran_has_his_draft_and_is_no_rookie():
     record = _career(draft_year=2015, draft_pick=1, seasons=[_season(2015, 45), _season(2025, 82)])
-    assert (record.draft_year, record.draft_pick, record.rookie) == (2015 - 1959, 1, 0)
+    # In the game's calendar: 2025-26 is its last season, 2003-04, so 22 years back.
+    assert (record.draft_year, record.draft_pick, record.rookie) == (2015 - 22 - 1959, 1, 0)
 
 
-def test_seasons_after_the_one_patched_are_left_out():
-    record = _career(draft_year=2015, draft_pick=1, seasons=[_season(2025, 82), _season(2026, 20)])
-    assert [s["season"] for s in record.seasons] == [2025]
+def test_seasons_move_into_the_games_calendar_and_later_ones_are_left_out():
+    # Player Information shows no season after the game's last, 2003-04.
+    record = _career(draft_year=2015, draft_pick=1, seasons=[_season(2024, 70), _season(2025, 82)])
+    assert [(s["season"], s["GP"]) for s in record.seasons] == [(2002, 70), (2003, 82)]
+    later = _career(seasons=[_season(2025, 82), _season(2026, 20)])
+    assert [s["season"] for s in later.seasons] == [2003]
 
 
 def test_a_player_with_no_nhl_game_before_the_season_is_a_rookie():

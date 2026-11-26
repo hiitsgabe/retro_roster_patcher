@@ -480,7 +480,7 @@ class NHL07StatMapper:
         )
         set_birth(record, player, GAME_YEAR)
         if career is not None:
-            set_career(record, career, season, YEAD_NOT_AVAILABLE)
+            set_career(record, career, season, YEAD_NOT_AVAILABLE, GAME_YEAR)
 
         attrs: NHL07SkaterAttributes | NHL07GoalieAttributes
         if is_goalie:

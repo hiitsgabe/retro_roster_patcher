@@ -423,9 +423,21 @@ def set_birth(record: Any, player: Player, game_year: int = GAME_YEAR) -> None:
         record.birth_month, record.birth_day = int(parts[1]), int(parts[2])
 
 
-def set_career(record: Any, career: Mapping[str, object], season: int, not_available: int) -> None:
+def set_career(
+    record: Any,
+    career: Mapping[str, object],
+    season: int,
+    not_available: int,
+    game_year: int = GAME_YEAR,
+) -> None:
     """The record's NHL seasons up to `season` (`core.nhl_career` writes them),
     his draft and whether he is a rookie.
+
+    Seasons and draft move into the game's calendar, as his birth year does
+    (`set_birth`): `season` becomes the one ending in `game_year`, the last the
+    game has. Player Information leaves out every season after that one, from
+    its list and its career totals alike (seen in PPSSPP on NHL 07's retail
+    rows), and NHL 2005 reads a draft after 2004 as "N/A".
 
     `YEAD` is the draft year less 1959 and `POSD` the overall pick;
     `not_available` and 0 for a player who was not drafted or whose career
@@ -435,24 +447,29 @@ def set_career(record: Any, career: Mapping[str, object], season: int, not_avail
     906 it does not; NHL 07 carries the same flags two seasons stale): a
     player with no NHL game before `season`, when his career is known.
     """
+    shift = game_year - 1 - season if season else 0
     listed = career.get("seasons")
     seasons = [
         dict(s)
         for s in (listed if isinstance(listed, list) else [])
         if isinstance(s, dict) and (not season or int(s.get("season") or 0) <= season)
     ]
-    record.seasons = seasons
-    year = career.get("draft_year")
-    drafted = isinstance(year, int) and year > 0
-    record.draft_year = max(0, int(year) - BIRTH_YEAR_BASE) if drafted else not_available  # type: ignore[call-overload]
-    pick = career.get("draft_pick")
-    record.draft_pick = int(pick) if drafted and isinstance(pick, int) else 0
     before = sum(
         int(s.get("GP") or 0)
         for s in seasons
         if not s.get("playoffs") and int(s.get("season") or 0) < season
     )
     record.rookie = int("draft_year" in career and before == 0)
+    record.seasons = [s | {"season": int(s.get("season") or 0) + shift} for s in seasons]
+    year = career.get("draft_year")
+    drafted = isinstance(year, int) and year > 0
+    record.draft_year = (
+        max(0, int(year) + shift - BIRTH_YEAR_BASE)  # type: ignore[call-overload]
+        if drafted
+        else not_available
+    )
+    pick = career.get("draft_pick")
+    record.draft_pick = int(pick) if drafted and isinstance(pick, int) else 0
 
 
 def _defaults_for(position: str) -> NHL05SkaterAttributes:

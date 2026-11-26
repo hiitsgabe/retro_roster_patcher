@@ -9,9 +9,13 @@ some trophy winners to a bio (`PID_`).
 
 A bio taken over by a new player would show the old one's seasons, so
 `rewrite` replaces them with his own, newest first when the table, which is
-full on the disc, has no room for them all, and `forget`
-drops what no provider knows of him: his tournaments and trophies. A player
-without a season shows what the disc shows for a rookie, no rows.
+full on the disc, has no room for them all, and `forget` drops what no
+provider knows of him: his tournaments and trophies. Every table keeps the
+record count the disc gave it (`_fill`): NHL 07 shows no one's seasons
+otherwise. The pages leave out every season after the game's own last one,
+so the seasons come here already moved into the game's calendar
+(`nhl05_ps2.stat_mapper.set_career`). A player without a season shows what the
+disc shows for a rookie, no rows.
 
 `YEAR` is the season's closing year less 1959 (2005-06 is 47), `TEAM` the
 club's abbreviation, several joined by `-` for a traded player. `PLMN` is
@@ -134,15 +138,26 @@ def _row(
     return {name: value for name, value in values.items() if name in width}
 
 
-def _keep(table: TDBTable, column: str, gone: set[int]) -> None:
+def _keep(table: TDBTable, column: str, gone: set[int]) -> int:
     """Drop every live record of `table` whose `column` is in `gone`, closing
-    the gaps and zeroing what the table no longer uses."""
+    the gaps and zeroing what the table no longer uses. Returns the count the
+    table had, for `_fill`."""
     size = table.record_size
-    live = range(min(table.num_records, table.capacity))
-    kept = [i for i in live if table.read_record(i).get(column) not in gone]
+    count = min(table.num_records, table.capacity)
+    kept = [i for i in range(count) if table.read_record(i).get(column) not in gone]
     data = b"".join(bytes(table._raw_data[i * size : (i + 1) * size]) for i in kept)
-    table._raw_data[: len(live) * size] = data + bytes(len(live) * size - len(data))
+    table._raw_data[: count * size] = data + bytes(count * size - len(data))
     table.num_records = len(kept)
+    return count
+
+
+def _fill(table: TDBTable, count: int) -> None:
+    """Bring `table` back to `count` records with rows no bio owns (`INDX` all
+    ones): NHL 07 shows no one's seasons once a table holds fewer records than
+    the disc gave it, every player's rows still there (seen in PPSSPP)."""
+    width = next((f.bit_width for f in table.fields if f.name == "INDX"), 0)
+    while table.num_records < count:
+        table.write_record(table.allocate_record(), {"INDX": (1 << width) - 1})
 
 
 def rewrite(
@@ -164,7 +179,7 @@ def rewrite(
         if listed is not None:
             held = {table.read_record(i).get("INDX") for i in range(table.num_records)}
             gone |= {bio for bio in held if isinstance(bio, int) and bio not in listed}
-        _keep(table, "INDX", gone)
+        count = _keep(table, "INDX", gone)
         rows = [
             (bio, season)
             for bio, (is_goalie, seasons) in careers.items()
@@ -176,6 +191,7 @@ def rewrite(
         room = table.capacity - table.num_records
         for bio, season in rows[:room]:
             table.write_record(table.allocate_record(), _row(table, bio, season, goalie))
+        _fill(table, count)
         written += min(room, len(rows))
         left += max(0, len(rows) - room)
     return written, left
@@ -189,7 +205,7 @@ def forget(tournaments: TDBFile | None, awards: TDBFile | None, bios: Iterable[i
     for name in TOURNAMENT_TABLES:
         table = tournaments.get_table(name) if tournaments is not None else None
         if table is not None:
-            _keep(table, "INDX", gone)
+            _fill(table, _keep(table, "INDX", gone))
     table = awards.get_table("SAWA") if awards is not None else None
     if table is not None:
         for i in range(min(table.num_records, table.capacity)):
