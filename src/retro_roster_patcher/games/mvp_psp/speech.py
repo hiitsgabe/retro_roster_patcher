@@ -12,7 +12,8 @@ the id of its nine invented players (Jon Dowd), whom it never names.
 
 So a player given a 2005 player's record must not keep his audio id: the
 booth would call him by the old name. `Voices` hands him an id no name answers
-to, and the old id's portrait with it (`portraits`).
+to: one the disc has a portrait for when he has a head shot to draw over it
+(`portraits`), 153 on the retail disc, else one without, and his 3D head.
 """
 
 from __future__ import annotations
@@ -63,30 +64,31 @@ class Voices:
     `named` is `named_ids` of the disc, `pictures` the ids its portrait archive
     has a picture for, `in_use` the audio ids its records hold. A player whose
     record's id is already nameless keeps it; another takes the lowest free
-    nameless id in the disc's own range, and `moves` then says which id's
-    picture the new id takes over. With nothing in `named` (no speech index
-    on the image) every id is kept.
+    nameless id in the disc's own range, one with a picture if he has a photo
+    and one without if not, the other kind when his own runs out. With nothing
+    in `named` (no speech index on the image) every id is kept.
     """
 
     named: set[int] = field(default_factory=set)
     pictures: set[int] = field(default_factory=set)
     in_use: Iterable[int] = ()
-    moves: dict[int, int] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         taken = set(self.in_use) | self.named
-        self._free = iter(i for i in range(1, max(taken, default=0) + 1) if i not in taken)
+        free = [i for i in range(1, max(taken | self.pictures, default=0) + 1) if i not in taken]
+        pictured = [i for i in free if i in self.pictures]
+        #: How many nameless ids have a picture.
+        self.spare = len(pictured)
+        self._free = {True: iter(pictured), False: iter(i for i in free if i not in self.pictures)}
 
-    def assign(self, current: int) -> int | None:
-        """The audio id for a player whose record holds `current`; None when no
-        nameless id is left (he then takes 0, the invented players')."""
+    def assign(self, current: int, photo: bool = False) -> int | None:
+        """The audio id for a player whose record holds `current`, with a
+        picture for him if `photo`; None when no nameless id is left (he then
+        takes 0, the invented players')."""
         if not self.named or (current and current not in self.named):
             return current
-        new = next(self._free, None)
-        if new is not None and new not in self.pictures and current in self.pictures:
-            self.moves[new] = current
-        return new
+        return next(self._free[photo], None) or next(self._free[not photo], None)
 
     def pictured(self, audio_id: int) -> bool:
-        """Does the id have a portrait to show, its own or one it takes over?"""
-        return audio_id in self.pictures or audio_id in self.moves
+        """Does the id have a portrait to show?"""
+        return audio_id in self.pictures

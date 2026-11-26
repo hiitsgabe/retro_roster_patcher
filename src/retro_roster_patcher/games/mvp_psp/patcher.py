@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import os
 from datetime import date
+from itertools import zip_longest
 from pathlib import Path
 from typing import Any
 
@@ -378,6 +379,8 @@ class MVPPSPPatcher(Patcher):
         self._faces: dict[int, Face] = {}
         # Which audio id each written player takes (`speech`), set by `patch`.
         self._voices = Voices()
+        # The players given one of the disc's spare portraits, set by `patch`.
+        self._photos: set[int] = set()
         self.mapper = MVPStatMapper()
         # The client creates its cache directory in its own constructor, so
         # constructing this patcher can raise `StorageError`.
@@ -699,6 +702,15 @@ class MVPPSPPatcher(Patcher):
                         if row.get(ATTRIB_AUDIO_ID, "").isdigit()
                     ],
                 )
+            # The disc's spare portraits go round the clubs, each club's first
+            # players (its lineup) first, not all to the clubs written first.
+            ranked = [
+                p.player_id
+                for rank in zip_longest(*rosters.teams.values())
+                for p in rank
+                if p is not None and p.photo_url
+            ]
+            self._photos = set(ranked[: self._voices.spare])
             self.status("Writing rosters...")
             teams_patched, players_patched = self._write_all_teams(writer, rosters, on_progress)
             if options.get("portraits", True):
@@ -884,7 +896,7 @@ class MVPPSPPatcher(Patcher):
             if attrib[p.hash_id].get(ATTRIB_AUDIO_ID, "").strip().isdigit()
         }
         with open(rom_path, "rb") as f:
-            writer.edits += portraits.edits(f, pictures, self.status, self._voices.moves)
+            writer.edits += portraits.edits(f, pictures, self.status)
 
     def _write_player(
         self, writer: MVPPSPRomWriter, player: MVPPlayerRecord, spreads: Spreads
@@ -900,7 +912,8 @@ class MVPPSPPatcher(Patcher):
         old = writer.reader.records.get("attrib", {}).get(player.hash_id, {})
         if self._voices.named and old.get(ATTRIB_AUDIO_ID, "").isdigit():
             # No 2005 player's name for him, and a photo only if he has a picture.
-            audio = self._voices.assign(int(old[ATTRIB_AUDIO_ID])) or 0
+            photo = player.player_id in self._photos
+            audio = self._voices.assign(int(old[ATTRIB_AUDIO_ID]), photo) or 0
             fields[ATTRIB_AUDIO_ID] = str(audio)
             fields[ATTRIB_PHOTO] = "1" if self._voices.pictured(audio) else "2"
         writer.update_player_record("attrib", player.hash_id, fields)
