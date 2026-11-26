@@ -435,7 +435,12 @@ class EspnClient:
         item = _ID_TO_LEAGUE.get(league_id)
         if not item:
             return 0
-        schedule = self._request(f"/{item['code']}/teams/{team_id}/schedule", sport="soccer")
+        cache_key = f"espn_schedule_{item['code']}_{team_id}"
+        schedule = self._load_cache(cache_key)
+        if not schedule:
+            schedule = self._request(f"/{item['code']}/teams/{team_id}/schedule", sport="soccer")
+            if schedule.get("events"):
+                self._save_cache(cache_key, schedule)
         return sum(
             1
             for e in schedule.get("events") or []

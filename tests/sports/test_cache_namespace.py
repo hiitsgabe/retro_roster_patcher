@@ -64,6 +64,7 @@ OMNIBUS = json.dumps(
                 "competitions": [{"status": {"type": {"completed": True}}}],
             }
         ],
+        "children": [{"standings": {"entries": [{"team": {"id": "359"}}]}}],
         "rosters": [
             {
                 "team": {"id": "359"},
