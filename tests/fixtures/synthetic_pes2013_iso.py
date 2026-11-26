@@ -62,15 +62,15 @@ def block(payload: bytes, *, compress: bool) -> bytes:
 
 
 def table(parts: list[bytes]) -> bytes:
-    n = len(parts) + 1
-    head_len = 4 + 4 * n
-    pos = (head_len // 16 + 1) * 16
+    n = len(parts)
+    head_len = 8 + 4 * n
+    pos = head_len + (-head_len % 16)
     offsets = [8]
     body = b""
     for part in parts:
         offsets.append(pos + len(body))
         body += part + b"\0" * (-len(part) % 16)
-    head = struct.pack(f"<I{n}I", n, *offsets)
+    head = struct.pack(f"<I{n + 1}I", n, *offsets)
     return head + b"\0" * (pos - len(head)) + body
 
 

@@ -4,7 +4,7 @@ An `.AFS` archive is `"AFS\\0", u32 count, {u32 offset, u32 size}[count]`; the
 entries are unnamed (the name table on the disc is scrambled). Each entry is a
 *block*: a 32-byte header `u8 kind, u8 flags, u8 zlib, u8 0, u32 csize, u32
 usize, 20 x 0` followed by the payload, a zlib stream when `zlib == 1`. A
-payload is often a *table*: `u32 n, u32 8, u32 offs[n-1]` where each non-zero
+payload is often a *table*: `u32 n, u32 8, u32 offs[n]` where each non-zero
 offset starts another block (zero = an unused slot). The table's parts keep
 their file order, so a rebuilt table only moves offsets.
 
@@ -96,7 +96,8 @@ def wrap(header: bytes, payload: bytes) -> bytes:
 
 @dataclass
 class Table:
-    """A `u32 n, u32 8, u32 offs[n-1]` table and its parts (zero slots kept)."""
+    """A `u32 n, u32 8, u32 offs[n]` table and its parts (zero slots kept). `offsets` starts
+    with the 8."""
 
     count: int
     offsets: list[int]
@@ -107,9 +108,9 @@ class Table:
         if len(data) < 8:
             raise RomError("Table shorter than its header")
         count = struct.unpack("<I", data[:4])[0]
-        if not 2 <= count <= 1024 or len(data) < 4 + 4 * count:
+        if not 1 <= count <= 1024 or len(data) < 8 + 4 * count:
             raise RomError("Not a part table")
-        offsets = list(struct.unpack(f"<{count}I", data[4 : 4 + 4 * count]))
+        offsets = list(struct.unpack(f"<{count + 1}I", data[4 : 8 + 4 * count]))
         if offsets[0] != 8:
             raise RomError("Not a part table")
         live = [o for o in offsets[1:] if o]
@@ -129,10 +130,8 @@ class Table:
 
     def build(self) -> bytes:
         """The table with its current parts laid back in order."""
-        head_len = 4 + 4 * self.count
-        # The game's own files leave at least one byte of padding: the first
-        # part starts at the next 16-byte boundary strictly past the table.
-        pos = (head_len // PART_ALIGN + 1) * PART_ALIGN
+        head_len = 8 + 4 * self.count
+        pos = head_len + (-head_len % PART_ALIGN)
         offsets = [8]
         body = bytearray()
         for part in self.parts:
@@ -142,5 +141,5 @@ class Table:
             offsets.append(pos + len(body))
             body += part
             body += b"\0" * (-len(part) % PART_ALIGN)
-        head = struct.pack(f"<I{self.count}I", self.count, *offsets)
+        head = struct.pack(f"<I{self.count + 1}I", self.count, *offsets)
         return head + b"\0" * (pos - len(head)) + bytes(body)

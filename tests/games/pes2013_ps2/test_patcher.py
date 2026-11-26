@@ -112,11 +112,20 @@ LEAGUE = LeagueData(
 
 def test_a_part_table_round_trips_with_the_games_padding():
     parts = [b"a" * 10, b"", b"b" * 40]
-    data = afs.Table(4, [8, 48, 0, 64], parts).build()
+    data = afs.Table(3, [8, 32, 0, 48], parts).build()
     table = afs.Table.parse(data)
-    assert table.offsets[0] == 8 and table.offsets[1] == 32  # 20-byte table, padded past it
+    assert table.offsets[0] == 8 and table.offsets[1] == 32  # 20-byte table, padded to 16
     # Parsed parts run up to the next offset, so they carry their padding.
     assert [p.rstrip(b"\0") for p in table.parts] == parts
+    assert table.build() == data
+
+
+def test_a_part_table_lists_an_offset_for_every_part_the_last_one_too():
+    # `u32 n, u32 8, u32 offs[n]`: entry 49's third part (the Copa squad numbers) is listed
+    # by the fourth word after the count, which reading n - 1 offsets lost on every rebuild.
+    data = struct.pack("<5I", 3, 8, 32, 48, 64) + b"\0" * 12 + b"a" * 16 + b"b" * 16 + b"c" * 16
+    table = afs.Table.parse(data)
+    assert table.parts == [b"a" * 16, b"b" * 16, b"c" * 16]
     assert table.build() == data
 
 

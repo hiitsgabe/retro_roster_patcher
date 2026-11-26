@@ -82,15 +82,20 @@ class PlayerTables:
     table: Table
     part_headers: list[bytes]
     parts: list[bytes]
+    #: Each part's block and payload as read: a part left as it was is put back byte for byte.
+    read: list[tuple[bytes, bytes]] = field(default_factory=list)
 
     @property
     def players(self) -> bytes:
         return self.parts[PART_PLAYERS]
 
     def build(self) -> bytes:
-        """The entry rebuilt: every part deflated under its header, table relaid."""
+        """The entry rebuilt: every changed part deflated under its header, table relaid."""
+        if not self.read:
+            self.read = [(b"", b"")] * len(self.parts)
         self.table.parts = [
-            wrap(h, p) if p else b"" for h, p in zip(self.part_headers, self.parts, strict=True)
+            block if p == old else wrap(h, p) if p else b""
+            for h, p, (block, old) in zip(self.part_headers, self.parts, self.read, strict=True)
         ]
         return wrap(self.header, self.table.build())
 
@@ -290,7 +295,9 @@ class RomReader:
             raise RomError(f"{TEXT_AFS} entry {index}: club squad table too short")
         if len(parts[PART_PLAYERS]) % PLAYER_RECORD_SIZE:
             raise RomError(f"{TEXT_AFS} entry {index}: player table is not whole records")
-        return PlayerTables(header, table, part_headers, parts)
+        return PlayerTables(
+            header, table, part_headers, parts, list(zip(table.parts, parts, strict=True))
+        )
 
     def libertadores_players(self, index: int = LIBERTADORES_ENTRY) -> bytes:
         """The South American clubs' player records (part 0 of `index`), or
